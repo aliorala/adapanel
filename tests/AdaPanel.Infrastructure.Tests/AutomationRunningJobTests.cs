@@ -25,7 +25,7 @@ public sealed class AutomationRunningJobTests
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finish = new TaskCompletionSource<BackupPruneResultDto>(TaskCreationOptions.RunContinuationsAsynchronously);
         fixture.Backup.Handler = (method, _) => method.Name == nameof(IBackupService.PruneAsync)
-            ? Wait() : Task.FromResult(new BackupRecordDto());
+            ? Wait() : Task.FromResult(AutomationBackupOutcomeTests.Result("panel", "panel", null));
         Task<BackupPruneResultDto> Wait() { entered.TrySetResult(); return finish.Task; }
         var run = scheduled ? fixture.Service.RunDueJobsAsync() : fixture.Service.RunBackupNowAsync();
         try
@@ -106,7 +106,7 @@ public sealed class AutomationRunningJobTests
         var finish = new TaskCompletionSource<BackupPruneResultDto>(TaskCreationOptions.RunContinuationsAsynchronously);
         fixture.Backup.Handler = (method, _) => method.Name switch
         {
-            nameof(IBackupService.BackupPanelAsync) => Task.FromResult(new BackupRecordDto()),
+            nameof(IBackupService.BackupPanelAsync) => Task.FromResult(AutomationBackupOutcomeTests.Result("panel", "panel", null)),
             nameof(IBackupService.PruneAsync) => Wait(),
             _ => throw new NotSupportedException(method.Name)
         };
@@ -149,7 +149,7 @@ public sealed class AutomationRunningJobTests
         await fixture.Configure();
         fixture.Backup.Handler = (method, _) => method.Name == nameof(IBackupService.PruneAsync)
             ? Task.FromCanceled<BackupPruneResultDto>(new CancellationToken(true))
-            : Task.FromResult(new BackupRecordDto());
+            : Task.FromResult(AutomationBackupOutcomeTests.Result("panel", "panel", null));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fixture.Service.RunBackupNowAsync());
         Assert.Empty((await fixture.Jobs.GetStatusAsync([RunningJobKinds.Backup], null)).Running);
     }

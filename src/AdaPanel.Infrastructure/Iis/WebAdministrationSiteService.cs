@@ -17,6 +17,19 @@ public sealed partial class WebAdministrationSiteService(
     IConcurrencyLock concurrencyLock,
     ILogger<WebAdministrationSiteService> logger) : IIisSiteService
 {
+    private readonly Func<IDisposable> managerFactory = CreateServerManager;
+    private readonly Func<CancellationToken, Task>? ensureManagement;
+    private readonly Func<string, string, CancellationToken, Task<CommandResult>> runCommand =
+        (file, arguments, token) => ProcessRunner.RunAsync(file, arguments, cancellationToken: token);
+    // Tests exercise the actual write/commit/read boundary with in-memory managers.
+    internal WebAdministrationSiteService(IConcurrencyLock gates, ILogger<WebAdministrationSiteService> log,
+        Func<IDisposable> managerFactory, Func<CancellationToken, Task>? ensureManagement = null,
+        Func<string, string, CancellationToken, Task<CommandResult>>? runCommand = null) : this(gates, log)
+    {
+        this.managerFactory = managerFactory;
+        this.ensureManagement = ensureManagement;
+        if (runCommand is not null) this.runCommand = runCommand;
+    }
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
     private const string ServerManagerTypeName = "Microsoft.Web.Administration.ServerManager";
     // Onek ManagedAppPoolName.Prefix'ten gelir; burada IKINCI bir kopyasi TUTULMAZ. Iki dosyada
@@ -40,7 +53,15 @@ public sealed partial class WebAdministrationSiteService(
         }, "sites.read_failed", cancellationToken);
     }
 
-    public async Task<SiteDto> CreateSiteAsync(CreateSiteRequest request, CancellationToken cancellationToken = default)
+    public Task<SiteDto> CreateSiteAsync(CreateSiteRequest request, CancellationToken cancellationToken = default) =>
+        CreateSiteCoreAsync(request, null, cancellationToken);
+
+    // This callback belongs to one invocation; another same-name create cannot publish its outcome to it.
+    internal Task<SiteDto> CreateSiteAsync(CreateSiteRequest request, Action<SiteDto> committed,
+        CancellationToken cancellationToken) => CreateSiteCoreAsync(request, committed, cancellationToken);
+
+    private async Task<SiteDto> CreateSiteCoreAsync(CreateSiteRequest request, Action<SiteDto>? committed,
+        CancellationToken cancellationToken)
     {
         await EnsureIisManagementAvailableAsync(cancellationToken);
 
@@ -108,12 +129,12 @@ public sealed partial class WebAdministrationSiteService(
 
             return new SiteDto
             {
-                Id = 0,
+                Id = 0, // Assigned by IIS when the configuration is committed; measured below.
                 Name = normalizedName,
                 State = request.AutoStart ? "Started" : "Stopped",
                 AutoStart = request.AutoStart,
                 PhysicalPath = physicalPath,
-                ApplicationRootPath = physicalPath,
+                ApplicationRootPath = ResolveApplicationRootPath(physicalPath),
                 ApplicationPoolName = appPoolName,
                 Bindings =
                 [
@@ -127,7 +148,12 @@ public sealed partial class WebAdministrationSiteService(
                     }
                 ]
             };
-        }, "sites.write_failed", cancellationToken);
+        }, "sites.write_failed", cancellationToken, request.Name, SiteMutationGuard.MutationKind.Create, afterCommit: draft =>
+        {
+            var measured = ReadCreatedSite(draft);
+            committed?.Invoke(measured);
+            return measured;
+        });
 
         var firewallPort = site.Bindings.FirstOrDefault()?.Port is > 0
             ? site.Bindings.First().Port
@@ -136,22 +162,40 @@ public sealed partial class WebAdministrationSiteService(
         return site;
     }
 
+    private SiteDto ReadCreatedSite(SiteDto created)
+    {
+        // ExecuteWriteAsync still owns IIS here. A fresh manager measures the committed
+        // automatic ID and paths without admitting a same-name replacement between them.
+        using var manager = managerFactory();
+        return MapSite(FindSite(GetSitesCollection(manager), created.Name));
+    }
+
     public Task<SiteDto> UpdatePhysicalPathAsync(
         string siteName,
         string physicalPath,
         CancellationToken cancellationToken = default)
     {
-        return ExecuteWriteAsync(serverManager =>
-        {
-            var site = FindSite(GetSitesCollection(serverManager), siteName);
-            var resolvedPath = ResolvePhysicalPath(physicalPath);
-            Directory.CreateDirectory(resolvedPath);
+        return ExecuteWriteAsync(manager => WritePhysicalPath(manager, siteName, physicalPath),
+            "sites.write_failed", cancellationToken, siteName, SiteMutationGuard.MutationKind.IdentityChange,
+            ReadCreatedSite);
+    }
 
-            var rootApplication = GetRootApplication(site);
-            var rootVirtualDirectory = GetRootVirtualDirectory(rootApplication);
-            SetPropertyValue(rootVirtualDirectory, "PhysicalPath", resolvedPath);
-            return MapSite(site);
-        }, "sites.write_failed", cancellationToken);
+    internal Task<SiteMutationGuard.PinnedSite> UpdatePhysicalPathAndReserveAsync(
+        SiteMutationGuard.Target target, string physicalPath,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken token) =>
+        target.ChangeIdentityAsync(current => ExecuteWriteCore(
+            manager => WritePhysicalPath(manager, current.Name, physicalPath), "sites.write_failed", token,
+            ReadCreatedSite), beforeMutation, token);
+
+    private SiteDto WritePhysicalPath(object manager, string siteName, string physicalPath)
+    {
+        var site = FindSite(GetSitesCollection(manager), siteName);
+        var resolvedPath = ResolvePhysicalPath(physicalPath);
+        Directory.CreateDirectory(resolvedPath);
+        var rootApplication = GetRootApplication(site);
+        var rootVirtualDirectory = GetRootVirtualDirectory(rootApplication);
+        SetPropertyValue(rootVirtualDirectory, "PhysicalPath", resolvedPath);
+        return MapSite(site);
     }
 
     public async Task DeleteSiteAsync(string siteName, CancellationToken cancellationToken = default)
@@ -191,7 +235,7 @@ public sealed partial class WebAdministrationSiteService(
             }
 
             return null;
-        }, "sites.write_failed", cancellationToken);
+        }, "sites.write_failed", cancellationToken, siteName);
 
         await RemoveFirewallRulesAsync(siteName, kuralPortlari, cancellationToken);
     }
@@ -282,7 +326,7 @@ public sealed partial class WebAdministrationSiteService(
         {
             try
             {
-                using var serverManager = CreateServerManager();
+                using var serverManager = managerFactory();
                 return Task.FromResult(operation(serverManager));
             }
             catch (AppException)
@@ -309,33 +353,35 @@ public sealed partial class WebAdministrationSiteService(
         throw new AppException(fallbackMessageKey, 500, 500);
     }
 
-    private Task<T> ExecuteWriteAsync<T>(Func<object, T> operation, string fallbackMessageKey, CancellationToken cancellationToken)
+    private Task<T> ExecuteWriteAsync<T>(Func<object, T> operation, string fallbackMessageKey, CancellationToken cancellationToken,
+        string? mutationName = null, SiteMutationGuard.MutationKind mutation = SiteMutationGuard.MutationKind.Delete,
+        Func<T, T>? afterCommit = null)
     {
-        return concurrencyLock.RunExclusiveAsync(() =>
-        {
-            cancellationToken.ThrowIfCancellationRequested();
+        Task<T> Write() => ExecuteWriteCore(operation, fallbackMessageKey, cancellationToken, afterCommit);
+        return mutationName is null
+            ? concurrencyLock.RunExclusiveAsync(Write, cancellationToken)
+            : SiteMutationGuard.RunMutationAsync(concurrencyLock, mutationName, mutation, Write, cancellationToken);
+    }
 
-            try
-            {
-                using var serverManager = CreateServerManager();
-                var result = operation(serverManager);
-                InvokeMethod(serverManager, "CommitChanges");
-                return Task.FromResult(result);
-            }
-            catch (AppException)
-            {
-                throw;
-            }
-            catch (Exception exception)
-            {
-                var mappedException = MapIisException(exception, fallbackMessageKey);
-                logger.LogError(
-                    exception,
-                    "IIS write operation failed. MappedMessageKey={MessageKey}",
-                    mappedException.MessageKey);
-                throw mappedException;
-            }
-        }, cancellationToken);
+    private Task<T> ExecuteWriteCore<T>(Func<object, T> operation, string fallbackMessageKey,
+        CancellationToken cancellationToken, Func<T, T>? afterCommit)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            using var serverManager = managerFactory();
+            var result = operation(serverManager);
+            InvokeMethod(serverManager, "CommitChanges");
+            return Task.FromResult(afterCommit is null ? result : afterCommit(result));
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (AppException) { throw; }
+        catch (Exception exception)
+        {
+            var mappedException = MapIisException(exception, fallbackMessageKey);
+            logger.LogError(exception, "IIS write operation failed. MappedMessageKey={MessageKey}", mappedException.MessageKey);
+            throw mappedException;
+        }
     }
 
     private static IDisposable CreateServerManager()
@@ -356,6 +402,11 @@ public sealed partial class WebAdministrationSiteService(
 
     private async Task EnsureIisManagementAvailableAsync(CancellationToken cancellationToken)
     {
+        if (ensureManagement is not null)
+        {
+            await ensureManagement(cancellationToken);
+            return;
+        }
         var assemblyPath = Environment.ExpandEnvironmentVariables(WebAdministrationAssemblyPath);
         if (File.Exists(assemblyPath))
         {
@@ -370,10 +421,10 @@ public sealed partial class WebAdministrationSiteService(
         }
 
         logger.LogInformation("IIS management features are missing. Running the bundled IIS preparation script.");
-        var result = await ProcessRunner.RunAsync(
+        var result = await runCommand(
             "powershell.exe",
             $"-NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\"",
-            cancellationToken: cancellationToken);
+            cancellationToken);
 
         if (!result.Success || !File.Exists(assemblyPath))
         {
@@ -435,15 +486,15 @@ public sealed partial class WebAdministrationSiteService(
     {
         var ruleName = SiteFirewallRuleName.For(siteName, port);
 
-        await ProcessRunner.RunAsync(
+        await runCommand(
             "netsh.exe",
             $"advfirewall firewall delete rule name=\"{ruleName}\"",
-            cancellationToken: cancellationToken);
+            cancellationToken);
 
-        var result = await ProcessRunner.RunAsync(
+        var result = await runCommand(
             "netsh.exe",
             $"advfirewall firewall add rule name=\"{ruleName}\" dir=in action=allow protocol=TCP localport={port}",
-            cancellationToken: cancellationToken);
+            cancellationToken);
 
         if (!result.Success)
         {
@@ -471,10 +522,10 @@ public sealed partial class WebAdministrationSiteService(
         foreach (var port in ports.Distinct())
         {
             var ruleName = SiteFirewallRuleName.For(siteName, port);
-            var result = await ProcessRunner.RunAsync(
+            var result = await runCommand(
                 "netsh.exe",
                 $"advfirewall firewall delete rule name=\"{ruleName}\"",
-                cancellationToken: cancellationToken);
+                cancellationToken);
 
             if (!result.Success)
             {

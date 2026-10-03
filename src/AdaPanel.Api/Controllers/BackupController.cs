@@ -4,6 +4,8 @@ using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.RunningJobs;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Data.Persistence;
+using AdaPanel.Infrastructure.Database;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -19,7 +21,8 @@ public sealed class BackupController(
     IDatabaseOwnershipService dbOwnership,
     ISubscriptionBackupScheduleService backupSchedules,
     IRunningJobService runningJobs,
-    IAuditService auditService) : ControllerBase
+    IAuditService auditService,
+    AdaPanelDbContext dbContext) : ControllerBase
 {
     // =====================================================================================
     // SÜREN İŞİN SUNUCUDAN GERİ OKUNMASI
@@ -92,17 +95,94 @@ public sealed class BackupController(
     /// "yedek diskte nerede" sorusunu cevaplayabilmeli.
     /// </para>
     /// <para>
-    /// <b>DİKKAT — nesne yerinde değiştiriliyor.</b> Bu güvenlidir çünkü
-    /// <c>BackupService.GetBackupsAsync</c> kayıtları her çağrıda diskten TAZE deserialize eder
-    /// (<c>JsonFileStore.ReadAsync</c>), yani her isteğin kendi nesne kopyası vardır. O katmana
-    /// bir gün önbellek eklenirse burası KOPYA ÜRETMELİDİR; yoksa bir kiracının isteği
-    /// yöneticinin gördüğü yolları da siler ve bu sessizce olur.
+    /// Yanıt ayrı bir kopyadır: oluşturma sonucunu veya servis tarafından paylaşılan bir
+    /// kaydı arındırmak, diskteki metadata ya da yöneticinin daha sonra okuyacağı nesneyi
+    /// değiştirmemelidir. Uyarının anahtarı ve mantıksal hedefi kalır; teknik ayrıntısı
+    /// sunucu yolları ve servis kimlik bilgileri taşıyabildiğinden yalnız yöneticiye döner.
     /// </para>
     /// </remarks>
     private static BackupRecordDto HideServerPaths(BackupRecordDto record)
     {
-        record.Path = string.Empty;
-        return record;
+        return new BackupRecordDto
+        {
+            Id = record.Id,
+            Name = record.Name,
+            Type = record.Type,
+            Source = record.Source,
+            Format = record.Format,
+            CreatedAtUtc = record.CreatedAtUtc,
+            Size = record.Size,
+            Status = record.Status,
+            TargetType = record.TargetType,
+            RemoteUri = SafeRemoteLocation(record.RemoteUri),
+            Encrypted = record.Encrypted,
+            Compressed = record.Compressed,
+            Warnings = record.Warnings.Select(warning => new BackupRestoreWarningDto
+            {
+                MessageKey = warning.MessageKey,
+                Target = SafeWarningTarget(warning.Target)
+            }).ToList(),
+            IncludedDatabases = record.IncludedDatabases?.Select(database => new BackupDatabaseRef
+            {
+                Engine = database.Engine, DatabaseName = database.DatabaseName
+            }).ToList(),
+            IncludedComponents = record.IncludedComponents?.Select(component => new BackupComponentRef
+            {
+                Kind = component.Kind, Source = component.Source
+            }).ToList(),
+            LocalMissing = record.LocalMissing,
+            RemoteMissing = record.RemoteMissing,
+            RemoteVerifiedUtc = record.RemoteVerifiedUtc,
+            RemoteState = record.RemoteState,
+            OffsiteCopyLost = record.OffsiteCopyLost,
+            AllCopiesMissing = record.AllCopiesMissing,
+            IntegrityState = record.IntegrityState,
+            ContentHash = record.ContentHash,
+            RemoteDeleteFailed = record.RemoteDeleteFailed,
+            ChainId = record.ChainId,
+            ChainIndex = record.ChainIndex,
+            BackupMode = record.BackupMode,
+            BaseBackupId = record.BaseBackupId,
+            SubscriptionUserId = record.SubscriptionUserId,
+            ItemCount = record.ItemCount
+        };
+    }
+
+    private BackupRecordDto ProjectBackupRecord(BackupRecordDto record) =>
+        CustomerAccess.IsScoped(User) ? HideServerPaths(record) : record;
+
+    private static string SafeRemoteLocation(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        // FTP's Uri parser can treat a literal '?' as part of the path and escape it.
+        // Remove raw query/fragment delimiters before parsing; encoded filename characters
+        // such as %3F and %23 remain part of the real remote object name.
+        var location = value.Trim();
+        var suffix = location.IndexOfAny(['?', '#']);
+        if (suffix >= 0) location = location[..suffix];
+        if (!Uri.TryCreate(location, UriKind.Absolute, out var uri) || uri.IsFile)
+            return string.Empty;
+        // OAuth destinations identify a folder inside the account, e.g. dropbox:/backups/a.zip.
+        // Keep that remote-copy evidence while still rejecting hostless arbitrary text.
+        var logicalCloudPath = (uri.Scheme is "dropbox" or "onedrive") && uri.AbsolutePath.StartsWith('/');
+        if (string.IsNullOrEmpty(uri.Host) && !logicalCloudPath)
+            return string.Empty;
+
+        return new UriBuilder(uri)
+        {
+            UserName = string.Empty, Password = string.Empty, Query = string.Empty, Fragment = string.Empty
+        }.Uri.AbsoluteUri;
+    }
+
+    private static string SafeWarningTarget(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var target = value.Trim();
+        var absoluteUri = Uri.TryCreate(target, UriKind.Absolute, out var uri);
+        if (Path.IsPathRooted(target) || (absoluteUri && uri!.IsFile))
+            return string.Empty;
+        return target.Contains("://", StringComparison.Ordinal) || (absoluteUri && uri!.Scheme is "dropbox" or "onedrive")
+            ? SafeRemoteLocation(target) : value;
     }
 
     /// <summary>
@@ -330,13 +410,17 @@ public sealed class BackupController(
     [HttpPost("site")]
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> BackupSiteAsync([FromBody] BackupSiteRequest request, CancellationToken cancellationToken)
     {
-        await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
-
-        foreach (var veritabani in request.Databases ?? [])
+        var actor = await EnterActorAsync(cancellationToken);
+        using var actorLease = actor.Lease;
+        async Task BeforeBackup(CancellationToken token)
         {
-            await CustomerAccess.EnsureDatabaseAsync(
-                customerScopes, dbOwnership, User, veritabani.Engine, veritabani.DatabaseName, cancellationToken);
+            await actor.Authority.RevalidateAsync(dbContext, customerScopes, User, token);
+            await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, token);
+            foreach (var database in request.Databases ?? [])
+                await CustomerAccess.EnsureDatabaseAsync(
+                    customerScopes, dbOwnership, User, database.Engine, database.DatabaseName, token);
         }
+        await BeforeBackup(cancellationToken);
 
         // Sahip İŞTEN ÖNCE çözülür: çalışan-iş kaydı da denetim kaydı da aynı sahibi taşımalı ve
         // sahiplik yedek sırasında değişse bile ikisi tutarlı kalmalı.
@@ -344,11 +428,11 @@ public sealed class BackupController(
         await using var job = await runningJobs.BeginAsync(
             RunningJobKinds.Backup, request.SiteName, konu, cancellationToken);
 
-        var backup = await backupService.BackupSiteAsync(request, cancellationToken);
+        var backup = await backupService.BackupSiteAsync(request, BeforeBackup, cancellationToken);
 
         await WriteBackupCreatedAuditAsync(backup, konu, cancellationToken);
 
-        return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.created"));
+        return Ok(ApiResponse<BackupRecordDto>.Ok(ProjectBackupRecord(backup), "backup.created"));
     }
 
     /// <summary>Yerel yedek dosyasını .zip olarak indirir (profesyonel panel benzeri "indir").</summary>
@@ -386,9 +470,12 @@ public sealed class BackupController(
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> RetryRemoteAsync(string backupId,
         [FromBody] RetryBackupRemoteRequest request, CancellationToken cancellationToken)
     {
+        var actor = await EnterActorAsync(cancellationToken, administratorOnly: true);
+        using var actorLease = actor.Lease;
         await using var job = await runningJobs.BeginAsync(
             RunningJobKinds.Backup, backupId, subjectUserId: null, cancellationToken);
-        var backup = await backupService.RetryRemoteUploadAsync(backupId, request.RemoteUrl, cancellationToken);
+        var backup = await backupService.RetryRemoteUploadAsync(backupId, request.RemoteUrl,
+            (record, token) => RevalidateMutationAsync(actor.Authority, record, token), cancellationToken);
         await WriteBackupAuditAsync("backup.remote_retried", backup.Name,
             $"Remote upload completed: {backup.RemoteUri}",
             await ResolveRecordSubjectAsync(backup, CancellationToken.None), CancellationToken.None);
@@ -399,6 +486,8 @@ public sealed class BackupController(
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> BackupDatabaseAsync([FromBody] BackupDatabaseRequest request, CancellationToken cancellationToken)
     {
+        var actor = await EnterActorAsync(cancellationToken, administratorOnly: true);
+        using var actorLease = actor.Lease;
         // Konu YOK: sunucu geneli/yönetici işlemi (veritabanı sahipliği yedek kaydında taşınmaz).
         // Aynı sebeple çalışan-iş kaydı da sahipsizdir → yalnız yöneticide görünür.
         await using var job = await runningJobs.BeginAsync(
@@ -407,7 +496,8 @@ public sealed class BackupController(
             subjectUserId: null,
             cancellationToken);
 
-        var backup = await backupService.BackupDatabaseAsync(request, cancellationToken);
+        var backup = await backupService.BackupDatabaseAsync(request,
+            token => actor.Authority.RevalidateAsync(dbContext, customerScopes, User, token), cancellationToken);
         await WriteBackupCreatedAuditAsync(backup, null, cancellationToken);
         return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.created"));
     }
@@ -417,6 +507,8 @@ public sealed class BackupController(
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> BackupMailAsync([FromBody] BackupMailRequest request)
     {
+        var actor = await EnterActorAsync(CancellationToken.None, administratorOnly: true);
+        using var actorLease = actor.Lease;
         // Servisi durdurup başlatan akış istemci iptaline bağlanmaz.
         //
         // ÇALIŞAN-İŞ KAYDI BURADA ÖZELLİKLE DEĞERLİ: bu iş sırasında posta sunucusu DURUYOR.
@@ -425,7 +517,8 @@ public sealed class BackupController(
         await using var job = await runningJobs.BeginAsync(
             RunningJobKinds.Backup, "mail", subjectUserId: null, CancellationToken.None);
 
-        var backup = await backupService.BackupMailAsync(request, CancellationToken.None);
+        var backup = await backupService.BackupMailAsync(request,
+            token => actor.Authority.RevalidateAsync(dbContext, customerScopes, User, token), CancellationToken.None);
 
         // MAIL SUNUCUSU KISA SÜRELİĞİNE DURUYOR: bu, dışarıdan "posta kesintisi" olarak görülen
         // bir olaydır ve izi olmadan sebebi hiç bulunamaz.
@@ -439,10 +532,13 @@ public sealed class BackupController(
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> BackupPanelAsync([FromBody] BackupPanelRequest? request, CancellationToken cancellationToken)
     {
+        var actor = await EnterActorAsync(cancellationToken, administratorOnly: true);
+        using var actorLease = actor.Lease;
         await using var job = await runningJobs.BeginAsync(
             RunningJobKinds.Backup, "panel", subjectUserId: null, cancellationToken);
 
-        var backup = await backupService.BackupPanelAsync(request ?? new BackupPanelRequest(), cancellationToken);
+        var backup = await backupService.BackupPanelAsync(request ?? new BackupPanelRequest(),
+            token => actor.Authority.RevalidateAsync(dbContext, customerScopes, User, token), cancellationToken);
         // Panel yedeği ADMIN PAROLA ÖZETLERİNİ ve 2FA gizlerini içerir; kimin ne zaman aldığı
         // izlenebilir olmalı (indirilebilen bir arşiv üretiliyor).
         await WriteBackupCreatedAuditAsync(backup, null, cancellationToken);
@@ -455,6 +551,8 @@ public sealed class BackupController(
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> RestoreAsync([FromBody] RestoreBackupRequest request, CancellationToken cancellationToken)
     {
+        var actor = await EnterActorAsync(cancellationToken, administratorOnly: true);
+        using var actorLease = actor.Lease;
         // Kayıt İŞLEMDEN ÖNCE okunur: geri yükleme yarıda patlarsa (dosyalar canlı kökün üzerine
         // ZATEN yazılmış olabilir) hangi yedekten ne denendiği yine de yazılabilsin.
         var hedef = (await backupService.GetBackupsAsync(cancellationToken))
@@ -472,7 +570,8 @@ public sealed class BackupController(
         BackupRecordDto backup;
         try
         {
-            backup = await backupService.RestoreAsync(request, cancellationToken);
+            backup = await backupService.RestoreAsync(request,
+                (record, token) => RevalidateMutationAsync(actor.Authority, record, token), cancellationToken);
         }
         catch (Exception exception)
         {
@@ -552,6 +651,8 @@ public sealed class BackupController(
         [FromBody] RestoreBackupItemsRequest request,
         CancellationToken cancellationToken)
     {
+        var actor = await EnterActorAsync(cancellationToken);
+        using var actorLease = actor.Lease;
         await EnsureBackupOwnershipAsync(request.BackupId, cancellationToken);
 
         // GÜVENLİK (çapraz-kiracı): yönetici DIŞINDA kimse hedef yol seçemez; içerik her zaman
@@ -584,7 +685,8 @@ public sealed class BackupController(
         RestoreBackupItemsResultDto result;
         try
         {
-            result = await backupService.RestoreItemsAsync(request, cancellationToken);
+            result = await backupService.RestoreItemsAsync(request,
+                (record, token) => RevalidateMutationAsync(actor.Authority, record, token), cancellationToken);
         }
         catch (Exception exception)
         {
@@ -619,6 +721,8 @@ public sealed class BackupController(
     [HttpDelete("{backupId}")]
     public async Task<ActionResult<ApiResponse<object>>> DeleteAsync(string backupId, CancellationToken cancellationToken)
     {
+        var actor = await EnterActorAsync(cancellationToken);
+        using var actorLease = actor.Lease;
         await EnsureBackupOwnershipAsync(backupId, cancellationToken);
 
         var record = (await backupService.GetBackupsAsync(cancellationToken))
@@ -627,7 +731,8 @@ public sealed class BackupController(
         // Konu, kayıt SİLİNMEDEN önce çözülür (sonrasında okunamaz).
         var konu = await ResolveRecordSubjectAsync(record, cancellationToken);
 
-        await backupService.DeleteBackupAsync(backupId, cancellationToken);
+        await backupService.DeleteBackupAsync(backupId,
+            (current, token) => RevalidateMutationAsync(actor.Authority, current, token), cancellationToken);
 
         await WriteBackupAuditAsync(
             "backup.deleted",
@@ -654,6 +759,13 @@ public sealed class BackupController(
             .FirstOrDefault(item => item.Id == backupId)
             ?? throw new AdaPanel.Core.Common.AppException("backup.not_found", 404, 404);
 
+        await EnsureBackupOwnershipAsync(record, cancellationToken);
+    }
+
+    private async Task EnsureBackupOwnershipAsync(BackupRecordDto record, CancellationToken cancellationToken)
+    {
+        if (!CustomerAccess.IsScoped(User)) return;
+
         if (string.Equals(record.Type, "subscription", StringComparison.OrdinalIgnoreCase))
         {
             if (!Guid.TryParseExact(record.SubscriptionUserId, "N", out var sahip))
@@ -673,6 +785,29 @@ public sealed class BackupController(
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, record.Source, cancellationToken);
     }
 
+    private async Task<(BackupActorAuthority Authority, IDisposable Lease)> EnterActorAsync(
+        CancellationToken token, bool administratorOnly = false)
+    {
+        var authority = await BackupActorAuthority.CaptureAsync(dbContext, customerScopes, User, token);
+        if (administratorOnly && authority.Role != "Administrator")
+            throw new AdaPanel.Core.Common.AppException("auth.forbidden", 403, 403);
+        // User/subscription mutations use the same outer lease. Never acquire it from
+        // a source callback: all paths take subscription before the backup source.
+        var lease = await DatabaseLifecycle.EnterSubscriptionAsync(authority.SubscriptionId, token);
+        try
+        {
+            await authority.RevalidateAsync(dbContext, customerScopes, User, token);
+            return (authority, lease);
+        }
+        catch { lease.Dispose(); throw; }
+    }
+
+    private async Task RevalidateMutationAsync(BackupActorAuthority authority, BackupRecordDto record, CancellationToken token)
+    {
+        await authority.RevalidateAsync(dbContext, customerScopes, User, token);
+        await EnsureBackupOwnershipAsync(record, token);
+    }
+
     // =====================================================================================
     // ABONELİK YEDEĞİ + ZİNCİR + ABONELİK BAŞINA PROGRAM
     // =====================================================================================
@@ -686,6 +821,13 @@ public sealed class BackupController(
         [FromBody] BackupSubscriptionRequest request,
         CancellationToken cancellationToken)
     {
+        var actor = await EnterActorAsync(cancellationToken);
+        using var actorLease = actor.Lease;
+        async Task BeforeBackup(CancellationToken token)
+        {
+            await actor.Authority.RevalidateAsync(dbContext, customerScopes, User, token);
+            await EnsureSubscriptionAccessAsync(request.UserId, token);
+        }
         // KİRACI İZOLASYONU: kapsamlı kullanıcı gövdeye BAŞKA bir abonelik kimliği yazamaz.
         // Kimlik istekten okunup doğrulanmasaydı, bir müşteri başka bir müşterinin bütün
         // verisini içeren bir arşiv ürettirip indirebilirdi.
@@ -697,13 +839,13 @@ public sealed class BackupController(
         await using var job = await runningJobs.BeginAsync(
             RunningJobKinds.Backup, request.UserId.ToString("N"), request.UserId, cancellationToken);
 
-        var backup = await backupService.BackupSubscriptionAsync(request, cancellationToken);
+        var backup = await backupService.BackupSubscriptionAsync(request, BeforeBackup, cancellationToken);
 
         // Konu ÖLÇÜLMEZ, İSTEKTEN GELİR ve zaten yukarıda doğrulanmıştır: bu arşiv o aboneliğin
         // bütün verisini taşır, izi de sahibinin ekranında görünmelidir.
         await WriteBackupCreatedAuditAsync(backup, request.UserId, cancellationToken);
 
-        return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.created"));
+        return Ok(ApiResponse<BackupRecordDto>.Ok(ProjectBackupRecord(backup), "backup.created"));
     }
 
     /// <summary>
@@ -726,15 +868,19 @@ public sealed class BackupController(
     /// </para>
     /// </summary>
     [HttpDelete("{backupId}/chain")]
-    public async Task<ActionResult<ApiResponse<BackupDeleteResultDto>>> DeleteChainAsync(string backupId, CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<BackupDeleteResultDto>>> DeleteChainAsync(string backupId, CancellationToken cancellationToken,
+        [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] DeleteBackupChainRequest? request = null)
     {
+        var actor = await EnterActorAsync(cancellationToken);
+        using var actorLease = actor.Lease;
         await EnsureBackupOwnershipAsync(backupId, cancellationToken);
 
         var record = (await backupService.GetBackupsAsync(cancellationToken))
             .FirstOrDefault(item => string.Equals(item.Id, backupId, StringComparison.OrdinalIgnoreCase));
         var konu = await ResolveRecordSubjectAsync(record, cancellationToken);
 
-        var result = await backupService.DeleteBackupChainAsync(backupId, cancellationToken);
+        var result = await backupService.DeleteBackupChainAsync(backupId, request?.ExpectedBackupIds,
+            (current, token) => RevalidateMutationAsync(actor.Authority, current, token), cancellationToken);
 
         await WriteBackupAuditAsync(
             "backup.chain_deleted",
@@ -826,12 +972,19 @@ public sealed class BackupController(
     [HttpPost("schedules/{userId:guid}/run")]
     public async Task<ActionResult<ApiResponse<SubscriptionBackupScheduleDto>>> RunScheduleNowAsync(Guid userId, CancellationToken cancellationToken)
     {
+        var actor = await EnterActorAsync(cancellationToken);
+        using var actorLease = actor.Lease;
+        async Task BeforeMutation(CancellationToken token)
+        {
+            await actor.Authority.RevalidateAsync(dbContext, customerScopes, User, token);
+            await EnsureSubscriptionAccessAsync(userId, token);
+        }
         await EnsureSubscriptionAccessAsync(userId, cancellationToken);
 
         await using var job = await runningJobs.BeginAsync(
             RunningJobKinds.Backup, userId.ToString("N"), userId, cancellationToken);
 
-        var schedule = await backupSchedules.RunNowAsync(userId, cancellationToken);
+        var schedule = await backupSchedules.RunNowAsync(userId, BeforeMutation, cancellationToken);
 
         // İZ YOKTU. Elle tetiklenen tur yalnız yedek ALMAZ, saklama politikasına göre ESKİLERİ DE
         // BUDAR — yani veri silen bir yoldur. Ayrıca arka plan turundan ayırt edilebilmesi gerekir:

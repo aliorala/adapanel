@@ -5,7 +5,10 @@ using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Audit;
+using AdaPanel.Infrastructure.Database;
+using AdaPanel.Infrastructure.Iis;
 using AdaPanel.Infrastructure.Security;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -272,22 +275,20 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
 
         // Bağlı = açık link VEYA ad eşleşmesi (site adı / DatabaseNameFromSite). Geri kalan mevcut DB'ler aday.
         var links = await siteDatabaseLinks.GetForSiteAsync(siteName, cancellationToken);
-        var wantedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        string[] wantedNames =
         {
             siteName.Trim(),
             AdaPanel.Core.Common.ResourceNaming.DatabaseNameFromSite(siteName)
         };
 
-        bool IsLinked(SiteDatabaseRefDto reference) =>
-            links.Any(link =>
-                string.Equals(link.Engine, reference.Engine, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(link.DatabaseName, reference.Name, StringComparison.OrdinalIgnoreCase)) ||
-            wantedNames.Contains(reference.Name);
-
-        // GÜVENLİK (sızıntı): aday listesi kullanıcının SAHİP OLDUĞU veritabanlarıyla sınırlıdır.
-        // Bağlı olanlar filtrelenmez: bir site zaten bağlıysa kullanıcı onu görmeli, aksi hâlde
-        // ekranında sebepsiz kaybolurdu.
         var baglanabilir = await ResolveLinkableDatabasesAsync(cancellationToken);
+        bool IsLinked(SiteDatabaseRefDto reference) =>
+            links.Any(link => DatabaseResourceIdentity.Same(link.Engine, link.DatabaseName, reference.Engine, reference.Name)) ||
+            (wantedNames.Any(name => DatabaseResourceIdentity.Same(reference.Engine, name, reference.Engine, reference.Name)) &&
+             (baglanabilir is null || baglanabilir.Icerir(reference.Engine, reference.Name)));
+
+        // Persisted links remain visible; name coincidence alone cannot bypass another
+        // tenant's explicit ownership, even in the linked list.
         var adaylar = all.Where(reference => !IsLinked(reference));
         if (baglanabilir is not null)
         {
@@ -310,17 +311,22 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService, concurrencyLock, siteName, cancellationToken);
 
         // GÜVENLİK (çapraz-kiracı): site kapsamı doğrulanıyordu ama veritabanı adı SERBESTTİ.
         // Başkasının veritabanını kendi sitesine bağlayan kiracı, sitesini silince cascade o
         // veritabanını DROP ediyordu. Gerekçe: ResolveLinkableDatabasesAsync.
-        var baglanabilir = await ResolveLinkableDatabasesAsync(cancellationToken);
-        if (baglanabilir is not null && !baglanabilir.Icerir(request.Engine, request.Name))
+        using (await DatabaseLifecycle.EnterResourceAsync(request.Engine, request.Name, cancellationToken))
         {
-            return StatusCode(403, ApiResponse<object>.Fail("sites.database_forbidden", 403));
+            await target.RunAsync(async current =>
+            {
+                await CustomerAccess.EnsureSiteAsync(customerScopes, User, current.Name, cancellationToken);
+                var baglanabilir = await ResolveLinkableDatabasesAsync(cancellationToken);
+                if (baglanabilir is not null && !baglanabilir.Icerir(request.Engine, request.Name))
+                    throw new AppException("sites.database_forbidden", 403, 403);
+                await siteDatabaseLinks.LinkAsync(request.Engine, request.Name, current.Name, cancellationToken);
+            }, cancellationToken);
         }
-
-        await siteDatabaseLinks.LinkAsync(request.Engine, request.Name, siteName, cancellationToken);
         await WriteAuditAsync("sites.database.linked", siteName, cancellationToken, ayrinti: $"{request.Engine}:{request.Name}");
         return Ok(ApiResponse<object>.Ok(new { }, "sites.database.linked"));
     }
@@ -334,19 +340,28 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService, concurrencyLock, siteName, cancellationToken);
 
         // GÜVENLİK (çapraz-kiracı): kaldırma da BAĞLAMA ile aynı sahiplik denetiminden geçer.
         // UnlinkAsync imzasında site adı YOK ve kaydı yalnız motor+ad eşleşmesiyle siliyor; yani
         // denetimsiz bırakılırsa kendi sitesinin adını yazan bir kiracı, BAŞKASININ site↔DB bağını
         // sessizce koparabilirdi. Sonuç kurbanda görünmez bir bozulma: veritabanı site panelinden
         // kaybolur ve site silinirken cascade ile temizlenmediği için yetim kalır.
-        var baglanabilir = await ResolveLinkableDatabasesAsync(cancellationToken);
-        if (baglanabilir is not null && !baglanabilir.Icerir(engine, name))
+        using (await DatabaseLifecycle.EnterResourceAsync(engine, name, cancellationToken))
         {
-            return StatusCode(403, ApiResponse<object>.Fail("sites.database_forbidden", 403));
+            await target.RunAsync(async current =>
+            {
+                await CustomerAccess.EnsureSiteAsync(customerScopes, User, current.Name, cancellationToken);
+                var baglanabilir = await ResolveLinkableDatabasesAsync(cancellationToken);
+                if (baglanabilir is not null && !baglanabilir.Icerir(engine, name))
+                    throw new AppException("sites.database_forbidden", 403, 403);
+                var link = (await siteDatabaseLinks.GetAllAsync(cancellationToken))
+                    .FirstOrDefault(item => DatabaseResourceIdentity.Same(item.Engine, item.DatabaseName, engine, name));
+                if (link is not null && !string.Equals(link.SiteName, current.Name, StringComparison.OrdinalIgnoreCase))
+                    throw new AppException("sites.target_changed", 409, 409);
+                await siteDatabaseLinks.UnlinkAsync(engine, name, cancellationToken);
+            }, cancellationToken);
         }
-
-        await siteDatabaseLinks.UnlinkAsync(engine, name, cancellationToken);
         await WriteAuditAsync("sites.database.unlinked", siteName, cancellationToken, ayrinti: $"{engine}:{name}");
         return Ok(ApiResponse<object>.Ok(new { }, "sites.database.unlinked"));
     }
@@ -359,71 +374,41 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         [FromBody] UpdateDocumentRootRequest request,
         CancellationToken cancellationToken)
     {
+        // Keep the path-only rejection before any mutation or integration work.
+        if (User.IsInRole("Administrator")) EnsureAdminPathIsWritable(request.PhysicalPath);
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService, concurrencyLock, siteName, cancellationToken);
+        var db = HttpContext.RequestServices.GetRequiredService<AdaPanelDbContext>();
+        var actor = await SiteActorAuthority.CaptureAsync(db, customerScopes, User, cancellationToken);
+        using var subscription = await DatabaseLifecycle.EnterSubscriptionAsync(actor.SubscriptionId, cancellationToken);
+        await actor.RevalidateAsync(db, customerScopes, User, cancellationToken);
+        if (!await IsDocumentRootAllowedAsync(target.Site, request.PhysicalPath, cancellationToken))
+            return StatusCode(403, ApiResponse<SiteDto>.Fail("sites.document_root_outside_site", 403));
 
-        // GÜVENLİK (çapraz-kiracı): admin DIŞINDAKİ kullanıcılar belge kökünü sitenin KENDİ
-        // klasörünün dışına taşıyamaz.
-        //
-        // Site OLUŞTURULURKEN yol zaten zorlanıyor (ResolveScopedPhysicalPath) — ama bu kontrol
-        // olmadan aynı kısıtlama SONRADAN belge kökü değiştirilerek aşılabiliyordu: ön kapı
-        // kapalı, yan kapı açıktı. Kiracı belge kökünü başka bir müşterinin klasörüne (ya da
-        // C:\ gibi bir sistem yoluna) çevirip o içeriği web üzerinden okuyabilir, IIS'in o
-        // klasöre yazma iznini kendi lehine kullanabilirdi.
-        //
-        // Sitenin kökünün KENDİSİ geçerlidir: "public"ten proje köküne geri dönmek meşru bir
-        // işlemdir ve en olağan durumdur.
-        //
-        // SINIR SİTE DEĞİL KİRACIDIR — ve bu, kullanıcı bildirimiyle düzeltildi. Önceki hâl
-        // yalnız DÜZENLENEN sitenin kökünü kabul ediyordu; oysa alt alan adı AYRI BİR SİTEDİR ve
-        // en olağan kullanım tam da şudur: "webtv.ornek.com" alt alan adını ana sitedeki
-        // "httpdocs/iptv/public" klasörüne bakacak şekilde ayarlamak (Plesk'in olağan davranışı).
-        // Site sınırı bunu 403 ile reddediyordu — yani koruma, kiracıyı BAŞKASININ klasöründen
-        // korurken KENDİ klasöründen de koruyordu.
-        //
-        // Yeni kural: yol, kiracının SAHİP OLDUĞU sitelerden HERHANGİ BİRİNİN kökünde olabilir.
-        // Çapraz kiracı koruması aynen duruyor — küme kapsam servisinden geliyor, istekten değil
-        // (bu depoda kapanmış hata sınıfı: "kapsam denetimi doğru ama denetlenen değeri kiracı
-        // seçiyor"). Kapsamsız rol (operator) için davranış DEĞİŞMEDİ: küme null döner ve eski
-        // tek-site kuralı uygulanır; bu düzeltmenin amacı kiracıya alan açmak, kapsamsız role
-        // yeni yetki vermek değil.
-        if (!User.IsInRole("Administrator"))
+        var site = await siteProvisioningService.SetDocumentRootAsync(siteName, request.PhysicalPath, async (current, token) =>
         {
-            var mevcut = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-            var duzenlenenKok = string.IsNullOrWhiteSpace(mevcut.ApplicationRootPath)
-                ? mevcut.PhysicalPath
-                : mevcut.ApplicationRootPath;
-
-            List<string>? kiracininKokleri = null;
-            var kiracininSiteleri = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, User, cancellationToken);
-            if (kiracininSiteleri is not null)
-            {
-                // TEK çağrı: kiracının site sayısı kadar IIS okuması yapmak, olağan bir ayar
-                // değişikliğini site sayısıyla birlikte yavaşlatırdı.
-                var hepsi = await iisSiteService.GetSitesAsync(cancellationToken);
-                kiracininKokleri = hepsi
-                    .Where(site => kiracininSiteleri.Contains(site.Name, StringComparer.OrdinalIgnoreCase))
-                    .Select(site => string.IsNullOrWhiteSpace(site.ApplicationRootPath)
-                        ? site.PhysicalPath
-                        : site.ApplicationRootPath)
-                    .ToList();
-            }
-
-            if (!SiteDocumentRootScope.IsAllowed(request.PhysicalPath, duzenlenenKok, kiracininKokleri))
-            {
-                return StatusCode(403, ApiResponse<SiteDto>.Fail("sites.document_root_outside_site", 403));
-            }
-        }
-        else
-        {
-            // YÖNETİCİ DALI DA DENETLENİR. Kiracı sınırı KİRACI kapsamıdır (SiteDocumentRootScope);
-            // yöneticinin kapsamı yoktur, o yüzden ondan istenen şey kapsam değil SİSTEM ALANINA
-            // dokunmamaktır. Aksi hâlde "belge kökü = C:\" ile dosya yöneticisi tüm diski açıyordu.
-            EnsureAdminPathIsWritable(request.PhysicalPath);
-        }
-
-        var site = await siteProvisioningService.SetDocumentRootAsync(siteName, request.PhysicalPath, cancellationToken);
+            target.ValidateSnapshot(current);
+            await actor.RevalidateAsync(db, customerScopes, User, token);
+            await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, token);
+            if (!await IsDocumentRootAllowedAsync(current, request.PhysicalPath, token))
+                throw new AppException("sites.document_root_outside_site", 403, 403);
+        }, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         await WriteAuditAsync("sites.document_root.updated", siteName, cancellationToken, ayrinti: site.PhysicalPath);
         return Ok(ApiResponse<SiteDto>.Ok(site, "sites.document_root.updated"));
+    }
+
+    private async Task<bool> IsDocumentRootAllowedAsync(SiteDto current, string requested, CancellationToken token)
+    {
+        if (User.IsInRole("Administrator")) { EnsureAdminPathIsWritable(requested); return true; }
+        var root = string.IsNullOrWhiteSpace(current.ApplicationRootPath) ? current.PhysicalPath : current.ApplicationRootPath;
+        var allowed = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, User, token);
+        // Subdomains may use any root belonging to this tenant, including a parent site's public directory.
+        var roots = allowed is null ? null : (await iisSiteService.GetSitesAsync(token))
+            .Where(site => allowed.Contains(site.Name, StringComparer.OrdinalIgnoreCase))
+            .Select(site => string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath)
+            .ToArray();
+        return SiteDocumentRootScope.IsAllowed(requested, root, roots);
     }
 
     // #2 Laravel/WordPress pretty-URL yönlendirmesi (index.php). URL Rewrite modülü yoksa 409 (site bozulmaz).
@@ -431,7 +416,18 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
     public async Task<ActionResult<ApiResponse<SiteDto>>> EnableFrameworkRewriteAsync(string siteName, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
-        var site = await siteProvisioningService.EnableFrameworkRewriteAsync(siteName, cancellationToken);
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService, concurrencyLock, siteName, cancellationToken);
+        var db = HttpContext.RequestServices.GetRequiredService<AdaPanelDbContext>();
+        var actor = await SiteActorAuthority.CaptureAsync(db, customerScopes, User, cancellationToken);
+        using var subscription = await DatabaseLifecycle.EnterSubscriptionAsync(actor.SubscriptionId, cancellationToken);
+        await actor.RevalidateAsync(db, customerScopes, User, cancellationToken);
+        var site = await siteProvisioningService.EnableFrameworkRewriteAsync(siteName, async (current, token) =>
+        {
+            target.ValidateSnapshot(current);
+            await actor.RevalidateAsync(db, customerScopes, User, token);
+            await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, token);
+        }, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         await WriteAuditAsync("sites.framework_rewrite.enabled", siteName, cancellationToken);
         return Ok(ApiResponse<SiteDto>.Ok(site, "sites.framework_rewrite.enabled"));
     }
@@ -504,7 +500,18 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
     public async Task<ActionResult<ApiResponse<SitePermissionRepairResultDto>>> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
-        var result = await siteProvisioningService.RepairPermissionsAsync(siteName, cancellationToken);
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService, concurrencyLock, siteName, cancellationToken);
+        var db = HttpContext.RequestServices.GetRequiredService<AdaPanelDbContext>();
+        var actor = await SiteActorAuthority.CaptureAsync(db, customerScopes, User, cancellationToken);
+        using var subscription = await DatabaseLifecycle.EnterSubscriptionAsync(actor.SubscriptionId, cancellationToken);
+        await actor.RevalidateAsync(db, customerScopes, User, cancellationToken);
+        var result = await siteProvisioningService.RepairPermissionsAsync(siteName, async (current, token) =>
+        {
+            target.ValidateSnapshot(current);
+            await actor.RevalidateAsync(db, customerScopes, User, token);
+            await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, token);
+        }, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var action = result.State switch
         {
@@ -569,8 +576,15 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         [FromServices] IFtpService ftpService,
         [FromServices] IDnsService dnsService,
         [FromServices] IComponentBootstrapper componentBootstrapper,
+        [FromServices] AdaPanelDbContext dbContext,
         CancellationToken cancellationToken)
     {
+        // Freeze the account/subscription before site provisioning or any database wait.
+        // Database creation below remains best effort: a revoked actor receives a partial
+        // result for the already provisioned site, without creating its optional database.
+        var databaseAuthority = request.CreateDatabase
+            ? await DatabaseActorAuthority.CaptureAsync(dbContext, customerScopes, User, cancellationToken)
+            : null;
         // GÜVENLİK (internet/güvenilmez kiracı): admin DIŞINDAKİ kullanıcılar (bayi/müşteri) fiziksel yolu SEÇEMEZ —
         // panel yolu DAİMA varsayılan site köküne (kiracı-izole) zorlar. Aksi halde kötü-niyetli istek başka sitenin
         // klasörüne işaret edip okuyabilir/ACL'ini bozabilirdi (çapraz-kiracı). Admin tam serbest (mevcut davranış).
@@ -640,6 +654,11 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             ? Guid.Empty
             : await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken);
 
+        // Start before provisioning: a replacement before its return must not become the
+        // target of this request's optional database merely because its name/paths match.
+        using var databaseSiteCreation = request.CreateDatabase
+            ? await SiteMutationGuard.WatchCreationAsync(concurrencyLock, request.Name, cancellationToken)
+            : null;
         var site = await concurrencyLock.RunExclusiveAsync(
             $"site-quota:{aboneligim}",
             async () =>
@@ -714,13 +733,6 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             (request.ProvisionDefaultServices && installedComponents.Contains("stalwart-mail"));
         var shouldCreateFtpUser = request.CreateFtpUser || request.ProvisionDefaultServices;
 
-        // M1 (panel MaxDatabases): DB kotası doluysa DB oluşturmayı atla (site yine oluşur). Admin sınırsız.
-        if (shouldCreateDatabase && !string.IsNullOrWhiteSpace(databaseEngine) && await IsDatabaseQuotaReachedAsync(cancellationToken))
-        {
-            shouldCreateDatabase = false;
-            result.Warnings.Add("database: quota reached (max databases in your plan).");
-        }
-
         if (shouldCreateDatabase && !string.IsNullOrWhiteSpace(databaseEngine))
         {
             var dbName = string.IsNullOrWhiteSpace(request.DatabaseName)
@@ -734,15 +746,41 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
                 : request.DatabasePassword;
             try
             {
-                await databaseService.CreateDatabaseAsync(
-                    new Core.Dtos.Databases.CreateDatabaseRequest
-                    {
-                        Engine = databaseEngine,
-                        Name = dbName,
-                        UserName = databaseUser,
-                        Password = databasePassword
-                    },
-                    cancellationToken);
+                var authority = databaseAuthority!;
+                using var target = await databaseSiteCreation!.CaptureCreatedAsync(iisSiteService, site, cancellationToken);
+                var subscriptionId = authority.SubscriptionId;
+                using var subscriptionLease = await DatabaseLifecycle.EnterSubscriptionAsync(subscriptionId, cancellationToken);
+                await authority.RevalidateAsync(dbContext, customerScopes, User, cancellationToken);
+                IDisposable? reservation = null;
+                try
+                {
+                    await databaseService.CreateDatabaseAsync(
+                        new Core.Dtos.Databases.CreateDatabaseRequest
+                        {
+                            Engine = databaseEngine,
+                            Name = dbName,
+                            UserName = databaseUser,
+                            Password = databasePassword,
+                            SiteName = site.Name
+                        },
+                        async token =>
+                        {
+                            await authority.RevalidateAsync(dbContext, customerScopes, User, token);
+                            if (await IsDatabaseQuotaReachedAsync(token))
+                                throw new AppException("database.quota_exceeded", 403, 403);
+                            // This callback already owns the database lease. Pin until CREATE,
+                            // link publication, ownership and any compensation have all completed.
+                            reservation = await target.ReserveAsync(token);
+                        },
+                        token => target.RunAsync(async current =>
+                        {
+                            await authority.RevalidateAsync(dbContext, customerScopes, User, token);
+                            if (!User.IsInRole("Administrator"))
+                                await dbOwnership.RecordAsync(databaseEngine, dbName, subscriptionId, current.Name, token);
+                        }, token),
+                        cancellationToken);
+                }
+                finally { reservation?.Dispose(); }
                 result.Created.Add($"{databaseEngine}:{dbName}");
                 result.GeneratedCredentials.Add(new GeneratedCredentialDto
                 {
@@ -750,16 +788,10 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
                     UserName = databaseUser,
                     Password = databasePassword
                 });
-                // M1: yeni DB'yi oluşturan müşteriye + siteye ait kaydet (kota sayımı + sahiplik).
-                if (!User.IsInRole("Administrator"))
-                {
-                    await dbOwnership.RecordAsync(
-                        databaseEngine,
-                        dbName,
-                        await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken),
-                        site.Name,
-                        cancellationToken);
-                }
+            }
+            catch (AppException exception) when (exception.MessageKey == "database.quota_exceeded")
+            {
+                result.Warnings.Add("database: quota reached (max databases in your plan).");
             }
             catch (Exception exception)
             {

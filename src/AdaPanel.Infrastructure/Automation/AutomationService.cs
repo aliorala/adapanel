@@ -7,6 +7,7 @@ using AdaPanel.Core.Dtos.Ssl;
 using AdaPanel.Core.Dtos.RunningJobs;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Backup;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
 
@@ -43,7 +44,9 @@ public sealed class AutomationService(
     // arşivine hangi dökümleri koyacağını buradan öğrenir — ad benzerliğinden DEĞİL.
     IDatabaseOwnershipService databaseOwnership,
     IRunningJobService runningJobs,
-    ILogger<AutomationService> logger) : IAutomationService
+    ILogger<AutomationService> logger,
+    ISiteDatabaseLinkService? siteDatabaseLinks = null,
+    ICustomerScopeService? customerScopes = null) : IAutomationService
 {
     private const string StatePath = "config/automation.json";
     private const string AlertCooldownPath = "config/automation-alerts.json";
@@ -126,27 +129,53 @@ public sealed class AutomationService(
         return ToStatus(state);
     }
 
-    public async Task<AutomationStatusDto> RunBackupNowAsync(CancellationToken cancellationToken = default)
+    public Task<AutomationStatusDto> RunBackupNowAsync(CancellationToken cancellationToken = default) =>
+        RunBackupNowCoreAsync(null, cancellationToken);
+
+    public Task<AutomationStatusDto> RunBackupNowAsync(Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken = default) => RunBackupNowCoreAsync(beforeMutation, cancellationToken);
+
+    private async Task<AutomationStatusDto> RunBackupNowCoreAsync(
+        Func<CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
+        var expectedContext = beforeMutation is null ? null : BackupContext(await LoadAsync(cancellationToken));
+        var approval = beforeMutation is null ? null : new BackupExecutionApproval(async token =>
+        {
+            await beforeMutation(token);
+            if (BackupContext(await LoadAsync(token)) != expectedContext)
+                throw new AppException("backup.schedule_changed", 409, 409);
+        });
         // Kilidi bekleyen ikinci bir istek, ilk tur bitince tekrar yedek başlatmamalı.
         await using var job = await runningJobs.BeginAsync(
             RunningJobKinds.Backup, "automation", null, cancellationToken);
         await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Automation, async () =>
         {
             var state = await LoadAsync(cancellationToken);
-            await RunBackupAsync(state, cancellationToken);
-            await SaveRunResultsAsync(state, cancellationToken);
+            if (approval is not null) await approval.CheckAsync(cancellationToken);
+            await RunBackupAsync(state, cancellationToken, approval);
+            if (approval is not null) await approval.CheckAsync(cancellationToken);
+            await SaveRunResultsAsync(state, cancellationToken, expectedContext);
         }, cancellationToken);
 
         return await GetStatusAsync(cancellationToken);
     }
 
-    public async Task<AutomationStatusDto> RunSslRenewNowAsync(CancellationToken cancellationToken = default)
+    public Task<AutomationStatusDto> RunSslRenewNowAsync(CancellationToken cancellationToken = default) =>
+        RunSslRenewNowCoreAsync(null, cancellationToken);
+
+    public Task<AutomationStatusDto> RunSslRenewNowAsync(Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken = default) => RunSslRenewNowCoreAsync(beforeMutation, cancellationToken);
+
+    private async Task<AutomationStatusDto> RunSslRenewNowCoreAsync(
+        Func<CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
+        var approval = beforeMutation is null ? null : new BackupExecutionApproval(beforeMutation);
         await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Automation, async () =>
         {
             var state = await LoadAsync(cancellationToken);
-            await RunSslRenewAsync(state, cancellationToken);
+            if (approval is not null) await approval.CheckAsync(cancellationToken);
+            await RunSslRenewAsync(state, cancellationToken, approval);
+            if (approval is not null) await approval.CheckAsync(cancellationToken);
             await SaveRunResultsAsync(state, cancellationToken);
         }, cancellationToken);
 
@@ -297,7 +326,15 @@ public sealed class AutomationService(
                 }
             }
 
-            if (state.AutoSslRenewEnabled && IsDue(state.LastSslRunUtc, state.SslRenewIntervalHours, now))
+            // The preceding backup can take hours while settings remain editable. Start the
+            // next job from current SSL settings/results, and preserve those results if skipped.
+            var currentSsl = await LoadAsync(cancellationToken);
+            state.AutoSslRenewEnabled = currentSsl.AutoSslRenewEnabled;
+            state.SslRenewIntervalHours = currentSsl.SslRenewIntervalHours;
+            state.LastSslRunUtc = currentSsl.LastSslRunUtc;
+            state.LastSslStatus = currentSsl.LastSslStatus;
+            state.LastSslDetails = currentSsl.LastSslDetails;
+            if (state.AutoSslRenewEnabled && IsDue(state.LastSslRunUtc, state.SslRenewIntervalHours, DateTime.UtcNow))
             {
                 await RunSslRenewAsync(state, cancellationToken);
                 changed = true;
@@ -324,7 +361,8 @@ public sealed class AutomationService(
         }, cancellationToken);
     }
 
-    private async Task RunBackupAsync(AutomationStateRecord state, CancellationToken cancellationToken)
+    private async Task RunBackupAsync(AutomationStateRecord state, CancellationToken cancellationToken,
+        BackupExecutionApproval? approval = null)
     {
         var summary = new StringBuilder();
         var hasError = false;
@@ -333,7 +371,8 @@ public sealed class AutomationService(
 
         // Sitenin arşivine giren veritabanları: aynı dökümü bir de tek başına yedeklemeyelim diye
         // hangilerinin siteye gittiği burada tutulur (anahtar "motor|ad").
-        var siteIcindeYedeklenen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var siteIcindeYedeklenen = new HashSet<string>(StringComparer.Ordinal);
+        var bagimsizDenenen = new HashSet<string>(StringComparer.Ordinal);
 
         try
         {
@@ -345,7 +384,8 @@ public sealed class AutomationService(
                 // Sahiplik kaydı BİR KEZ okunur ve siteye göre gruplanır: site başına ayrı sorgu
                 // atmak, onlarca siteli bir sunucuda gecelik işi gereksiz yere uzatırdı.
                 var sahiplik = await databaseOwnership.GetAllAsync(cancellationToken);
-                var siteVeritabanlari = GroupDatabasesBySite(sahiplik);
+                var siteVeritabanlari = await ResolveDatabasesBySiteAsync(sahiplik,
+                    sites.Select(site => site.Name).ToHashSet(StringComparer.OrdinalIgnoreCase), cancellationToken);
 
                 foreach (var site in sites)
                 {
@@ -362,7 +402,7 @@ public sealed class AutomationService(
                             .Select(x => new BackupDatabaseRef { Engine = x.Engine, DatabaseName = x.DatabaseName })
                             .ToList();
 
-                        await backupService.BackupSiteAsync(new BackupSiteRequest
+                        var request = new BackupSiteRequest
                         {
                             SiteName = site.Name,
                             IncludeFiles = true,
@@ -374,16 +414,21 @@ public sealed class AutomationService(
                             RemoteUserName = state.BackupRemoteUserName,
                             RemotePassword = remotePassword,
                             RemoteRegion = state.BackupRemoteRegion
-                        }, cancellationToken);
+                        };
+                        var record = approval is null
+                            ? await backupService.BackupSiteAsync(request, cancellationToken)
+                            : await backupService.BackupSiteAsync(request, approval.CheckAsync, cancellationToken);
 
-                        foreach (var db in dbler)
+                        var outcome = EvaluateBackupResult(record, "site", site.Name, dbler);
+                        siteIcindeYedeklenen.UnionWith(outcome.IncludedDatabases);
+                        if (outcome.Complete) siteCount++;
+                        else
                         {
-                            siteIcindeYedeklenen.Add($"{db.Engine}|{db.DatabaseName}");
+                            hasError = true;
+                            summary.AppendLine($"site {site.Name}: {outcome.Detail}");
                         }
-
-                        siteCount++;
                     }
-                    catch (Exception exception)
+                    catch (Exception exception) when (exception is not OperationCanceledException && approval?.Rejected(exception) != true)
                     {
                         hasError = true;
                         summary.AppendLine($"site {site.Name}: {exception.Message}");
@@ -421,14 +466,15 @@ public sealed class AutomationService(
                             // yüklerken "hangisi güncel" sorusunu doğurur. Sahipsiz (hiçbir siteye
                             // bağlı olmayan) veritabanları BURADA yedeklenmeye devam eder — yoksa
                             // panel dışında açılmış bir veritabanı sessizce yedeksiz kalırdı.
-                            if (siteIcindeYedeklenen.Contains($"{engine}|{database.Name}"))
+                            var identity = DatabaseResourceIdentity.Key(engine, database.Name);
+                            if (siteIcindeYedeklenen.Contains(identity) || !bagimsizDenenen.Add(identity))
                             {
                                 continue;
                             }
 
                             try
                             {
-                                await backupService.BackupDatabaseAsync(new BackupDatabaseRequest
+                                var request = new BackupDatabaseRequest
                                 {
                                     Engine = engine,
                                     DatabaseName = database.Name,
@@ -437,10 +483,20 @@ public sealed class AutomationService(
                                     RemoteUserName = state.BackupRemoteUserName,
                                     RemotePassword = ResolveRemotePassword(state),
                                     RemoteRegion = state.BackupRemoteRegion
-                                }, cancellationToken);
-                                dbCount++;
+                                };
+                                var record = approval is null
+                                    ? await backupService.BackupDatabaseAsync(request, cancellationToken)
+                                    : await backupService.BackupDatabaseAsync(request, approval.CheckAsync, cancellationToken);
+                                var outcome = EvaluateBackupResult(record, "database", $"{engine}:{database.Name}",
+                                    [new BackupDatabaseRef { Engine = engine, DatabaseName = database.Name }]);
+                                if (outcome.Complete) dbCount++;
+                                else
+                                {
+                                    hasError = true;
+                                    summary.AppendLine($"db {engine}/{database.Name}: {outcome.Detail}");
+                                }
                             }
-                            catch (Exception exception)
+                            catch (Exception exception) when (exception is not OperationCanceledException && approval?.Rejected(exception) != true)
                             {
                                 hasError = true;
                                 summary.AppendLine($"db {engine}/{database.Name}: {exception.Message}");
@@ -448,7 +504,7 @@ public sealed class AutomationService(
                             }
                         }
                     }
-                    catch (Exception exception)
+                    catch (Exception exception) when (exception is not OperationCanceledException && approval?.Rejected(exception) != true)
                     {
                         hasError = true;
                         summary.AppendLine($"engine {engine}: {exception.Message}");
@@ -461,17 +517,22 @@ public sealed class AutomationService(
             {
                 try
                 {
-                    await backupService.BackupMailAsync(new BackupMailRequest
+                    var request = new BackupMailRequest
                     {
                         TargetType = state.BackupTargetType,
                         RemoteUrl = state.BackupRemoteUrl,
                         RemoteUserName = state.BackupRemoteUserName,
                         RemotePassword = ResolveRemotePassword(state),
                         RemoteRegion = state.BackupRemoteRegion
-                    }, cancellationToken);
-                    summary.AppendLine("mail: yedeklendi");
+                    };
+                    var record = approval is null
+                        ? await backupService.BackupMailAsync(request, cancellationToken)
+                        : await backupService.BackupMailAsync(request, approval.CheckAsync, cancellationToken);
+                    var outcome = EvaluateBackupResult(record, "mail", null, []);
+                    hasError |= !outcome.Complete;
+                    summary.AppendLine(outcome.Complete ? "mail: yedeklendi" : $"mail: {outcome.Detail}");
                 }
-                catch (Exception exception)
+                catch (Exception exception) when (exception is not OperationCanceledException && approval?.Rejected(exception) != true)
                 {
                     hasError = true;
                     summary.AppendLine($"mail: {exception.Message}");
@@ -483,17 +544,22 @@ public sealed class AutomationService(
             {
                 try
                 {
-                    await backupService.BackupPanelAsync(new BackupPanelRequest
+                    var request = new BackupPanelRequest
                     {
                         TargetType = state.BackupTargetType,
                         RemoteUrl = state.BackupRemoteUrl,
                         RemoteUserName = state.BackupRemoteUserName,
                         RemotePassword = ResolveRemotePassword(state),
                         RemoteRegion = state.BackupRemoteRegion
-                    }, cancellationToken);
-                    summary.AppendLine("panel: yedeklendi");
+                    };
+                    var record = approval is null
+                        ? await backupService.BackupPanelAsync(request, cancellationToken)
+                        : await backupService.BackupPanelAsync(request, approval.CheckAsync, cancellationToken);
+                    var outcome = EvaluateBackupResult(record, "panel", "panel", []);
+                    hasError |= !outcome.Complete;
+                    summary.AppendLine(outcome.Complete ? "panel: yedeklendi" : $"panel: {outcome.Detail}");
                 }
-                catch (Exception exception)
+                catch (Exception exception) when (exception is not OperationCanceledException && approval?.Rejected(exception) != true)
                 {
                     hasError = true;
                     summary.AppendLine($"panel: {exception.Message}");
@@ -516,7 +582,9 @@ public sealed class AutomationService(
             // yedegi olmayan bir kaynagin eskilerine dokunmaz (bkz. BackupService.PruneAsync).
             // Burada "hata varsa hic budama" demek, tek bir sitenin hatasi yuzunden butun sunucunun
             // saklama politikasini durdurmak olurdu.
-            var pruned = await backupService.PruneAsync(state.BackupRetentionDays, pruneRemote, cancellationToken);
+            var pruned = approval is null
+                ? await backupService.PruneAsync(state.BackupRetentionDays, pruneRemote, cancellationToken)
+                : await backupService.PruneAsync(state.BackupRetentionDays, pruneRemote, approval.CheckAsync, cancellationToken);
 
             var budama = SummarizePrune(pruned);
             foreach (var satir in budama.TechnicalLines)
@@ -534,13 +602,86 @@ public sealed class AutomationService(
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (approval?.Rejected(exception) != true)
         {
             state.LastBackupRunUtc = DateTime.UtcNow;
             state.LastBackupStatus = "failed";
             state.LastBackupDetails = exception.Message;
             logger.LogError(exception, "Otomatik yedekleme job'u başarısız oldu.");
         }
+    }
+
+    private sealed record BackupOutcome(bool Complete, HashSet<string> IncludedDatabases, string Detail);
+
+    private static BackupOutcome EvaluateBackupResult(
+        BackupRecordDto? record,
+        string expectedType,
+        string? expectedSource,
+        IReadOnlyCollection<BackupDatabaseRef> requestedDatabases)
+    {
+        var included = new HashSet<string>(StringComparer.Ordinal);
+        if (record is null)
+            return new(false, included, "backup_result=unconfirmed; reason=no_result");
+
+        var knownStatus = record.Status is "created" or "created_remote_synced" or "created_with_errors" or "created_remote_failed";
+        var sourceMatches = expectedSource is null
+            ? !string.IsNullOrWhiteSpace(record.Source)
+            : expectedType == "database"
+                ? DatabaseSourceMatches(record.Source, expectedSource)
+                : string.Equals(record.Source?.Trim(), expectedSource.Trim(), StringComparison.OrdinalIgnoreCase);
+        var correctContext = string.Equals(record.Type, expectedType, StringComparison.OrdinalIgnoreCase) && sourceMatches;
+        var localCopy = !string.IsNullOrWhiteSpace(record.Path) && !record.LocalMissing;
+        var remoteCopy = !string.IsNullOrWhiteSpace(record.RemoteUri) && !record.RemoteMissing &&
+            record.RemoteState is not (BackupPresence.Missing or BackupPresence.None) &&
+            (record.RemoteState == BackupPresence.Present || record.Status is "created_remote_synced" or "created_with_errors");
+        var usable = correctContext && knownStatus && !string.IsNullOrWhiteSpace(record.Id) &&
+            record.Size > 0 && record.IntegrityState == BackupIntegrity.Sound &&
+            !record.AllCopiesMissing && (localCopy || remoteCopy);
+        var warnings = record.Warnings ?? [];
+
+        // Inclusion is an explicit positive measurement. Status or a warning-free result
+        // alone cannot prove that a requested database made it into the archive.
+        if (usable && record.IncludedDatabases is not null)
+        {
+            var measured = record.IncludedDatabases
+                .Where(db => db is not null && !string.IsNullOrWhiteSpace(db.Engine) && !string.IsNullOrWhiteSpace(db.DatabaseName))
+                .Select(db => DatabaseResourceIdentity.Key(db.Engine, db.DatabaseName))
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (var warning in warnings.Where(w => w.MessageKey is "backup.database_dump_empty" or "backup.database_dump_failed"))
+            {
+                var target = warning.Target ?? string.Empty;
+                var separator = target.IndexOf('/');
+                if (separator > 0)
+                    measured.Remove(DatabaseResourceIdentity.Key(target[..separator], target[(separator + 1)..]));
+            }
+            included.UnionWith(requestedDatabases
+                .Select(db => DatabaseResourceIdentity.Key(db.Engine, db.DatabaseName))
+                .Where(measured.Contains));
+        }
+
+        var missing = requestedDatabases
+            .Where(db => !included.Contains(DatabaseResourceIdentity.Key(db.Engine, db.DatabaseName)))
+            .Select(db => $"{DatabaseResourceIdentity.NormalizeEngine(db.Engine)}/{db.DatabaseName}")
+            .ToArray();
+        var hasContentErrors = warnings.Any(w => w.MessageKey is not ("backup.remote_unencrypted" or "backup.compression_failed"));
+        var complete = usable && (record.Status is "created" or "created_remote_synced") &&
+            !hasContentErrors && missing.Length == 0;
+        var detail = $"status={record.Status}; integrity={record.IntegrityState}; backup_result={(complete ? "confirmed" : "incomplete_or_unconfirmed")}";
+        if (missing.Length > 0)
+            detail += $"; databases_unconfirmed={string.Join(",", missing)}";
+        foreach (var warning in warnings)
+            detail += $"; {warning.MessageKey} ({warning.Target}) {warning.Detail}";
+        return new(complete, included, detail);
+    }
+
+    private static bool DatabaseSourceMatches(string? actual, string expected)
+    {
+        var source = actual ?? string.Empty;
+        var actualSeparator = source.IndexOf(':');
+        var expectedSeparator = expected.IndexOf(':');
+        return actualSeparator > 0 && expectedSeparator > 0 && DatabaseResourceIdentity.Same(
+            source[..actualSeparator], source[(actualSeparator + 1)..],
+            expected[..expectedSeparator], expected[(expectedSeparator + 1)..]);
     }
 
     /// <summary>Budama sonucunun gece işi özetine yansıması: cümle + teknik satırlar + "hata var mı".</summary>
@@ -605,25 +746,34 @@ public sealed class AutomationService(
     internal static string ResolveBackupStatus(bool hasError, PruneSummary prune) =>
         hasError || prune.HasFailures ? "completed_with_errors" : "completed";
 
-    private async Task RunSslRenewAsync(AutomationStateRecord state, CancellationToken cancellationToken)
+    private async Task RunSslRenewAsync(AutomationStateRecord state, CancellationToken cancellationToken,
+        BackupExecutionApproval? approval = null)
     {
         try
         {
-            var result = await sslService.RenewAllAsync(cancellationToken);
+            var result = approval is null
+                ? await sslService.RenewAllAsync(cancellationToken)
+                : await sslService.RenewAllAsync(approval.CheckAsync, cancellationToken);
 
             // win-acme yenilemesi mail sertifikasının PEM dosyalarını değiştirdiyse Stalwart'a yeniden bas.
             var mailSync = "";
+            var mailFailure = "";
             try
             {
-                var synced = await mailService.SyncCertificateAsync(cancellationToken);
+                var synced = approval is null
+                    ? await mailService.SyncCertificateAsync(cancellationToken)
+                    : await mailService.SyncCertificateAsync(approval.CheckAsync, cancellationToken);
                 if (synced is not null)
                 {
                     mailSync = $" Mail sertifikası ({synced.HostName}) güncellendi.";
                 }
             }
-            catch (Exception mailException)
+            catch (Exception mailException) when (mailException is not OperationCanceledException &&
+                approval?.Rejected(mailException) != true)
             {
-                logger.LogWarning(mailException, "Mail sertifikası senkronizasyonu başarısız oldu.");
+                mailFailure = $"Mail certificate synchronization failed: {DescribeSslFailure(mailException)}";
+                // Provider errors may include credentials; the raw exception must not reach log sinks.
+                logger.LogWarning("Mail sertifikası senkronizasyonu başarısız oldu: {Details}", mailFailure);
             }
 
             state.LastSslRunUtc = DateTime.UtcNow;
@@ -631,22 +781,48 @@ public sealed class AutomationService(
             // OLCULEMEDIYSE "tamamlandi" DENMEZ. Aksi halde ekranda her gun basarili bir satir
             // gorunur, gercekte hicbir sertifika yenilenmez ve bu ancak 90 gun sonra tum siteler
             // ayni anda dustugunde anlasilir.
-            state.LastSslStatus = result.Measured ? "completed" : "failed";
+            var verificationIncomplete = !result.BindingsMeasured || result.MissingFromStoreCount > 0 ||
+                result.UnverifiedCount > 0 || result.BindingDriftCount > 0 || !string.IsNullOrWhiteSpace(result.FailureReason);
+            state.LastSslStatus = !result.Measured ? "failed" : verificationIncomplete ? "completed_with_errors" : "completed";
             state.LastSslDetails = result.Measured
                 ? $"{result.RenewedCount} sertifika yenilendi.{mailSync}"
-                : result.FailureReason;
+                : SecretRedactor.Redact(result.FailureReason) + (mailSync.Length > 0 ? "\n" + mailSync.TrimStart() : "");
+            if (result.Measured)
+            {
+                state.LastSslDetails += $"\nCertificate verification: verified={result.VerifiedCount}; " +
+                    $"missing={result.MissingFromStoreCount}; unverified={result.UnverifiedCount}; " +
+                    $"binding-drift={result.BindingDriftCount}; bindings-measured={(result.BindingsMeasured ? "true" : "false")}.";
+                if (!string.IsNullOrWhiteSpace(result.FailureReason))
+                    state.LastSslDetails += "\n" + SecretRedactor.Redact(result.FailureReason);
+            }
+            if (mailFailure.Length > 0)
+            {
+                // Renewal can succeed while the mail server still presents its old certificate.
+                if (result.Measured) state.LastSslStatus = "completed_with_errors";
+                state.LastSslDetails = string.Join("\n", new[] { state.LastSslDetails, mailFailure }
+                    .Where(detail => !string.IsNullOrWhiteSpace(detail)));
+            }
         }
         catch (OperationCanceledException)
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (approval?.Rejected(exception) != true)
         {
             state.LastSslRunUtc = DateTime.UtcNow;
             state.LastSslStatus = "failed";
-            state.LastSslDetails = exception.Message;
-            logger.LogError(exception, "Otomatik SSL yenileme job'u başarısız oldu.");
+            state.LastSslDetails = DescribeSslFailure(exception);
+            logger.LogError("Otomatik SSL yenileme job'u başarısız oldu: {Details}", state.LastSslDetails);
         }
+    }
+
+    private static string DescribeSslFailure(Exception exception)
+    {
+        var diagnosis = exception is AppException app && !string.IsNullOrWhiteSpace(app.Details)
+            ? $"{app.MessageKey}: {app.Details}"
+            : exception.Message;
+        // Never pass the original exception (including inner exceptions) to an output sink.
+        return SecretRedactor.Redact(diagnosis);
     }
 
     /// <summary>
@@ -670,9 +846,14 @@ public sealed class AutomationService(
 
         try
         {
-            // Kayit = BASARILI yedek (kayitlar yalnizca dosya uretildikten sonra eklenir).
             var backups = await backupService.GetBackupsAsync(cancellationToken);
-            DateTime? lastSuccess = backups.Count == 0 ? null : backups.Max(item => item.CreatedAtUtc);
+            // A record can describe an incomplete, missing or unreadable archive. A new
+            // incremental member also cannot make its incomplete base a healthy backup.
+            var lastSuccess = backups
+                .Where(item => item.CreatedAtUtc != default && item.CreatedAtUtc <= now && IsHealthyBackupCopy(item))
+                .Where(item => !BackupChainPlanner.Resolve(backups, item.Id, IsHealthyBackupCopy).Broken)
+                .Select(item => (DateTime?)item.CreatedAtUtc)
+                .Max();
 
             // Iki dongu kacirildiysa artik tesaduf degildir; ama cok sik araliklarda gurultu
             // yapmamak icin en az 48 saat beklenir.
@@ -726,6 +907,14 @@ public sealed class AutomationService(
         return now >= lastRunUtc.Value.AddHours(Math.Max(1, intervalHours));
     }
 
+    private static bool IsHealthyBackupCopy(BackupRecordDto record) =>
+        !string.IsNullOrWhiteSpace(record.Id) && record.Size > 0 &&
+        (record.Status is "created" or "created_remote_synced") &&
+        record.IntegrityState == BackupIntegrity.Sound && BackupReplacementPolicy.HasCompleteContent(record) &&
+        !record.AllCopiesMissing && !record.RemoteMissing && !record.OffsiteCopyLost &&
+        ((!string.IsNullOrWhiteSpace(record.Path) && !record.LocalMissing) ||
+         (!string.IsNullOrWhiteSpace(record.RemoteUri) && record.RemoteState is not (BackupPresence.None or BackupPresence.Missing)));
+
     /// <summary>Kayıttaki program alanlarını normalize edilmiş plana çevirir.</summary>
     private static BackupSchedulePlan BuildSchedulePlan(AutomationStateRecord state) =>
         BackupSchedule.Normalize(
@@ -751,9 +940,12 @@ public sealed class AutomationService(
 
     // Jobs hold an old settings snapshot while running. Merge only their results so an
     // administrator can save new settings immediately without having them reverted at completion.
-    private Task SaveRunResultsAsync(AutomationStateRecord state, CancellationToken cancellationToken) =>
+    private Task SaveRunResultsAsync(AutomationStateRecord state, CancellationToken cancellationToken,
+        string? expectedBackupContext = null) =>
         fileStore.UpdateAsync(StatePath, new AutomationStateRecord(), current =>
         {
+            if (expectedBackupContext is not null && BackupContext(current) != expectedBackupContext)
+                throw new AppException("backup.schedule_changed", 409, 409);
             current.LastBackupRunUtc = state.LastBackupRunUtc;
             current.LastBackupStatus = state.LastBackupStatus;
             current.LastBackupDetails = state.LastBackupDetails;
@@ -769,6 +961,17 @@ public sealed class AutomationService(
             current.PendingComponentUpdates = state.PendingComponentUpdates;
             return current;
         }, cancellationToken);
+
+    private static string BackupContext(AutomationStateRecord state) => System.Text.Json.JsonSerializer.Serialize(new
+    {
+        state.AutoBackupEnabled, state.BackupScheduleMode, state.BackupIntervalHours,
+        state.BackupScheduleHour, state.BackupScheduleMinute, state.BackupScheduleDayOfWeek,
+        state.BackupScheduleDayOfMonth, state.BackupScheduleSecondHour, state.BackupScheduleSecondMinute,
+        state.BackupRetentionDays, state.BackupSites, state.BackupDatabases, state.BackupMail,
+        state.BackupPanelConfig, state.BackupDatabaseEngines, state.BackupTargetType,
+        state.BackupRemoteUrl, state.BackupRemoteUserName, state.BackupRemoteRegion,
+        state.BackupRemotePasswordProtected
+    });
 
     private static IReadOnlyCollection<string> NormalizeEngines(IReadOnlyCollection<string> engines)
     {
@@ -1292,6 +1495,45 @@ public sealed class AutomationService(
     /// veritabanlarıdır ve kendi başlarına yedeklenmeye devam ederler.
     /// </para>
     /// </remarks>
+    private async Task<Dictionary<string, List<BackupDatabaseRef>>> ResolveDatabasesBySiteAsync(
+        IReadOnlyCollection<(string Engine, string DatabaseName, Guid OwnerUserId, string SiteName)> ownership,
+        IReadOnlySet<string> existingSites,
+        CancellationToken cancellationToken)
+    {
+        var grouped = GroupDatabasesBySite(ownership);
+        if (siteDatabaseLinks is null || customerScopes is null) return grouped;
+
+        var owned = ownership.Select(record => DatabaseResourceIdentity.Key(record.Engine, record.DatabaseName))
+            .ToHashSet(StringComparer.Ordinal);
+        var siteOwners = new Dictionary<string, Guid?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var link in await siteDatabaseLinks.GetAllAsync(cancellationToken))
+        {
+            if (string.IsNullOrWhiteSpace(link.Engine) || string.IsNullOrWhiteSpace(link.DatabaseName) ||
+                string.IsNullOrWhiteSpace(link.SiteName)) continue;
+            var siteName = link.SiteName.Trim();
+            var key = DatabaseResourceIdentity.Key(link.Engine, link.DatabaseName);
+            if (!existingSites.Contains(siteName) || owned.Contains(key)) continue;
+
+            // A link is not an ownership grant. Only an explicitly measured admin site
+            // can supplement the ownership catalogue with an unowned database.
+            if (!siteOwners.TryGetValue(siteName, out var owner))
+            {
+                owner = await customerScopes.GetSiteOwnerUserIdAsync(siteName, cancellationToken);
+                siteOwners[siteName] = owner;
+            }
+            if (owner is not null) continue;
+            if (!grouped.TryGetValue(siteName, out var databases)) grouped[siteName] = databases = [];
+            if (databases.Any(database => DatabaseResourceIdentity.Same(database.Engine, database.DatabaseName,
+                link.Engine, link.DatabaseName))) continue;
+            databases.Add(new BackupDatabaseRef
+            {
+                Engine = DatabaseResourceIdentity.NormalizeEngine(link.Engine),
+                DatabaseName = link.DatabaseName.Trim()
+            });
+        }
+        return grouped;
+    }
+
     internal static Dictionary<string, List<BackupDatabaseRef>> GroupDatabasesBySite(
         IReadOnlyCollection<(string Engine, string DatabaseName, Guid OwnerUserId, string SiteName)> ownership)
     {

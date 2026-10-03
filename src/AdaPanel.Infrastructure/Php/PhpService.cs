@@ -165,7 +165,7 @@ public sealed class PhpService(
     // (;extension_dir) satır "aktif yok" sayılır → eklenir. Böylece eklentiler güvenle yüklenir.
     private static bool EnsureExtensionDir(List<string> lines, string extensionDirectory)
     {
-        var hasActive = lines.Any(line =>
+        var hasActive = PhpIniSiteIsolation.GlobalLines(lines).Any(line =>
         {
             var trimmed = line.TrimStart();
             return !trimmed.StartsWith(';') &&
@@ -200,13 +200,14 @@ public sealed class PhpService(
         }
 
         // Zaten aktif (yorumsuz) bir satır varsa dokunma.
-        if (lines.Any(line => !line.TrimStart().StartsWith(';') && Matches(line.Trim())))
+        var globalEnd = PhpIniSiteIsolation.GlobalInsertIndex(lines);
+        if (lines.Take(globalEnd).Any(line => !line.TrimStart().StartsWith(';') && Matches(line.Trim())))
         {
             return false;
         }
 
         // Yorumlu bir satır varsa onu aç.
-        for (var i = 0; i < lines.Count; i++)
+        for (var i = 0; i < globalEnd; i++)
         {
             var trimmed = lines[i].TrimStart();
             if (trimmed.StartsWith(';') && Matches(trimmed.TrimStart(';').TrimStart()))
@@ -643,16 +644,12 @@ public sealed class PhpService(
             throw new AppException("php.site_root_missing", 404, 404);
         }
 
-        var content = new StringBuilder();
-        content.AppendLine("; AdaPanel - site PHP ayarları (.user.ini, per-dizin)");
-        content.AppendLine($"memory_limit = {SanitizeIniValue(request.MemoryLimit)}");
-        content.AppendLine($"max_execution_time = {Math.Clamp(request.MaxExecutionTime, 0, 86400)}");
-        content.AppendLine($"upload_max_filesize = {SanitizeIniValue(request.UploadMaxFilesize)}");
-        content.AppendLine($"post_max_size = {SanitizeIniValue(request.PostMaxSize)}");
-        content.AppendLine($"display_errors = {(request.DisplayErrors ? "On" : "Off")}");
-
         var iniPath = Path.Combine(site.PhysicalPath, ".user.ini");
-        await File.WriteAllTextAsync(iniPath, content.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+        var lines = File.Exists(iniPath)
+            ? await File.ReadAllLinesAsync(iniPath, cancellationToken)
+            : ["; AdaPanel - site PHP ayarları (.user.ini, per-dizin)"];
+        // Panelin beş alanı güncellenir; uygulamanın oturum, bootstrap ve özel ayarları korunur.
+        await File.WriteAllLinesAsync(iniPath, UpdateIniSettings(lines, request), cancellationToken);
 
         // İZOLASYON: istek bunu SÖYLEMİYORSA (null) mevcut durum KORUNUR.
         //
@@ -710,6 +707,8 @@ public sealed class PhpService(
             if (values.TryGetValue("max_execution_time", out var met) && int.TryParse(met, out var metVal)) dto.MaxExecutionTime = metVal;
             if (values.TryGetValue("upload_max_filesize", out var umf)) dto.UploadMaxFilesize = umf;
             if (values.TryGetValue("post_max_size", out var pms)) dto.PostMaxSize = pms;
+            if (values.TryGetValue("display_errors", out var de))
+                dto.DisplayErrors = de.Equals("On", StringComparison.OrdinalIgnoreCase) || de == "1";
         }
 
         // phpredis durumu: kart "etkin ise etkin yazsın" (kullanıcı isteği). php -m ile gerçekten yüklü mü bak (best-effort).
@@ -746,11 +745,7 @@ public sealed class PhpService(
             throw new AppException("php.version_not_installed", 404, 404);
         }
 
-        var lines = (await File.ReadAllLinesAsync(iniPath, cancellationToken)).ToList();
-        SetIniDirective(lines, "memory_limit", SanitizeIniValue(request.MemoryLimit));
-        SetIniDirective(lines, "max_execution_time", Math.Clamp(request.MaxExecutionTime, 0, 86400).ToString());
-        SetIniDirective(lines, "upload_max_filesize", SanitizeIniValue(request.UploadMaxFilesize));
-        SetIniDirective(lines, "post_max_size", SanitizeIniValue(request.PostMaxSize));
+        var lines = UpdateIniSettings(await File.ReadAllLinesAsync(iniPath, cancellationToken), request);
         await File.WriteAllLinesAsync(iniPath, lines, cancellationToken);
 
         // Süre (max_execution_time) değişince FastCGI requestTimeout'u da yükselt (yoksa büyük import 500 timeout verir).
@@ -818,34 +813,19 @@ public sealed class PhpService(
             throw new AppException("php.redis_download_failed", 502, 502, $"{fileName}: {TruncateError(download.StandardError)}");
         }
 
-        File.Copy(sourceDll, dllPath, overwrite: true);
-        SafeDeleteFile(tempZip);
-        SafeDeleteDirectory(tempDir);
-
         var iniPath = Path.Combine(component.InstallDir, "php.ini");
-        var lines = (await File.ReadAllLinesAsync(iniPath, cancellationToken)).ToList();
-        var alreadyDeclared = lines.Any(line =>
+        try
         {
-            var normalized = line.Trim().TrimStart(';').Replace(" ", string.Empty);
-            return normalized.StartsWith("extension=redis", StringComparison.OrdinalIgnoreCase) ||
-                   normalized.StartsWith("extension=php_redis", StringComparison.OrdinalIgnoreCase);
-        });
-        if (!alreadyDeclared)
-        {
-            // GENEL bölüme: site [PATH=] bloklarından sonra eklenirse redis yalnız son sitede yüklenirdi.
-            lines.Insert(PhpIniSiteIsolation.GlobalInsertIndex(lines), "extension=redis");
-            await File.WriteAllLinesAsync(iniPath, lines, cancellationToken);
+            if (!await ActivateRedisFilesAsync(iniPath, sourceDll, dllPath,
+                    token => PhpHasModuleAsync(phpCli, "redis", token), cancellationToken))
+            {
+                throw new AppException("php.redis_verify_failed", 500, 500, $"{fileName} yüklenemedi (PHP build uyumsuz); geri alındı.");
+            }
         }
-
-        // DOĞRULA: redis gerçekten yüklendi mi? Hayırsa GERİ AL (DLL sil + extension satırı çıkar) → PHP kırılmaz.
-        if (!await PhpHasModuleAsync(phpCli, "redis", cancellationToken))
+        finally
         {
-            var reverted = lines
-                .Where(line => !line.Trim().Replace(" ", string.Empty).Equals("extension=redis", StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            await File.WriteAllLinesAsync(iniPath, reverted, cancellationToken);
-            SafeDeleteFile(dllPath);
-            throw new AppException("php.redis_verify_failed", 500, 500, $"{fileName} yüklenemedi (PHP build uyumsuz); geri alındı.");
+            SafeDeleteFile(tempZip);
+            SafeDeleteDirectory(tempDir);
         }
 
         // Başarılı → php-cgi yenile (FastCGI php.ini'yi süreç başında okur).
@@ -859,6 +839,55 @@ public sealed class PhpService(
         }
 
         return new RedisExtensionResultDto { Enabled = true, Message = "installed", FileName = fileName };
+    }
+
+    internal static async Task<bool> ActivateRedisFilesAsync(
+        string iniPath,
+        string sourceDll,
+        string dllPath,
+        Func<CancellationToken, Task<bool>> verify,
+        CancellationToken cancellationToken = default)
+    {
+        // Doğrulama başlamadan önce mevcut dosyaları sakla. Uyumsuz bir DLL, hata ya da
+        // iptal durumunda yönetici ayarları (site bölümleri dahil) ve eski DLL geri gelir.
+        var originalIni = await File.ReadAllBytesAsync(iniPath, cancellationToken);
+        var originalDll = File.Exists(dllPath)
+            ? await File.ReadAllBytesAsync(dllPath, cancellationToken)
+            : null;
+        var lines = (await File.ReadAllLinesAsync(iniPath, cancellationToken)).ToList();
+        var iniChanged = EnablePhpIniExtension(lines, "redis");
+        var verified = false;
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            File.Copy(sourceDll, dllPath, overwrite: true);
+            if (iniChanged)
+            {
+                await File.WriteAllLinesAsync(iniPath, lines, cancellationToken);
+            }
+            verified = await verify(cancellationToken);
+            return verified;
+        }
+        finally
+        {
+            if (!verified)
+            {
+                // İstek iptal edilmiş olsa da geri alma tamamlanmalı. Satırları yeniden
+                // üretmek yerine özgün baytlar, kodlama ve satır sonlarıyla birlikte korunur.
+                try
+                {
+                    if (iniChanged)
+                        await File.WriteAllBytesAsync(iniPath, originalIni, CancellationToken.None);
+                }
+                finally
+                {
+                    if (originalDll is not null)
+                        await File.WriteAllBytesAsync(dllPath, originalDll, CancellationToken.None);
+                    else
+                        File.Delete(dllPath);
+                }
+            }
+        }
     }
 
     private static async Task<bool> PhpHasModuleAsync(string phpExecutable, string moduleName, CancellationToken cancellationToken)
@@ -924,6 +953,17 @@ public sealed class PhpService(
     /// sitenin bölümüne düşer, genel olarak HİÇ uygulanmazdı. Hem arama hem ekleme ilk PATH/HOST
     /// başlığında durur.
     /// </remarks>
+    internal static List<string> UpdateIniSettings(IEnumerable<string> source, UpdateSitePhpSettingsRequest request)
+    {
+        var lines = source.ToList();
+        SetIniDirective(lines, "memory_limit", SanitizeIniValue(request.MemoryLimit));
+        SetIniDirective(lines, "max_execution_time", Math.Clamp(request.MaxExecutionTime, 0, 86400).ToString());
+        SetIniDirective(lines, "upload_max_filesize", SanitizeIniValue(request.UploadMaxFilesize));
+        SetIniDirective(lines, "post_max_size", SanitizeIniValue(request.PostMaxSize));
+        SetIniDirective(lines, "display_errors", request.DisplayErrors ? "On" : "Off");
+        return lines;
+    }
+
     private static void SetIniDirective(List<string> lines, string name, string value)
     {
         var globalEnd = PhpIniSiteIsolation.GlobalInsertIndex(lines);
@@ -945,7 +985,8 @@ public sealed class PhpService(
                 else
                 {
                     activeIndex = i;
-                    break;
+                    // Sonraki aktif kopya eski değeri tekrar yürürlüğe sokmasın.
+                    lines[i] = $"{name} = {value}";
                 }
             }
         }

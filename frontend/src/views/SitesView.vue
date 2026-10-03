@@ -191,6 +191,7 @@
           v-model="siteSearch"
           class="site-search"
           type="search"
+          :aria-label="t('panel.sites.searchPlaceholder')"
           :placeholder="t('panel.sites.searchPlaceholder')" />
         <span class="meta">{{ filteredSites.length }} / {{ sitesStore.sites.length }}</span>
       </div>
@@ -1357,6 +1358,12 @@ button:disabled {
 }
 
 @media (max-width: 760px) {
+  .site-search {
+    /* The header stacks vertically here; its desktop flex basis must not become height. */
+    flex: 0 1 auto;
+    max-width: none;
+  }
+
   .sites-header,
   .sites-actions,
   .section-head,

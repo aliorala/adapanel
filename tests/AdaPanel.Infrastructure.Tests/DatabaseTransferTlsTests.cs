@@ -323,6 +323,10 @@ public sealed class DatabaseTransferTlsTests
 
     private sealed class PatlayanSaglama : ISiteProvisioningService
     {
+        public Task<AdaPanel.Core.Dtos.Sites.SiteDto> SetDocumentRootAsync(string siteName, string physicalPath, Func<AdaPanel.Core.Dtos.Sites.SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<AdaPanel.Core.Dtos.Sites.SiteDto> EnableFrameworkRewriteAsync(string siteName, Func<AdaPanel.Core.Dtos.Sites.SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<AdaPanel.Core.Dtos.Sites.SitePermissionRepairResultDto> RepairPermissionsAsync(string siteName, Func<AdaPanel.Core.Dtos.Sites.SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
         public Task<AdaPanel.Core.Dtos.Sites.SiteDto> CreateAndProvisionAsync(AdaPanel.Core.Dtos.Sites.CreateSiteRequest request, Guid? actorUserId, string? ipAddress, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 

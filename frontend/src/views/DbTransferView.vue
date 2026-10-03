@@ -92,11 +92,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import { transferDatabase } from "../api/databases";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { getSessionEpoch } from "../api/client";
 
 const { t } = useI18n();
 const busy = ref(false);
@@ -120,14 +121,22 @@ const form = reactive({
   targetUserName: "",
   targetPassword: ""
 });
+let disposed = false;
+const session = getSessionEpoch();
+const isCurrent = () => !disposed && session === getSessionEpoch();
+onBeforeUnmount(() => {
+  disposed = true;
+  form.sourcePassword = ""; form.targetPassword = ""; created.password = "";
+});
 
 const canRun = computed(() =>
   form.sourceHost.trim().length > 0 &&
   form.sourceUserName.trim().length > 0 &&
-  form.sourceDatabase.trim().length > 0);
+  form.sourceDatabase.trim().length > 0 &&
+  Number.isInteger(form.sourcePort) && form.sourcePort >= 1 && form.sourcePort <= 65535);
 
 async function run() {
-  if (!canRun.value) {
+  if (!isCurrent() || busy.value || !canRun.value) {
     return;
   }
   busy.value = true;
@@ -138,7 +147,7 @@ async function run() {
     const result = await transferDatabase({
       engine: form.engine,
       sourceHost: form.sourceHost.trim(),
-      sourcePort: form.sourcePort || 3306,
+      sourcePort: form.sourcePort,
       sourceUserName: form.sourceUserName.trim(),
       sourcePassword: form.sourcePassword,
       // Şifreleme tercihi AÇIKÇA gönderilir; gönderilmezse sunucu "auto" sayar (güvenli taraf),
@@ -149,11 +158,12 @@ async function run() {
       targetUserName: form.targetUserName.trim(),
       targetPassword: form.targetPassword
     });
+    if (!isCurrent()) return;
     created.userName = result.userName;
     created.password = result.password;
     showNotice(t("panel.database.transfer.done", { target: result.targetDatabase }), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
   } finally {
     busy.value = false;
   }

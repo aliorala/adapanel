@@ -97,6 +97,8 @@ internal sealed partial class DatabaseService(
             throw new AppException("database.admin_password_missing", 400, 400);
         }
 
+        using var mutation = await DatabaseLifecycle.EnterEngineAsync(request.Engine, cancellationToken);
+
         var descriptor = ResolveDescriptor(engine);
         var component = await dbContext.InstalledComponents.FirstOrDefaultAsync(
             item => item.ComponentId == descriptor.ComponentId && item.Status == ComponentInstallStatus.Installed,
@@ -121,29 +123,31 @@ internal sealed partial class DatabaseService(
             descriptor.SupportsHostScopedUsers,
             component.InstallDir);
 
+        var configuration = ReadProtectedConfiguration(component);
+
         // Kimlik bilgilerini GERÇEKTEN bağlanarak doğrula; yanlışsa kaydetme.
         try
         {
+            if ((engine is DbEngine.MySql or DbEngine.MariaDb) &&
+                !await ResolveProvider(engine).VerifyAdminPasswordAsync(profile, cancellationToken))
+                throw new AppException("database.credentials_invalid", 400, 400);
             await ResolveProvider(engine).GetWorkspaceAsync(profile, cancellationToken);
         }
         catch (AppException)
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
             throw new AppException("database.credentials_invalid", 400, 400, exception.Message);
         }
 
         // Mevcut yapılandırmayı koru (systemDetected vb.), yalnız kimlik bilgilerini ekle/güncelle.
-        var configuration = ReadProtectedConfiguration(component);
         configuration[GeneratedPasswordKey] = request.Password;
         configuration[AdminUserKey] = adminUser;
         configuration[AdminPortKey] = port.ToString();
-        component.ProtectedConfigurationJson = secretProtector.Protect(
-            JsonSerializer.Serialize(configuration, SerializerOptions));
-        component.UpdatedAtUtc = DateTime.UtcNow;
-        await dbContext.SaveChangesAsync(cancellationToken);
+        configuration.Remove(DatabaseProfiles.PendingAdminPasswordKey);
+        await SaveAdminConfigurationAsync(component, configuration, cancellationToken);
 
         return BuildEngineStatus(descriptor, component, configuration);
     }
@@ -221,8 +225,7 @@ internal sealed partial class DatabaseService(
         {
             var baglar = await siteDatabaseLinks.GetAllAsync(cancellationToken);
             return baglar.FirstOrDefault(bag =>
-                string.Equals(bag.Engine, engineKey, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(bag.DatabaseName, databaseName, StringComparison.OrdinalIgnoreCase))?.SiteName ?? string.Empty;
+                DatabaseResourceIdentity.Same(bag.Engine, bag.DatabaseName, engineKey, databaseName))?.SiteName ?? string.Empty;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -249,6 +252,7 @@ internal sealed partial class DatabaseService(
             throw new AppException("database.harden_not_supported", 400, 400);
         }
 
+        using var mutation = await DatabaseLifecycle.EnterEngineAsync(engine, cancellationToken);
         var provider = ResolveProvider(dbEngine);
         var results = new List<string>();
 
@@ -257,7 +261,13 @@ internal sealed partial class DatabaseService(
         // hesapları (anonim + uzak root) ve boş 'test' db'sini temizle (mysql_secure_installation eşi).
         if (dbEngine is DbEngine.MariaDb or DbEngine.MySql)
         {
-            var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken, allowEmptyPassword: true);
+            var profile = await DatabaseProfiles.ResolveAsync(dbContext, secretProtector, dbEngine,
+                cancellationToken, allowEmptyPassword: true, allowPendingPassword: true);
+            var component = await dbContext.InstalledComponents.FirstAsync(
+                item => item.ComponentId == profile.ComponentId && item.Status == ComponentInstallStatus.Installed, cancellationToken);
+            var configuration = ReadProtectedConfiguration(component);
+            if (configuration.ContainsKey(DatabaseProfiles.PendingAdminPasswordKey))
+                profile = await ReconcileRootPasswordAsync(component, configuration, profile, provider, cancellationToken);
             if (string.IsNullOrWhiteSpace(profile.AdminPassword))
             {
                 profile = await SetRootPasswordAtomicAsync(dbEngine, profile, results, cancellationToken);
@@ -280,9 +290,7 @@ internal sealed partial class DatabaseService(
         return await provider.HardenAdminAccountsAsync(otherProfile, cancellationToken);
     }
 
-    // ATOMİK root parolası (Plesk gibi): MariaDB root'u parolasızsa güçlü parola atar + saklar. "MariaDB yeni /
-    // panel eski" TEHLİKELİ durumu OLUŞMAZ: önce SAKLAR, sonra UYGULAR+DOĞRULAR, hata olursa saklamayı GERİ ALIR.
-    // Saklanan parola tek kaynaktır → panelin DB bağlantıları + phpMyAdmin (WebDbClient) aynı anda tutarlı kalır.
+    // Persist both possibilities before SQL; only a verified result becomes an active profile.
     private async Task<DatabaseConnectionProfile> SetRootPasswordAtomicAsync(
         DbEngine dbEngine,
         DatabaseConnectionProfile oldProfile,
@@ -295,29 +303,73 @@ internal sealed partial class DatabaseService(
             cancellationToken) ?? throw new AppException("database.engine_not_installed", 404, 404);
 
         var configuration = ReadProtectedConfiguration(component);
-        var oldPassword = oldProfile.AdminPassword; // boş
         var newPassword = GenerateStrongDbPassword();
-
-        // 1) Yeni parolayı önce SAKLA (panel + phpMyAdmin bunu kullanır). [sakla=yeni, MariaDB=eski → kurtarılabilir]
-        configuration[GeneratedPasswordKey] = newPassword;
-        component.ProtectedConfigurationJson = secretProtector.Protect(JsonSerializer.Serialize(configuration, SerializerOptions));
-        component.UpdatedAtUtc = DateTime.UtcNow;
-        await dbContext.SaveChangesAsync(cancellationToken);
+        configuration[DatabaseProfiles.PendingAdminPasswordKey] = newPassword;
+        await SaveAdminConfigurationAsync(component, configuration, cancellationToken);
 
         try
         {
             // 2) MariaDB'ye UYGULA (eski/boş parolayla bağlan) + yeni parolayla DOĞRULA.
             await ResolveProvider(dbEngine).SetRootPasswordAsync(oldProfile, newPassword, cancellationToken);
+            configuration[GeneratedPasswordKey] = newPassword;
+            configuration.Remove(DatabaseProfiles.PendingAdminPasswordKey);
+            using (var publication = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
+                await SaveAdminConfigurationAsync(component, configuration, publication.Token);
             results.Add("root@localhost: guclu parola ayarlandi (panel uretti; phpMyAdmin/araclar otomatik kullanir)");
             return oldProfile with { AdminPassword = newPassword };
         }
         catch
         {
-            // 3) Hata → saklamayı ESKİYE geri al (panel eski parolayla çalışmaya devam eder, kilitlenmez).
-            configuration[GeneratedPasswordKey] = oldPassword;
+            // The SQL result may be unknown, including after cancellation. A fresh bounded
+            // check can identify a usable credential; otherwise keep durable pending state.
+            configuration[GeneratedPasswordKey] = oldProfile.AdminPassword;
+            configuration[DatabaseProfiles.PendingAdminPasswordKey] = newPassword;
+            try
+            {
+                using var recovery = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                await ReconcileRootPasswordAsync(component, configuration, oldProfile, ResolveProvider(dbEngine), recovery.Token);
+            }
+            catch { /* Preserve the original error; persisted pending state blocks ordinary profiles. */ }
+            throw;
+        }
+    }
+
+    private async Task<DatabaseConnectionProfile> ReconcileRootPasswordAsync(InstalledComponent component,
+        Dictionary<string, string> configuration, DatabaseConnectionProfile oldProfile,
+        IDatabaseEngineProvider provider, CancellationToken cancellationToken)
+    {
+        var candidate = configuration[DatabaseProfiles.PendingAdminPasswordKey];
+        foreach (var password in new[] { candidate, oldProfile.AdminPassword }.Distinct(StringComparer.Ordinal))
+        {
+            var profile = oldProfile with { AdminPassword = password };
+            bool verified;
+            try { verified = await provider.VerifyAdminPasswordAsync(profile, cancellationToken); }
+            catch (Exception exception) when (exception is not OperationCanceledException) { continue; }
+            if (!verified) continue;
+            configuration[GeneratedPasswordKey] = password;
+            configuration.Remove(DatabaseProfiles.PendingAdminPasswordKey);
+            await SaveAdminConfigurationAsync(component, configuration, cancellationToken);
+            return profile;
+        }
+        throw new AppException("database.admin_password_unverified", 409, 409);
+    }
+
+    private async Task SaveAdminConfigurationAsync(InstalledComponent component, Dictionary<string, string> configuration,
+        CancellationToken cancellationToken)
+    {
+        var originalJson = component.ProtectedConfigurationJson;
+        var originalUpdatedAt = component.UpdatedAtUtc;
+        try
+        {
             component.ProtectedConfigurationJson = secretProtector.Protect(JsonSerializer.Serialize(configuration, SerializerOptions));
             component.UpdatedAtUtc = DateTime.UtcNow;
             await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch
+        {
+            // EF's tracked entity must not advertise a confirmation that failed to persist.
+            component.ProtectedConfigurationJson = originalJson;
+            component.UpdatedAtUtc = originalUpdatedAt;
             throw;
         }
     }
@@ -336,10 +388,19 @@ internal sealed partial class DatabaseService(
         return new string(chars);
     }
 
+    public Task<DatabaseWorkspaceDto> CreateDatabaseAsync(
+        CreateDatabaseRequest request,
+        CancellationToken cancellationToken = default) =>
+        CreateDatabaseAsync(request, _ => Task.CompletedTask, _ => Task.CompletedTask, cancellationToken);
+
     public async Task<DatabaseWorkspaceDto> CreateDatabaseAsync(
         CreateDatabaseRequest request,
+        Func<CancellationToken, Task> beforeCreate,
+        Func<CancellationToken, Task> afterCreate,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(beforeCreate);
+        ArgumentNullException.ThrowIfNull(afterCreate);
         var dbEngine = ParseEngine(request.Engine);
         var databaseName = NormalizeDatabaseName(request.Name);
 
@@ -353,56 +414,78 @@ internal sealed partial class DatabaseService(
             ? string.Empty
             : NormalizeUserName(request.UserName, dbEngine);
 
+        using var mutation = await DatabaseLifecycle.EnterResourceAsync(request.Engine, databaseName, cancellationToken);
+        await beforeCreate(cancellationToken);
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
         var provider = ResolveProvider(dbEngine);
 
+        using var account = newUser.Length == 0 ? null
+            : await DatabaseLifecycle.EnterAccountAsync(mutation, request.Engine, newUser, cancellationToken);
+        // A failed or uncertain CREATE must never authorize DROP of a pre-existing database.
         await provider.CreateDatabaseAsync(profile, databaseName, cancellationToken);
-
-        // profesyonel paneller gibi: kullanıcı adı verildiyse aynı anda kullanıcı oluştur ve bu veritabanına
-        // otomatik TAM yetki ver. Host YEREL'dir (bkz. NewUserHost) — uzak erişim ayrı ve açık bir karardır.
-        if (newUser.Length > 0)
+        var newUserHost = NewUserHost(dbEngine);
+        var userCreated = false;
+        var linkAttempted = false;
+        try
         {
-            var newUserHost = NewUserHost(dbEngine);
-            var fullPrivileges = NormalizePrivileges(["ALL PRIVILEGES"], dbEngine);
-            try
+            if (newUser.Length > 0)
             {
                 await provider.CreateUserAsync(profile, newUser, request.Password, newUserHost, cancellationToken);
-                await provider.GrantAccessAsync(profile, databaseName, newUser, newUserHost, fullPrivileges, cancellationToken);
-                // phpMyAdmin'i bu kullanıcı olarak açıp yalnız kendi DB'sini göstermek için parolayı şifreli sakla.
-                await credentialStore.UpsertAsync(profile.EngineKey, newUser, newUserHost, databaseName, request.Password, cancellationToken);
+                userCreated = true;
+                await credentialStore.RecordCreatedAsync(profile.EngineKey, newUser, newUserHost, databaseName, request.Password, cancellationToken);
+                await GrantWithReferenceAsync(provider, profile, databaseName, newUser, newUserHost,
+                    NormalizePrivileges(["ALL PRIVILEGES"], dbEngine), cancellationToken);
             }
-            catch
+
+            if (!string.IsNullOrWhiteSpace(request.SiteName))
             {
-                // GERİ AL: kullanıcı kurulamadıysa BU ÇAĞRIDA oluşturduğumuz veritabanını da kaldır.
-                //
-                // Silmek güvenli çünkü veritabanı bir kaç satır önce BU çağrıda doğdu:
-                // CreateDatabaseAsync `CREATE DATABASE` (IF NOT EXISTS DEĞİL) çalıştırır ve zaten
-                // varsa 1007'yi `database.database_already_exists` ile yukarı verir — yani buraya
-                // gelinmişse veritabanı bize aittir ve içinde veri yoktur.
-                //
-                // Geri almanın kendisi patlarsa YUTULUR ve asıl hata yukarı çıkar: kullanıcıya
-                // "kullanıcı oluşturulamadı" demek, "temizlik başarısız" demekten daha yararlıdır.
-                // (Zaten parola politikası/1470 gibi asıl sebep de o mesajdadır.)
-                try
-                {
-                    await provider.DeleteDatabaseAsync(profile, databaseName, cancellationToken);
-                }
-                catch (Exception)
-                {
-                    // Yutuldu: asıl istisna aşağıda yeniden fırlatılıyor, onu gölgelemeyiz.
-                }
-
-                throw;
+                linkAttempted = true;
+                await siteDatabaseLinks.LinkAsync(request.Engine, databaseName, request.SiteName, cancellationToken);
             }
+            var workspace = await provider.GetWorkspaceAsync(profile, cancellationToken);
+            // Ownership publication belongs to this same lease and compensation boundary.
+            await afterCreate(cancellationToken);
+            return workspace;
         }
-
-        // Site bağı (Plesk gibi): site verildiyse bu DB'yi siteye bağla → site silinince cascade ile gider.
-        if (!string.IsNullOrWhiteSpace(request.SiteName))
+        catch (Exception original)
         {
-            await siteDatabaseLinks.LinkAsync(request.Engine, databaseName, request.SiteName, cancellationToken);
+            var failures = new List<string>();
+            var databaseGone = await CleanupDatabaseStepAsync("database",
+                token => provider.DeleteDatabaseAsync(profile, databaseName, token), failures);
+            if (databaseGone)
+            {
+                if (linkAttempted)
+                    await CleanupDatabaseStepAsync("site-link", token => siteDatabaseLinks.UnlinkAsync(profile.EngineKey, databaseName, token), failures);
+                if (userCreated)
+                {
+                    await CleanupDatabaseStepAsync("credentials", token => credentialStore.RemoveDatabaseAsync(profile.EngineKey, databaseName, token), failures);
+                    await CleanupDatabaseStepAsync("user", async token =>
+                    {
+                        if (!await credentialStore.IsUserReferencedAsync(profile.EngineKey, newUser, newUserHost, token))
+                            await provider.DeleteUserAsync(profile, newUser, newUserHost, token);
+                    }, failures);
+                }
+            }
+            // If DROP failed, keep any link/login metadata for recovery of the surviving DB.
+            if (failures.Count > 0)
+                throw new AppException("database.create_cleanup_incomplete", 500, 500,
+                    $"engine={profile.EngineKey}; database={databaseName}; cause={FailureCode(original)}; cleanup={string.Join(", ", failures)}");
+            throw;
         }
+    }
 
-        return await provider.GetWorkspaceAsync(profile, cancellationToken);
+    private static string FailureCode(Exception exception) =>
+        exception is AppException app ? app.MessageKey : exception.GetType().Name;
+
+    private static async Task<bool> CleanupDatabaseStepAsync(
+        string step, Func<CancellationToken, Task> cleanup, List<string> failures)
+    {
+        // The request may already be cancelled. Bound each independent recovery step,
+        // without allowing one failed step to suppress all remaining cleanup.
+        using var cleanupCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try { await cleanup(cleanupCancellation.Token); return true; }
+        catch (AppException exception) when (exception.ResourceAlreadyGone) { return true; }
+        catch (Exception exception) { failures.Add($"{step}:{FailureCode(exception)}"); return false; }
     }
 
     // Var olan bir veritabanı+kullanıcıyı panele TANIT (import): erişimi garanti et (eksikse GRANT ALL) ve
@@ -413,10 +496,12 @@ internal sealed partial class DatabaseService(
     {
         var dbEngine = ParseEngine(request.Engine);
         var databaseName = NormalizeDatabaseName(request.DatabaseName);
+        using var mutation = await DatabaseLifecycle.EnterResourceAsync(request.Engine, databaseName, cancellationToken);
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
         var provider = ResolveProvider(dbEngine);
         var userName = NormalizeUserName(request.UserName, dbEngine);
 
+        using var account = await DatabaseLifecycle.EnterAccountAsync(mutation, request.Engine, userName, cancellationToken);
         // HOST TAHMİN EDİLMEZ, MOTORDAN OKUNUR.
         //
         // Eskiden burada `NormalizeAllowedHost(request.Host)` vardı ve boş gelen host `%` oluyordu;
@@ -431,7 +516,7 @@ internal sealed partial class DatabaseService(
         var fullPrivileges = NormalizePrivileges(["ALL PRIVILEGES"], dbEngine);
         foreach (var host in targetHosts)
         {
-            await provider.GrantAccessAsync(profile, databaseName, userName, host, fullPrivileges, cancellationToken);
+            await GrantWithReferenceAsync(provider, profile, databaseName, userName, host, fullPrivileges, cancellationToken);
         }
 
         // Kimlik kaydına YEREL hesap yazılır (varsa). Kayıt phpMyAdmin'in "bu kullanıcı olarak aç"
@@ -439,7 +524,9 @@ internal sealed partial class DatabaseService(
         // bağlandığı hesabı ister. Yerel hesap yoksa okunan ilk hesap yazılır — uydurulmuş bir
         // değer değil, ÖLÇÜLMÜŞ bir hesap.
         var credentialHost = targetHosts.FirstOrDefault(MySqlAccountHosts.IsLocal) ?? targetHosts[0];
-        await credentialStore.UpsertAsync(profile.EngineKey, userName, credentialHost, databaseName, request.Password, cancellationToken);
+        using (var publication = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
+            await credentialStore.UpsertAsync(profile.EngineKey, userName, credentialHost, databaseName, request.Password, publication.Token);
+        cancellationToken.ThrowIfCancellationRequested();
 
         // Site bağı: içe aktarılan DB de bir siteye bağlanabilir → site silinince cascade ile gider.
         if (!string.IsNullOrWhiteSpace(request.SiteName))
@@ -450,36 +537,64 @@ internal sealed partial class DatabaseService(
         return await provider.GetWorkspaceAsync(profile, cancellationToken);
     }
 
-    public async Task DeleteDatabaseAsync(string engine, string name, CancellationToken cancellationToken = default)
+    public Task DeleteDatabaseAsync(string engine, string name, CancellationToken cancellationToken = default) =>
+        DeleteDatabaseAsync(engine, name, _ => Task.CompletedTask, _ => Task.CompletedTask, cancellationToken);
+
+    public async Task DeleteDatabaseAsync(
+        string engine,
+        string name,
+        Func<CancellationToken, Task> beforeDelete,
+        Func<CancellationToken, Task> afterDelete,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(beforeDelete);
+        ArgumentNullException.ThrowIfNull(afterDelete);
         var dbEngine = ParseEngine(engine);
         var databaseName = NormalizeDatabaseName(name);
+        using var mutation = await DatabaseLifecycle.EnterResourceAsync(engine, databaseName, cancellationToken);
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
         var provider = ResolveProvider(dbEngine);
 
-        // profesyonel paneller gibi: DB'ye bağlı (panel oluşturduğu) kullanıcıyı da temizle ki öksüz kullanıcı kalmasın.
-        var owner = await credentialStore.FindForDatabaseAsync(profile.EngineKey, databaseName, cancellationToken);
-
-        await provider.DeleteDatabaseAsync(profile, databaseName, cancellationToken);
-
-        // Önce bu DB'nin kimlik kaydını sil, sonra kullanıcı başka DB'de kullanılmıyorsa kullanıcıyı düşür.
-        await credentialStore.RemoveDatabaseAsync(profile.EngineKey, databaseName, cancellationToken);
-        // DB bağımsız silindiyse site bağını da temizle (öksüz bağ kalmasın).
-        await siteDatabaseLinks.UnlinkAsync(engine, databaseName, cancellationToken);
-        if (owner is not null)
+        // Usage/password records alone cannot authorize DROP USER. Only a confirmed panel
+        // CREATE may do so; several such accounts can legitimately share the same database.
+        var candidates = await credentialStore.FindCleanupAccountsAsync(profile.EngineKey, databaseName, cancellationToken);
+        var accounts = new List<IDisposable>();
+        try
         {
-            var stillUsed = await credentialStore.IsUserReferencedAsync(profile.EngineKey, owner.Value.UserName, owner.Value.Host, cancellationToken);
-            if (!stillUsed)
+            foreach (var candidate in candidates.DistinctBy(item => DatabaseAccountIdentity.FamilyKey(engine, item.UserName))
+                         .OrderBy(item => DatabaseAccountIdentity.FamilyKey(engine, item.UserName), StringComparer.Ordinal))
+                accounts.Add(await DatabaseLifecycle.EnterAccountAsync(mutation, engine, candidate.UserName, cancellationToken));
+            // A standalone account deletion may remove the association while we wait.
+            var owners = (await credentialStore.FindCleanupAccountsAsync(profile.EngineKey, databaseName, cancellationToken))
+                .Where(current => candidates.Any(previous => DatabaseAccountIdentity.Same(engine, previous.UserName, previous.Host,
+                    engine, current.UserName, current.Host))).ToArray();
+
+            // Account cleanup may have waited after the resource lease was acquired. Run
+            // the final authority check after every wait and before the irreversible DROP.
+            await beforeDelete(cancellationToken);
+            try { await provider.DeleteDatabaseAsync(profile, databaseName, cancellationToken); }
+            catch (AppException exception) when (exception.ResourceAlreadyGone) { }
+
+            var failures = new List<string>();
+            await CleanupDatabaseStepAsync("credentials", token => credentialStore.RemoveDatabaseAsync(profile.EngineKey, databaseName, token), failures);
+            await CleanupDatabaseStepAsync("site-link", token => siteDatabaseLinks.UnlinkAsync(engine, databaseName, token), failures);
+            foreach (var owner in owners)
             {
-                try
+                await CleanupDatabaseStepAsync("user", async token =>
                 {
-                    await provider.DeleteUserAsync(profile, owner.Value.UserName, owner.Value.Host, cancellationToken);
-                }
-                catch
-                {
-                    // Kullanıcı zaten yoksa / silinemezse DB silme işlemini başarısız sayma.
-                }
+                    if (!await credentialStore.IsUserReferencedAsync(profile.EngineKey, owner.UserName, owner.Host, token))
+                        await provider.DeleteUserAsync(profile, owner.UserName, owner.Host, token);
+                }, failures);
             }
+            // The physical DB is confirmed gone even if another cleanup step failed.
+            await CleanupDatabaseStepAsync("ownership", afterDelete, failures);
+            if (failures.Count > 0)
+                throw new AppException("database.delete_cleanup_incomplete", 500, 500,
+                    $"engine={profile.EngineKey}; database={databaseName}; cleanup={string.Join(", ", failures)}");
+        }
+        finally
+        {
+            for (var index = accounts.Count - 1; index >= 0; index--) accounts[index].Dispose();
         }
     }
 
@@ -488,24 +603,37 @@ internal sealed partial class DatabaseService(
         var dbEngine = ParseEngine(engine);
         var normalizedUser = NormalizeUserName(userName, dbEngine);
         var allowedHost = NormalizeAllowedHost(host);
+        using var mutation = await DatabaseLifecycle.EnterSharedEngineAsync(engine, cancellationToken);
+        using var account = await DatabaseLifecycle.EnterAccountAsync(mutation, engine, normalizedUser, cancellationToken);
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
-        await ResolveProvider(dbEngine).DeleteUserAsync(profile, normalizedUser, allowedHost, cancellationToken);
+        try { await ResolveProvider(dbEngine).DeleteUserAsync(profile, normalizedUser, allowedHost, cancellationToken); }
+        catch (AppException exception) when (exception.ResourceAlreadyGone) { }
         // Öksüz kimlik kaydı kalmasın (kullanıcı silinince phpMyAdmin parolası da gitmeli).
-        await credentialStore.RemoveUserAsync(profile.EngineKey, normalizedUser, allowedHost, cancellationToken);
+        var failures = new List<string>();
+        await CleanupDatabaseStepAsync("credentials", token => credentialStore.RemoveUserAsync(profile.EngineKey, normalizedUser, allowedHost, token), failures);
+        if (failures.Count > 0)
+            throw new AppException("database.user_delete_cleanup_incomplete", 500, 500,
+                $"engine={profile.EngineKey}; user={normalizedUser}; cleanup={string.Join(", ", failures)}");
     }
 
     public async Task<DatabaseWorkspaceDto> SetUserPasswordAsync(
         SetDatabaseUserPasswordRequest request,
         CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Trim().Length < 6)
+            throw new AppException("database.password_too_short", 400, 400);
         var dbEngine = ParseEngine(request.Engine);
         var userName = NormalizeUserName(request.UserName, dbEngine);
         var allowedHost = NormalizeAllowedHost(request.AllowedHost);
+        using var mutation = await DatabaseLifecycle.EnterSharedEngineAsync(request.Engine, cancellationToken);
+        using var account = await DatabaseLifecycle.EnterAccountAsync(mutation, request.Engine, userName, cancellationToken);
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
         var provider = ResolveProvider(dbEngine);
 
+        await credentialStore.BeginPasswordChangeAsync(profile.EngineKey, userName, allowedHost, request.Password, cancellationToken);
         await provider.SetUserPasswordAsync(profile, userName, request.Password, allowedHost, cancellationToken);
-        await credentialStore.UpsertAsync(profile.EngineKey, userName, allowedHost, string.Empty, request.Password, cancellationToken);
+        using (var publication = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
+            await credentialStore.ConfirmPasswordChangeAsync(profile.EngineKey, userName, allowedHost, publication.Token);
         return await provider.GetWorkspaceAsync(profile, cancellationToken);
     }
 
@@ -520,24 +648,44 @@ internal sealed partial class DatabaseService(
         var allowedHost = string.IsNullOrWhiteSpace(request.AllowedHost)
             ? NewUserHost(dbEngine)
             : NormalizeAllowedHost(request.AllowedHost);
+        var grantedDatabase = string.IsNullOrWhiteSpace(request.DatabaseName) ? string.Empty : NormalizeDatabaseName(request.DatabaseName);
+        using var mutation = grantedDatabase.Length == 0
+            ? await DatabaseLifecycle.EnterSharedEngineAsync(request.Engine, cancellationToken)
+            : await DatabaseLifecycle.EnterResourceAsync(request.Engine, grantedDatabase, cancellationToken);
+        using var account = await DatabaseLifecycle.EnterAccountAsync(mutation, request.Engine, userName, cancellationToken);
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
         var provider = ResolveProvider(dbEngine);
 
+        // Only confirmed creation authorizes compensation. An existing/uncertain account
+        // must never be dropped because a CREATE call failed.
         await provider.CreateUserAsync(profile, userName, request.Password, allowedHost, cancellationToken);
-
-        // Plesk gibi: kullanıcı bir veritabanı bağlamında eklenirse o DB'ye OTOMATİK tam yetki (GRANT ALL) ver.
-        // Aksi halde kullanıcı giriş yapar ama "Access denied for user ... to database ..." alır (en sık şikâyet).
-        // Veritabanı seçilmemişse yalnız kullanıcı oluşur (ileride GrantAccess ile bağlanabilir).
-        var grantedDatabase = string.Empty;
-        if (!string.IsNullOrWhiteSpace(request.DatabaseName))
+        try
         {
-            grantedDatabase = NormalizeDatabaseName(request.DatabaseName);
-            var fullPrivileges = NormalizePrivileges(["ALL PRIVILEGES"], dbEngine);
-            await provider.GrantAccessAsync(profile, grantedDatabase, userName, allowedHost, fullPrivileges, cancellationToken);
+            await credentialStore.RecordCreatedAsync(profile.EngineKey, userName, allowedHost, grantedDatabase, request.Password, cancellationToken);
+            if (grantedDatabase.Length > 0)
+            {
+                var fullPrivileges = NormalizePrivileges(["ALL PRIVILEGES"], dbEngine);
+                await GrantWithReferenceAsync(provider, profile, grantedDatabase, userName, allowedHost, fullPrivileges, cancellationToken);
+            }
+            return await provider.GetWorkspaceAsync(profile, cancellationToken);
         }
+        catch (Exception original)
+        {
+            await CleanupCreatedUserAsync(provider, profile, userName, allowedHost, original);
+            throw;
+        }
+    }
 
-        await credentialStore.UpsertAsync(profile.EngineKey, userName, allowedHost, grantedDatabase, request.Password, cancellationToken);
-        return await provider.GetWorkspaceAsync(profile, cancellationToken);
+    private async Task CleanupCreatedUserAsync(IDatabaseEngineProvider provider, DatabaseConnectionProfile profile,
+        string userName, string host, Exception original)
+    {
+        var failures = new List<string>();
+        var gone = await CleanupDatabaseStepAsync("user", token => provider.DeleteUserAsync(profile, userName, host, token), failures);
+        if (gone)
+            await CleanupDatabaseStepAsync("credentials", token => credentialStore.RemoveUserAsync(profile.EngineKey, userName, host, token), failures);
+        if (failures.Count > 0)
+            throw new AppException("database.user_create_cleanup_incomplete", 500, 500,
+                $"engine={profile.EngineKey}; user={userName}; cause={FailureCode(original)}; cleanup={string.Join(", ", failures)}");
     }
 
     public async Task<DatabaseWorkspaceDto> GrantAccessAsync(
@@ -548,6 +696,8 @@ internal sealed partial class DatabaseService(
         var databaseName = NormalizeDatabaseName(request.DatabaseName);
         var userName = NormalizeUserName(request.UserName, dbEngine);
         var privileges = NormalizePrivileges(request.Privileges, dbEngine);
+        using var mutation = await DatabaseLifecycle.EnterResourceAsync(request.Engine, databaseName, cancellationToken);
+        using var account = await DatabaseLifecycle.EnterAccountAsync(mutation, request.Engine, userName, cancellationToken);
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
         var provider = ResolveProvider(dbEngine);
 
@@ -563,10 +713,21 @@ internal sealed partial class DatabaseService(
 
         foreach (var host in targetHosts)
         {
-            await provider.GrantAccessAsync(profile, databaseName, userName, host, privileges, cancellationToken);
+            await GrantWithReferenceAsync(provider, profile, databaseName, userName, host, privileges, cancellationToken);
         }
 
         return await provider.GetWorkspaceAsync(profile, cancellationToken);
+    }
+
+    private async Task GrantWithReferenceAsync(IDatabaseEngineProvider provider, DatabaseConnectionProfile profile,
+        string databaseName, string userName, string host, IReadOnlyCollection<string> privileges, CancellationToken cancellationToken)
+    {
+        // Intent is durable before SQL runs. If SQL or confirmation fails, retain it:
+        // removing an uncertain reference could delete an account already used by this DB.
+        await credentialStore.BeginReferenceAsync(profile.EngineKey, userName, host, databaseName, cancellationToken);
+        await provider.GrantAccessAsync(profile, databaseName, userName, host, privileges, cancellationToken);
+        using var publication = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await credentialStore.ConfirmReferenceAsync(profile.EngineKey, userName, host, databaseName, publication.Token);
     }
 
     public async Task<DatabaseDumpResultDto> ExportDumpAsync(
@@ -618,6 +779,9 @@ internal sealed partial class DatabaseService(
         var databaseName = string.IsNullOrWhiteSpace(request.DatabaseName)
             ? string.Empty
             : NormalizeDatabaseName(request.DatabaseName);
+        // A SQL script can switch databases (USE / \\connect), even when the caller
+        // supplies an initial database. Hold the engine lease for its actual scope.
+        using var mutation = await DatabaseLifecycle.EnterEngineAsync(request.Engine, cancellationToken);
         var result = engine switch
         {
             DbEngine.MariaDb or DbEngine.MySql => await ImportMySqlAsync(profile, databaseName, sourcePath, cancellationToken),
@@ -674,6 +838,7 @@ internal sealed partial class DatabaseService(
             ? sourceDatabase
             : NormalizeDatabaseName(request.TargetDatabase);
 
+        using var mutation = await DatabaseLifecycle.EnterResourceAsync(request.Engine, targetDatabase, cancellationToken);
         var targetProfile = await ResolveConnectionProfileAsync(engine, cancellationToken);
         var provider = ResolveProvider(engine);
 
@@ -770,23 +935,10 @@ internal sealed partial class DatabaseService(
                 var passwordGenerated = string.IsNullOrWhiteSpace(request.TargetPassword);
                 var transferPassword = passwordGenerated ? GenerateDbPassword() : request.TargetPassword;
                 var transferHost = NewUserHost(engine);
-                var fullPrivileges = NormalizePrivileges(["ALL PRIVILEGES"], engine);
-
-                try
-                {
-                    await provider.CreateUserAsync(targetProfile, transferUser, transferPassword, transferHost, cancellationToken);
-                }
-                catch
-                {
-                    // kullanıcı zaten var olabilir → parolayı değiştirmeden yetkilendirmeye devam et
-                }
-
-                createdUser = transferUser;
-                createdPassword = passwordGenerated ? transferPassword : string.Empty;
-                await provider.GrantAccessAsync(targetProfile, targetDatabase, transferUser, transferHost, fullPrivileges, cancellationToken);
-                await credentialStore.UpsertAsync(targetProfile.EngineKey, transferUser, transferHost, targetDatabase, transferPassword, cancellationToken);
+                (createdUser, createdPassword) = await ProvisionTransferUserAsync(mutation, targetProfile, provider,
+                    targetDatabase, transferUser, transferHost, transferPassword, passwordGenerated, cancellationToken);
             }
-            catch
+            catch (Exception exception) when (CanIgnoreTransferAccountFailure(exception))
             {
                 // best-effort: kullanıcı kurulamasa da transfer başarılı (DB + veri taşındı)
             }
@@ -814,6 +966,40 @@ internal sealed partial class DatabaseService(
             {
                 // En iyi çaba: geçici dosya silinemezse işlemi başarısız sayma.
             }
+        }
+    }
+
+    internal static bool CanIgnoreTransferAccountFailure(Exception exception) =>
+        exception is not OperationCanceledException &&
+        exception is not AppException { MessageKey: "database.user_create_cleanup_incomplete" };
+
+    internal async Task<(string UserName, string Password)> ProvisionTransferUserAsync(
+        IDisposable mutation, DatabaseConnectionProfile profile, IDatabaseEngineProvider provider,
+        string databaseName, string userName, string host, string password, bool passwordGenerated, CancellationToken cancellationToken)
+    {
+        using var account = await DatabaseLifecycle.EnterAccountAsync(mutation, profile.EngineKey, userName, cancellationToken);
+        var created = false;
+        try
+        {
+            await provider.CreateUserAsync(profile, userName, password, host, cancellationToken);
+            created = true;
+        }
+        catch (AppException exception) when (exception.MessageKey == "database.user_already_exists") { }
+        try
+        {
+            if (created)
+                await credentialStore.RecordCreatedAsync(profile.EngineKey, userName, host, databaseName, password, cancellationToken);
+            await GrantWithReferenceAsync(provider, profile, databaseName, userName, host,
+                NormalizePrivileges(["ALL PRIVILEGES"], profile.Engine), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            // CREATE did not change an existing account's password. A generated candidate
+            // must never be published as a working secret for that account.
+            return (userName, created && passwordGenerated ? password : string.Empty);
+        }
+        catch (Exception original)
+        {
+            if (created) await CleanupCreatedUserAsync(provider, profile, userName, host, original);
+            throw;
         }
     }
 
@@ -952,7 +1138,7 @@ internal sealed partial class DatabaseService(
         }
     }
 
-    private DatabaseEngineStatusDto BuildEngineStatus(
+    internal DatabaseEngineStatusDto BuildEngineStatus(
         EngineDescriptor descriptor,
         InstalledComponent component,
         IReadOnlyDictionary<string, string> configuration)
@@ -972,7 +1158,8 @@ internal sealed partial class DatabaseService(
             Engine = descriptor.EngineKey,
             DisplayName = descriptor.DisplayName,
             Installed = true,
-            Ready = hasPassword,
+            Ready = hasPassword && !configuration.ContainsKey(DatabaseProfiles.PendingAdminPasswordKey),
+            AdminPasswordPending = configuration.ContainsKey(DatabaseProfiles.PendingAdminPasswordKey),
             SystemDetected = systemDetected,
             Host = "127.0.0.1",
             Port = port,

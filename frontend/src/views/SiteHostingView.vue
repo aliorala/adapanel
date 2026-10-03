@@ -24,7 +24,7 @@
             <h3>{{ t("panel.hosting.title") }}</h3>
             <p class="meta">{{ t("panel.hosting.subtitle") }}</p>
           </div>
-          <button class="secondary compact" :disabled="!siteName || busy" @click="load">{{ t("panel.hosting.refresh") }}</button>
+          <button class="secondary compact" :disabled="!siteName || busy" @click="load()">{{ t("panel.hosting.refresh") }}</button>
         </div>
 
         <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
@@ -33,7 +33,7 @@
         <!-- Veri gelmeden ayar anahtarlarını göstermiyoruz: kapalı görünen bir anahtar,
              "kapalı" demektir — oysa henüz okunmamıştır. -->
         <p v-else-if="!settingsLoaded" class="empty-state" role="status" aria-live="polite">
-          {{ t("panel.common.loading") }}
+          {{ t(busy ? "panel.common.loading" : "panel.common.loadFailed") }}
         </p>
 
         <template v-else>
@@ -321,7 +321,7 @@
             <!-- ÇIKMAZ SOKAK DEĞİL: rol eksikse kurma düğmesi de burada. -->
             <div v-if="quota && !quota.fsrmAvailable" class="notice error fsrm-missing" role="alert">
               <span>{{ t("panel.hosting.quotaUnavailable") }}</span>
-              <button class="secondary compact" v-bind="writeGate(installingFsrm)" @click="installFsrmRole">
+              <button class="secondary compact" v-bind="writeGate(busy)" @click="installFsrmRole">
                 {{ installingFsrm ? t("panel.hosting.quotaInstalling") : t("panel.hosting.quotaInstall") }}
               </button>
             </div>
@@ -438,7 +438,7 @@
               </button>
             </div>
 
-            <SectionLoadError v-if="gitLoad.message.value" :message="gitLoad.message.value" @retry="loadGit" />
+            <SectionLoadError v-if="gitLoad.message.value" :message="gitLoad.message.value" :busy="busy" @retry="loadGit" />
 
             <div class="settings-rows">
               <label class="setting-row">
@@ -536,7 +536,7 @@
 
 <script setup lang="ts">
 import { getFormattingLocale } from '../utils/locale';
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import SiteAliases from "../components/SiteAliases.vue";
 // .htaccess bolumu AYRI bir gorunumde: gerekcesi o dosyanin script blogunda yazili.
@@ -558,6 +558,7 @@ import { useSitesStore } from "../stores/sites";
 import { updateDocumentRoot, enableFrameworkRewrite, repairSitePermissions } from "../api/sites";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 import { formatBytes as sharedFormatBytes } from "../utils/bytes";
+import { getSessionEpoch } from "../api/client";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
@@ -574,6 +575,31 @@ const busy = ref(false);
 // "her şey kapalı" sanıp yanlış karar veriyordu. Bu bayrak, "henüz bilmiyorum" ile "kapalı" arasındaki
 // farkı ekranda görünür kılar.
 const settingsLoaded = ref(false);
+let workspaceVersion = 0;
+let disposed = false;
+onBeforeUnmount(() => { disposed = true; workspaceVersion++; });
+
+function hostingContext() {
+  const site = siteName.value, version = workspaceVersion, epoch = getSessionEpoch();
+  return { site, current: () => !disposed && siteName.value === site && workspaceVersion === version && getSessionEpoch() === epoch };
+}
+
+async function mutate<T>(action: (context: ReturnType<typeof hostingContext>) => Promise<T>, apply: (result: T) => void, installing = false) {
+  if (!siteName.value || disposed || busy.value || !settingsLoaded.value) return;
+  const context = hostingContext();
+  busy.value = true;
+  if (installing) { installingFsrm.value = true; quotaError.value = ""; }
+  try {
+    const result = await action(context);
+    if (context.current()) apply(result);
+  } catch (error) {
+    if (!context.current()) return;
+    if (installing) quotaError.value = resolveApiMessage(error);
+    else showNotice(resolveApiMessage(error), true);
+  } finally {
+    if (context.current()) { busy.value = false; if (installing) installingFsrm.value = false; }
+  }
+}
 const notice = ref("");
 const noticeError = ref(false);
 const deniedIps = ref("");
@@ -688,18 +714,38 @@ const primaryBinding = computed(() => {
     : `${binding.protocol.toUpperCase()} ${binding.ipAddress}:${binding.port}`;
 });
 
-watch(siteName, load, { immediate: true });
 watch(activeSection, (section) => {
   if (section === "stats" && !stats.value) {
-    loadStats();
+    void loadStats();
   }
 });
 
-async function load() {
+async function load(siteChanged = false) {
+  if (disposed || (!siteChanged && busy.value)) return;
+  workspaceVersion++;
+  settingsLoaded.value = false;
+  notice.value = "";
+  noticeError.value = false;
+  if (siteChanged) {
+    quota.value = null;
+    quotaError.value = "";
+    Object.assign(quotaForm, { limitMegabytes: 1024, softLimit: false });
+    git.value = null;
+    gitLoad.clear();
+    Object.assign(gitForm, { repositoryUrl: "", branch: "main" });
+    showLegacyWebhook.value = false;
+    composerOutput.value = "";
+    gitOutput.value = "";
+    stats.value = null;
+    installingFsrm.value = false;
+    busy.value = false;
+  }
   if (!siteName.value) return;
+  const context = hostingContext();
   busy.value = true;
   try {
-    const settings = await getSiteHostingSettings(siteName.value);
+    const settings = await getSiteHostingSettings(context.site);
+    if (!context.current()) return;
     form.maximumBandwidthBytesPerSecond = settings.maximumBandwidthBytesPerSecond;
     form.maximumConnections = settings.maximumConnections;
     form.redirectUrl = settings.redirectUrl;
@@ -719,21 +765,20 @@ async function load() {
     deniedIps.value = settings.deniedIpAddresses.join("\n");
     allowedReferrers.value = settings.allowedReferrerHosts.join("\n");
     protectedExtensions.value = settings.protectedExtensions.join(", ");
-    await loadQuota();
-    await loadGit();
+    await loadQuota(context);
+    if (!context.current()) return;
+    await loadGitFor(context);
+    if (!context.current()) return;
     settingsLoaded.value = true;
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (context.current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    busy.value = false;
+    if (context.current()) busy.value = false;
   }
 }
 
 async function save() {
-  if (!siteName.value) return;
-  busy.value = true;
-  try {
-    const saved = await updateSiteHostingSettings(siteName.value, {
+  await mutate(context => updateSiteHostingSettings(context.site, {
       ...form,
       defaultDocuments: splitLines(defaultDocumentsText.value),
       deniedIpAddresses: splitLines(deniedIps.value),
@@ -741,7 +786,7 @@ async function save() {
       protectedExtensions: protectedExtensions.value.split(",").map(item => item.trim()).filter(Boolean),
       customErrorPages: parseErrorPages(),
       mimeTypes: parseMimeTypes()
-    });
+    }), saved => {
     // Sunucu normalleştirilmiş hâli döner ("woff2" -> ".woff2", sıralı liste). Ekran onunla
     // tazelenir ki kullanıcı SUNUCUDA DURANI görsün, yazdığını değil.
     errorPagesText.value = saved.customErrorPages.map((page) => `${page.statusCode} ${page.path}`).join("\n");
@@ -754,26 +799,20 @@ async function save() {
     } else {
       showNotice(t("panel.hosting.saved"), false);
     }
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  });
 }
 
 // #1 ⭐ Belge kökü / web root kaydet (Laravel/Symfony için ...\public). IIS'te kalıcı; panel revert etmez.
 async function saveDocumentRoot() {
-  if (!siteName.value || !documentRoot.value.trim()) return;
-  busy.value = true;
-  try {
-    await updateDocumentRoot(siteName.value, documentRoot.value.trim());
+  const path = documentRoot.value.trim();
+  if (!path) return;
+  await mutate(async context => {
+    await updateDocumentRoot(context.site, path);
+    if (!context.current()) return;
     await sitesStore.fetchSites();
+  }, () => {
     showNotice(t("panel.hosting.documentRootSaved"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  });
 }
 
 // Mevcut yolun altına \public ekle (Laravel/Symfony belge kökü). Kullanıcı kaydetmeden önce görür/düzenler.
@@ -784,16 +823,9 @@ function useLaravelPublic() {
 
 // #2 — pretty-URL (index.php front controller) yönlendirmesini etkinleştir. URL Rewrite modülü yoksa net hata.
 async function enableRewrite() {
-  if (!siteName.value) return;
-  busy.value = true;
-  try {
-    await enableFrameworkRewrite(siteName.value);
+  await mutate(context => enableFrameworkRewrite(context.site), () => {
     showNotice(t("panel.hosting.rewriteEnabled"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  });
 }
 
 // #5 — mevcut siteye yazma iznini yeniden uygula.
@@ -807,10 +839,7 @@ async function enableRewrite() {
 // DACL yuzunden calisan bir sunucuyu bozuk gostermek olurdu; ikisini "tamam" ile birlestirmek
 // ise duzeltilen yalanin ta kendisi.
 async function repairPermissions() {
-  if (!siteName.value) return;
-  busy.value = true;
-  try {
-    const result = await repairSitePermissions(siteName.value);
+  await mutate(context => repairSitePermissions(context.site), result => {
     if (result.state === "granted") {
       showNotice(t("panel.hosting.permissionsRepaired"), false);
     } else if (result.state === "not_granted") {
@@ -818,25 +847,14 @@ async function repairPermissions() {
     } else {
       showNotice(`${t("panel.hosting.permissionsUnverified")} ${result.detail}`.trim(), true);
     }
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  });
 }
 
 async function runComposer() {
-  if (!siteName.value) return;
-  busy.value = true;
-  try {
-    const result = await runComposerInstall(siteName.value);
+  await mutate(context => runComposerInstall(context.site), result => {
     composerOutput.value = [result.output, result.error].filter(Boolean).join("\n");
     showNotice(result.exitCode === 0 ? t("panel.hosting.composerDone") : t("panel.hosting.composerFailed"), result.exitCode !== 0);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  });
 }
 
 /*
@@ -852,28 +870,26 @@ const quotaError = ref("");
 const installingFsrm = ref(false);
 
 async function installFsrmRole() {
-  installingFsrm.value = true;
-  quotaError.value = "";
-  try {
-    quota.value = await installFsrm(siteName.value);
+  await mutate(context => installFsrm(context.site), result => {
+    quota.value = result;
     showNotice(t("panel.hosting.quotaInstalled"), false);
-  } catch (error) {
-    quotaError.value = resolveApiMessage(error);
-  } finally {
-    installingFsrm.value = false;
-  }
+  }, true);
 }
 
-async function loadQuota() {
+async function loadQuota(context: ReturnType<typeof hostingContext>) {
   quotaError.value = "";
-  if (!siteName.value) return;
   try {
-    quota.value = await getQuota(siteName.value);
+    const result = await getQuota(context.site);
+    if (!context.current()) return;
+    quota.value = result;
     if (quota.value.quotaEnabled) {
       quotaForm.limitMegabytes = Math.max(1, Math.round(quota.value.limitBytes / 1_048_576));
       quotaForm.softLimit = quota.value.softLimit;
+    } else {
+      Object.assign(quotaForm, { limitMegabytes: 1024, softLimit: false });
     }
   } catch (error) {
+    if (!context.current()) return;
     // ÖLÇEMEDİK ≠ KAPALI. Önceden yalnız quota=null yapılıyordu ve kart "Durum: Kapalı,
     // Kullanılan: 0 B, Sınır: Sınırsız" gösteriyordu — bunlar ölçüm değil, null'ın varsayılanı.
     // Kullanıcı kotanın gerçekten kapalı olduğuna inanıyordu.
@@ -883,29 +899,19 @@ async function loadQuota() {
 }
 
 async function saveSiteQuota() {
-  if (!siteName.value) return;
-  busy.value = true;
-  try {
-    quota.value = await setQuota(siteName.value, quotaForm.limitMegabytes, quotaForm.softLimit);
+  await mutate(context => setQuota(context.site, quotaForm.limitMegabytes, quotaForm.softLimit), result => {
+    quota.value = result;
+    quotaError.value = "";
     showNotice(t("panel.hosting.quotaSaved"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  });
 }
 
 async function removeSiteQuota() {
-  if (!siteName.value) return;
-  busy.value = true;
-  try {
-    quota.value = await removeQuota(siteName.value);
+  await mutate(context => removeQuota(context.site), result => {
+    quota.value = result;
+    quotaError.value = "";
     showNotice(t("panel.hosting.quotaRemoved"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  });
 }
 
 /** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */
@@ -925,15 +931,23 @@ function formatQuotaBytes(value: number) {
 }
 
 async function loadGit() {
-  if (!siteName.value) return;
+  await mutate(context => loadGitFor(context), () => {});
+}
+
+async function loadGitFor(context: ReturnType<typeof hostingContext>) {
   try {
-    git.value = await getGitDeployment(siteName.value);
+    const result = await getGitDeployment(context.site);
+    if (!context.current()) return;
+    git.value = result;
     if (git.value.configured) {
       gitForm.repositoryUrl = git.value.repositoryUrl;
       gitForm.branch = git.value.branch;
+    } else {
+      Object.assign(gitForm, { repositoryUrl: "", branch: "main" });
     }
     gitLoad.clear();
   } catch (error) {
+    if (!context.current()) return;
     // Hata YUTULMUYOR: boş form "git kurulu değil" sanılıyordu; kullanıcı var olan
     // dağıtımı yeniden kurmaya kalkabilirdi.
     git.value = null;
@@ -942,16 +956,10 @@ async function loadGit() {
 }
 
 async function saveGit(regenerate = false) {
-  if (!siteName.value) return;
-  busy.value = true;
-  try {
-    git.value = await configureGitDeployment(siteName.value, gitForm.repositoryUrl, gitForm.branch, regenerate);
+  await mutate(context => configureGitDeployment(context.site, gitForm.repositoryUrl, gitForm.branch, regenerate), result => {
+    git.value = result;
     showNotice(t("panel.hosting.gitSaved"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  });
 }
 
 async function regenerateSecret() {
@@ -959,31 +967,19 @@ async function regenerateSecret() {
 }
 
 async function deploySite() {
-  if (!siteName.value) return;
-  busy.value = true;
-  try {
-    const result = await deployGit(siteName.value);
+  await mutate(context => deployGit(context.site), result => {
     git.value = result.deployment;
     gitOutput.value = result.output;
     showNotice(result.success ? t("panel.hosting.gitDeployed") : t("panel.hosting.gitDeployFailed"), !result.success);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  });
 }
 
 async function loadStats() {
-  if (!siteName.value) return;
-  busy.value = true;
-  try {
-    stats.value = await getSiteStatistics(siteName.value, statsDays.value);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  await mutate(context => getSiteStatistics(context.site, statsDays.value), result => { stats.value = result; });
 }
+
+// Başlangıç yüklemesi, kota/Git durumları da oluşturulduktan sonra başlatılır.
+watch(siteName, () => { void load(true); }, { immediate: true, flush: "sync" });
 
 function dailyWidth(count: number) {
   return `${Math.round((count / maxDailyHit.value) * 100)}%`;

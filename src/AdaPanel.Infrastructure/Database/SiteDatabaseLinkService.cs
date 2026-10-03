@@ -1,3 +1,4 @@
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
@@ -13,12 +14,11 @@ public sealed class SiteDatabaseLinkService(JsonFileStore fileStore) : ISiteData
     private const string StatePath = "config/site-databases.json";
 
     private static bool SameDb(SiteDatabaseLinkDto link, string engine, string databaseName) =>
-        string.Equals(link.Engine, engine, StringComparison.OrdinalIgnoreCase) &&
-        string.Equals(link.DatabaseName, databaseName, StringComparison.OrdinalIgnoreCase);
+        DatabaseResourceIdentity.Same(link.Engine, link.DatabaseName, engine, databaseName);
 
     public async Task LinkAsync(string engine, string databaseName, string siteName, CancellationToken cancellationToken = default)
     {
-        var normalizedEngine = (engine ?? string.Empty).Trim().ToLowerInvariant();
+        var normalizedEngine = DatabaseResourceIdentity.NormalizeEngine(engine);
         var db = (databaseName ?? string.Empty).Trim();
         var site = (siteName ?? string.Empty).Trim();
         if (normalizedEngine.Length == 0 || db.Length == 0 || site.Length == 0)
@@ -36,7 +36,7 @@ public sealed class SiteDatabaseLinkService(JsonFileStore fileStore) : ISiteData
 
     public async Task UnlinkAsync(string engine, string databaseName, CancellationToken cancellationToken = default)
     {
-        var normalizedEngine = (engine ?? string.Empty).Trim();
+        var normalizedEngine = DatabaseResourceIdentity.NormalizeEngine(engine);
         var db = (databaseName ?? string.Empty).Trim();
         await fileStore.UpdateAsync(StatePath, new List<SiteDatabaseLinkDto>(),
             existing => existing.Where(link => !SameDb(link, normalizedEngine, db)).ToList(),

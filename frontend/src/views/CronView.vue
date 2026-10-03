@@ -27,7 +27,7 @@
              İki düzeltme: (1) sayı ancak liste BİR KEZ okunduktan sonra yazılır, öncesinde
              rozet ölçümün sürdüğünü söyler; (2) ton `ok` (yeşil) DEĞİL nötr — bir SAYI bir
              sağlık durumu değildir, "0 görev" başarı değil sadece bir ölçümdür. -->
-        <span v-if="tasksLoaded" class="status-pill">{{ tasks.length }} {{ t("panel.tasks.taskCount") }}</span>
+        <span v-if="tasksLoaded" class="status-pill">{{ tasks.length }} {{ t(tasks.length === 1 ? "panel.tasks.taskCountOne" : "panel.tasks.taskCount") }}</span>
         <span v-else class="status-pill" role="status" aria-live="polite">{{ t("panel.common.loading") }}</span>
       </div>
       <input v-model.trim="query" class="search-control" :placeholder="t('panel.tasks.search')" />
@@ -151,7 +151,7 @@
           <select v-model.number="form.timeLimitHours">
             <option :value="0">{{ t("panel.tasks.timeLimitNone") }}</option>
             <option v-for="saat in [1, 4, 12, 24, 48]" :key="saat" :value="saat">
-              {{ t("panel.tasks.timeLimitHours", { hours: saat }) }}
+              {{ t(saat === 1 ? "panel.tasks.timeLimitOneHour" : "panel.tasks.timeLimitHours", { hours: saat }) }}
             </option>
           </select>
           <small class="field-hint">{{ t("panel.tasks.timeLimitHint") }}</small>
@@ -318,6 +318,7 @@
                 <pre class="run-output">{{ outputs[item.name].content }}</pre>
               </template>
             </template>
+            <small v-else>{{ t("panel.tasks.outputUnreadable") }}</small>
           </template>
         </span>
         <button class="ghost compact" @click="closeRunPanel(item.name)">{{ t("panel.tasks.runClose") }}</button>
@@ -369,6 +370,11 @@ const { t } = useI18n();
 const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const authStore = useAuthStore();
+let disposed = false;
+function captureContext() {
+  const session = authStore.session;
+  return () => !disposed && authStore.session === session;
+}
 // Müşteri/bayi yalnızca URL görevi kurar (backend de zorlar); tip seçici yalnız admin'de görünür.
 // "script" tipi de bilinçli olarak yalnız yöneticide: planlı betik = sunucuda kod çalıştırmak.
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
@@ -528,15 +534,23 @@ onMounted(() => {
   }, 60_000);
 });
 
+let listSequence = 0;
 async function refresh() {
+  if (disposed) return false;
+  const isCurrent = captureContext();
+  const sequence = ++listSequence;
   loading.value = true;
   try {
-    tasks.value = await getScheduledTasks();
+    const result = await getScheduledTasks();
+    if (!isCurrent() || sequence !== listSequence) return false;
+    tasks.value = result;
     tasksLoaded.value = true;
+    return true;
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent() && sequence === listSequence) showNotice(resolveApiMessage(error), true);
+    return false;
   } finally {
-    loading.value = false;
+    if (isCurrent() && sequence === listSequence) loading.value = false;
   }
 }
 
@@ -547,6 +561,9 @@ async function refresh() {
  * anılır, ayrı bir kimlik yoktur.
  */
 const editingName = ref("");
+let draftRevision = 0;
+let draftGeneration = 0;
+watch([form, editingName, formOpen, scriptScope], () => { draftRevision++; }, { deep: true, flush: "sync" });
 
 /**
  * Görevi düzenlemeye açar: formu görevin GERÇEK değerleriyle doldurur.
@@ -556,6 +573,7 @@ const editingName = ref("");
  * her ayarı sessizce varsayılana döndürürdü.
  */
 function editTask(item: ScheduledTask) {
+  draftGeneration++;
   editingName.value = item.name;
   Object.assign(form, {
     name: item.name,
@@ -603,10 +621,17 @@ function cancelEdit() {
 }
 
 async function saveTask() {
+  if (disposed || saving.value || !form.name.trim() || !formComplete.value) return;
   saving.value = true;
+  const isCurrent = captureContext();
+  const session = authStore.session;
+  let revision = draftRevision;
+  const generation = draftGeneration;
   const oncekiAd = editingName.value;
+  const payload = { ...form, name: form.name.trim() };
   try {
-    await createScheduledTask({ ...form });
+    await createScheduledTask(payload);
+    if (authStore.session !== session) return;
 
     // AD DEĞİŞTİYSE eskisi silinir. Kayıt, aynı adlı görevi yerine yazar; ad değiştiğinde ise yeni
     // bir görev oluşur ve eskisi ORTADA KALIR. Kullanıcı "adını düzelttim" der, sunucuda iki görev
@@ -614,23 +639,36 @@ async function saveTask() {
     //
     // Sıra bilerek böyle: önce yeni kayıt BAŞARILI olur, sonra eski silinir. Tersi olsaydı kayıt
     // başarısız olduğunda kullanıcı hiç görevsiz kalırdı.
-    if (oncekiAd && oncekiAd !== form.name.trim()) {
+    // Yeni adlar TaskNameRules tarafından ASCII ile sınırlı; Windows kimliği harf kasasından bağımsız.
+    // Eski Unicode adlarında (ör. K) JS'nin geniş harf dönüşümü ayrı görevleri eşitlememeli.
+    const previousIdentity = oncekiAd.replace(/[A-Z]/g, letter => letter.toLowerCase());
+    if (oncekiAd && previousIdentity !== payload.name.toLowerCase()) {
       await deleteScheduledTask(oncekiAd);
     }
 
-    await refresh();
+    if (!isCurrent()) return;
+    if (generation === draftGeneration && editingName.value === oncekiAd) {
+      // Kullanıcı aynı taslağa yazmayı sürdürdüyse sonraki kayıt artık yeni görevi düzenler.
+      const unchanged = revision === draftRevision;
+      editingName.value = payload.name;
+      if (unchanged) revision = draftRevision;
+    }
+    const refreshed = await refresh();
+    if (!isCurrent() || revision !== draftRevision) return;
     editingName.value = "";
     resetForm();
     formOpen.value = false;
-    showNotice(t(oncekiAd ? "panel.tasks.updated" : "panel.tasks.saved"), false);
+    if (refreshed) showNotice(t(oncekiAd ? "panel.tasks.updated" : "panel.tasks.saved"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent() && revision === draftRevision) showNotice(resolveApiMessage(error), true);
   } finally {
     saving.value = false;
   }
 }
 
 async function removeTask(name: string) {
+  if (disposed || deletingName.value) return;
+  const isCurrent = captureContext();
   const task = tasks.value.find((item) => item.name === name);
   const impact = [`${t("panel.tasks.name")}: ${name}`];
   if (task?.command) {
@@ -643,13 +681,17 @@ async function removeTask(name: string) {
     message: t("panel.tasks.confirmDelete"),
     impact,
     action: async () => {
+      if (!isCurrent() || deletingName.value) return;
       deletingName.value = name;
       try {
         await deleteScheduledTask(name);
-        await refresh();
-        showNotice(t("panel.tasks.deleted"), false);
+        if (!isCurrent()) return;
+        closeRunPanel(name);
+        closeOutput(name);
+        const refreshed = await refresh();
+        if (isCurrent() && refreshed) showNotice(t("panel.tasks.deleted"), false);
       } catch (error) {
-        showNotice(resolveApiMessage(error), true);
+        if (isCurrent()) showNotice(resolveApiMessage(error), true);
       } finally {
         deletingName.value = "";
       }
@@ -660,7 +702,7 @@ async function removeTask(name: string) {
 function defaultForm() {
   return {
     name: "",
-    taskType: "command",
+    taskType: isAdmin.value ? "command" : "url",
     command: "powershell.exe",
     arguments: "",
     workingDirectory: "",
@@ -678,6 +720,7 @@ function defaultForm() {
 }
 
 function resetForm() {
+  draftGeneration++;
   Object.assign(form, defaultForm());
   scriptScope.value = "server";
 }
@@ -708,6 +751,7 @@ type RunState = {
 const runStates = reactive<Record<string, RunState>>({});
 const outputs = reactive<Record<string, ScheduledTaskOutput>>({});
 const outputLoading = reactive<Record<string, boolean>>({});
+const outputRequests = new Map<string, object>();
 
 /**
  * Görev bittiğinde çıktısını çeker.
@@ -716,19 +760,27 @@ const outputLoading = reactive<Record<string, boolean>>({});
  * şeydir. Çalışırken saniyede bir okumak, yarım yazılmış satırlar gösterirdi.
  */
 async function loadOutput(name: string) {
+  if (disposed) return;
+  const isCurrent = captureContext();
+  const request = {};
+  outputRequests.set(name, request);
+  const isLatest = () => isCurrent() && outputRequests.get(name) === request;
   outputLoading[name] = true;
   try {
-    outputs[name] = await getScheduledTaskOutput(name);
+    const result = await getScheduledTaskOutput(name);
+    if (isLatest()) outputs[name] = result;
   } catch {
     // Çıktı okunamadıysa BOŞ göstermeyiz: "çıktı yok" ile "okuyamadık" farklı şeylerdir.
-    delete outputs[name];
+    if (isLatest()) delete outputs[name];
   } finally {
-    outputLoading[name] = false;
+    if (isLatest()) outputLoading[name] = false;
   }
 }
 
 // Aynı görev iki kez başlatılırsa ESKİ takip durmalı: yoksa iki döngü aynı satıra yazar.
 const runTimers: Record<string, number> = {};
+const runRequests = new Map<string, object>();
+const pendingStarts = new Set<string>();
 
 function stopWatching(name: string) {
   if (runTimers[name]) {
@@ -738,6 +790,8 @@ function stopWatching(name: string) {
 }
 
 function closeRunPanel(name: string) {
+  runRequests.delete(name);
+  outputRequests.delete(name);
   stopWatching(name);
   delete runStates[name];
   delete outputs[name];
@@ -745,20 +799,30 @@ function closeRunPanel(name: string) {
 }
 
 async function runTask(name: string) {
+  if (disposed || pendingStarts.has(name)) return;
+  const isCurrent = captureContext();
+  const request = {};
+  runRequests.set(name, request);
+  pendingStarts.add(name);
+  const isLatest = () => isCurrent() && runRequests.get(name) === request;
   runningName.value = name;
   stopWatching(name);
+  outputRequests.delete(name);
   // Onceki calismanin ciktisi yeni turun ciktisi sanilmasin.
   delete outputs[name];
   runStates[name] = { phase: "starting", seconds: 0, resultCode: null };
 
   try {
     await runScheduledTask(name);
-    watchRun(name);
+    if (isLatest()) watchRun(name, isLatest);
   } catch (error) {
-    delete runStates[name];
-    showNotice(resolveApiMessage(error), true);
+    if (isLatest()) {
+      delete runStates[name];
+      showNotice(resolveApiMessage(error), true);
+    }
   } finally {
-    runningName.value = "";
+    pendingStarts.delete(name);
+    if (runningName.value === name) runningName.value = "";
   }
 }
 
@@ -768,7 +832,7 @@ async function runTask(name: string) {
  * Sonsuza kadar sormaz: bir üst sınır vardır ve dolduğunda "hâlâ çalışıyor" der. Süresiz bir
  * yoklama, sekme açık kaldığı sürece sunucuda saniyede bir PowerShell çalıştırmak demekti.
  */
-function watchRun(name: string) {
+function watchRun(name: string, isCurrent: () => boolean) {
   const POLL_MS = 2500;
   const MAX_SECONDS = 300;
   const basladi = Date.now();
@@ -777,7 +841,7 @@ function watchRun(name: string) {
   runTimers[name] = window.setInterval(() => {
     const gecen = Math.round((Date.now() - basladi) / 1000);
     const durum = runStates[name];
-    if (!durum) {
+    if (!isCurrent() || !durum) {
       stopWatching(name);
       return;
     }
@@ -797,7 +861,7 @@ function watchRun(name: string) {
 
     void getScheduledTaskStatus(name)
       .then((status) => {
-        if (!runStates[name]) return;
+        if (!isCurrent() || !runStates[name]) return;
         if (status.isRunning) {
           runStates[name].phase = "running";
           return;
@@ -811,7 +875,7 @@ function watchRun(name: string) {
       })
       .catch(() => {
         // Durum okunamadı: "bitti, başarılı" demek YANLIŞ olurdu — bilmediğimizi söyleriz.
-        if (!runStates[name]) return;
+        if (!isCurrent() || !runStates[name]) return;
         runStates[name].phase = "unknown";
         stopWatching(name);
       })
@@ -847,6 +911,9 @@ function runClass(name: string) {
 }
 
 onUnmounted(() => {
+  disposed = true;
+  runRequests.clear();
+  outputRequests.clear();
   // Sayfadan çıkılınca yoklama sürmemeli.
   Object.keys(runTimers).forEach(stopWatching);
   if (clockTimer) {
@@ -1070,11 +1137,13 @@ function canShowOutput(item: ScheduledTask) {
 const openOutputs = reactive<Record<string, boolean>>({});
 
 async function showOutput(name: string) {
+  if (disposed) return;
   openOutputs[name] = true;
   await loadOutput(name);
 }
 
 function closeOutput(name: string) {
+  outputRequests.delete(name);
   delete openOutputs[name];
   delete outputs[name];
   delete outputLoading[name];
@@ -1095,6 +1164,8 @@ function resultClass(item: ScheduledTask) {
  */
 const stoppingName = ref("");
 async function stopRun(item: ScheduledTask) {
+  if (disposed || stoppingName.value) return;
+  const isCurrent = captureContext();
   const uzun = elapsedMs(item);
   await confirm({
     title: t("panel.confirm.stopTaskTitle", { name: item.name }),
@@ -1106,9 +1177,11 @@ async function stopRun(item: ScheduledTask) {
     confirmLabel: t("panel.tasks.stopRunning"),
     busyLabel: t("panel.tasks.stopping"),
     action: async () => {
+      if (!isCurrent() || stoppingName.value) return;
       stoppingName.value = item.name;
       try {
         const sonuc = await stopScheduledTask(item.name);
+        if (!isCurrent()) return;
         if (sonuc.stillRunning) {
           showNotice(t("panel.tasks.stopStillRunning"), true);
         } else if (!sonuc.allKilled) {
@@ -1125,7 +1198,7 @@ async function stopRun(item: ScheduledTask) {
         }
         await refresh();
       } catch (error) {
-        showNotice(resolveApiMessage(error), true);
+        if (isCurrent()) showNotice(resolveApiMessage(error), true);
       } finally {
         stoppingName.value = "";
       }
@@ -1284,6 +1357,12 @@ function resolveApiMessage(error: unknown) {
 
 .span-2 {
   grid-column: span 2;
+}
+
+@media (max-width: 720px) {
+  .span-2 {
+    grid-column: 1 / -1;
+  }
 }
 
 /* SATIR UZUNLUĞU SINIRI. En uzun görünür metin bu ekranda (ölçüldü: `panel.tasks.systemEnvHint`

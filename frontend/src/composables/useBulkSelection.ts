@@ -1,5 +1,7 @@
-import { computed, ref } from "vue";
+import { computed, onScopeDispose, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import axios from "axios";
+import { getSessionEpoch } from "../api/client";
 
 import { useNotice } from "./useNotice";
 
@@ -76,6 +78,8 @@ export function useBulkAction() {
   const { t } = useI18n();
   const { resolveApiMessage } = useNotice();
   const busy = ref(false);
+  let disposed = false;
+  onScopeDispose(() => { disposed = true; });
 
   /**
    * Her öğeyi TEK TEK dener; bir hata döngüyü kesmez. Sonuç: kaç tanesi oldu, kaç tanesi olmadı
@@ -84,18 +88,31 @@ export function useBulkAction() {
   async function runBulk<T>(
     items: T[],
     keyOf: (item: T) => string,
-    worker: (item: T) => Promise<unknown>
+    worker: (item: T) => Promise<unknown>,
+    isCurrent: () => boolean = () => true
   ): Promise<BulkOutcome> {
+    const targets = [...items];
+    if (busy.value) return {
+      total: targets.length, done: 0,
+      failures: targets.map(item => ({ key: keyOf(item), reason: t("panel.bulk.alreadyRunning") }))
+    };
+    const epoch = getSessionEpoch();
+    let cancelled = false;
     busy.value = true;
     const failures: BulkFailure[] = [];
     let done = 0;
 
     try {
-      for (const item of items) {
+      for (const item of targets) {
+        if (cancelled || disposed || epoch !== getSessionEpoch() || !isCurrent()) {
+          failures.push({ key: keyOf(item), reason: t("panel.bulk.notStarted") });
+          continue;
+        }
         try {
           await worker(item);
           done += 1;
         } catch (error) {
+          if (axios.isCancel(error)) cancelled = true;
           failures.push({ key: keyOf(item), reason: resolveApiMessage(error) });
         }
       }
@@ -103,7 +120,7 @@ export function useBulkAction() {
       busy.value = false;
     }
 
-    return { total: items.length, done, failures };
+    return { total: targets.length, done, failures };
   }
 
   /** Toplu SİLME özeti. Kısmi başarısızlıkta hangi öğenin neden silinemediği satır satır yazılır. */

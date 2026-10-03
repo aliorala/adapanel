@@ -143,14 +143,17 @@ internal static class WebAppPublisher
     // bölümü tüm siteyi 500.19'a sokar → rewrite.dll yoksa HİÇBİR ŞEY yazma + false döndür (çağıran net hata verir).
     // Idempotent: aynı isimli kural varsa tekrar eklemez. Mevcut başka rewrite kurallarını korur.
     public static bool TryWriteFrontControllerRewrite(string root)
+        => TryWriteFrontControllerRewrite(root,
+            File.Exists(Path.Combine(Environment.SystemDirectory, "inetsrv", "rewrite.dll")));
+
+    internal static bool TryWriteFrontControllerRewrite(string root, bool moduleAvailable)
     {
         if (string.IsNullOrWhiteSpace(root))
         {
             return false;
         }
 
-        var rewriteModule = Path.Combine(Environment.SystemDirectory, "inetsrv", "rewrite.dll");
-        if (!File.Exists(rewriteModule))
+        if (!moduleAvailable)
         {
             return false;
         }

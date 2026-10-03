@@ -6,7 +6,7 @@ import SoftwareView from "./SoftwareView.vue";
 import { useSoftwareStore, type SoftwareCatalog } from "../stores/software";
 import { apiClient } from "../api/client";
 
-vi.mock("../api/client", () => ({ apiClient: { post: vi.fn(), get: vi.fn() } }));
+vi.mock("../api/client", () => ({ apiClient: { post: vi.fn(), get: vi.fn() }, getSessionEpoch: () => 0 }));
 vi.mock("../api/software", () => ({ getSoftwareRunningJobs: vi.fn(async () => ({ running: [], interrupted: [] })) }));
 vi.mock("../stores/auth", () => ({ extractApiMessage: () => "failed", extractApiDetails: () => "" }));
 vi.mock("../components/ConfirmDialog.vue", () => ({ useConfirm: () => ({ confirm: vi.fn() }) }));

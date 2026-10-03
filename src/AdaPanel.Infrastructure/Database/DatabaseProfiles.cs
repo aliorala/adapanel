@@ -22,6 +22,7 @@ namespace AdaPanel.Infrastructure.Database;
 internal static class DatabaseProfiles
 {
     public const string GeneratedPasswordKey = "generatedPassword";
+    public const string PendingAdminPasswordKey = "pendingAdminPassword";
     public const string AdminUserKey = "adminUser";
     public const string AdminPortKey = "adminPort";
     public const string SystemDetectedKey = "systemDetected";
@@ -71,7 +72,8 @@ internal static class DatabaseProfiles
         ISecretProtector secretProtector,
         DbEngine engine,
         CancellationToken cancellationToken,
-        bool allowEmptyPassword = false)
+        bool allowEmptyPassword = false,
+        bool allowPendingPassword = false)
     {
         if (engine == DbEngine.MsSql)
         {
@@ -90,6 +92,8 @@ internal static class DatabaseProfiles
         }
 
         var configuration = ReadProtectedConfiguration(secretProtector, installedComponent);
+        if (configuration.ContainsKey(PendingAdminPasswordKey) && !allowPendingPassword)
+            throw new AppException("database.admin_password_unverified", 409, 409);
         var adminPassword = configuration.TryGetValue(GeneratedPasswordKey, out var storedPassword) ? storedPassword : string.Empty;
         if (string.IsNullOrWhiteSpace(adminPassword) && !allowEmptyPassword)
         {

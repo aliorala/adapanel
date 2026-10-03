@@ -94,10 +94,17 @@ public static class SslRemovalPlan
                 : (null, HostNameRequiredKey);
         }
 
-        var eslesen = portlular.FirstOrDefault(binding =>
-            string.Equals(binding.HostName, istenen, StringComparison.OrdinalIgnoreCase));
+        var eslesen = portlular.Where(binding =>
+            string.Equals(binding.HostName, istenen, StringComparison.OrdinalIgnoreCase)).ToArray();
 
-        return eslesen is null ? (null, HostNotFoundKey) : (eslesen, string.Empty);
+        // The request has no IP selector. Two IP bindings with the same host and port
+        // cannot be distinguished, so neither may be chosen by enumeration order.
+        return eslesen.Length switch
+        {
+            0 => (null, HostNotFoundKey),
+            1 => (eslesen[0], string.Empty),
+            _ => (null, HostNameRequiredKey)
+        };
     }
 
     /// <summary>
@@ -114,9 +121,13 @@ public static class SslRemovalPlan
     /// </summary>
     public static string[] FindOtherUsersOfCertificate(
         IReadOnlyCollection<IisHttpsBinding> allBindings,
-        IisHttpsBinding target)
+        IisHttpsBinding target) =>
+        FindCertificateUsers(allBindings.Where(binding => !AynıBağlama(binding, target)), target.Thumbprint);
+
+    /// <summary>All current users, including a binding recreated after removal.</summary>
+    public static string[] FindCertificateUsers(IEnumerable<IisHttpsBinding> allBindings, string thumbprint)
     {
-        if (string.IsNullOrWhiteSpace(target.Thumbprint))
+        if (string.IsNullOrWhiteSpace(thumbprint))
         {
             // Parmak izini ÖLÇEMEDİK. "Kimse kullanmıyor" DEMEYİZ: ölçemediğimiz şeye dayanarak
             // sertifika silmek, bilmediğimiz bir siteyi bozmak olurdu.
@@ -124,9 +135,8 @@ public static class SslRemovalPlan
         }
 
         return allBindings
-            .Where(binding => !AynıBağlama(binding, target))
             .Where(binding => !binding.CertificateReadable ||
-                string.Equals(binding.Thumbprint, target.Thumbprint, StringComparison.OrdinalIgnoreCase))
+                string.Equals(binding.Thumbprint, thumbprint, StringComparison.OrdinalIgnoreCase))
             .Select(binding => $"{binding.SiteName} ({binding.BindingInformation})")
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)

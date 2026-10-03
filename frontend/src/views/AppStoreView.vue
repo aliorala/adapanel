@@ -16,18 +16,18 @@
       </div>
       <div class="hero-stats">
         <span class="hero-stat">
-          <strong>{{ templates.length }}</strong>
+          <strong>{{ templatesLoaded ? templates.length : "—" }}</strong>
           <span class="tile-label">{{ t("panel.appStore.applicationCount") }}</span>
         </span>
         <span class="hero-stat">
-          <strong>{{ featuredCount }}</strong>
+          <strong>{{ templatesLoaded ? featuredCount : "—" }}</strong>
           <span class="tile-label">{{ t("panel.appStore.automaticCount") }}</span>
         </span>
         <!-- `loading` OLCULDU: betikte SET EDILIYOR ama sablonda HIC OKUNMUYORDU. Yani
              "Sablonlari yenile" tiklandiginda ekranda hicbir sey degismiyor, istek surerken
              dugme tekrar tekrar tiklanabiliyordu. Bayrak zaten vardi, tek eksik onu
              gostermekti. -->
-        <button class="secondary compact" :disabled="loading" @click="refresh">
+        <button class="secondary compact" :disabled="loading || !!busyTemplate" @click="refresh">
           {{ loading ? t("panel.common.loading") : t("panel.appStore.refresh") }}
         </button>
       </div>
@@ -59,7 +59,7 @@
       {{ t("panel.appStore.sitesUnavailable") }}
     </p>
 
-    <p v-else-if="sitesStore.sites.length === 0" class="notice warn-banner">
+    <p v-else-if="sitesReady && sitesStore.sites.length === 0" class="notice warn-banner">
       {{ t("panel.appStore.noSites") }}
     </p>
 
@@ -147,7 +147,7 @@
              etiket sarilip satir yuksekligini bozabiliyordu. -->
         <label class="site-select">
           <span class="sr-only">{{ t("panel.php.targetSite") }}</span>
-          <select v-model="siteMap[template.id]">
+          <select v-model="siteMap[template.id]" :disabled="loading || !!busyTemplate || !sitesReady">
             <option value="">{{ t("panel.php.selectSite") }}</option>
             <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">
               {{ site.name }}
@@ -163,7 +163,7 @@
              azalmiyor: kendi sutununda, kendi basligi ("Islem") altinda duruyor. -->
         <button
           class="secondary compact install-button"
-          v-bind="writeGate(busyTemplate !== '' || sitesUnavailable || sitesStore.sites.length === 0 || !siteMap[template.id])"
+          v-bind="writeGate(!!busyTemplate || loading || !templatesLoaded || !sitesReady || !sitesStore.loaded || sitesStore.loading || !sitesStore.sites.some(site => site.name === siteMap[template.id]))"
           @click="install(template.id)">
           {{ busyTemplate === template.id ? t("panel.appStore.installing") : t("panel.appStore.install") }}
         </button>
@@ -200,7 +200,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getAppTemplates, installAppTemplate, type AppTemplate } from "../api/store";
 import { useConfirm } from "../components/ConfirmDialog.vue";
@@ -209,25 +209,22 @@ import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useServerText } from "../composables/useNotice";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { getSessionEpoch } from "../api/client";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
-const { writeGate } = useSubscriptionGate();
+const { writeGate, locked } = useSubscriptionGate();
 // Katalog metinleri sunucudan ANAHTAR olarak gelir; ceviri karari tek kaynakta.
 const { serverText } = useServerText();
 const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 
 const templates = ref<AppTemplate[]>([]);
-// Şablon listesi BİR KEZ başarıyla okundu mu. `loading` hata durumunda da false olur; boş dizi
-// "uygulama yok" gibi KESİN bir cümleye dönüşüyordu (bkz. SiteBackupView `listLoaded`).
+// Yalnız son başarılı katalog ve site ölçümü kurulum başlatabilir.
 const templatesLoaded = ref(false);
-// Katalog isteği BAŞARISIZ döndü mü. `templatesLoaded` tek başına yetmez: false değeri "henüz
-// gelmedi" ile "gelmedi ÇÜNKÜ patladı"yı aynı kefeye koyuyordu ve ikincisinde ekran sonsuza
-// kadar "Yükleniyor…" yazıyordu. Elde ÇALIŞAN bir liste varken tekrar denenen istek patlarsa
-// bayrak yakılmaz — eski liste hâlâ doğru, hatayı üstteki şerit söyler.
 const catalogFailed = ref(false);
+const sitesReady = ref(false);
 const loading = ref(false);
 const busyTemplate = ref("");
 const notice = ref("");
@@ -238,6 +235,31 @@ const search = ref("");
 const activeCategory = ref("all");
 const siteMap = reactive<Record<string, string>>({});
 const wpAdmin = reactive({ adminUrl: "", adminUser: "", adminPassword: "" });
+const sessionEpoch = getSessionEpoch();
+let disposed = false, readSequence = 0;
+const targetVersions = new Map<string, number>();
+let credentialTemplate = "";
+const isActive = () => !disposed && sessionEpoch === getSessionEpoch();
+function clearCredentials() {
+  wpAdmin.adminUrl = "";
+  wpAdmin.adminUser = "";
+  wpAdmin.adminPassword = "";
+  credentialTemplate = "";
+}
+watch(() => Object.fromEntries(Object.keys(siteMap).map(id => {
+  const site = sitesStore.sites.find(item => item.name === siteMap[id]);
+  return [id, JSON.stringify([siteMap[id], site?.id, site?.physicalPath, site?.applicationRootPath])];
+})), (next, previous) => {
+  for (const id of new Set([...Object.keys(next), ...Object.keys(previous)])) {
+    if (next[id] !== previous[id]) {
+      targetVersions.set(id, (targetVersions.get(id) ?? 0) + 1);
+      if (credentialTemplate === id || busyTemplate.value === id) {
+        clearCredentials();
+        showNotice("", false);
+      }
+    }
+  }
+}, { flush: "sync" });
 
 const categories = computed(() => [
   "all",
@@ -300,98 +322,98 @@ watch(() => sitesStore.selectedSiteName, (siteName) => {
 onMounted(async () => {
   await refresh();
 });
+onUnmounted(() => { disposed = true; readSequence++; clearCredentials(); });
 
 async function refresh() {
+  if (!isActive() || busyTemplate.value) return;
+  const sequence = ++readSequence;
+  const current = () => isActive() && sequence === readSequence;
   loading.value = true;
+  templatesLoaded.value = false;
+  sitesReady.value = false;
+  catalogFailed.value = false;
+  sitesUnavailable.value = false;
   try {
-    sitesUnavailable.value = false;
-    catalogFailed.value = false;
-    if (sitesStore.sites.length === 0 && !sitesStore.loading) {
-      await sitesStore.fetchSites();
+    const [catalog, sites] = await Promise.allSettled([getAppTemplates(), sitesStore.fetchSites()]);
+    if (!current()) return;
+    const errors: string[] = [];
+    if (catalog.status === "fulfilled") {
+      templates.value = catalog.value;
+      templatesLoaded.value = true;
+    } else {
+      catalogFailed.value = true;
+      errors.push(resolveApiMessage(catalog.reason));
     }
-
-    templates.value = await getAppTemplates();
-    templatesLoaded.value = true;
-    for (const template of templates.value) {
-      if (!siteMap[template.id] && sitesStore.selectedSiteName) {
-        siteMap[template.id] = sitesStore.selectedSiteName;
+    if (sites.status === "fulfilled") {
+      sitesReady.value = true;
+      for (const template of templates.value) {
+        if (!sitesStore.sites.some(site => site.name === siteMap[template.id])) {
+          siteMap[template.id] = sitesStore.sites.some(site => site.name === sitesStore.selectedSiteName) ? sitesStore.selectedSiteName : "";
+        }
       }
-    }
-  } catch (error) {
-    const key = extractApiMessage(error);
-    if (key === "sites.iis_not_available" || key === "sites.iis_install_required") {
+    } else {
       sitesUnavailable.value = true;
-      // IIS yokken şablonlar YİNE okunabilir (kurulum hedefi yok, katalog var). Liste ancak
-      // bu ikinci istek de GERÇEKTEN dönerse "okundu" sayılır; başarısızsa ekran "yükleniyor"
-      // demeye devam eder, "uygulama yok" demez.
-      const katalog = await getAppTemplates().catch(() => null);
-      if (katalog) {
-        templates.value = katalog;
-        templatesLoaded.value = true;
-      } else if (!templatesLoaded.value) {
-        // İkinci istek de patladı: bildirim BİLEREK temizlendiği için burada susmak, ekranı
-        // hiçbir açıklaması olmayan bir beklemede bırakırdı.
-        catalogFailed.value = true;
-      }
-      showNotice("", false);
-      return;
+      errors.push(resolveApiMessage(sites.reason));
     }
-
-    catalogFailed.value = !templatesLoaded.value;
-    showNotice(resolveApiMessage(error), true, extractApiDetails(error));
+    if (!categories.value.includes(activeCategory.value)) activeCategory.value = "all";
+    showNotice([...new Set(errors)].join("\n\n"), errors.length > 0);
   } finally {
-    loading.value = false;
+    if (current()) loading.value = false;
   }
 }
 
-async function install(templateId: string, cleanInstall = false) {
+async function install(templateId: string) {
+  const template = templates.value.find(item => item.id === templateId);
+  const siteName = siteMap[templateId] || "", version = targetVersions.get(templateId) ?? 0;
+  const current = () => isActive() && version === (targetVersions.get(templateId) ?? 0);
+  const canContinue = () => current() && !locked.value && sitesReady.value && sitesStore.loaded && !sitesStore.loading && sitesStore.sites.some(site => site.name === siteName);
+  if (!canContinue() || busyTemplate.value || loading.value || !templatesLoaded.value || !template) return;
   busyTemplate.value = templateId;
   showNotice("", false);
-  wpAdmin.adminUrl = "";
-  wpAdmin.adminUser = "";
-  wpAdmin.adminPassword = "";
+  clearCredentials();
 
   try {
-    const result = await installAppTemplate({
-      templateId,
-      siteName: siteMap[templateId] || "",
-      targetPath: "",
-      cleanInstall
-    });
-    // WordPress otomatik kurulduysa giriş bilgilerini göster (bir kez).
+    const payload = { templateId, siteName, targetPath: "" };
+    let result;
+    try {
+      result = await installAppTemplate({ ...payload, cleanInstall: false });
+    } catch (error) {
+      if (!current()) return;
+      if (extractApiMessage(error) !== "store.site_has_content") throw error;
+      if (!canContinue()) return;
+      const approved = await confirm({
+        title: t("panel.confirm.cleanInstallTitle", { name: siteName }),
+        message: t("panel.appStore.cleanInstallConfirm"),
+        impact: [`${t("panel.files.siteLabel")}: ${siteName}`, `${t("panel.appStore.application")}: ${template.displayName}`],
+        requireText: siteName,
+        confirmLabel: t("panel.appStore.install")
+      });
+      if (!approved || !canContinue()) return;
+      result = await installAppTemplate({ ...payload, cleanInstall: true });
+    }
+    if (!current()) return;
+    if (result.templateId !== templateId) {
+      showNotice(t("panel.appStore.resultUnconfirmed"), true);
+      return;
+    }
+    credentialTemplate = templateId;
     wpAdmin.adminUrl = result.adminUrl || "";
     wpAdmin.adminUser = result.adminUser || "";
     wpAdmin.adminPassword = result.adminPassword || "";
     showNotice(t("panel.appStore.installed"), false);
-    await sitesStore.fetchSites();
-  } catch (error) {
-    // profesyonel paneller gibi: hedef klasör boş değilse "yedekle + temizle + kur" teklif et, onaylanırsa tekrar dene.
-    if (!cleanInstall && extractApiMessage(error) === "store.site_has_content") {
-      const targetSite = siteMap[templateId] || "";
-      const templateName = templates.value.find((item) => item.id === templateId)?.displayName || templateId;
-      const impact: string[] = [];
-      if (targetSite) {
-        impact.push(`${t("panel.files.siteLabel")}: ${targetSite}`);
-      }
-      impact.push(`${t("panel.appStore.application")}: ${templateName}`);
-
-      // Yüksek riskli onay: hedef klasörün mevcut içeriği temizlenir → site adı yazılmadan devam edilemez.
-      const approved = await confirm({
-        title: t("panel.confirm.cleanInstallTitle", { name: targetSite }),
-        message: t("panel.appStore.cleanInstallConfirm"),
-        impact,
-        requireText: targetSite,
-        confirmLabel: t("panel.appStore.install"),
-      });
-      if (approved) {
-        busyTemplate.value = "";
-        await install(templateId, true);
-        return;
+    try {
+      await sitesStore.fetchSites();
+    } catch (error) {
+      if (current()) {
+        sitesReady.value = false;
+        sitesUnavailable.value = true;
+        showNotice(`${t("panel.appStore.installedRefreshFailed")}\n\n${resolveApiMessage(error)}`, true, extractApiDetails(error));
       }
     }
-    showNotice(resolveApiMessage(error), true, extractApiDetails(error));
+  } catch (error) {
+    if (current()) showNotice(resolveApiMessage(error), true, extractApiDetails(error));
   } finally {
-    busyTemplate.value = "";
+    if (isActive()) busyTemplate.value = "";
   }
 }
 
@@ -582,6 +604,8 @@ function appInitials(displayName: string) {
   background: var(--accent-1);
   content: "";
 }
+
+.site-select { position: relative; }
 
 .site-select select {
   min-width: 0;

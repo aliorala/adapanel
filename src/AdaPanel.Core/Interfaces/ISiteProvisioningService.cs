@@ -16,8 +16,14 @@ public interface ISiteProvisioningService
     /// </summary>
     Task<SiteDto> SetDocumentRootAsync(string siteName, string physicalPath, CancellationToken cancellationToken = default);
 
+    Task<SiteDto> SetDocumentRootAsync(string siteName, string physicalPath,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default);
+
     /// <summary>Laravel/WordPress/Symfony pretty-URL yönlendirmesi (index.php front controller). URL Rewrite modülü gerekir.</summary>
     Task<SiteDto> EnableFrameworkRewriteAsync(string siteName, CancellationToken cancellationToken = default);
+
+    Task<SiteDto> EnableFrameworkRewriteAsync(string siteName,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sitenin yazma iznini (app pool kimliği, kök Modify) yeniden uygular — bu özellikten önce
@@ -30,4 +36,7 @@ public interface ISiteProvisioningService
     /// alışkanlık hâline getirmişti; cevabın taşınabilir olması, doğru cevabın ön koşuludur.
     /// </remarks>
     Task<SitePermissionRepairResultDto> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken = default);
+
+    Task<SitePermissionRepairResultDto> RepairPermissionsAsync(string siteName,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default);
 }

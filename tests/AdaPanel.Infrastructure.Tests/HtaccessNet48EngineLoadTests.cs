@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Xunit;
 
 namespace AdaPanel.Infrastructure.Tests;
@@ -143,46 +142,12 @@ public sealed class HtaccessNet48EngineLoadTests
             $"Windows PowerShell 5.1 bulunamadi ({kabuk}). Bu test .NET Framework barindiricisi olmadan "
             + "kosamaz ve ATLANMAZ: atlamak, kanitlanmamis bir seyi kanitlanmis gostermek olurdu.");
 
-        var betikYolu = Path.Combine(Path.GetTempPath(), $"adapanel-net48-{Guid.NewGuid():N}.ps1");
-        File.WriteAllText(betikYolu, Betik(modulDll, siteKoku));
-
-        try
-        {
-            using var surec = Process.Start(new ProcessStartInfo
-            {
-                FileName = kabuk,
-                Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{betikYolu}\"",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            })!;
-
-            var cikti = surec.StandardOutput.ReadToEnd();
-            var hata = surec.StandardError.ReadToEnd();
-
-            // 60 sn: makine yuk altindayken surec baslatma yavaslayabilir; sonsuz bekleme ise
-            // test kosumunu ASAR (kilitlenen bir testin bedeli, kirmizi bir testten agirdir).
-            Assert.True(surec.WaitForExit(60_000), "net48 kanit sureci 60 saniyede bitmedi.");
-
-            Assert.True(
-                surec.ExitCode == 0,
-                $"net48 kanit sureci {surec.ExitCode} ile bitti.{Environment.NewLine}"
-                + $"CIKTI:{Environment.NewLine}{cikti}{Environment.NewLine}HATA:{Environment.NewLine}{hata}");
-
-            return cikti;
-        }
-        finally
-        {
-            try
-            {
-                File.Delete(betikYolu);
-            }
-            catch (IOException)
-            {
-                // Gecici betigin silinememesi testin sonucunu degistirmez.
-            }
-        }
+        // Ortak host UTF-8 BOM yazar (PowerShell 5.1 için şart), iki çıktı borusunu
+        // birlikte okur ve süre sınırını okuma dahil bütün sürece uygular.
+        var sonuc = ScriptTestHost.Run(Betik(modulDll, siteKoku), 60_000);
+        Assert.True(sonuc.ExitCode == 0,
+            $"net48 kanit sureci {sonuc.ExitCode} ile bitti.{Environment.NewLine}{sonuc.Tumu}");
+        return sonuc.StdOut;
     }
 
     /// <summary>
@@ -192,7 +157,7 @@ public sealed class HtaccessNet48EngineLoadTests
         $$"""
         $ErrorActionPreference = 'Stop'
         try {
-            $asm = [Reflection.Assembly]::LoadFrom('{{modulDll}}')
+            $asm = [Reflection.Assembly]::LoadFrom({{ScriptTestHost.PowerShellLiteral(modulDll)}})
 
             # Derlemenin net48 damgasi ve BARINDIRAN surecin CLR surumu AYRI iki olcumdur:
             # birincisi "ne derlendi", ikincisi "nerede kosuyor".
@@ -207,13 +172,13 @@ public sealed class HtaccessNet48EngineLoadTests
             'MOTOR=' + $motor.GetType().FullName
 
             # HtaccessHttpModule.Apply: once Compile, sonra Evaluate.
-            $derlenmis = $motor.Compile((Join-Path '{{siteKoku}}' '.htaccess'))
+            $derlenmis = $motor.Compile((Join-Path {{ScriptTestHost.PowerShellLiteral(siteKoku)}} '.htaccess'))
             if ($null -eq $derlenmis) { 'DERLEME=YOK'; exit 3 }
 
             function Karar([string]$yol) {
                 $istek = New-Object AdaPanel.HtaccessModule.HtaccessRequestInfo
                 $istek.VirtualPath = $yol
-                $istek.DocumentRoot = '{{siteKoku}}'
+                $istek.DocumentRoot = {{ScriptTestHost.PowerShellLiteral(siteKoku)}}
                 $istek.HttpMethod = 'GET'
                 $istek.QueryString = ''
                 $istek.RemoteAddress = '203.0.113.10'

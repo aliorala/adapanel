@@ -22,7 +22,7 @@ public sealed class NginxInstallationSupportTests
 
         Assert.Contains("listen 127.0.0.1:8088;", configuration);
         Assert.Contains("server_name example.test;", configuration);
-        Assert.Contains("proxy_pass http://127.0.0.1:80;", configuration);
+        Assert.Contains("proxy_pass \"http://127.0.0.1\";", configuration);
         Assert.Contains("max_size=512m", configuration);
         Assert.Contains("proxy_cache adapanel_cache;", configuration);
     }

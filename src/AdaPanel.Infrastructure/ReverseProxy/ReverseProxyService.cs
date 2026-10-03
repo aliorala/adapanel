@@ -5,9 +5,12 @@ using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Proxy;
+using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using Microsoft.Extensions.Logging;
 using AdaPanel.Infrastructure.SiteBuilder;
+using AdaPanel.Infrastructure.Files;
+using AdaPanel.Infrastructure.Iis;
 
 namespace AdaPanel.Infrastructure.ReverseProxy;
 
@@ -25,6 +28,8 @@ public sealed partial class ReverseProxyService(
     private const string OutboundRulePrefix = "AdaPanel.ReverseProxy.Outbound|";
     private const string CustomRulePrefix = "AdaPanel.CustomRewrite|";
     private const string HtmlPreconditionName = "AdaPanel.IsHtml";
+    internal Func<IDisposable> ManagerFactory { get; init; } = CreateServerManager;
+    internal Func<Stream, Stream>? ConfigurationStream { get; init; }
 
     public async Task<ReverseProxySiteConfigurationDto> GetSiteConfigurationAsync(
         string siteName,
@@ -39,18 +44,23 @@ public sealed partial class ReverseProxyService(
         }, site.Name, cancellationToken);
     }
 
-    public async Task<ReverseProxySiteConfigurationDto> EnableProxyAsync(
+    public Task<ReverseProxySiteConfigurationDto> EnableProxyAsync(
         string siteName,
         EnableReverseProxyRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        EnableProxyCoreAsync(siteName, request, null, cancellationToken);
+
+    public Task<ReverseProxySiteConfigurationDto> EnableProxyAsync(string siteName, EnableReverseProxyRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) =>
+        EnableProxyCoreAsync(siteName, request, beforeMutation, cancellationToken);
+
+    private async Task<ReverseProxySiteConfigurationDto> EnableProxyCoreAsync(string siteName, EnableReverseProxyRequest request,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
-        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var destinationUrl = NormalizeDestinationUrl(request.DestinationUrl);
         var mountPath = NormalizeMountPath(request.MountPath);
-        await EnsureComponentInstalledAsync("url-rewrite", cancellationToken);
-        await EnsureComponentInstalledAsync("iis-arr", cancellationToken);
 
-        return await ExecuteWriteAsync(serverManager =>
+        return await ConfigureAsync(siteName, ["url-rewrite", "iis-arr"], (site, serverManager, save) =>
         {
             EnsureRewriteAvailable(serverManager, site.Name);
             var arrSettings = EnsureArrProxyEnabled(serverManager);
@@ -67,40 +77,50 @@ public sealed partial class ReverseProxyService(
                 RemoveOutboundRules(document);
             }
 
-            document.Save(webConfigPath);
+            save(webConfigPath, document);
             return ReadConfiguration(site, arrSettings with { IsEnabled = true }, document);
-        }, site.Name, cancellationToken);
+        }, beforeMutation, cancellationToken, requireArrEnabled: true);
     }
 
-    public async Task<ReverseProxySiteConfigurationDto> RemoveProxyAsync(
+    public Task<ReverseProxySiteConfigurationDto> RemoveProxyAsync(
         string siteName,
-        CancellationToken cancellationToken = default)
-    {
-        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        CancellationToken cancellationToken = default) =>
+        RemoveProxyCoreAsync(siteName, null, cancellationToken);
 
-        return await ExecuteWriteAsync(serverManager =>
+    public Task<ReverseProxySiteConfigurationDto> RemoveProxyAsync(string siteName,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) =>
+        RemoveProxyCoreAsync(siteName, beforeMutation, cancellationToken);
+
+    private Task<ReverseProxySiteConfigurationDto> RemoveProxyCoreAsync(string siteName,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken) =>
+        ConfigureAsync(siteName, [], (site, serverManager, save) =>
         {
             var arrSettings = ReadArrProxySettings(serverManager);
             var webConfigPath = ResolveWebConfigPath(site.PhysicalPath);
             var document = LoadWebConfig(webConfigPath);
 
             RemoveProxyRules(document);
-            document.Save(webConfigPath);
+            save(webConfigPath, document);
 
             return ReadConfiguration(site, arrSettings, document);
-        }, site.Name, cancellationToken);
-    }
+        }, beforeMutation, cancellationToken);
 
-    public async Task<ReverseProxySiteConfigurationDto> AddRewriteRuleAsync(
+    public Task<ReverseProxySiteConfigurationDto> AddRewriteRuleAsync(
         string siteName,
         AddRewriteRuleRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-        var normalizedRuleName = NormalizeCustomRuleName(request.Name);
-        await EnsureComponentInstalledAsync("url-rewrite", cancellationToken);
+        CancellationToken cancellationToken = default) =>
+        AddRewriteRuleCoreAsync(siteName, request, null, cancellationToken);
 
-        return await ExecuteWriteAsync(serverManager =>
+    public Task<ReverseProxySiteConfigurationDto> AddRewriteRuleAsync(string siteName, AddRewriteRuleRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) =>
+        AddRewriteRuleCoreAsync(siteName, request, beforeMutation, cancellationToken);
+
+    private async Task<ReverseProxySiteConfigurationDto> AddRewriteRuleCoreAsync(string siteName, AddRewriteRuleRequest request,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
+    {
+        var normalizedRuleName = NormalizeCustomRuleName(request.Name);
+
+        return await ConfigureAsync(siteName, ["url-rewrite"], (site, serverManager, save) =>
         {
             EnsureRewriteAvailable(serverManager, site.Name);
             var arrSettings = ReadArrProxySettings(serverManager);
@@ -108,38 +128,52 @@ public sealed partial class ReverseProxyService(
             var document = LoadWebConfig(webConfigPath);
 
             UpsertCustomRewriteRule(document, normalizedRuleName, request);
-            document.Save(webConfigPath);
+            save(webConfigPath, document);
 
             return ReadConfiguration(site, arrSettings, document);
-        }, site.Name, cancellationToken);
+        }, beforeMutation, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task EnsureArrPrerequisitesAsync(string siteName, CancellationToken cancellationToken = default)
     {
-        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-        await EnsureComponentInstalledAsync("url-rewrite", cancellationToken);
-        await EnsureComponentInstalledAsync("iis-arr", cancellationToken);
-
-        await ExecuteWriteAsync<object?>(serverManager =>
+        await ConfigureAsync<object?>(siteName, ["url-rewrite", "iis-arr"], (site, serverManager, _) =>
         {
             EnsureRewriteAvailable(serverManager, site.Name);
             EnsureArrProxyEnabled(serverManager);
             return null;
-        }, site.Name, cancellationToken);
+        }, null, cancellationToken, requireArrEnabled: true);
     }
 
-    private async Task EnsureComponentInstalledAsync(string componentId, CancellationToken cancellationToken)
+    private async Task<T> ConfigureAsync<T>(string siteName, string[] dependencies,
+        Func<SiteDto, IDisposable, Action<string, XDocument>, T> operation,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken,
+        bool requireArrEnabled = false)
     {
-        var catalog = await componentBootstrapper.GetCatalogAsync(cancellationToken);
-        var installed = catalog.Installed.Any(component =>
-            string.Equals(component.ComponentId, componentId, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(component.Status, "Installed", StringComparison.OrdinalIgnoreCase));
-
-        if (!installed)
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService, concurrencyLock, siteName, cancellationToken);
+        async Task VerifyAsync(SiteDto current)
         {
-            await componentBootstrapper.InstallAsync(componentId, null, null, force: false, cancellationToken: cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (beforeMutation is not null) await beforeMutation(current, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
         }
+        await target.RunAsync(VerifyAsync, cancellationToken);
+        var catalog = dependencies.Length > 0 ? await componentBootstrapper.GetCatalogAsync(cancellationToken) : null;
+        // Pin only after the read wait; a replacement during measurement invalidates the
+        // original target. Long installation work never keeps the shared IIS gate held.
+        using var reservation = await target.ReserveAsync(beforeMutation, cancellationToken);
+        foreach (var componentId in dependencies)
+        {
+            var installed = catalog!.Installed.Any(component =>
+                string.Equals(component.ComponentId, componentId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(component.Status, "Installed", StringComparison.OrdinalIgnoreCase));
+            if (installed) continue;
+            await target.RunAsync(VerifyAsync, cancellationToken);
+            await componentBootstrapper.InstallAsync(componentId, null, null, force: false, cancellationToken: cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        return await ExecuteWriteAsync(target, (manager, save) => operation(target.Site, manager, save),
+            beforeMutation, cancellationToken, requireArrEnabled);
     }
 
     private Task<T> ExecuteReadAsync<T>(Func<IDisposable, T> operation, string siteName, CancellationToken cancellationToken)
@@ -148,7 +182,7 @@ public sealed partial class ReverseProxyService(
 
         try
         {
-            using var serverManager = CreateServerManager();
+            using var serverManager = ManagerFactory();
             return Task.FromResult(operation(serverManager));
         }
         catch (AppException)
@@ -163,30 +197,102 @@ public sealed partial class ReverseProxyService(
         }
     }
 
-    private Task<T> ExecuteWriteAsync<T>(Func<IDisposable, T> operation, string siteName, CancellationToken cancellationToken)
+    private async Task<T> ExecuteWriteAsync<T>(SiteMutationGuard.Target target,
+        Func<IDisposable, Action<string, XDocument>, T> operation,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation,
+        CancellationToken cancellationToken, bool requireArrEnabled = false)
     {
-        return concurrencyLock.RunExclusiveAsync(() =>
+        T result = default!;
+        var siteName = target.Site.Name;
+        await target.RunAsync(async current =>
         {
+            if (beforeMutation is not null) await beforeMutation(current, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
+            ArrProxySettings? previousArr = null;
+            ArrProxySettings? expectedArr = null;
+            var attemptedArrChange = false;
             try
             {
-                using var serverManager = CreateServerManager();
-                var result = operation(serverManager);
+                using var serverManager = ManagerFactory();
+                if (requireArrEnabled)
+                {
+                    previousArr = ReadRequiredArrProxySettings(serverManager);
+                    expectedArr = previousArr with { IsEnabled = true };
+                }
+                (string Path, XDocument Document)? prepared = null;
+                result = operation(serverManager, (path, document) => prepared = (path, document));
+                cancellationToken.ThrowIfCancellationRequested();
+                attemptedArrChange = previousArr is { IsEnabled: false };
                 InvokeMethod(serverManager, "CommitChanges");
-                return Task.FromResult(result);
-            }
-            catch (AppException)
-            {
-                throw;
+                cancellationToken.ThrowIfCancellationRequested();
+                if (expectedArr is not null)
+                {
+                    using var measured = ManagerFactory();
+                    if (ReadRequiredArrProxySettings(measured) != expectedArr)
+                        throw new AppException("proxy.configuration_failed", 500, 500, "The ARR configuration commit could not be verified.");
+                }
+                if (prepared is { } configuration)
+                    WebConfigurationFile.Save(configuration.Path, configuration.Document, ConfigurationStream, cancellationToken);
             }
             catch (Exception exception)
             {
+                Exception? recoveryFailure = null;
+                if (attemptedArrChange && previousArr is not null && expectedArr is not null)
+                {
+                    try { RestoreOwnedArrChange(previousArr, expectedArr); }
+                    catch (Exception recovery)
+                    {
+                        recoveryFailure = recovery;
+                        logger.LogError(recovery, "ARR configuration recovery failed for site {SiteName}.", siteName);
+                    }
+                }
+                if (exception is OperationCanceledException)
+                {
+                    if (recoveryFailure is not null) exception.Data["ARR recovery"] = recoveryFailure.Message;
+                    throw;
+                }
+                if (recoveryFailure is not null)
+                    throw new AppException("proxy.configuration_failed", 500, 500,
+                        "The operation failed and the previous ARR configuration could not be restored. " +
+                        "Inspect the server proxy settings before retrying. " + BuildDiagnosticDetails(exception));
+                if (exception is AppException) throw;
                 var mappedException = MapProxyException(exception);
                 logger.LogError(exception, "Reverse proxy write operation failed for site {SiteName}.", siteName);
                 throw mappedException;
             }
         }, cancellationToken);
+        return result;
+    }
+
+    private void RestoreOwnedArrChange(ArrProxySettings previous, ArrProxySettings expected)
+    {
+        using (var manager = ManagerFactory())
+        {
+            var current = ReadRequiredArrProxySettings(manager);
+            // Only our false-to-true setting is compensable. A later change to the
+            // measured ARR flags belongs to another writer and must be preserved.
+            if (!current.IsEnabled) return;
+            if (current != expected)
+                throw new IOException("ARR settings changed after the attempted configuration commit.");
+            var configuration = InvokeMethod(manager, "GetApplicationHostConfiguration");
+            var section = InvokeMethod(configuration, "GetSection", ProxySectionPath);
+            SetAttributeValue(section, "enabled", previous.IsEnabled);
+            InvokeMethod(manager, "CommitChanges");
+        }
+        using var verification = ManagerFactory();
+        if (ReadRequiredArrProxySettings(verification) != previous)
+            throw new IOException("The previous ARR configuration could not be verified after recovery.");
+    }
+
+    private static ArrProxySettings ReadRequiredArrProxySettings(IDisposable manager)
+    {
+        var configuration = InvokeMethod(manager, "GetApplicationHostConfiguration");
+        var section = InvokeMethod(configuration, "GetSection", ProxySectionPath);
+        return new ArrProxySettings(
+            Convert.ToBoolean(InvokeMethod(section, "GetAttributeValue", "enabled")),
+            Convert.ToBoolean(InvokeMethod(section, "GetAttributeValue", "preserveHostHeader")),
+            Convert.ToBoolean(InvokeMethod(section, "GetAttributeValue", "reverseRewriteHostInResponseHeaders")));
     }
 
     private static ReverseProxySiteConfigurationDto ReadConfiguration(

@@ -598,6 +598,7 @@ public sealed class ComponentBootstrapper(
         string? ipAddress,
         CancellationToken cancellationToken = default)
     {
+        using var nginxLease = await NginxLifecycle.EnterForComponentAsync(componentId, cancellationToken);
         var manifest = await LoadManifestAsync(cancellationToken);
         var manifestComponent = manifest.FirstOrDefault(item =>
             string.Equals(item.Id, componentId, StringComparison.OrdinalIgnoreCase));
@@ -747,6 +748,9 @@ public sealed class ComponentBootstrapper(
         string? ipAddress,
         CancellationToken cancellationToken)
     {
+        // Own the Nginx files through preservation, extraction, activation and rollback.
+        // Other components and IIS operations do not share this lifecycle gate.
+        using var nginxLease = await NginxLifecycle.EnterForComponentAsync(component.Id, cancellationToken);
         var downloadsRoot = Path.Combine(Environment.ExpandEnvironmentVariables(runtimeOptions.DataRoot), "downloads");
         Directory.CreateDirectory(downloadsRoot);
 
@@ -768,6 +772,8 @@ public sealed class ComponentBootstrapper(
         var fileName = ResolveDownloadFileName(component);
         var downloadPath = Path.Combine(downloadsRoot, fileName);
         var installDirectory = ResolveInstallDirectory(component.InstallDir);
+        var preserveNginxConfiguration = component.Id.Equals("nginx", StringComparison.OrdinalIgnoreCase) &&
+            NginxInstallationSupport.HasConfigurationToPreserve(installDirectory);
         var silentArgs = component.SilentArgs ?? string.Empty;
         var previous = await dbContext.InstalledComponents.AsNoTracking()
             .FirstOrDefaultAsync(item => item.ComponentId == component.Id, cancellationToken);
@@ -847,7 +853,7 @@ public sealed class ComponentBootstrapper(
                 stateRestored = true;
             }
 
-            await ApplyPostInstallStepsAsync(component, installDirectory, generatedPassword, cancellationToken);
+            await ApplyPostInstallStepsAsync(component, installDirectory, generatedPassword, cancellationToken, preserveNginxConfiguration);
             await ComponentWebPublication.RestoreAsync(component.Id, installDirectory, cancellationToken);
 
             // KURULAN SURUM GERI OKUNUR. Asagida kaydedilecek surum artik manifest'in ISTEDIGI
@@ -925,7 +931,7 @@ public sealed class ComponentBootstrapper(
                 ipAddress,
                 cancellationToken);
 
-            if (stateRestored) await RollbackFailedInstallAsync(component, cleanupPath, cancellationToken);
+            if (stateRestored) await RollbackFailedInstallAsync(component, cleanupPath, cancellationToken, preserveNginxConfiguration);
             throw;
         }
         catch (Exception exception)
@@ -941,7 +947,7 @@ public sealed class ComponentBootstrapper(
                 ipAddress,
                 cancellationToken);
 
-            if (stateRestored) await RollbackFailedInstallAsync(component, cleanupPath, cancellationToken);
+            if (stateRestored) await RollbackFailedInstallAsync(component, cleanupPath, cancellationToken, preserveNginxConfiguration);
             throw new AppException("software.install_failed", 500, 500, BuildDiagnosticDetails(exception));
         }
     }
@@ -1167,7 +1173,8 @@ public sealed class ComponentBootstrapper(
     private async Task RollbackFailedInstallAsync(
         ComponentManifestItemDto component,
         string cleanupPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool preserveNginxConfiguration)
     {
         if (string.IsNullOrWhiteSpace(cleanupPath))
         {
@@ -1221,14 +1228,26 @@ public sealed class ComponentBootstrapper(
             // burada dizin komple silinirdi — veri klasörü kurulum dizininin içinde olduğu için
             // başarısız bir YÜKSELTME, çalışan bir veritabanının tüm verisini yok ederdi.
             // Binary'ler silinir, veri geri konur; yönetici en kötü ihtimalle bileşeni yeniden kurar.
-            var preserved = PreserveDataDirectories(component, cleanupPath);
-            try { DeleteManagedPath(cleanupPath, component.Id); }
-            finally { preserved.Restore(); }
+            RollbackInstallationFiles(component, cleanupPath, preserveNginxConfiguration);
         }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Rollback cleanup failed for path {CleanupPath}", cleanupPath);
         }
+    }
+
+    internal void RollbackInstallationFiles(ComponentManifestItemDto component, string cleanupPath, bool preserveNginxConfiguration)
+    {
+        if (!IsManagedPath(cleanupPath))
+        {
+            logger.LogWarning("Skipping rollback cleanup outside managed roots: {Path}", cleanupPath);
+            return;
+        }
+        if (component.Id.Equals("nginx", StringComparison.OrdinalIgnoreCase) && !preserveNginxConfiguration)
+            NginxInstallationSupport.DiscardUninitializedConfiguration(cleanupPath);
+        var preserved = PreserveDataDirectories(component, cleanupPath);
+        try { DeleteManagedPath(cleanupPath, component.Id); }
+        finally { preserved.Restore(); }
     }
 
     private async Task UpsertFailedInstallAsync(
@@ -3580,7 +3599,8 @@ public sealed class ComponentBootstrapper(
         ComponentManifestItemDto component,
         string installDirectory,
         string generatedPassword,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool preserveNginxConfiguration = false)
     {
         foreach (var postInstallStep in component.PostInstall)
         {
@@ -3617,7 +3637,7 @@ public sealed class ComponentBootstrapper(
                     break;
 
                 case "preparenginx":
-                    await NginxInstallationSupport.PrepareAsync(installDirectory, cancellationToken);
+                    await NginxInstallationSupport.PrepareAsync(installDirectory, cancellationToken, preserveNginxConfiguration);
                     break;
 
                 case "registerfastcgi":
@@ -4961,6 +4981,9 @@ public sealed class ComponentBootstrapper(
     internal static IReadOnlyList<string> ConfigurationFilesToPreserve(string componentId)
         => componentId.Trim().ToLowerInvariant() switch
         {
+            // nginx.conf can include custom files; preserving only the two panel files
+            // leaves those references broken after the package directory is replaced.
+            "nginx" => ["conf"],
             // phpredis is installed separately and is absent from the official PHP ZIP.
             // This component stays on the same 8.3 / NTS / x64 ABI; bundled extensions
             // must come from the new package, rather than preserving the entire ext folder.

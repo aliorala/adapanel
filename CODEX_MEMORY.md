@@ -1,5 +1,565 @@
 # AdaPanel Codex Memory
 
+## 2026-10-02–03 — R25 tamamlandı; 0.8.75 yayın hazırlığı
+
+Kullanıcının bütün sistemi tarama isteğiyle kaynak, test ve yerel tarayıcı kontrolleri yapıldı.
+Son yönlendirme **“bittiyse yayınla artık”**: yeni uzun denetim açılmıyor; R25 kapatıldı ve
+**0.8.75** kurulum paketi hazır; **session39229 exit0**. Publish içerik denetimi **169 dosya/0 bulgu**,
+installer denetimi **0 bulgu**, sürüm **0.8.75**; paket **90.989.933 bayt (86,77 MiB)**,
+SHA-256 **EFA622694590D4A1C158D043C5D8772F90500DCC69737DD5A6F3559C99C40FEF**.
+İlk GitHub yayın denemesi **session68731 exit1**: kayıtlı GitHub hesabı/token bulunamadı
+(`release075-github-publish.log`); yükleme veya release oluşturulmadı. Resmi GCM cihaz girişi
+etkileşimli terminalde **session15814** ile kullanıcı onayını bekliyor. Giriş tamamlanınca
+aynı yayın betiğiyle yükleme ve indirme/hash doğrulaması yapılmalı; yayımlandı denmemeli.
+Public GitHub'a kaynak/history/tag push yapılmadı; mevcut yayın betiğiyle yalnız installer akışı.
+Ayrıntılar `docs/audit-2026-10-02.md`.
+
+R25 son doğrulama: **Infrastructure 7.631 + Core 2 = 7.633/7.633**, başarısız/atlanan yok;
+Release çözüm derlemesi **0 uyarı / 0 hata**. Kanıtlar `.tmp/audit-20261002/release075-complete.log`,
+`release075-solution-build.log` ve `test-results/audit-20261002/release075-complete_net8.0_20261003090940.trx`,
+`release075-complete_net8.0_20261003091324.trx`. Frontend **79 dosyada 1.286/1.286**;
+Vue-tsc/Vite başarılı, TR/EN **5.400** anahtar. R25 hedefli sunucu kontrolü **254/254**.
+Baseline 141 = 113 başarısız / 28 başarılı; 113'ün biri wildcard fixture beklentisi, **112 gerçek kırmızı**:
+root 34/27 kırmızı, redirect 54/42 kırmızı, import 53/43 gerçek kırmızı + 1 fixture.
+SSL içe aktarmada önce bellekte PFX/özel anahtar/tarih/alan adı doğrulaması, sonra güncel aktör/site
+yetkisi altında kalıcı makine anahtarı; özel port, JSON yayını, yönlendirme ve iptal sınırları korundu.
+SSL kaldırma/GET uzlaştırma/HTTPS yönlendirme beklemeleri ve frontend issue/import sonuç ölçümü düzeltildi.
+Direct Issue backend'in bütün yaşam döngüsü bu tur tamamlanmış sayılmıyor.
+
+Gerçek SslView+sahte API: 320 TR/koyuda ölçülemeyen depo hatası ve belge **310/310**;
+1440 EN/açıkta boş PFX reddi ve doğrulanmış import bildirimi; console hatası **0**.
+Görseller `round25-ssl-unverified-mobile.png`, `round25-ssl-verified-desktop.png` audit klasöründe.
+İki geçici mock kaldırıldı; özgün `__preview` dosyaları **346/4.182 bayt** korundu.
+Ayrı bileşen denetimi **22 Passed/3 standart Skipped**; paketlemede `-SkipComponentAudit`
+yalnız aynı başarılı denetimin yaklaşık 700 MB indirmesini tekrarlamamak için kullanılıyor.
+Gerçek IIS/CERT deposu/Windows hizmetlerinde canlı uçtan uca doğrulama veya kurulum yapılmadı.
+
+Başlıca düzeltmeler: kesilen yüklemede eski dosyayı koruyan atomik yazma; UTF-8 BOM eklemeyen
+metin kaydı; üzerine yüklemede net boyut artışıyla kota kontrolü; dosya/yedek ekranında eski
+yanıtların yeni seçimi bozmaması; göç akışının ortak Axios oturum/CSRF kapılarından geçmesi,
+kesilen/başarısız akışın doğru gösterilmesi; tıklama sırasında açılan yönetim sekmeleri;
+mobil uzun metinli diyaloglar ve iç içe diyalog kaydırma kilidi.
+
+Devam turları: CSRF önbellek/iptal/süre sınırı ve hatalı yanıtta yazmayı durdurma; toplu
+işlerde oturum/hedef kontrolü; geri yüklemede belirsiz sonuç sonrası otomatik tekrarı kaldırma;
+DNS, PHP, korumalı dizin, .htaccess ve SSL ekranlarında eski yanıt/site karışıklığı düzeltmeleri;
+PHP özel .user.ini satırlarını koruma; PFX okuma sıralaması; uzak DB erişimi ölçülmeden yazmayı
+engelleme; DB taşıma çift gönderim/port denetimi; günlük saklama okuma/yazma kapıları;
+iş takibi zamanlayıcılarının kapanıştan sonra yeniden başlamasını engelleme; site yedeğinde
+kısmi motor okuma hatasını gösterme ve eski sonuç/site ayrımı. Sekizinci turda görev adı/silme,
+aynı taslakta sonraki yeniden adlandırma, eski çıktı/yoklama ve kapanan ekranın onayı korundu;
+mobil görev formundaki örtük ikinci sütun düzeltildi. Barındırma, güvenlik ve FTP bağlamları;
+antivirüste yanlış temiz sonucu; ölçülmemiş kaba kuvvet whitelist yazması; izleme duraklatma/
+sıralama; FTP parola süre dolumu uyarısı; genel PHP eklenti kapsamı ve Redis başarısızlığında
+özgün ini/DLL geri alma düzeltildi. Dokuzuncu turda Nginx okuma/yazma/durum kapıları, taslak
+koruması, PID/yol doğrulaması, durma ölçümü, iki ayar dosyasının geri alınması, upstream URL
+kaçışı ve startup PowerShell hatası düzeltildi. Önbellekte Unknown/Stopped ayrımı, onay/işlem
+bağlamı ve sonuç ölçümü korundu. Windows loopback ConnectionRefused 2,05–2,08 s sürdüğünden
+port bağlantı sınırı 4 s, bağlantı sonrası cevap sınırı 2 s yapıldı; timeout Unknown kaldı.
+Site veritabanı bağlamı ve yönetici araç kapısı; Adminer PostgreSQL sürücüsü/ortak bağlantı
+profili; genel DB onayları/ayrıntı kartı ve store okuma-yazma/oturum sıralaması düzeltildi.
+Mobil DB ayrıntısı yatay tablo kaydırılırken görünür kalıyor; 320/390/1440 px kontrol edildi.
+Onuncu turda Redis INFO tam RESP/UTF-8/CRLF, zorunlu metrik/taşma/iptal denetimi; Nginx conf
+ağacını yükseltmede koruma, aktivasyon sonuna kadar iki dosyayı geri alma ve ortak lifecycle
+kilidi eklendi. Başarısız ilk kurulumun paket conf dosyası retry'da kullanıcı ayarı sanılmıyor;
+gerçek metadata'sız özel ayarlar ve başarılı panel ayarları korunuyor. Geri alma dosya kapsamı;
+çalışan süreç veya Windows görev tanımının geri alındığı iddia edilmiyor. Genel DB uzak erişim/
+bakım/form/attach/move/kurulum bağlamları, WebDb engine seçimi ve müşteri DB çift gönderim/
+onay/sonuç ölçümü korundu. Ortak software store eski oturum, katalog/ilerleme sırası, meşgul
+durumu sahipliği, başarısız son okuma ve tamamlanma sonrası eski progress yanıtını izliyor.
+WebDb ve MyDB mobil tablolarının 720 piksel zorunlu genişliği düzeltildi; 320/390/1440 px
+kontrol edildi. On birinci turda AppStore temiz kurulum hedefi, aynı adlı site id/kök değişimi,
+oturum/kapanış, tek tekrar ve parola/sonuç bağlamı korundu; katalog/site kısmi hata ayrıldı.
+Site store GET yanıtlarının son istek/oturum kontrolü on ikinci turda GET–mutasyon yarışlarını
+da kapsadı: per-site sürüm, liste yayın revizyonu, pending/busy sahipliği, import/fetchSite/public
+upsert çakışması ve sonunda uzlaştırma GET'i. Altmış yeni test; geçersiz GET loading kilitlemiyor.
+Mağaza 320 px mobil taşması (667 px belge) gizli etiketin kapsayıcısı konumlandırılarak giderildi.
+SoftwareView ortak yazma/onay kilidi, katalog bağlamı, kapanan/takılan progress yoklaması ve
+sonuç ölçümü düzeltildi. PostgreSQL foo/Foo ortak DatabaseResourceIdentity ile sahiplik, link,
+credential, scope/fallback, cascade, yedek/otomasyon ve izleme akışlarında ayrılıyor; aliaslar
+canonical. Windows motorlarının mevcut case-fold davranışı korundu. PG yedek klasöründe hash
+öneki ve bütün DB yedeklerinde benzersiz dosya eki aynı saniye/harf farkı çakışmasını önlüyor.
+Eski yedek kayıtları/ZIP restore test edildi. MyDB silme sonucu da aynı kimlik kuralını kullanıyor.
+On ikinci tur ön yüz: 64 dosyada 802 test, tip kontrolü ve üretim derlemesi geçti; TR/EN 5.357'şer
+anahtar, yerel wwwroot güncellendi. Mobil Sites arama flex-basis 200px yüksekliği 40px'e indirildi,
+arama etiketi eklendi; global mobil input min-height checkbox/radio dışına alındı. Gerçek bileşen
+320 TR/açık, 390 EN/koyu, 1440 EN/koyu kontrol edildi. On ikinci tur son TAM .NET:
+Infrastructure 6.104 + Core 2 = 6.106/6.106 başarılı, başarısız/atlanan yok.
+On üçüncü turda yedek replacement/chain/source kimliği, aynı saniyelik arşiv çakışması,
+otomasyon sağlık ölçümü ve yönetici DB-site bağı düzeltildi. Hesap yaşam döngüsü motor/kaynak
+→ hesap → JSON sırasını kullanıyor; shared user silme/Import/GRANT normal başarı yarışları,
+çoklu DB credential referansları, MySQL/MariaDB exact username ve host kimliği düzeltildi.
+CreateUser telafi ve transfer parola/eksik cleanup sonucu korundu; remote ve legacy firewall
+mutasyonları engine-exclusive. Bu turun post-GRANT iptal/I/O boşluğu on dördüncü turda kapatıldı.
+Son hedefli takım 374/374; son TAM çözüm Infrastructure 6.256 + Core 2 = 6.258/6.258,
+başarısız/atlanan yok. Son hedefli derlemenin aynı DLL'leriyle full --no-build koştu.
+Arayüz yine 64 dosyada 802/802; tip kontrolü/üretim derlemesi geçti, TR/EN 5.359 anahtar.
+BackupView create grid mobil belgeyi 588px'e taşıyordu: 320px ekranda 310px'e döndü;
+arama etiketi ve okunabilir tablo sütunları düzeltildi. 320 TR/açık, 390 EN/koyu,
+1440 EN/koyu, uzak hedef formu ve bağlı ayrıntı kenarları kontrol edildi. wwwroot güncel;
+hash 81ADE81A04F2BB0CC4A364FC31D2ACDD114EA4A2A4A445590FF5857E64D77BC1.
+On dördüncü turda GRANT öncesi durable pending kullanım kaydı + bağımsız bounded confirm
+ve CreatedByPanel silme yetkisi ayrımı tamamlandı. Legacy/null/Upsert/import/GRANT yetki
+üretmez; doğrulanmış CREATE authority tüm referanslara taşınır. 33 yeni account davranışı.
+IncludedComponents ile ölçülmüş dosya/config/mail/FTP kapsamı, yeni zincirin son DB kapsamı
+ve zincirin bütün uzak kopyaları saklamada dikkate alınıyor; 31 yeni scope testi. Eski 11
+uzak silme fixture hazırlığında local-only replacement varsayımı gerçek uzak yedekle düzeltildi.
+Posta backup/restore ortak gate, stop hata/iptalinde bağımsız 30sn restart; özgün hatayı
+koruma, kısmi ZIP temizliği, data-only staging, path/duplicate/symlink/directory payload
+ve CRC doğrulama, geri alınabilir benzersiz directory swap ve committed restore sonucunun
+iptalden bağımsız kaydı eklendi. 20 gerçek davranış testi, eski iki regex testinin yerine.
+BackupView liste/chain sırası, session/unmount, immutable confirm/tek işlem, geç sonuç,
+configured FTP/retry/granular restore ve yenileme hata görünürlüğü: 50 yeni test. Hata tek
+retry bildiriminde; mobil liste korunuyor. Görseller round14-backup-mobile/desktop.jpg.
+On dördüncü tur son doğrulama: 871/871 hedefli, Infrastructure 6.338 + Core 2 = 6.340/6.340 tam takım;
+65 dosyada 852/852 frontend, types/build temiz, TR/EN 5.359. wwwroot hash:
+6A148734F4CF03A807C198B308AFA106B8A775F5F4D95B266D57A047655B1C29.
+On beşinci turda ALTER öncesi durable pending parola ve bağımsız süre sınırlı doğrulama;
+belirsizlikte eski parolayla signon/remote engeli, boş/kısa parola reddi eklendi. Root adayları
+yeni havuzsuz bağlantıyla doğrulanıyor, kör geri alma yok; EF tracked rollback ve normal
+register fresh authentication/caller cancellation düzeltildi. 35 password testi geçti.
+AdminPasswordPending DTO yalnız durum taşır; GUI kurtarma kapısı ordinary mutation izinlerini
+genişletmeden başarılı engine ölçümündeki bu sinyali kullanır. POST sonrası engine/workspace
+yeniden ölçülür; notready/missing/uninstalled success değildir. 24 yeni + 95 eski hedefli119/119.
+390/320TR gerçek bileşen kontrol edildi; round15-database-recovery-mobile.jpg kaydedildi.
+Posta restart artık schtasks metni yerine aynı kurulumun
+canlı stalwart.exe kimliğini ölçüyor; stopped/unknown ayrımı, sınırlı bekleme ve cancellation;
+16 restart + 11 probe testi geçti. Gerçek Windows süreçlerini çalıştıran uçtan uca test değildir.
+Self-service ve site-provision DB create kuyrukları actor/role/active/parent/section/credential
+stamp'i kalıcı kullanıcı satırından yeniden ölçer. User/sub-user update/delete aynı parent
+subscription kilidinde; tracked stale satır Reload edilir. 26 yeni + 15 race testi geçti.
+Eski ElleAski fixture audit fake'i SQL'i kaydetmediğinden gerçek AuditService'e geçirildi;
+son geniş hedefli 1.374/1.374 (round15-targeted-verified_net8.0_20261003031611.trx).
+Backup schedule/settings lifecycle, draft revision, tek write/onay ve belirsiz sonuç düzeltildi;
+admin-only DB/mail create ve source-aware chain etki sayacı korundu. 57 yeni BackupLifecycle
+testi, önceki 50 ve ilgili 14 ile 121/121. Program tablosu mobilde kendi alanında kayar,
+form 320px ekranda 232px genişlikte taşmıyor; 390TR/320EN/1440EN görselleri kontrol edildi.
+On altıncı turda çatallı yedek silme BaseBackupId soyunu izliyor; kardeş dallar korunuyor,
+restore yalnız seçili ancestor path'i alıyor. Eksik/çift/tutarsız graph silmeden önce duruyor.
+DELETE chain expectedBackupIds sözleşmesi onaylanan set değiştiğinde 409 veriyor; UI yeniden
+silme denemiyor. Partial-delete kalan isimlerle hata, ambiguity açıklamayla disabled düğme.
+Kaynak/store başına lease producer plan→publish, delete, prune reread, retry, restore boyunca;
+leaves-first silme, child failure ancestor koruması, request iptalinden bağımsız 30sn metadata.
+Generic ZIP restore Path/Encrypted arşiv kimliğini artık değiştirmiyor; RestoredPath ayrı hedef.
+Önce single/chain/prune gerçek sentinel dizinini siliyordu; eski directory records da remote
+isteğinden önce reddediliyor, directory tekbaşına replacement sayılmıyor. Real encrypted ZIP
+aynı byte/path ile iki kez restore edildi. Eski kaydın original archive yolu tahmin edilmiyor.
+52 yeni backup testi, 35 SiteDatabaseGeneration ve 28 yeni queued-delete testi eklendi.
+Self/admin DB delete subscription→resource→account bekleme sonrası authority yeniden ölçüyor;
+son callback hesap lease'lerinden sonra. Shared-memory SQLite fixture context başına connection.
+Move/Link/Unlink site ID/path/pool + process generation ile doğrulanıyor; kısa DB→IIS gate.
+Native create/delete generation değiştiriyor. Cascade start marker yeni binding/recreate/ikinci
+delete'i engelliyor, cancel/failure finally temizleniyor; ağır cascade IIS kilidini tutmuyor.
+Gerçek IIS COM/harici aynı-ID/path recreate bu testlerin kapsamında değil.
+On altıncı tur doğrulaması: Infrastructure6.541 + Core2 = **6.543/6.543**, başarısız/atlanan yok;
+Infrastructure full --no-build aynı son hedefli DLL ile koştu. Yeni DTO ile Core test projesi
+önce yeniden derlendi; Core DLL hash'leri eşit: 3C19ACC0813905F911B2BEB10C1715AFF04CB25CD61A71933214C89E05001808.
+Son geniş hedefli1.364/1.364; frontend **67 dosyada972/972**, types/build temiz, TR/EN5.368.
+wwwroot sonbuild ile hash eşit: AFCF595DF3F902E127C38D823B2BC4E771EE64D06FB36E03C22181FE9CFEA446.
+Görsel390/320TR açık,1440EN koyu: doğruikiA-dalı onayı, ambiguity disabled, yataytaşma yok.
+round16-chain-{mobile,desktop,ambiguous-mobile}.jpg .tmp/audit-20261002 altında. __audit16 dosyaları
+kaldırıldı, tab15kapalı, viewportreset; özgün__preview korunuyor.
+On yedinci turda BackupController doğrudan beş producer ve beş record mutation yolu
+subscription → source beklemelerinden sonra BackupActorAuthority ile kalıcı actor/rol/aktiflik,
+parent/section/password stamp ve güncel kaydın sahipliğini yeniden ölçüyor. Controller DbContext
+zorunlu. Core callback overloadları gerçek serviste source lease içinde çağrılıyor; trusted
+internal eski overloadlar korunuyor. Chain bütün gerçek hedefleri ilk silmeden önce denetliyor;
+RestoreItems da source lease kullanıyor. Kuyruk aktörü/producer grubu95/95. İlk54 testte41 gerçek
+hata +1 fixture beklentisi; ek producer40 grubunda21 auth ve2 cancellation yarışı kanıtlandı.
+Mail HTTP'nin CancellationToken.None sözleşmesi korunuyor; diğer producer kuyruğunda ct açıkça
+ölçülüyor. İlk safe preferences sınırını aşmadan durma testleri gerçek SQLite/tempJSON kullanır.
+BackupSite source beklemesi öncesi Target yakalar; sonrasında Reserve ve callback, sonra archive.
+Site/native create-delete-cascade arşiv boyunca çakışmaz; iptal/failure use ve lease bırakır.
+14/14 test; state/binding değişimi kimlik değişimi sayılmaz. Optional DB create Target kullanımını
+provider CREATE → hesap/link → ownership/compensation bitene kadar korur. Provision rollback
+yalnız kendi generation'ını silebilir; native delete failure'da directory korunur.
+Native create DTO'su CommitChanges sonrası aynı IIS gate içinde fresh manager ile MapSite'dan
+okunur; otomatik ID'nin geç atanması resmi Microsoft Site.Id sözleşmesiyle karşılaştırıldı.
+Gerçek private write/commit/read+fake manager testleri2/2; gerçek IIS COM çalıştırılmadı.
+Son çapraz incelemede shared use provisioning rollback'ini engelliyordu:3 yeni actual-service
+testte site/directory kalması kanıtlandı. Creation intent native create öncesinden using-finally
+sonuna kadar Entry.ProvisioningOwner olarak tutulur; yalnız aynı Creation'dan türetilen Target
+Run/Reserve yapabilir. Yabancı Capture, önceki Target ve cascade durur; outer controller watcher
+servis dönüşünde çalışır. Böylece firewall/native-return ve use-release→rollback aralıklarında
+backup içeri giremez. Native version/ActiveUses kuralları değişmedi; ayrı exclusive-use katmanı
+eklenmedi. Provisioning28/28 (7 yeni interaction testi dahil); ağır işlerde IIS gate tutulmaz.
+Tenant backup GET/site/subscription POST ayrı DTO üretir: Path/PreservedPath/RestoredPath ve
+warning.Detail gizlenir; rooted target temizlenir, logical/relative kaynak/health/coverage kalır.
+Remote URI raw ?/# eki parse öncesi kesilir (FTP parser bunları path'e kodluyordu); credentials
+silinir, gerçek %3F/%23 filename kaçışları ve Dropbox/OneDrive hostless logical path korunur.
+Admin/service object/disk metadata aynı kalır; projection37/37. İlk29 testte17 gerçek red vardı.
+Frontend iki view'da gizli yol ile bilinmeyen yol ayrılıyor. BackupView mobil detail kartları
+sticky left + minmax(0,1fr) ile okunur; 320px içerik239/239,390px309/309 ölçüldü; desktop1440EN
+koyu kontrol edildi. __audit17 girişleri/tab16 kaldırıldı, viewportreset, özgün__preview kaldı.
+Görseller .tmp/audit-20261002/round17-backup-{mobile,320,desktop}.jpg.
+Son hedefli2.218/2.218 (round17-targeted-final_net8.0_20261003045333.trx); yeni backend test176.
+Frontend67 dosyada980/980, types/build başarılı, TR/EN5.369. wwwroot/dist index SHA256 eşit:
+CE7C3DDA97D4450AC946DF1C1FC8C6C11B1425FE51BA5EFAC83C6CE9F66D7CED.
+Core tests güncel arayüzlerle yeniden derlendi (0warning/error); Core DLL hash eşit:
+7CB6598AC7246C1EFB2F6CBEA8578529B304074AC6E8684C5CE36B3BF73F3AD5.
+R17 tam çözüm son doğrulaması **Infrastructure6.717 + Core2 = 6.719/6.719**, fail/skip yok.
+round17-complete_net8.0_20261003045503.trx (Core) ve _20261003045844.trx (Infrastructure),
+round17-complete.log; session30575 exit0 ile kapandı. Son hedefli session55753 de exit0.
+Son git diff --check temiz; canlı dağıtım/paket yok, sürüm0.8.74, sürekli hedef aktif.
+R18 tamamlandı: ilk baseline 153 testte 89 red/64 green; bir FTP PascalCase UserName fixture
+düzeltmesi dışında 88 gerçek hata. İlk birleşik green 158/158; sonraki iki arşiv silme testinde
+8 testten 4 gerçek red (ikinci ZIP kaybı) ve 4 olumlu sonuç, ardından per-file callback düzeltildi.
+Yeni backend test toplamı 136: DB ownership 20, FTP 8, subscription site pins 19, native 23,
+manual actor/program/prune 66. Final geniş hedefli 2.376/2.376:
+round18-targeted-final_net8.0_20261003052844.trx. xUnit2031 stil uyarısı eşdeğer Assert.Single
+overload ile giderildi; ardından tüm AdaPanel.sln yeniden derlendi, 0 warning/error.
+R18 TAM TAKIM: Infrastructure 6.853 + Core 2 = **6.855/6.855**, fail/skip yok.
+round18-complete_net8.0_20261003053004.trx (Core) ve _20261003053253.trx (Infrastructure);
+round18-complete.log, session46654 exit0. Son kaynaklar Release --no-build --no-restore
+-m:1 /nodeReuse:false ile test edildi. Core DLL hash kaynak/test dizininde eşit:
+1F64041236BAFC74DD22C13D218FC6C9F0C9209B1EFA1912D71B3563F7AE9ED2.
+Planner owner==subscription AND (site blank OR scoped) uygular; PG case ve engine aliases kalır.
+Gerçek CustomerScope/DatabaseOwnership JSON + CustomerAccess + tempZIP/fake dump sınırı ölçüldü.
+FTP inventory read hatası backup.ftp_inventory_unreadable warning + partial status; boş gerçek
+envanter normal kalır, OCE yutulmaz. SubscriptionSiteReservations helper her Capture/Reserve'i
+Finalize await sonuna kadar tutar; IIS gate uzun iş boyunca tutulmaz. OCE site catch'ten çıkar.
+Native MutationKind(Create/Delete/IdentityChange) overload bool API'yi korur; root change
+ActiveUses/Deleting/ProvisioningOwner sırasında durur ve kabul edilen attempt version artırır.
+Native concrete invocation'a özel committed callback, successful commit + fresh MapSite sonrası
+aynı IIS gate içinde Creation.RecordCommitted'e snapshot kaydeder. ID/path/app-root/pool eksikse
+kanıt yok; başkasının create sonucu sahiplenilmez. Provision catch bu snapshot'ı aynı watcher
+CaptureCreated(None) ile doğrulayıp güvenli rollback yapar, asıl hata/OCE korunur.
+Manual schedule/automation callback overloadları actor→global→source sırasını izler; callback
+actor lease'i yeniden almaz. BackupExecutionApproval yalnız kendi callback exception nesnesini
+catch'lerden dışarı geçirir. Normal provider partial/failed sözleşmesi kalır. Program/backup
+settings fingerprint Last* telemetry'yi dışlar; source ve her archive delete öncesi kontrol,
+final JSON update içinde yeniden compare yapılır. Silinen/değişen program geri yazılmaz.
+Trusted worker callback-null yolu R18'de korunmuştur; onun program-context açığı R19 adayıdır.
+AutomationView backup/SSL HTTP200 sonucu yalnız completed ise olumlu; failed/partial/unknown
+doğru alert + automationDetails gösterir. 16 yeni FE testi; son takım 67 dosyada **996/996**.
+Vue types ve Vite build green, TR/EN 5.371 anahtar (4 eski yorum/dinamik önek false positive).
+Ortak fixed notice artık opaque layered surface + max-height/scroll; automation dismiss düğmesi
+panel.common.dismissNotice anahtarını kullanır. Browser 320/390 TR light, 1440 EN dark ölçüldü;
+body310/310 ve380/380, notice284/284 ve354/354. Long notice418/2236px scroll; dismiss çalışır.
+Görseller round18-notice-before-320.png ve round18-automation-{320,mobile,desktop}.png.
+__audit18 dosyaları/tab17 kaldırıldı, viewport reset; özgün __preview dosyaları korundu.
+frontend/dist 151 dosyanın tamamı wwwroot karşılıklarıyla hash eşit. Index SHA256:
+AA4C2D5E7081ADD07441D1C50105C9A36D9561C19F9039F3C1582EBEB1185192.
+Canlı dağıtım/paket yok, sürüm0.8.74, sürekli hedef aktif. R18 ayrıntıları audit raporu sonunda.
+R19 tamamlandı: ilk backend93 test71red22green; 6 native SSL fixture yanlış tablo adı bekliyordu.
+SQL interceptor installed_components düzeltildi; aynı baseline DLL ile6test5gerçekred1green.
+Toplam doğrulanmış ilk grup70red23green. SiteSettings baseline44=36red8green, yeni3capture ile
+47/47green. Worker24=16red8green→24/24green. ManualSsl25/25green (global/fake SSL/mail + gerçek
+WinAcme executable-query SQLite barrier); mail-provider OCE başarıya çevrilmiyor.
+SiteActorAuthority sites-section freshactor+parent+stamp; controller actor subscription lease;
+callback current site+path/scope yeniden ölçer. SiteMutationGuard ilk Capture öncesi version+DTO;
+native root Target.ChangeIdentityAsync gate içinde validate→commit→fresh MapSite→PinnedSite.
+Target.Run→native gated write deadlock yok, publisher/ACL uzun iş boyunca IIS gate tutulmuyor.
+Subscription trusted worker program-only approval'ı global/source/per-file-delete/publication
+boyunca taşır, silinmiş/değişmiş program geri eklenmez. Automation worker uzunbackup sonrası
+SSL enabled/interval/LastSsl* fresh okur. Actor/cookie gerektirmeyen worker sözleşmesi korunur.
+Manual SSL controller BackupActorAuthority admin + subscription lease; Automation approval
+provider callback üzerinden geçer, inner mail ve outer catch yalnız kendi approval error'ını
+yutmaz. ISsl callback native executable query sonrası çalışır, normal provider failure kalır.
+MailCertificateApprovalTests21 actualMail+SQLite+tempPEM+certificate-only command seam hazır:
+10red11green. Ortak117test107green10beklenenMailred (round19-first-green-mail-red_20261003055947).
+Mail override düzeltildi: JSON read sonrası ve query sonrası ilk create/update öncesi approval;
+approved write→reload→publication kesintisiz. Final yeni117/117 geçti, round19-targeted-final
+_20261003060429.trx. xUnit2031 Assert.Single overload düzeltildi. Solution build0warning/error.
+R19 TAM TAKIM: Infrastructure6.970 + Core2 = **6.972/6.972**, fail/skip0. round19-complete.log;
+Core _20261003060512.trx, Infra _20261003060802.trx; session43070 exit0 ve kapalı.
+Release --no-build --no-restore -m:1 /nodeReuse:false; öncesinde fresh solution build0warning/error.
+Git diff --check temiz, dirty257 girdi korunuyor; tüm R19 .NET/Node/browser oturumları kapalı.
+Core DLL kaynak/test hash eşit: FE30D67E62F178865EB2404D98850197881F62478B3C90A51D88745401E19E97.
+FE AutomationLifecycle39 yeni test; ilk34=33red1green, ekpassword-context test ayrıred.
+Request ownership/view epoch/draft revision + remote context rev; eskiGET/save/job taslak ezmez,
+aynı parola farklı hedefe aitse korunur, remote sonuç invalidation, stale unmount/session durur.
+62targetedgreen; tümFE68dosya1035/1035. Types/Vitegreen. Preview19 kaldırıldı, tab18kapandı,
+viewportreset, özgün__previewkorundu. Browser390/320TRdark1440ENlight; save21→draft45,
+testA→Bnoresult, oldGET→save31korundu. body380/380,310/310,1430/1430; notice284/284.
+Görseller round19-automation-{320,mobile,desktop}.png. 151dist/wwwroot hash eşit, index:
+ED45BFBE2310CDE78EA4C8D36D705F6EF1A25C0D8FB9355EACED1D14F6046F36. Locale5371/5371.
+R20 sunucu tamamlandı: baseline59 = 38 red / 21 green; site19 = 6/13,
+Mail28 = 21/7, SSL outcome12 = 11/1. Native entry ömrü own-ref + in-progress flag;
+ilk capture aynı ID/path değiştirmesini kaçırmaz. Atomik root commit→pin de korunur.
+Site testleri23/23. Mail Issue/Sync canonical state path lease altında JSON/PEM/query/
+push/reload/publication sıralı; farklı data root bağımsız. Manual approval korunur.
+SSL mail hatası measured ise completed_with_errors, unmeasured ise failed + iki tanı;
+başarılı mail sonucu unmeasured SSL yanında korunur. Mail tanısı DTO/JSON/logger maskeli.
+Logger sentinel testi1 red /63 green → fix →64/64. automationDetails üç yeni test,
+bilinen mail kodlarını TR/EN çevirir; unknown tanı korunur. Helper7/7 green.
+İlk full: Core2 + Infra7033 green/1 cancel Issue hatası. Semaphore acquire/cancel yarışı
+geçici PEM dizini oluşturuyordu. Yeni iki deterministik test (acquire boundary ve held
+SynchronizationContext public Issue continuation)2/2 red. Helper acquire sonrası CT ve
+exception'da lease.Dispose; Issue await sonrası ilk dosya etkisinden önce CT eklendi.
+Son yeni test66/66; round20-targeted-cancel-final_20261003063458.trx.
+R20 TAM SUNUCU: Infrastructure7036 + Core2 =7038/7038, fail/skip0.
+round20-complete-final log; TRX Core_20261003063523, Infra_20261003063808.
+session91382 exit0/kapalı; taze Release solution build0warning/error; tüm .NET root-only.
+Core DLL hash R19 ile aynı ve source/test eşit. C# kaynakları sabit.
+Apps frontend site geçişi reset, draft/read/write/session/unmount guards, duplicate/action
+guards ve admin-only install + measured result tamamlandı. İlk43=41 red/2green;
+install ve boundary ekleriyle58/58 green, dismiss28px mevcutlocale ile eklendi.
+Browser390/320 TRdark,1440 ENlight: alpha→beta none defaults; pending save yeni draft
+korur. body380/380,310/310,1430/1430; notice284/284 ve dismiss çalışır.
+Browser ek hata: Pinia dev plugin her action'a farklı this Proxy veriyor. WeakMap key
+ayrışıyor ve oldGET POST'u eziyordu. Gerçek plugin+real API/fake Axios yeni3test2red1pass;
+Apps toRaw(store) yalnız key fix →61/61 green. Browser fresh reload oldGET sonrası
+current+draft verified-alpha.js kaldı. Aynı kalıp sites/software/databases gerçek Pinia
+plugin + real API/fake Axios12 testinde10 red/2 green ölçüldü; yalnız raw key fix ile
+12/12, ilgili mevcut gruplarla142/142 green. Diğer state yazmaları reaktif kaldı.
+__audit20 dosyaları/tab19 kaldırıldı, viewport reset; __preview346/4182 korundu.
+R20 TÜM FE:72 dosya1111/1111, round20-frontend-complete.log/session80398 exit0.
+Root son types round20-types-final.log/session20628 exit0; Vite build green.
+151 dist dosyası wwwroot karşılıklarıyla hash eşit, index SHA256:
+54AADD6D305E858462927CB9F0EB55D6EEE8FD33F3E4AB9853FFD60113B28D7F.
+TR/EN5373; önceki4 yorum/dinamik önek dışında eksik yok. Git diff --check temiz,
+dirty269 girdi korunuyor. R20 tüm .NET/Node/browser oturumları kapalı, tüm ajanlar tamam.
+Görseller round20-apps-{320,mobile,desktop}.png ve notice/reseller320. Fixture bayi
+envanterini sahte sağlıyor; gerçek bayi katalog403 sorunu henüz düzeltilmedi.
+R21 TAMAMLANDI: yeni108 ve tam sunucu Infrastructure7144+Core2=7146/7146, fail/skip0.
+round21-complete-final.log/root56710exit0; TRX Core_20261003071402/Infra_20261003071654.
+Taze çözüm0warning/error üstünde --no-build --no-restore -m:1 /nodeReuse:false.
+FE1156green; tümR21test/build/browser oturumları kapalı, dirty287korundu/diffchecktemiz.
+AppRuntime lifecycle44 baseline36red8green → capture/actor/subscription+pin, uzun
+dependency kurulumunda IIS gate yok, final native pool commit ölçümü XML'den önce.
+Provisioning kendi trusted Target'ını geçiriyor; controller public iki callback overload.
+Runtime52green sonrası XMLwrite-denied node/python2 red; pool geri alma aynıgate,
+aynısite/pool ve bizim boş CLR değerinde, OCE/directory/XML hatasında önceki ayar döner.
+Removed/different pool/value3 ve directory2 + cancellation assertions → runtime59green.
+Inventory yeni28 sözleşme testi23fail5pass failclosed503stub'a karşıydı;23oldbug değildir.
+Read-only scoped endpoint fullcatalog secrets açmaz; yalnız 2 componentId/isInstalled.
+Gerçek SQLite/stat/probe; IOunknown503/OCE korunur. Ortak processless resolver
+registered→known→cwd/PATH; validregistered sonrası gereksiz fallback1red → lazyfix.
+Inventory29green. Apps bayi scopedread, unknown/retry/publishdisabled, admincatalognormal.
+Apps yeni26 (22view/API4actualPinia), ilk21=20red1green, failed200envelope ayrıca1red.
+Apps ilgili87/87; FE74dosya1156/1156 round21-frontend-complete.log/session90917exit0.
+Automation SSL14 test baseline8red6green → sanitized Message+Details/state/logger,
+rawexceptioninnerlogger yok. WinAcme actualstdout/stderr +DTOassign/JSON6red→6green;
+RenewAllResultDto Output/FailureReason setter redaction, parsing önce, OCE korunur.
+SslView outcome yeni19=15red4green → measured/counts/bindings kontrolü, incompleteunknown,
+refreshfailure ilkresulttanıyı silmez, notice pre-wrap+dismiss. İlgili28/28green.
+Yeni backend108/108: round21-targeted-final_20261003071339.trx/root39699exit0.
+Final solutionbuild0warning/error, Core source/test copies hash:
+DE0D50C2AE33ECAC80B31772FBBB4782FBE075D590541FAA75E013A1A16C3627.
+Types round21-types-final/root88417exit0, Vitegreen. TR/EN5379 dört eski falsepositive.
+151dist/wwwroot SHAequal; index74B1AAE98BC504217F52F295A153AA9B30F11FE5440A5F6838C64619DC0CD4E6.
+Browser actual Apps/Ssl mock-only: reseller fullcatalog0, failed→retryinstalled,
+sitechange reset, admininstall→catalogremeasure→publishenabled. SSLfailed/partial/
+unknown/success/refreshfailure görünür.320TRdark310/310notice284/284,390SSL380/380,
+1440ENlightApps1430/1430SSL1440/1440. Screenshotround21-* .tmp/audit-20261002.
+__audit21 dört dosya ve tab20/21 kaldırıldı; viewportreset; __preview346/4182 korundu.
+R22 tamamlandı. DirectRenew actual controller+SQLite lookup sonrası actor callback/lease,
+14test baseline10red4positive. Automation measured+verification+bindings sonucu20test;
+sağlıklı renewed0 normal; unknown failed, drift/missing/providerwarning partial.
+SSL redirect exact OK/write/install/retry+YES/NO readback, HttpsRedirectMeasured bool;
+unknown lastbinding remove durur; best-effort Issue/Import korunur. Redirect41/41.
+AppRuntime/SiteHosting ortak WebConfigurationFile privateACL staging+Flush(true)+Replace/Move;
+12 actual partial XML red giderildi. Yeni dosya kimliği(volume+128bit ID)+SHA256;
+ACL ve cleanup aynı read/delete/permissions handle, FileShare.Read; yabancı değişmiş
+dosya silinmez/ACL değişmez. Foreign-file6red→green. Hosting toplam98test.
+Baseline153=65red88green; dört index.html fixture beklentisi ayrıca4green düzeltildi.
+İlk green351=347pass4fail fixture/source-string ayrıldı; installer fake yanlış Task generic
+retry'yi ölçmüyordu, düzeltildi ve ikinci write çağrısı şart. Detaylar audit raporunda.
+Son geniş360/360 round22-targeted-final_20261003074135.trx. Solutionbuild0warning/error.
+Tam Infra7257+Core2=7259/7259 nofail/skip, round22-complete-final_20261003074404.trx
+ve _20261003074717.trx; log round22-complete-final.log, session23069exit0.
+Core hash21F065A911DCF2720B3748E3C13C2ACB3BF6E9F3968A072BC3B0EE3E58C55B71.
+FE75files1181/1181; types/Vitegreen. TR/EN5384, dört eski falsepositive.
+SslView measured same-site requested-match başarı, unknown/retry/indeterminate;
+native checkbox optimistic değişim reset, locked handlers, nonadminRenew gizli. Yeni23+old28=51.
+AutomationDetails verification counts locale, unknown bindings drift —; helper9green.
+151dist/wwwroot hashmatch, indexA5AB568884B5690726D3AE41967458C5B4C4A653CECA0BBE2FB8DF80A108BC6D.
+Browser actual SslView mock-only320TRdark310/310,390ENlight380/380,1440ENlight1440/1440.
+round22-redirect-{failure-320,unknown-mobile,success-desktop,mismatch-desktop}.png,
+round22-ssl-customer-locked-320.png, round22-renewal-drift-mobile.png. DesktopfullPage
+capture artefact viewport screenshot ile düzeltildi. audit22files/tab22closed/reset,
+originalpreview346/4182 preserved. Gitdiffcheckclean,dirty301. R22 tüm sessionsclosed.
+R23 tamam: Infra7395+Core2=7397/7397 nofail/skip, round23-complete-final.log,
+TRX _20261003081430(Core) ve _20261003081716(Infra); session45655exit0. TazeRelease
+--no-build --no-restore -m:1 /nodeReuse:false. Tüm R23 sessionskapalı, goalactive.
+Baseline101=75red26green round23-baseline_20261003075850.trx/root50851exit1:
+DirectRemove32=25red7green; SiteRemove25=18red7green; ReverseProxy44=32red12green.
+Controller actorlookup/subscription öncesi SiteMutationGuard.Target; callback freshactor+scope
+ve ilkTarget.ValidateSnapshot; subscriptionlease işlemboyu. 3 SQLbarrier generationektesti35.
+ISslService authorizedRemove SiteDto callback overload failclosed default; actualWinAcme
+sitecapture→bindingswait→Reserve→hernative/JSON/finalworkspace girişinde Target.Run+approval.
+Başlangıç/bitiş iptal ve nativefaultleasecleanup ölçüldü; trustedoldoverload korunur.
+Ek5snapshotred (thumb/IP/readability/duplicate-IP/replacementSSLJSON) 172=167green5red:
+round23-binding-red_20261003080833.trx/root31967exit1. Freshbinding/metadata+thenactorcallback;
+nativePS exactbindingInformation/hash/store/tek eşleşme ve yalnız OK; UpdateAsync içinde
+capturedSSLrecordidentity karşılaştırma. Verificationtimestamps değişebilir. ssl.binding_changed
+TR/EN. Normalotherhost/store/ambiguousoutput ekleriyle SSLservice39test.
+ReverseProxy XMLprepare memory→nativecommit+freshARRmeasurement→WebConfigurationFile atomic;
+fault/cancel halinde yalnızbuçağrının false→true ARRenabled değişimini aynıölçümdegeri alır;
+alreadytrue korunur, foreignflagskorunur, recoveryfailure açıkhata. Yeni20ile64/64green.
+R23 final geniş440/440 round23-targeted-final_20261003081251.trx/root50619exit0.
+Solutionbuild0warning/error round23-solution-build-final.log; Core3copiesSHAequal
+F0D8CCFBC5A788F268950FBBA5DB9A0FCE2C584C3A13FAFC2515414E7CEB4755.
+Frontendremovebutton/API yoktu;27red yeniözellikkabulkoşulu, eski27bugdeğil. Yeni29+old51=80green.
+Confirmtargetsnapshot, role/session/site/lock/unmount guards, storedeletefalse, measuredresult;
+bindingremovedveunknownredirect ayrımesaj. <=640px certcards, desktop6columns.
+FullFE76files1210/1210 round23-frontend-complete.log/root13272exit0. SonVue-tscroot3555exit0,
+Vitegreen round23-vite-final.log; TR/EN5391,4oldfalsepositive.151dist/wwwroothashmatch;
+indexB2511B4905EE771CF17E2A55D5AFD5E8E5FC0BE1979E5337A109740B525F19E7.
+Browser390TRdarkcards332/332 page380;320ENlightcards262/262 page310;1440ENlight1440/1440.
+Confirmsitechange GET2POST0, successcounter/list, port8443, unknownredirectseparate,
+bindingRemovedfalseerror. round23-ssl-{confirm-mobile,confirm-320,cards-mobile,
+unknown-desktop,removal-failed-desktop}.png. HMRlocaleedit reset interimcapture redone.
+Noappconsoleerror, oldi18nwarningonly. audit23files/tab23removed, viewportreset,
+originalpreview346/4182preserved. Gitdiffcheckclean/status307. Full.NET7397green.
+R24 source-only adaylar: ReverseProxy actor/sitegeneration dependency/IISwait; SSLoptionalstoredelete
+afterBindings stale after JSONwait; finalworkspace reconciliation internal await→JSON authority.
+Issue/Import/SetRedirect callback paths still separate; Import PersistKeySet|MachineKeySet
+X509constructor ilk kalıcıeffect olabilir. R23 bunları kanıtlamış/düzeltmiş sayılmaz.
+ÖncelikliR24 SSLreachability: firstA+B→beklerkenBsilinir→freshAaynı diyeonaylanır,
+lastbindingkararıeskifalseolduğundanredirectaçıkkenAçıkarılabilir. HenüzREDyok.
+OptionalstoreREDplan: callbackBindingDeletes1&&targetJSONyok bariyeri→başkasınaaynıthumbbağla,
+nativeRemoveCertificateCommand sadecefakecount, silmemeli. Samebindingreappearanceayrıvaka.
+R24 başladı; baseline173=51RED122green round24-baseline_net8.0_20261003082702.trx,
+session19517kapalı. Proxy52=38red14green, oldProxyPublication64green;
+rootDirectSslReconciliation13=9red4green, SSLservice44=4red40green.
+Ek3proxyinitialscopeRED + SSL60green: round24-publication-firstscope_net8.0_20261003083036.trx,
+session52457kapalı. Root GetWorkspaceCore→Reconcile beforePublication callback taşır;
+JsonFileStore internalUpdate callback pathlock/read/serialize/flushsonrasıMoveöncesinde.
+Root13 + JsonPublicationAuthority3green; oldtrustedpaths/normalfoundmissing korunur.
+Serveragent managedfreshlastbinding+storeusersilkfix44green, nativeprotokolhalaçalışılıyor.
+Hostingagent55 lifecyclefixişliyor; old64fixtureDIuyarlamasıonun. Pollingagent gerçekFE36=31red5green,
+round24-proxy-red.log; store/API/Viewfixişliyor. Tamtests/build/browserR24 henüzyok.
+R24 TAMAM: finalgeniş616/616 round24-targeted-final_net8.0_20261003083703.trx,
+session66512closed. Full Infra7490+Core2=7492/7492 nofail/skip,
+round24-complete-final_net8.0_20261003083741.trx ve _20261003084047.trx,
+round24-complete-final.log session68323exit0closed. Solution0warning/error,
+Core3copieshash6A5E2756204BAFF924F8E2FB0A2BB9ED32B77618E73ADA011A84A149C2152CD5.
+Proxy59lifecycle+64publication=123green; SSLRemoval52green. Controllercapturefirstscopeöncesi,
+actualactorcallbackInstall/Target.Runöncesi; catalog→pin→install→finalwrite, trustedpaths korunur.
+SSLmanagedfreshlastbindingguard + afterJSONfreshusers; nativePSalltümIIShash+deposilmeverification;
+strictprivateJSONremoved/in_use/not_found. NativePS/IISrunyok, actualservicefakecommandtests.
+Ekcertreplacement6RED198=6red192green round24-replacement-red_net8.0_20261003083507.trx,
+session91183closed. Root immutableCertificateProbeIdentity includeskey/thumb/date/source/subject/friendly;
+aynıhostportyeniJSONcert eskiölçümdenkorunur; verificationtimestampyolukorunur. Root20reconcile+Json3green.
+FE78files1250/1250 round24-frontend-complete.log/session62232exit0. Proxynew40green,
+PiniaactualdevtoRawowner/epoch/reset/version, snapshotdraftrev, APIshape/effectverification.
+Vue-tscfinalsession17770exit0; Vitefinalgreen. TR/EN5392,4oldfalsepositive.
+Browser390TRdark oldGET→POST summary4000/draft5000;320ENlightunknown disableswrites;
+1440ENlightconfirmA→B GET2/write0, failedrefresh/retry/trimmedrewritesuccess. Noapperrors.
+Rootvisualfix ProxyView mobiletabs2gridcols/wrap:320tabs244/261→244/244;body310card262;
+390body380card332;desktop1440. round24-proxy-{draft-mobile,unconfirmed-320,
+confirm-site-change,refresh-failed-desktop,rewrite-desktop}.png. auditTab24closed/reset,
+audit24filesdeleted(correctroot2ndcleanup;firstwrongcwdprefixfailedharmless). originalpreview346/4182.
+151dist/wwwroothashmatch index277DE18A712173E575AFD00FC5C721FB70CF889A905655C07485F900F411EF7A.
+Gitdiffcheckclean, dirty319; R24sessionsclosed. All3agentscompleted, reusefollowup_tasknext.
+R24 sonundaki tarihsel R25 aday notu (aşağıdaki adayların son durumu üstteki R25 kaydıdır):
+SSLRemove initialEnsureScope BEFOREtargetcapture; targetJSONdelete Update waits
+afterouterauthority(noauthorizedcallbackyet); R24fixedfinalworkspacepublicationonly.
+SSLdirectIssue/Import/SetRedirect/GETworkspace actor/site waits remainseparate. ImportX509
+PersistKeySet|MachineKeySet constructionfirstpersistedeffect. NewREDbeforefix; WinAcmesharedpatchonly.
+ReconcileREDplan: kalan kardeşsertifikayaasyncProbe seam(defaultProbeCertificate)→actorrevoke→
+NotFoundfake; JSONunchangedolmalı. FinalcontrollerchecktekbaşınaöncekiJSONyazımınıkorumaz.
+ProxyFEreadonly: oldGET→POST→oldGET store/formezmesi; pendingPOST sırasında yeni taslak;
+rewriteA→B'deformreset yok ve lateAresponse Btaslağınısiler. ActualPinia/Axios ileölçülecek.
+Sonraki tur önerilen sahiplik: hostingproxybackendactor/native; pollingproxyfrontend;
+serverSSLlastbinding+optionalstore; rootreconcileactor/barriers+combined.NET. C#testsrootonly.
+R24 kapanışında değişiklikler yayımlanmamış ve sürüm0.8.74 idi. Sonraki R25 tamamlandı;
+kullanıcının yayın yönlendirmesiyle güncel0.8.75 paket başarısı ve süren yayın aktarımı üstte kayıtlıdır.
+Gerçek servis işlemleriyle uçtan uca doğrulama yapılmış sayılmaz.
+
+Bu makinede `npm` PATH'te yok; Node ile `frontend/node_modules/{vitest/vitest.mjs,vue-tsc/bin/vue-tsc.js,vite/bin/vite.js}`
+çalıştırılıyor. .NET SDK `.tools/dotnet/dotnet.exe`. Git sahiplik uyarısı için yalnız komut
+başına `-c safe.directory='D:/Yaptığım Uygulamalar/AdaPanel'` kullanıldı.
+Yeni sandbox altında Vite alt süreçleri ve .NET ACL/PFX testleri yetkili yerel koşum gerektirdi.
+On birinci turda alt görevin iki yetkili kimlik testi isteği önceki salt okunur sınırı gerekçesiyle
+otomatik incelemede reddedildi; işlem başlamadı. Saf temp JSON/kimlik testleri root normal
+sandbox'ta ek yetki olmadan çalıştı; bu kapsam için engel kalmadı. .NET için `-m:1 /nodeReuse:false`
+kullan; paralel MSBuild düğümleri başlangıçta takıldı. Son tam Infrastructure çıktısı
+`round17-complete_net8.0_20261003045844.trx`; güncel yeniden derlenen Core son çıktısı
+`round17-complete_net8.0_20261003045503.trx`, toplam6.719/6.719. Son hedefli test
+derlemesinin aynı Infrastructure DLL'iyle full --no-build koştu; 55753 ve30575 exit0 ile kapandı.
+İlk dokuzuncu tur tam koşusundaki tek Memcached test hatası, kontrollü OS ölçümü ve gerçek
+ConnectionRefused yolunu koruyan test/bağlantı sınırı düzeltmesinden sonra giderildi.
+Geçici görsel denetim girişleri (`__audit`) kaldırıldı; özgün `__preview` dosyaları korundu.
+
+Eski PG JSON kaydında özgün harf biçimi ve geçmişte ezilmiş sahip bilinmediğinden otomatik
+migration güvenilir yetki kaydı sayılmadı. Saklı yazım korunuyor; Foo için foo fallback yok.
+Çelişkili aliaslarda database.ownership_conflict ve dosya değişmezliği test edildi. Aliaslar
+postgres/postgresql ve sqlserver/mssql; pgsql yalnız Adminer driver adı, API aliası değil.
+Son kimlik incelemesi: Guid D/B/P/X biçimleri GetAll/Count/GetOwned'dan kaybolup site adı
+fallback erişimi verebiliyordu. Geçerli GUID biçimleri bellekte N'ye normalize ediliyor;
+bozuk/boş/Guid.Empty/null entry/key veya nesne olmayan JSON, ownership_invalid ile duruyor.
+Ownership store JsonElement ile gerçek null dosyayı eksik dosyadan ayırıyor; ortak JsonFileStore
+değişmedi. Okuma diske yazmaz, hatalı update kaynak dosyayı ezmez. Son hedefli99/99;
+44 store testinde eski kod19 hata/25 başarıydı. İki ilgili dosya değişti, API imzası aynı.
+On ikinci tur sunucu düzeltmeleri: DatabaseLifecycle subscription → engine shared/resource
+exclusive → JSON sırası; engine exclusive dump import, iptal edilen bekleyicinin temizliği,
+kapı refcount/dispose. IDatabaseService callback overloadları gerçek DatabaseService lease'i
+içinde kota/yetki ve ownership commit'i tutuyor (default interface fallback eski fake uyumu
+için; gerçek servis override'ı testli). Self-servis/site create, admin/self delete, site link/unlink,
+admin move, cascade ve UserManagement stale-owner recheck düzeltildi. İlk17 test5 red,
+sonraki cascade/user5 test5 red; provider+controller hedef paketi133/133 geçti. Site provision
+request.SiteName eksikti; yönetici DB'sinin de site linki yazılıyor. Whole-site delete/recreate
+generation kilidi yok; bu katman yalnız DB kaynak kimliğini tutuyor.
+CreateDatabase confirmed-CREATE sonrası user/grant/credential/link/workspace/ownership
+hatasında rollback yapıyor; mevcut DB/user silinmez. Cleanup adımı başına fresh30s token;
+DB DROP başarısızsa recoverymetadata korunur. Delete fiziksel DROP sonrası bağımsız cleanup
+ve ownership callback'i request cancellation'dan etkilenmiyor. Kısmi temizlik açık AppException
+verir; TR/EN create_cleanup_incomplete/delete_cleanup_incomplete eklendi. İlk17 test13red;
+son gerçekservice Create/Delete/Import32/32. İsimli SQL dump USE/\\connect ile kapsamı aşabildiği
+için engineexclusive; önce1red ardından32/32. Provider missing DB/user sözleşmesi Gone olarak
+daraltıldı; SQLServer'da DB_ID görünürlük yetkisi ve yalnız panelin özel mesajı+state173 yokluk
+sinyali kabul edilir. Generic DDL trigger50001 Gone değildir: ek6red→provider38/38green.
+BackupRecordDto nullable IncludedDatabases site/subscription/DB üreticilerinden persist edilir;
+null eski ölçümsüz kayıt, [] ölçülmüş boş. Otomasyon usable + context + measuredincluded
+kimliğini tüketir; kısmi/remote_failed yerel dahil DB'yi atlar, eksikDB mevcutpolicy içinde en
+fazla1 bağımsız deneme alır; ilkuyarı kalır, iptalprune'a devametmez. Yeni45 ilk41red→45green;
+eski AutomationIdentity/RunningJobs ile63/63. Birleşik224/216pass'taki8fail provider7+SiteName1
+bilinçli red idi; takip provider+authority133/133 geçti. İlk full eski source-order assertion'a
+takıldı; gerçekcascade2senaryoya çevrildi, ilgili10/10. Sonraki full100waiter stress5s timeout:
+kontrollü HeldContext testi schedule tutulunca100worker'ın beklediğini, Task.Run100'ün ve kapı
+Release sonrası eski100'ün tamamlandığını kanıtladı. İlk runtimepostmortem kesin değil; üretim
+Gate ve5s sınırı değişmedi. Test Task.Run+boundedtoken+finallydrain kullanır, class12/12. Son
+full6.106/6.106 geçti. Arayüz hash 854B06A1B7CEC880CE6CD0154B2CAE784F5B24469D87BE7DE1F2CE5A960CDB54.
+
+On üçüncü tur yeni testler: BackupArchiveCollision6, BackupPlannerSourceIdentity41,
+BackupPruneReplacement41, AutomationBackupMeasurement25, DatabaseAccountLifecycle33,
+DatabaseAccountLease6. İlk prune/source63 koşusunda46 gerçek red +1 restore fixture guard
+hatası +16pass; sonraki resolver10red. Artifact6red→6green. Account9 baseline7 gerçekred,
+1 yanlış MariaDb fake-provider eşlemesi timeout,1pass; fake gerçek MySql mapping'e düzeltildi.
+Ortak302=33 beklenenred(17health/link+10resolver+6replacementreview)+269green;
+son374'te yalnız2 eski retention fixture Status='' yüzünden korundu. Fixture'lar yalnız
+Status=created ile gerçek üretici sonucunu temsil ediyor; production gate gevşetilmedi,
+ardından374/374green (round13-targeted-final_net8.0_20261003020610.trx).
+IsUsableBackup restore semantiği aynen korundu; ayrı BackupReplacementPolicy completeness,
+legacy null/ölçülmüş[] ayrımı ve DB superset ölçer. Planner survivor-only, strictly-newer,
+keepCount minimum garantili, source+chain gruplu. Chain resolver duplicate/negative index,
+explicit wrong parent/base mode reject eder; sıra taraması N+1 ile sınırlı, legacy boş mode/
+parent korunur. Ortak NewArtifactFileName GUID'li; ZIP CreateNew, eski path değişmez.
+Automation health global lastSuccess yalnız complete/sound/known-copy-loss olmayan,
+sağlam source-aware zincir ve geçmiş tarih; unowned admin link yalnız site owner=null
+ölçülmüşse, ownership çatışması yoksa eklenir. Kaynakları kullanıcıya bildirmeden varsayma.
+
+Sıradaki öncelikler (henüz davranış testi/fix yok):
+1) Başarılı GRANT→AddReferenceAsync(requestCT) iptal/I/O boşluğu: Import/Grant motor tarafında
+B yetkisini açıp referansı yazamazsa sonraki A cleanup DROP USER yapabilir. Normal account
+lock bunu tek başına çözmez. Fresh bounded publication token iptal dalını; kalıcı intent veya
+doğrulanmış GRANT rollback ise I/O dalını ele almalı. Gerçek service + fakeprovider bariyer
+testinde GRANT başarıdan hemen önce CT iptal edilip sonra A cleanup çalıştırılabilir.
+Ayrıca yeni AddReferenceAsync parolasız saf GRANT bağını da Record olarak tutuyor;
+FindForDatabaseAsync bunu cleanup owner seçip panelin yaratmadığı hesabı DROP ettirebilir.
+Bu son kaynak bulgusu henüz davranış testiyle doğrulanmadı: ilk iş preexisting/untracked
+user'a B için GRANT, ardından B Delete senaryosunu ölç. Kullanım referansı ile hesap oluşturma/
+silme otoritesi ayrı olmalı; nullable legacy metadata'dan yeni sahiplik uydurma. Bilinen panel
+hesabının A→B son referansında cleanup yetkisi kaybolmamalı; tek geçici parolaya dayandırma.
+2) BackupMail/RestoreMail StopStalwartAsync try DIŞINDA; finally StartStalwartAsync aynı
+iptal edilmiş requestCT'yi kullanıyor. Stop kısmen etkili olup hata/iptalle dönerse veya
+finally iptalse posta kapalı kalabilir. Gerçek servis çalıştırmadan seam/barrier ile ölç.
+3) Backup replacement dosya/IncludeConfig kapsamını ve offsite dayanıklılık kaybını kalıcı
+metadata ile ölçmüyor; son halka DB scope değişimi de eski base dump'ını güncel saydırabilir.
+Legacy null→measured kapsam güvenilir eşdeğerlik kanıtı olmadan otomatik migrate edilmez.
+4) Aynı source/chainId içinde dallanmış chain silme lineage ayrı; global sağlıklı son yedek
+tarihi başka kaynağın eskiliğini örtebilir. Şimdiki source-cross-delete fix bunları çözmez.
+5) Silinmiş kullanıcıdan kapıda bekleyen create, scope yoksa limitsiz fallback ile geçebilir;
+GetScope missing semantics bayi için mevcut, körce değiştirilemez. Final callback'te fresh actor/
+subscription varlığı ayrıca doğrulanmalı. Whole-site generation yarışı ayrı kalır.
+Başarılı Nginx reload sinyali de yeni
+yapılandırmanın etkinleştiğini tek başına kanıtlamaz; canlı uçtan uca doğrulama yapılmadı.
+
+Canlı IIS/DNS/posta/SSL ve gerçek uzak sunucu göçü bu denetimle doğrulanmış sayılmaz.
+
 ## 2026-09-29 — SON DURUM: 0.8.74 — yer tutucu tazeleme + oluşturmada canlı liste
 
 Kullanıcı canlıda **iki ayrı şey** bildirdi, ikisi de gerçekti.

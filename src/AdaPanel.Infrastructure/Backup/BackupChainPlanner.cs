@@ -1,3 +1,4 @@
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Backup;
 
 namespace AdaPanel.Infrastructure.Backup;
@@ -74,18 +75,26 @@ internal static class BackupChainPlanner
     }
 
     /// <summary>
-    /// Aynı zincire ait kayıtları sıra numarasına göre döner. Sıra numarası eşit olanlarda
-    /// oluşturma zamanı ayırıcıdır (elle kopyalanmış/bozulmuş kayıtlar için savunma).
+    /// Aynı kaynak ve zincirin bütün dallarını döner. Saklama politikası bu grubu tek
+    /// geri yükleme noktası sayar; belirli bir yaprağın yolu için Resolve kullanılır.
     /// </summary>
-    public static IReadOnlyList<BackupRecordDto> GetChain(IEnumerable<BackupRecordDto> all, string chainId)
+    public static IReadOnlyList<BackupRecordDto> GetChain(
+        IEnumerable<BackupRecordDto> all, string chainId, string? type = null, string? source = null)
     {
         if (string.IsNullOrWhiteSpace(chainId))
         {
             return [];
         }
 
-        return all
+        var records = all
             .Where(record => string.Equals(record.ChainId, chainId, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (type is not null || source is not null)
+            records = records.Where(record => BackupSourceIdentity.Same(record, type ?? string.Empty, source ?? string.Empty)).ToArray();
+        else if (records.Select(BackupSourceIdentity.Key).Distinct(StringComparer.Ordinal).Skip(1).Any())
+            return []; // An unscoped, reused chain ID cannot choose one source on the caller's behalf.
+
+        return records
             .OrderBy(record => record.ChainIndex)
             .ThenBy(record => record.CreatedAtUtc)
             .ToArray();
@@ -111,6 +120,17 @@ internal static class BackupChainPlanner
             return new BackupChainDto { Broken = true, MissingLinks = [backupId] };
         }
 
+        var graph = BuildGraph(kayitlar, hedef);
+        if (graph.Errors.Count > 0)
+            return new BackupChainDto
+            {
+                ChainId = hedef.ChainId,
+                Links = graph.Records.Where(item => item.ChainIndex <= hedef.ChainIndex)
+                    .Select(item => ToLink(item, dosyaVarMi(item))).ToArray(),
+                Broken = true,
+                MissingLinks = graph.Errors.ToArray()
+            };
+
         // Zinciri olmayan (eski ya da tekil) yedek: kendi başına tam bir geri yükleme noktasıdır.
         if (string.IsNullOrWhiteSpace(hedef.ChainId))
         {
@@ -123,41 +143,26 @@ internal static class BackupChainPlanner
             };
         }
 
-        var zincir = GetChain(kayitlar, hedef.ChainId)
-            .Where(record => record.ChainIndex <= hedef.ChainIndex)
-            .ToArray();
-
-        var eksikler = new List<string>();
-        var halkalar = new List<BackupChainLinkDto>();
-
-        // 0'dan hedefin sırasına kadar HER sıra numarası dolu olmalı. Bir boşluk, o boşluktan
-        // sonraki bütün halkaları geri yüklenemez yapar (Plesk'in "sarı ünlem" durumu).
-        for (var sira = 0; sira <= hedef.ChainIndex; sira++)
-        {
-            var halka = zincir.FirstOrDefault(record => record.ChainIndex == sira);
-            if (halka is null)
-            {
-                eksikler.Add($"#{sira}");
-                continue;
-            }
-
-            var var_mi = dosyaVarMi(halka);
-            if (!var_mi)
-            {
-                eksikler.Add(halka.Name);
-            }
-
-            halkalar.Add(ToLink(halka, var_mi));
-        }
+        // Follow only this leaf's parents. Equal indices in an explicit sibling branch
+        // are legitimate and do not belong in this restore operation.
+        var path = new List<BackupRecordDto>();
+        for (BackupRecordDto? current = hedef; current is not null; current = graph.Parents[current.Id])
+            path.Add(current);
+        path.Reverse();
+        var halkalar = path.Select(item => ToLink(item, dosyaVarMi(item))).ToArray();
+        var eksikler = halkalar.Where(item => !item.Available).Select(item => item.Name).ToArray();
 
         return new BackupChainDto
         {
             ChainId = hedef.ChainId,
-            Links = halkalar.ToArray(),
-            Broken = eksikler.Count > 0,
-            MissingLinks = eksikler.ToArray()
+            Links = halkalar,
+            Broken = eksikler.Length > 0,
+            MissingLinks = eksikler.Distinct(StringComparer.Ordinal).ToArray()
         };
     }
+
+    internal static int SequenceInspectionLimit(int targetIndex, int knownRecords) =>
+        (int)Math.Max(0, Math.Min(int.MaxValue, Math.Min((long)targetIndex + 1, (long)knownRecords + 1)));
 
     private static BackupChainLinkDto ToLink(BackupRecordDto record, bool available) => new()
     {
@@ -172,7 +177,7 @@ internal static class BackupChainPlanner
 
     /// <summary>
     /// <paramref name="record"/> silinirse KULLANILAMAZ hâle gelecek kayıtlar (kendisi hariç):
-    /// aynı zincirde ondan SONRA gelen bütün halkalar.
+    /// aynı zincirde ebeveyn bağlantılarıyla ona ulaşan alt halkalar.
     /// </summary>
     /// <remarks>
     /// <b>Tuzağın tam yeri burasıdır:</b> zincirin ortasındaki bir yedeği (özellikle 0 numaralı TAM
@@ -183,16 +188,66 @@ internal static class BackupChainPlanner
     /// </remarks>
     public static IReadOnlyList<BackupRecordDto> GetDependents(IEnumerable<BackupRecordDto> all, BackupRecordDto record)
     {
-        if (string.IsNullOrWhiteSpace(record.ChainId))
-        {
-            return [];
-        }
+        var graph = BuildGraph(all, record);
+        if (graph.Errors.Count > 0)
+            throw new AppException("backup.chain_ambiguous", 409, 409);
+        var selected = new HashSet<string>(StringComparer.Ordinal) { record.Id };
+        var result = new List<BackupRecordDto>();
+        foreach (var item in graph.Records)
+            if (graph.Parents.TryGetValue(item.Id, out var parent) && parent is not null && selected.Contains(parent.Id))
+            {
+                selected.Add(item.Id);
+                result.Add(item);
+            }
+        return result;
+    }
 
-        return GetChain(all, record.ChainId)
-            .Where(item => item.ChainIndex > record.ChainIndex ||
-                          (item.ChainIndex == record.ChainIndex && !string.Equals(item.Id, record.Id, StringComparison.Ordinal)
-                           && item.CreatedAtUtc > record.CreatedAtUtc))
-            .ToArray();
+    private sealed record ChainGraph(IReadOnlyList<BackupRecordDto> Records,
+        Dictionary<string, BackupRecordDto?> Parents, IReadOnlyCollection<string> Errors);
+
+    private static ChainGraph BuildGraph(IEnumerable<BackupRecordDto> all, BackupRecordDto target)
+    {
+        var records = all as IReadOnlyCollection<BackupRecordDto> ?? all.ToArray();
+        IReadOnlyList<BackupRecordDto> scoped = string.IsNullOrWhiteSpace(target.ChainId)
+            ? [target] : GetChain(records, target.ChainId, target.Type, target.Source);
+        var parents = new Dictionary<string, BackupRecordDto?>(StringComparer.Ordinal);
+        var errors = new HashSet<string>(StringComparer.Ordinal);
+        var identities = records.GroupBy(item => item.Id, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        foreach (var item in scoped)
+            if (string.IsNullOrWhiteSpace(item.Id) || identities.GetValueOrDefault(item.Id) != 1)
+                errors.Add(item.Name);
+        if (string.IsNullOrWhiteSpace(target.ChainId)) return new(scoped, parents, errors);
+
+        var byId = scoped.GroupBy(item => item.Id, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        var byIndex = scoped.GroupBy(item => item.ChainIndex).ToDictionary(group => group.Key, group => group.ToArray());
+        if (!byIndex.TryGetValue(0, out var roots) || roots.Length != 1)
+            errors.Add("#0");
+        // Preserve useful gap diagnostics without iterating untrusted, potentially huge indices.
+        for (var index = 0; index < SequenceInspectionLimit(target.ChainIndex, scoped.Count); index++)
+            if (!byIndex.ContainsKey(index)) errors.Add($"#{index}");
+        foreach (var item in scoped)
+        {
+            BackupRecordDto? parent = null;
+            if (item.ChainIndex < 0) errors.Add(item.Name);
+            else if (item.ChainIndex == 0)
+            {
+                if (!string.IsNullOrWhiteSpace(item.BaseBackupId) ||
+                    (!string.IsNullOrWhiteSpace(item.BackupMode) && !string.Equals(item.BackupMode, ModeFull, StringComparison.OrdinalIgnoreCase)))
+                    errors.Add(item.Name);
+            }
+            else
+            {
+                if (!string.IsNullOrWhiteSpace(item.BaseBackupId)) byId.TryGetValue(item.BaseBackupId, out parent);
+                else if (byIndex.TryGetValue(item.ChainIndex - 1, out var candidates) && candidates.Length == 1)
+                    parent = candidates[0];
+                if (parent is null || parent.ChainIndex != item.ChainIndex - 1) errors.Add(item.Name);
+            }
+            parents[item.Id] = parent;
+        }
+        // A strictly decreasing parent index ending at the sole root also excludes cycles.
+        return new(scoped, parents, errors);
     }
 
     /// <summary>

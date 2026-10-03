@@ -10,10 +10,15 @@ namespace AdaPanel.Infrastructure.Nginx;
 
 public sealed class NginxService(
     AdaPanelDbContext dbContext,
-    IAuditService auditService,
-    IConcurrencyLock concurrencyLock) : INginxService
+    IAuditService auditService) : INginxService
 {
     public async Task<NginxStatusDto> GetStatusAsync(CancellationToken cancellationToken = default)
+    {
+        using var lease = await NginxLifecycle.EnterAsync(cancellationToken);
+        return await GetStatusCoreAsync(cancellationToken);
+    }
+
+    private async Task<NginxStatusDto> GetStatusCoreAsync(CancellationToken cancellationToken)
     {
         var component = await dbContext.InstalledComponents
             .AsNoTracking()
@@ -48,27 +53,32 @@ public sealed class NginxService(
         };
     }
 
-    public async Task<NginxStatusDto> ConfigureAsync(
+    public Task<NginxStatusDto> ConfigureAsync(
         NginxConfigurationRequest request,
         Guid? actorUserId,
         string? ipAddress,
         CancellationToken cancellationToken = default)
+        => ConfigureAsync(request, actorUserId, ipAddress, NginxInstallationSupport.ConfigureAsync, GetStatusCoreAsync, cancellationToken);
+
+    internal async Task<NginxStatusDto> ConfigureAsync(
+        NginxConfigurationRequest request,
+        Guid? actorUserId,
+        string? ipAddress,
+        Func<string, NginxConfigurationRequest, CancellationToken, Task> applyConfiguration,
+        Func<CancellationToken, Task<NginxStatusDto>> readStatus,
+        CancellationToken cancellationToken = default)
     {
-        return await concurrencyLock.RunExclusiveAsync(async () =>
-        {
-            var installDirectory = await GetInstallDirectoryAsync(cancellationToken);
-            await NginxInstallationSupport.WriteConfigurationAsync(installDirectory, request, cancellationToken);
-            await NginxInstallationSupport.RegisterStartupTaskAsync(installDirectory, cancellationToken);
-            await NginxInstallationSupport.ReloadAsync(installDirectory, cancellationToken);
-            await auditService.WriteAsync(
-                "nginx.configuration.updated",
-                "nginx",
-                $"Nginx now listens on {request.ListenAddress}:{request.ListenPort} and proxies to {request.UpstreamUrl}.",
-                actorUserId,
-                ipAddress,
-                cancellationToken);
-            return await GetStatusAsync(cancellationToken);
-        }, cancellationToken);
+        using var lease = await NginxLifecycle.EnterAsync(cancellationToken);
+        var installDirectory = await GetInstallDirectoryAsync(cancellationToken);
+        await applyConfiguration(installDirectory, request, cancellationToken);
+        await auditService.WriteAsync(
+            "nginx.configuration.updated",
+            "nginx",
+            $"Nginx configuration saved for {request.ListenAddress}:{request.ListenPort}, proxying to {request.UpstreamUrl}; reload command completed.",
+            actorUserId,
+            ipAddress,
+            cancellationToken);
+        return await readStatus(cancellationToken);
     }
 
     public Task<NginxStatusDto> StartAsync(
@@ -91,6 +101,7 @@ public sealed class NginxService(
 
     public async Task<NginxStatusDto> TestConfigurationAsync(CancellationToken cancellationToken = default)
     {
+        using var lease = await NginxLifecycle.EnterAsync(cancellationToken);
         var installDirectory = await GetInstallDirectoryAsync(cancellationToken);
         var result = await NginxInstallationSupport.TestCurrentConfigurationAsync(installDirectory, cancellationToken);
         if (!result.Success)
@@ -98,7 +109,7 @@ public sealed class NginxService(
             throw new AppException("nginx.config_invalid", 400, 400, FormatResult(result));
         }
 
-        return await GetStatusAsync(cancellationToken);
+        return await GetStatusCoreAsync(cancellationToken);
     }
 
     private async Task<NginxStatusDto> ChangeStateAsync(
@@ -107,31 +118,29 @@ public sealed class NginxService(
         string? ipAddress,
         CancellationToken cancellationToken)
     {
-        return await concurrencyLock.RunExclusiveAsync(async () =>
+        using var lease = await NginxLifecycle.EnterAsync(cancellationToken);
+        var installDirectory = await GetInstallDirectoryAsync(cancellationToken);
+        switch (action)
         {
-            var installDirectory = await GetInstallDirectoryAsync(cancellationToken);
-            switch (action)
-            {
-                case "start":
-                    await NginxInstallationSupport.StartAsync(installDirectory, cancellationToken);
-                    break;
-                case "stop":
-                    await NginxInstallationSupport.StopAsync(installDirectory, cancellationToken);
-                    break;
-                case "reload":
-                    await NginxInstallationSupport.ReloadAsync(installDirectory, cancellationToken);
-                    break;
-            }
+            case "start":
+                await NginxInstallationSupport.StartAsync(installDirectory, cancellationToken);
+                break;
+            case "stop":
+                await NginxInstallationSupport.StopAsync(installDirectory, cancellationToken);
+                break;
+            case "reload":
+                await NginxInstallationSupport.ReloadAsync(installDirectory, cancellationToken);
+                break;
+        }
 
-            await auditService.WriteAsync(
-                $"nginx.{action}",
-                "nginx",
-                $"Nginx action '{action}' completed.",
-                actorUserId,
-                ipAddress,
-                cancellationToken);
-            return await GetStatusAsync(cancellationToken);
-        }, cancellationToken);
+        await auditService.WriteAsync(
+            $"nginx.{action}",
+            "nginx",
+            $"Nginx action '{action}' completed.",
+            actorUserId,
+            ipAddress,
+            cancellationToken);
+        return await GetStatusCoreAsync(cancellationToken);
     }
 
     private async Task<string> GetInstallDirectoryAsync(CancellationToken cancellationToken)

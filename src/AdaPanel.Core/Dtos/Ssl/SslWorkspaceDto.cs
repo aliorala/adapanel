@@ -10,4 +10,7 @@ public sealed class SslWorkspaceDto
 
     /// <summary>HTTP→HTTPS kalıcı yönlendirme (Force HTTPS) bu sitede etkin mi.</summary>
     public bool HttpsRedirectEnabled { get; set; }
+
+    /// <summary>Whether this response measured the redirect state; false means unknown.</summary>
+    public bool HttpsRedirectMeasured { get; set; }
 }

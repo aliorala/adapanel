@@ -648,9 +648,9 @@ internal sealed partial class ResourceAttributionService(
         return string.IsNullOrWhiteSpace(siteName) ? null : siteName;
     }
 
-    /// <summary>Site eşleme sözlüğünün anahtarı: "motor|veritabanı" (küçük harf).</summary>
+    /// <summary>Site eşleme anahtarı; PostgreSQL veritabanı adının harf büyüklüğünü korur.</summary>
     internal static string SiteMapKey(string engine, string databaseName) =>
-        $"{(engine ?? string.Empty).Trim().ToLowerInvariant()}|{(databaseName ?? string.Empty).Trim().ToLowerInvariant()}";
+        DatabaseResourceIdentity.Key(engine, databaseName);
 
     /// <summary>
     /// Veritabanı adını SİTEYE çevirir. İsim tahminine (ör. "site_db" kalıbı) ASLA güvenilmez; yalnız
@@ -738,7 +738,7 @@ internal sealed partial class ResourceAttributionService(
 
     private async Task<IReadOnlyDictionary<string, string>> BuildSiteMapAsync(CancellationToken cancellationToken)
     {
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
         try
         {
             foreach (var link in await siteDatabaseLinks.GetAllAsync(cancellationToken))
@@ -767,7 +767,7 @@ internal sealed partial class ResourceAttributionService(
     /// </summary>
     private async Task<IReadOnlyDictionary<string, string>> BuildOwnerMapAsync(CancellationToken cancellationToken)
     {
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
         try
         {
             var owners = await databaseOwnership.GetAllAsync(cancellationToken);

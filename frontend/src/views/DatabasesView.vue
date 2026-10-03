@@ -92,7 +92,7 @@
           </span>
           <button
             class="secondary compact"
-            :disabled="!selectedEngineInstalled || databasesStore.loadingEngine === selectedEngine"
+            :disabled="!selectedEngineInstalled || refreshing || databasesStore.loadingEngine === selectedEngine"
             @click="refreshWorkspace">
             {{ t("panel.database.refresh") }}
           </button>
@@ -104,7 +104,7 @@
           <button
             v-if="hardeningSupported"
             class="secondary compact"
-            :disabled="!selectedEngineInstalled || hardening"
+            :disabled="!hardeningAvailable || hardening"
             :title="hardenHint"
             @click="hardenSecurity">
             {{ hardening ? t("panel.database.hardening") : t("panel.database.harden") }}
@@ -128,7 +128,7 @@
           <button
             v-if="selectedEngineMeta?.componentId"
             class="compact"
-            :disabled="softwareStore.installingComponentId === selectedEngineMeta.componentId"
+            :disabled="!softwareStore.catalog || installing || Boolean(softwareStore.installingComponentId)"
             @click="installSelectedEngine">
             {{ softwareStore.installingComponentId === selectedEngineMeta?.componentId ? t("panel.software.installing") : t("panel.database.installAction") }}
           </button>
@@ -140,7 +140,9 @@
           <strong>{{ t("panel.database.manageExistingTitle") }}</strong>
           <span class="status-pill warn">{{ t("panel.database.detected") }}</span>
         </div>
-        <p class="meta">{{ t("panel.database.manageExistingHint") }}</p>
+        <p class="meta">{{ t(currentEngineStatus?.adminPasswordPending === true
+          ? "database.admin_password_unverified"
+          : "panel.database.manageExistingHint") }}</p>
         <div class="form-grid">
           <label>
             <span class="field-label">{{ t("panel.database.adminUser") }}</span>
@@ -158,7 +160,7 @@
         <div class="row-actions">
           <button
             class="compact"
-            :disabled="databasesStore.registeringEngine === selectedEngine || !credForm.password"
+            :disabled="hardening || pendingWrites.credentials || databasesStore.registeringEngine === selectedEngine || !credForm.password"
             @click="submitRegisterCredentials">
             {{ databasesStore.registeringEngine === selectedEngine ? t("panel.database.connecting") : t("panel.database.connectAndSave") }}
           </button>
@@ -262,7 +264,7 @@
             <div class="row-actions">
               <button
                 class="compact"
-                :disabled="databasesStore.creatingEngine === selectedEngine"
+                :disabled="!workspaceReady || pendingWrites.database || databasesStore.creatingEngine === selectedEngine || !databaseForm.name.trim()"
                 @click="submitCreateDatabase">
                 {{ databasesStore.creatingEngine === selectedEngine ? t("panel.database.saving") : t("panel.database.createDatabase") }}
               </button>
@@ -306,7 +308,7 @@
             <div class="row-actions">
               <button
                 class="compact"
-                :disabled="!importForm.databaseName || !importForm.userName || !importForm.password"
+                :disabled="!workspaceReady || pendingWrites.import || !importForm.databaseName || !importForm.userName || !importForm.password"
                 @click="submitImport">
                 {{ t("panel.database.import") }}
               </button>
@@ -344,16 +346,14 @@
                 <button
                   v-if="selectedEngine === 'mariadb' || selectedEngine === 'mysql'"
                   class="secondary compact"
-                  :disabled="openingDb === item.name"
+                  :disabled="!workspaceReady || Boolean(openingDb)"
                   @click="openInPhpMyAdmin(item.name)">
                   {{ openingDb === item.name ? t("panel.database.opening") : t("panel.database.openInPhpMyAdmin") }}
                 </button>
-                <!-- Adminer'in phpMyAdmin gibi tek-tik giris mekanizmasi YOKTUR; kendi giris
-                     formunu gosterir. Bu yuzden yalnizca PANEL VEKILI uzerinden acilir --
-                     ham IIS portu loopback'e bagli oldugu icin disaridan 400 dondurur. -->
+                <!-- Tek kullanimlik Adminer oturumu panelin kimlik dogrulamali vekilinden acilir. -->
                 <button
                   class="secondary compact"
-                  :disabled="openingDb === item.name"
+                  :disabled="!workspaceReady || Boolean(openingDb)"
                   @click="openInAdminer(item.name)">
                   {{ t("panel.database.openInAdminer") }}
                 </button>
@@ -413,7 +413,7 @@
                         {{ u.userName }}@{{ u.host }}
                       </option>
                     </select>
-                    <button class="compact" :disabled="!attachUserName || attaching" @click="attachUser(item.name)">
+                    <button class="compact" :disabled="!workspaceReady || !attachUserName || attaching || moving" @click="attachUser(item.name)">
                       {{ attaching ? t("panel.database.saving") : t("panel.database.attachDo") }}
                     </button>
                   </div>
@@ -441,7 +441,7 @@
                       <option value="">{{ t("panel.database.moveSelect") }}</option>
                       <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">{{ site.name }}</option>
                     </select>
-                    <button class="compact" :disabled="!moveTarget || moving" @click="doMove(item.name)">
+                    <button class="compact" :disabled="!workspaceReady || !moveTarget || moving || attaching" @click="doMove(item.name)">
                       {{ moving ? t("panel.database.saving") : t("panel.database.moveDo") }}
                     </button>
                   </div>
@@ -459,12 +459,12 @@
                 <div class="db-block db-block-wide">
                   <span class="db-label">{{ t("panel.database.maintenance") }}</span>
                   <div class="row-actions">
-                    <button class="secondary compact" :disabled="checking" @click="runCheck(item.name)">
+                    <button class="secondary compact" :disabled="!workspaceReady || checking" @click="runCheck(item.name)">
                       {{ checking ? t("panel.database.checking") : t("panel.database.checkRepair") }}
                     </button>
                   </div>
 
-                  <template v-if="checkResult && checkResult.database === item.name">
+                  <template v-if="checkResult && checkResult.engine === selectedEngine && checkResult.database === item.name">
                     <p v-if="checkResult.problemCount === 0" class="db-ok">
                       {{ t("panel.database.checkClean", { count: checkResult.tables.length }) }}
                     </p>
@@ -500,7 +500,7 @@
                     </div>
 
                     <div v-if="selectedTables.length" class="row-actions">
-                      <button class="compact" :disabled="checking" @click="runRepair(item.name)">
+                      <button class="compact" :disabled="!workspaceReady || checking" @click="runRepair(item.name)">
                         {{ checking ? t("panel.database.repairing") : t("panel.database.repairSelected") }}
                       </button>
                     </div>
@@ -544,7 +544,7 @@
             <div class="row-actions">
               <button
                 class="compact"
-                :disabled="databasesStore.creatingUserEngine === selectedEngine"
+                :disabled="!workspaceReady || pendingWrites.user || databasesStore.creatingUserEngine === selectedEngine || !userForm.userName.trim() || !userForm.password"
                 @click="submitCreateUser">
                 {{ databasesStore.creatingUserEngine === selectedEngine ? t("panel.database.saving") : t("panel.database.createUser") }}
               </button>
@@ -690,10 +690,10 @@
                 </p>
 
                 <div class="row-actions">
-                  <button class="compact" :disabled="remoteSaving" @click="submitRemoteAccess">
+                  <button class="compact" :disabled="remoteSaving || remoteLoading || (remoteEditor.mode === 'anywhere' && !remoteEditor.confirmAnywhere)" @click="submitRemoteAccess">
                     {{ remoteSaving ? t("panel.database.saving") : t("panel.database.remoteUsers.save") }}
                   </button>
-                  <button class="secondary compact" @click="remoteEditor.userName = ''">
+                  <button class="secondary compact" @click="resetRemoteEditor">
                     {{ t("panel.database.cancelAction") }}
                   </button>
                 </div>
@@ -737,7 +737,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { CanceledError } from "axios";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import QueryHistory from "../components/QueryHistory.vue";
@@ -768,7 +769,8 @@ import {
   type DatabaseUserRemoteAccess,
   type RemoteAccessMode
 } from "../api/databases";
-import { openReachable } from "../utils/url";
+import { openAsyncReachable } from "../utils/externalTab";
+import { getSessionEpoch } from "../api/client";
 import { copyToClipboard } from "../utils/clipboard";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
@@ -811,6 +813,62 @@ const consumerSourceLabel = computed(() =>
 const activeSection = ref<WorkspaceSection>("databases");
 const showDatabaseForm = ref(false);
 const showUserForm = ref(false);
+const dialogPending = ref(false);
+const mountedSession = getSessionEpoch();
+let disposed = false;
+let contextVersion = 0;
+let detailSequence = 0;
+let workspaceReadSequence = 0;
+const workspaceReady = ref(false);
+let engineStatusReadSequence = 0;
+const engineStatusMeasured = ref(false);
+const refreshing = ref(false);
+const installing = ref(false);
+const captureContext = () => ({ engine: databasesStore.selectedEngine, version: contextVersion, epoch: getSessionEpoch() });
+type WorkspaceContext = ReturnType<typeof captureContext>;
+function contextCurrent(context: WorkspaceContext) {
+  return !disposed && context.epoch === mountedSession && context.epoch === getSessionEpoch() &&
+    context.version === contextVersion && context.engine === databasesStore.selectedEngine && activeModule.value === "databases";
+}
+
+function clearDetail() {
+  detailSequence++;
+  openDetail.value = "";
+  detail.value = null;
+  checkResult.value = null;
+  selectedTables.value = [];
+  attachUserName.value = "";
+  moveTarget.value = "";
+  checking.value = false;
+  attaching.value = false;
+  moving.value = false;
+}
+
+function captureDetail(name: string) {
+  const context = captureContext(), sequence = detailSequence;
+  return { ...context, current: () => contextCurrent(context) && sequence === detailSequence && openDetail.value === name };
+}
+
+watch([() => databasesStore.selectedEngine, activeModule], () => {
+  contextVersion++;
+  workspaceReadSequence++;
+  workspaceReady.value = false;
+  refreshing.value = false;
+  installing.value = false;
+  hardening.value = false;
+  openingDb.value = "";
+  clearWorkspaceDrafts();
+  Object.assign(pendingWrites, { database: false, user: false, import: false, credentials: false });
+  clearDetail();
+  resetRemoteEditor();
+  remoteReadSequence++;
+  remoteEngines.value = [];
+  remoteLoading.value = false;
+  remoteSaving.value = false;
+  if (activeModule.value === "databases" && activeSection.value === "remote") void loadRemoteAccess();
+  notice.value = "";
+}, { flush: "sync" });
+onBeforeUnmount(() => { disposed = true; contextVersion++; clearDetail(); clearWorkspaceDrafts(); resetRemoteEditor(); });
 
 const databaseForm = reactive({
   name: "",
@@ -842,8 +900,11 @@ const checkResult = ref<DatabaseCheckResult | null>(null);
 const selectedTables = ref<string[]>([]);
 
 async function toggleDetail(name: string) {
+  const context = captureContext();
+  if (!contextCurrent(context)) return;
+  const request = ++detailSequence;
   if (openDetail.value === name) {
-    openDetail.value = "";
+    clearDetail();
     return;
   }
 
@@ -853,30 +914,42 @@ async function toggleDetail(name: string) {
   checkResult.value = null;
   selectedTables.value = [];
   attachUserName.value = "";
+  moveTarget.value = "";
+  checking.value = false;
+  attaching.value = false;
+  moving.value = false;
 
   try {
-    detail.value = await getDatabaseDetail(selectedEngine.value, name);
+    const result = await getDatabaseDetail(context.engine, name);
+    if (contextCurrent(context) && request === detailSequence && openDetail.value === name) detail.value = result;
   } catch (error) {
+    if (!contextCurrent(context) || request !== detailSequence || openDetail.value !== name) return;
     showNotice(resolveApiMessage(error), true);
     openDetail.value = "";
   }
 }
 
 async function attachUser(databaseName: string) {
+  const context = captureDetail(databaseName);
   const [userName, host] = attachUserName.value.split("|");
-  if (!userName) return;
+  const choice = attachUserName.value;
+  if (!context.current() || !workspaceReady.value || attaching.value || moving.value || !userName || detail.value?.name !== databaseName ||
+    !workspace.value?.users.some(user => user.userName === userName && user.host === host)) return;
 
   attaching.value = true;
   try {
     // Host boşsa '%' UYDURULMAZ: sunucu kullanıcının gerçek hesaplarını motordan okuyup hepsine verir.
-    await databasesStore.grantAccess(selectedEngine.value, databaseName, userName, host || "");
+    await databasesStore.grantAccess(context.engine, databaseName, userName, host || "");
+    if (!context.current()) return;
+    const result = await getDatabaseDetail(context.engine, databaseName);
+    if (!context.current()) return;
+    detail.value = result;
+    if (attachUserName.value === choice) attachUserName.value = "";
     showNotice(t("panel.database.attached"), false);
-    detail.value = await getDatabaseDetail(selectedEngine.value, databaseName);
-    attachUserName.value = "";
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (context.current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    attaching.value = false;
+    if (context.current()) attaching.value = false;
   }
 }
 
@@ -909,42 +982,58 @@ const moveTarget = ref("");
 const moving = ref(false);
 
 async function doMove(databaseName: string) {
+  const context = captureDetail(databaseName), destination = moveTarget.value;
+  if (!context.current() || !workspaceReady.value || moving.value || attaching.value || !destination || detail.value?.name !== databaseName) return;
   moving.value = true;
   try {
-    await moveDatabase(selectedEngine.value, databaseName, moveTarget.value);
+    await moveDatabase(context.engine, databaseName, destination);
+    if (!context.current()) return;
+    const result = await getDatabaseDetail(context.engine, databaseName);
+    if (!context.current()) return;
+    detail.value = result;
+    if (moveTarget.value === destination) moveTarget.value = "";
     showNotice(t("panel.database.moved"), false);
-    detail.value = await getDatabaseDetail(selectedEngine.value, databaseName);
-    moveTarget.value = "";
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (context.current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    moving.value = false;
+    if (context.current()) moving.value = false;
   }
 }
 
 async function runCheck(name: string) {
+  const context = captureDetail(name);
+  if (!context.current() || !workspaceReady.value || checking.value || detail.value?.name !== name) return;
   checking.value = true;
   selectedTables.value = [];
+  checkResult.value = null;
   try {
-    checkResult.value = await checkAndRepairDatabase(selectedEngine.value, name, []);
+    const result = await checkAndRepairDatabase(context.engine, name, []);
+    if (context.current()) checkResult.value = result;
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (context.current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    checking.value = false;
+    if (context.current()) checking.value = false;
   }
 }
 
 async function runRepair(name: string) {
+  const context = captureDetail(name), result = checkResult.value;
+  const tables = [...selectedTables.value];
+  if (!context.current() || !workspaceReady.value || checking.value || !result || result.engine !== context.engine || result.database !== name || !tables.length ||
+    !tables.every(table => result.tables.some(item => item.table === table && item.status === "problem" && (item.canRepair || item.canRebuild)))) return;
   checking.value = true;
   try {
     // Onarim sonrasi sonuc, sunucunun YENIDEN DENETLEDIGI hali doner; "onarildi" sozu olcume
     // dayanir, niyete degil.
-    checkResult.value = await checkAndRepairDatabase(selectedEngine.value, name, selectedTables.value);
-    selectedTables.value = [];
+    const updated = await checkAndRepairDatabase(context.engine, name, tables);
+    if (context.current()) {
+      checkResult.value = updated;
+      selectedTables.value = [];
+    }
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (context.current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    checking.value = false;
+    if (context.current()) checking.value = false;
   }
 }
 
@@ -966,6 +1055,24 @@ const credForm = reactive({
   password: "",
   port: 3306
 });
+
+const pendingWrites = reactive({ database: false, user: false, import: false, credentials: false });
+const formRevision = { database: 0, user: 0, import: 0, credentials: 0 };
+watch(databaseForm, () => { formRevision.database++; }, { flush: "sync" });
+watch(userForm, () => { formRevision.user++; }, { flush: "sync" });
+watch(importForm, () => { formRevision.import++; }, { flush: "sync" });
+watch(credForm, () => { formRevision.credentials++; }, { flush: "sync" });
+watch(showDatabaseForm, open => { formRevision.database++; if (!open) resetDatabaseForm(); }, { flush: "sync" });
+watch(showUserForm, open => { formRevision.user++; if (!open) resetUserForm(); }, { flush: "sync" });
+watch(showImportForm, open => { formRevision.import++; if (!open) resetImportForm(); }, { flush: "sync" });
+function resetDatabaseForm() { Object.assign(databaseForm, { name: "", userName: "", password: "", siteName: "" }); }
+function resetUserForm() { Object.assign(userForm, { userName: "", password: "", databaseName: "" }); }
+function resetImportForm() { Object.assign(importForm, { databaseName: "", userName: "", password: "", siteName: "" }); }
+function clearWorkspaceDrafts() {
+  showDatabaseForm.value = false; showUserForm.value = false; showImportForm.value = false;
+  resetDatabaseForm(); resetUserForm(); resetImportForm();
+  Object.assign(credForm, { adminUserName: "", password: "", port: 3306 });
+}
 
 const engines = computed(() => ([
   { key: "mariadb", label: t("panel.database.engine.mariadb"), componentId: "mariadb-11" },
@@ -1039,60 +1146,82 @@ watch(databaseSearch, () => {
 });
 
 onMounted(async () => {
+  const context = captureContext();
   try {
     if (!softwareStore.catalog && !softwareStore.loading) {
       await softwareStore.fetchCatalog();
     }
-
-    await databasesStore.fetchEngines();
+    if (!contextCurrent(context)) return;
+    await readEngineStatuses(context);
+    if (!contextCurrent(context)) return;
     selectInitialEngine();
     await loadSelectedEngine();
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (contextCurrent(context)) showNotice(resolveApiMessage(error), true);
   }
 });
 
-watch(() => databasesStore.selectedEngine, async () => {
+watch([() => databasesStore.selectedEngine, activeModule], async () => {
+  const context = captureContext();
   try {
     await loadSelectedEngine();
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (contextCurrent(context)) showNotice(resolveApiMessage(error), true);
   }
 });
 
+async function readEngineStatuses(context: WorkspaceContext) {
+  const request = ++engineStatusReadSequence;
+  engineStatusMeasured.value = false;
+  await databasesStore.fetchEngines();
+  if (contextCurrent(context) && request === engineStatusReadSequence) engineStatusMeasured.value = true;
+}
+
 // Seçili motor "yönetilebilir" ise çalışma alanını getir; kimlik bilgisi gerekiyorsa
 // 409 gürültüsü üretmeden kayıt formunu hazırla (portu makul varsayılana çek).
-async function loadSelectedEngine() {
-  if (!selectedEngineInstalled.value || selectedEngine.value === "mssql") {
-    return;
+async function loadSelectedEngine(context = captureContext()) {
+  if (!contextCurrent(context)) return false;
+  const request = ++workspaceReadSequence;
+  workspaceReady.value = false;
+  if (!selectedEngineInstalled.value || context.engine === "mssql") {
+    return false;
   }
 
   if (needsCredentials.value) {
     credForm.adminUserName = currentEngineStatus.value?.adminUserName ?? "";
     credForm.password = "";
-    credForm.port = currentEngineStatus.value?.port || (selectedEngine.value === "postgresql" ? 5432 : 3306);
-    return;
+    credForm.port = currentEngineStatus.value?.port || (context.engine === "postgresql" ? 5432 : context.engine === "mysql" ? 3307 : 3306);
+    return false;
   }
-
-  await databasesStore.fetchWorkspace(selectedEngine.value);
+  await databasesStore.fetchWorkspace(context.engine);
+  if (!contextCurrent(context) || request !== workspaceReadSequence) return false;
+  workspaceReady.value = true;
+  return true;
 }
 
 async function submitRegisterCredentials() {
-  if (!credForm.password) {
+  const context = captureContext(), version = formRevision.credentials;
+  if (!contextCurrent(context) || !needsCredentials.value || hardening.value || pendingWrites.credentials || !credForm.password) {
     return;
   }
-
+  const current = () => contextCurrent(context) && version === formRevision.credentials;
+  pendingWrites.credentials = true;
   try {
     await databasesStore.registerCredentials({
-      engine: selectedEngine.value,
+      engine: context.engine,
       adminUserName: credForm.adminUserName.trim() || undefined,
       password: credForm.password,
       port: credForm.port > 0 ? credForm.port : undefined
     });
-    credForm.password = "";
-    showNotice(t("panel.database.credentialsSaved"), false);
+    if (contextCurrent(context)) workspaceReady.value = true;
+    if (current()) {
+      credForm.password = "";
+      showNotice(t("panel.database.credentialsSaved"), false);
+    }
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) showNotice(resolveApiMessage(error), true);
+  } finally {
+    if (contextCurrent(context)) pendingWrites.credentials = false;
   }
 }
 
@@ -1128,6 +1257,8 @@ function openSection(section: WorkspaceSection) {
 const remoteEngines = ref<DatabaseRemoteAccessEngine[]>([]);
 const remoteLoading = ref(false);
 const remoteSaving = ref(false);
+let remoteReadSequence = 0;
+let remoteEditorVersion = 0;
 
 const remoteEditor = reactive({
   userName: "",
@@ -1136,6 +1267,12 @@ const remoteEditor = reactive({
   confirmAnywhere: false,
   applyFirewall: false
 });
+watch(remoteEditor, () => { remoteEditorVersion++; }, { flush: "sync" });
+
+function resetRemoteEditor() {
+  remoteEditorVersion++;
+  Object.assign(remoteEditor, { userName: "", mode: "closed", origins: "", confirmAnywhere: false, applyFirewall: false });
+}
 
 const remoteEngine = computed(
   () => remoteEngines.value.find((item) => item.engine === selectedEngine.value) ?? null
@@ -1149,22 +1286,31 @@ const remoteGrantedButPortClosed = computed(() => {
 });
 
 async function loadRemoteAccess() {
+  const context = captureContext();
+  if (!contextCurrent(context) || remoteSaving.value) return;
+  const request = ++remoteReadSequence;
+  resetRemoteEditor();
+  remoteEngines.value = [];
   remoteLoading.value = true;
   try {
-    remoteEngines.value = await getUserRemoteAccess();
+    const result = await getUserRemoteAccess();
+    if (contextCurrent(context) && request === remoteReadSequence) remoteEngines.value = result;
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (contextCurrent(context) && request === remoteReadSequence) showNotice(resolveApiMessage(error), true);
   } finally {
-    remoteLoading.value = false;
+    if (contextCurrent(context) && request === remoteReadSequence) remoteLoading.value = false;
   }
 }
 
 function openRemoteEditor(item: DatabaseUserRemoteAccess) {
+  const context = captureContext();
+  if (!contextCurrent(context) || remoteLoading.value || !remoteEngine.value?.supported ||
+    item.engine !== context.engine || !remoteEngine.value.users.some(user => user.userName === item.userName)) return;
   if (remoteEditor.userName === item.userName) {
-    remoteEditor.userName = "";
+    resetRemoteEditor();
     return;
   }
-
+  resetRemoteEditor();
   remoteEditor.userName = item.userName;
   remoteEditor.mode = item.mode;
   remoteEditor.origins = item.allowedOrigins.join(", ");
@@ -1174,8 +1320,10 @@ function openRemoteEditor(item: DatabaseUserRemoteAccess) {
 }
 
 async function submitRemoteAccess() {
-  const engine = remoteEngine.value;
-  if (!engine) return;
+  const context = captureContext(), engine = remoteEngine.value, version = remoteEditorVersion;
+  if (!contextCurrent(context) || remoteSaving.value || remoteLoading.value || !engine?.supported || !remoteEditor.userName ||
+    !engine.users.some(user => user.userName === remoteEditor.userName) || (remoteEditor.mode === "anywhere" && !remoteEditor.confirmAnywhere)) return;
+  const current = () => contextCurrent(context) && version === remoteEditorVersion;
 
   remoteSaving.value = true;
   try {
@@ -1192,13 +1340,15 @@ async function submitRemoteAccess() {
         .filter((item) => item.length > 0)
     });
 
-    remoteEngines.value = remoteEngines.value.map((item) => (item.engine === updated.engine ? updated : item));
-    remoteEditor.userName = "";
-    showNotice(t("panel.database.remoteUsers.saved"), false);
+    if (contextCurrent(context)) remoteEngines.value = remoteEngines.value.map((item) => (item.engine === updated.engine ? updated : item));
+    if (current()) {
+      resetRemoteEditor();
+      showNotice(t("panel.database.remoteUsers.saved"), false);
+    }
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    remoteSaving.value = false;
+    if (contextCurrent(context)) remoteSaving.value = false;
   }
 }
 
@@ -1246,57 +1396,73 @@ function selectedComponentId(engineKey: string) {
 }
 
 async function installSelectedEngine() {
-  if (!selectedEngineMeta.value?.componentId) {
+  const context = captureContext(), component = selectedEngineMeta.value?.componentId;
+  if (!contextCurrent(context) || installing.value || !softwareStore.catalog || !component || selectedEngineInstalled.value || softwareStore.installingComponentId) {
     return;
   }
-
+  installing.value = true;
   try {
-    await softwareStore.installComponent(selectedEngineMeta.value.componentId);
-    await softwareStore.fetchCatalog();
-    await databasesStore.fetchEngines();
-    await loadSelectedEngine();
-    showNotice(t("software.install.completed"), false);
+    await softwareStore.installComponent(component);
+    if (!contextCurrent(context)) return;
+    await readEngineStatuses(context);
+    if (!contextCurrent(context)) return;
+    await loadSelectedEngine(context);
+    if (contextCurrent(context)) showNotice(t("software.install.completed"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (contextCurrent(context)) showNotice(resolveApiMessage(error), true);
+  } finally {
+    if (contextCurrent(context)) installing.value = false;
   }
 }
 
 async function refreshWorkspace() {
-  if (!selectedEngineInstalled.value) {
+  const context = captureContext();
+  if (!contextCurrent(context) || refreshing.value || hardening.value || !selectedEngineInstalled.value || Object.values(pendingWrites).some(Boolean)) {
     return;
   }
-
+  refreshing.value = true;
+  workspaceReady.value = false;
   try {
-    await databasesStore.fetchEngines();
-    await loadSelectedEngine();
-    showNotice(t("panel.database.refreshed"), false);
+    await readEngineStatuses(context);
+    if (!contextCurrent(context)) return;
+    const loaded = await loadSelectedEngine(context);
+    if (contextCurrent(context) && loaded) showNotice(t("panel.database.refreshed"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (contextCurrent(context)) showNotice(resolveApiMessage(error), true);
+  } finally {
+    if (contextCurrent(context)) refreshing.value = false;
   }
 }
 
 async function submitCreateDatabase() {
+  const context = captureContext(), version = formRevision.database;
+  if (!contextCurrent(context) || !workspaceReady.value || !showDatabaseForm.value || pendingWrites.database || !databaseForm.name.trim()) return;
+  const current = () => contextCurrent(context) && version === formRevision.database;
+  pendingWrites.database = true;
   try {
     await databasesStore.createDatabase({
-      engine: selectedEngine.value,
+      engine: context.engine,
       name: databaseForm.name,
       userName: databaseForm.userName.trim() || undefined,
       password: databaseForm.password || undefined,
       siteName: databaseForm.siteName || undefined
     });
-    databaseForm.name = "";
-    databaseForm.userName = "";
-    databaseForm.password = "";
-    databaseForm.siteName = "";
+    if (!current()) return;
+    resetDatabaseForm();
     showDatabaseForm.value = false;
     showNotice(t("database.create.success"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) showNotice(resolveApiMessage(error), true);
+  } finally {
+    if (contextCurrent(context)) pendingWrites.database = false;
   }
 }
 
 async function removeDatabase(name: string) {
+  const context = captureContext();
+  if (dialogPending.value || !contextCurrent(context)) return;
   const record = workspace.value?.databases.find((item) => item.name === name);
+  if (!record) return;
   const impact = [`${t("panel.database.databaseName")}: ${name} (${workspace.value?.displayName || selectedEngine.value})`];
   if (record?.owner) {
     impact.push(`${t("panel.database.owner")}: ${record.owner}`);
@@ -1306,27 +1472,38 @@ async function removeDatabase(name: string) {
   }
 
   // Yüksek riskli onay: veritabanı ve içindeki tüm veri gider → DB adı yazılmadan devam edilemez.
-  await confirm({
-    title: t("panel.confirm.deleteDatabaseTitle", { name }),
-    message: t("panel.confirm.deleteDatabaseMessage", { name }),
-    impact,
-    requireText: name,
-    busyLabel: t("panel.database.removing"),
-    action: async () => {
-      try {
-        await databasesStore.deleteDatabase(selectedEngine.value, name);
-        showNotice(t("database.delete.success"), false);
-      } catch (error) {
-        showNotice(resolveApiMessage(error), true);
-      }
-    },
-  });
+  dialogPending.value = true;
+  try {
+    await confirm({
+      title: t("panel.confirm.deleteDatabaseTitle", { name }),
+      message: t("panel.confirm.deleteDatabaseMessage", { name }),
+      impact,
+      requireText: name,
+      busyLabel: t("panel.database.removing"),
+      action: async () => {
+        if (!contextCurrent(context)) return;
+        try {
+          await databasesStore.deleteDatabase(context.engine, name);
+          if (contextCurrent(context)) showNotice(t("database.delete.success"), false);
+        } catch (error) {
+          if (contextCurrent(context)) showNotice(resolveApiMessage(error), true);
+        }
+      },
+    });
+  } finally {
+    dialogPending.value = false;
+  }
 }
 
 async function submitCreateUser() {
+  const context = captureContext(), version = formRevision.user;
+  if (!contextCurrent(context) || !workspaceReady.value || !showUserForm.value || pendingWrites.user || !userForm.userName.trim() || !userForm.password ||
+    (userForm.databaseName && !workspace.value?.databases.some(db => db.name === userForm.databaseName))) return;
+  const current = () => contextCurrent(context) && version === formRevision.user;
+  pendingWrites.user = true;
   try {
     await databasesStore.createUser({
-      engine: selectedEngine.value,
+      engine: context.engine,
       userName: userForm.userName,
       password: userForm.password,
       // Host seçtirilmez; sunucu GÜVENLİ (yerel) varsayılanı uygular. Uzak erişim ayrı bir
@@ -1336,22 +1513,27 @@ async function submitCreateUser() {
       databaseName: userForm.databaseName
     });
 
-    userForm.userName = "";
-    userForm.password = "";
-    userForm.databaseName = "";
+    if (!current()) return;
+    resetUserForm();
     showUserForm.value = false;
     showNotice(t("database.user_created"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) showNotice(resolveApiMessage(error), true);
+  } finally {
+    if (contextCurrent(context)) pendingWrites.user = false;
   }
 }
 
 // Var olan DB+kullanıcıyı panele içe aktar (GRANT ALL eksikse + parolayı sakla → phpMyAdmin + yönetim).
 async function submitImport() {
-  if (!importForm.databaseName || !importForm.userName || !importForm.password) return;
+  const context = captureContext(), version = formRevision.import;
+  if (!contextCurrent(context) || !workspaceReady.value || !showImportForm.value || pendingWrites.import || !importForm.databaseName || !importForm.userName || !importForm.password ||
+    !workspace.value?.databases.some(db => db.name === importForm.databaseName) || !workspace.value.users.some(user => user.userName === importForm.userName)) return;
+  const current = () => contextCurrent(context) && version === formRevision.import;
+  pendingWrites.import = true;
   try {
     await databasesStore.importDatabase({
-      engine: selectedEngine.value,
+      engine: context.engine,
       databaseName: importForm.databaseName,
       userName: importForm.userName,
       // Host GÖNDERİLMEZ. Sabit "%" gönderiliyordu: panelin kendi kullanıcıları localhost'ta
@@ -1360,18 +1542,20 @@ async function submitImport() {
       password: importForm.password,
       siteName: importForm.siteName || undefined
     });
-    importForm.databaseName = "";
-    importForm.userName = "";
-    importForm.password = "";
-    importForm.siteName = "";
+    if (!current()) return;
+    resetImportForm();
     showImportForm.value = false;
     showNotice(t("panel.database.imported"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) showNotice(resolveApiMessage(error), true);
+  } finally {
+    if (contextCurrent(context)) pendingWrites.import = false;
   }
 }
 
 async function removeUser(userName: string, host: string) {
+  const context = captureContext();
+  if (dialogPending.value || !contextCurrent(context) || !workspace.value?.users.some(user => user.userName === userName && user.host === host)) return;
   const linked = (workspace.value?.databases ?? [])
     .filter((item) => item.users.includes(userName))
     .map((item) => item.name);
@@ -1381,20 +1565,26 @@ async function removeUser(userName: string, host: string) {
   ];
 
   // Normal onay: yalnız erişim hesabı düşer, veritabanları ve içindeki veri yerinde kalır.
-  await confirm({
-    title: t("panel.confirm.deleteDatabaseUserTitle", { name: userName }),
-    message: t("panel.database.confirmDeleteUser"),
-    impact,
-    busyLabel: t("panel.database.removing"),
-    action: async () => {
-      try {
-        await databasesStore.deleteUser(selectedEngine.value, userName, host);
-        showNotice(t("database.user_deleted"), false);
-      } catch (error) {
-        showNotice(resolveApiMessage(error), true);
-      }
-    },
-  });
+  dialogPending.value = true;
+  try {
+    await confirm({
+      title: t("panel.confirm.deleteDatabaseUserTitle", { name: userName }),
+      message: t("panel.database.confirmDeleteUser"),
+      impact,
+      busyLabel: t("panel.database.removing"),
+      action: async () => {
+        if (!contextCurrent(context)) return;
+        try {
+          await databasesStore.deleteUser(context.engine, userName, host);
+          if (contextCurrent(context)) showNotice(t("database.user_deleted"), false);
+        } catch (error) {
+          if (contextCurrent(context)) showNotice(resolveApiMessage(error), true);
+        }
+      },
+    });
+  } finally {
+    dialogPending.value = false;
+  }
 }
 
 const openingDb = ref("");
@@ -1405,53 +1595,56 @@ const openingDb = ref("");
  * yalnizca loopback'e baglidir ve disaridan gelen istegin Host basligi bagla uymaz.
  */
 async function openInAdminer(databaseName: string) {
-  openingDb.value = databaseName;
-  try {
-    const result = await openAdminer(selectedEngine.value, databaseName);
-    openReachable(result.url);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    openingDb.value = "";
-  }
+  await openDatabaseTool(databaseName, openAdminer);
 }
 
 async function openInPhpMyAdmin(databaseName: string) {
+  if (!["mariadb", "mysql"].includes(selectedEngine.value)) return;
+  await openDatabaseTool(databaseName, openPhpMyAdmin);
+}
+
+async function openDatabaseTool(databaseName: string, open: typeof openAdminer) {
+  const context = captureContext();
+  if (!contextCurrent(context) || !workspaceReady.value || openingDb.value || !workspace.value?.databases.some(db => db.name === databaseName)) return;
   openingDb.value = databaseName;
   try {
-    const result = await openPhpMyAdmin(selectedEngine.value, databaseName);
-    // Backend 127.0.0.1 dönebilir; uzak tarayıcı için paneli gördüğümüz host'a çevir.
-    openReachable(result.url);
+    await openAsyncReachable(async () => {
+      const result = await open(context.engine, databaseName);
+      if (!contextCurrent(context)) throw new CanceledError("Database context changed");
+      return result.url;
+    });
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (contextCurrent(context)) showNotice(resolveApiMessage(error), true);
   } finally {
-    openingDb.value = "";
+    if (contextCurrent(context)) openingDb.value = "";
   }
 }
 
 async function changeUserPassword(userName: string, host: string) {
-  // window.prompt DEĞİL: parolayı ekranda açık gösteriyordu ve tarayıcı diyalogları
-  // engellendiğinde akış sessizce ölüyordu. Asgari uzunluk da artık ÖNDEN yazılı.
-  const password = await prompt({
-    title: t("panel.database.newPasswordPrompt", { user: userName }),
-    label: t("panel.database.userPassword"),
-    password: true,
-    minLength: 6,
-    confirmLabel: t("panel.database.changePassword")
-  });
-
-  if (password === null) {
-    return;
-  }
-  if (password.length < 6) {
-    showNotice(t("panel.database.passwordTooShort"), true);
-    return;
-  }
+  const context = captureContext();
+  if (dialogPending.value || !contextCurrent(context) || !workspace.value?.users.some(user => user.userName === userName && user.host === host)) return;
+  dialogPending.value = true;
   try {
-    await databasesStore.setUserPassword(selectedEngine.value, userName, password, host);
-    showNotice(t("panel.database.passwordChanged"), false);
+    // Ortak parola penceresi girdiyi gizler ve asgari uzunluğu önceden gösterir.
+    const password = await prompt({
+      title: t("panel.database.newPasswordPrompt", { user: userName }),
+      label: t("panel.database.userPassword"),
+      password: true,
+      minLength: 6,
+      confirmLabel: t("panel.database.changePassword")
+    });
+
+    if (password === null || !contextCurrent(context)) return;
+    if (password.length < 6) {
+      showNotice(t("panel.database.passwordTooShort"), true);
+      return;
+    }
+    await databasesStore.setUserPassword(context.engine, userName, password, host);
+    if (contextCurrent(context)) showNotice(t("panel.database.passwordChanged"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (contextCurrent(context)) showNotice(resolveApiMessage(error), true);
+  } finally {
+    dialogPending.value = false;
   }
 }
 
@@ -1461,6 +1654,13 @@ const hardening = ref(false);
 // hiçbir yerden çağrılamıyordu — uç vardı, kapısı yoktu. Yeteneği motorun kendi sağlayıcısı
 // bildiriyor; burası yalnız sunucudan gelen bayrağı okur.
 const hardeningSupported = computed(() => currentEngineStatus.value?.supportsHardening === true);
+// Pending publication blocks ordinary work, but the server can reconcile it without
+// asking the operator for the generated candidate password. Missing credentials alone
+// must not open this recovery path, and cached status after a failed GET is insufficient.
+const hardeningAvailable = computed(() => selectedEngineInstalled.value &&
+  currentEngineStatus.value?.installed === true && hardeningSupported.value &&
+  !refreshing.value && !databasesStore.loadingEngines && !Object.values(pendingWrites).some(Boolean) &&
+  (workspaceReady.value || (engineStatusMeasured.value && currentEngineStatus.value?.adminPasswordPending === true)));
 
 // YARDIM METNİ motora göre değişir: MySQL'de anonim/uzak-root/parolasız-root temizliği ve joker
 // yetki daraltması, PostgreSQL'de ortak (PUBLIC) bağlanma yetkisinin kaldırılması. Buradaki motor
@@ -1471,34 +1671,61 @@ const hardenHint = computed(() => (selectedEngine.value === "postgresql"
   : t("panel.database.hardenHint")));
 
 async function hardenSecurity() {
-  if (!selectedEngineInstalled.value) {
+  const context = captureContext();
+  if (!contextCurrent(context) || !hardeningAvailable.value || hardening.value) {
     return;
   }
   hardening.value = true;
+  workspaceReadSequence++;
+  workspaceReady.value = false;
+  engineStatusMeasured.value = false;
   try {
-    const rapor = await hardenDatabase(selectedEngine.value);
-
-    // ÜÇ DURUM AYRI. "Zaten güvenli" cümlesi eskiden BOŞ LİSTEDEN çıkıyordu ve boş liste
-    // "hiç güvensiz hesap yok" ile "hepsini silemedim"i aynı görüntüye düşürüyordu.
-    if (rapor.clean === false) {
-      showNotice(
-        t("panel.database.hardenedIncomplete", { items: rapor.failed.join(", ") }),
-        true,
-      );
-    } else if (rapor.clean === null) {
-      showNotice(t("panel.database.hardenedUnverified"), true);
-    } else {
-      showNotice(
-        rapor.applied.length === 0
+    let message: string;
+    let failed = false;
+    try {
+      const rapor = await hardenDatabase(context.engine);
+      if (!contextCurrent(context)) return;
+      if (rapor.clean === false) {
+        message = t("panel.database.hardenedIncomplete", { items: rapor.failed.join(", ") });
+        failed = true;
+      } else if (rapor.clean === null) {
+        message = t("panel.database.hardenedUnverified");
+        failed = true;
+      } else {
+        message = rapor.applied.length === 0
           ? t("panel.database.hardenedClean")
-          : t("panel.database.hardenedRemoved", { items: rapor.applied.join(", ") }),
-        false,
-      );
+          : t("panel.database.hardenedRemoved", { items: rapor.applied.join(", ") });
+      }
+    } catch (error) {
+      if (!contextCurrent(context)) return;
+      message = resolveApiMessage(error);
+      failed = true;
     }
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+
+    // A failed POST can still have changed the password. Measure both outcomes before
+    // reopening normal work, while keeping the original failure visible to the operator.
+    try {
+      await readEngineStatuses(context);
+      if (!contextCurrent(context)) return;
+      const status = currentEngineStatus.value;
+      const loaded = status?.installed === true && await loadSelectedEngine(context);
+      if (!contextCurrent(context)) return;
+      if (!loaded || status?.adminPasswordPending === true) {
+        workspaceReady.value = false;
+        const unverifiedMessage = t(status?.adminPasswordPending === true
+          ? "database.admin_password_unverified"
+          : "panel.database.hardenedUnverified");
+        message = failed ? [...new Set([message, unverifiedMessage])].join("\n") : unverifiedMessage;
+        failed = true;
+      }
+    } catch (error) {
+      if (!contextCurrent(context)) return;
+      message = [...new Set([message, resolveApiMessage(error)])].join("\n");
+      failed = true;
+    }
+    showNotice(message, failed);
   } finally {
-    hardening.value = false;
+    if (contextCurrent(context)) hardening.value = false;
   }
 }
 
@@ -1526,7 +1753,10 @@ function showNotice(message: string, isError: boolean) {
    kaybediyordu. Bilgi AYNI, yalnız yatay alan kullanılıyor. */
 .db-detail {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  position: sticky;
+  left: 0;
+  min-width: 0;
   gap: var(--sp-12);
   padding: var(--sp-12) var(--sp-16) var(--sp-16);
   border-left: 3px solid var(--accent-1);
@@ -1567,6 +1797,7 @@ function showNotice(message: string, isError: boolean) {
 
 .db-block {
   display: grid;
+  min-width: 0;
   align-content: start;
   gap: var(--sp-6);
   padding: var(--sp-12);
@@ -1578,7 +1809,7 @@ function showNotice(message: string, isError: boolean) {
 .db-users { display: flex; flex-wrap: wrap; gap: var(--sp-4); margin: 0; }
 
 .db-attach { display: flex; gap: var(--sp-6); flex-wrap: wrap; align-items: center; }
-.db-attach select { min-width: 200px; flex: 1; }
+.db-attach select { min-width: min(200px, 100%); max-width: 100%; flex: 1; }
 
 .db-conn {
   margin: 0;

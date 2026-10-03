@@ -8,6 +8,7 @@ public sealed class CacheRuntimeDto
 
     public string ServiceName { get; set; } = string.Empty;
 
+    /// <summary>NotInstalled, a measured runtime state, or Unknown when inspection failed.</summary>
     public string Status { get; set; } = string.Empty;
 
     public string InstallDir { get; set; } = string.Empty;

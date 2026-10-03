@@ -1,4 +1,5 @@
 using AdaPanel.Core.Dtos.Proxy;
+using AdaPanel.Core.Dtos.Sites;
 
 namespace AdaPanel.Core.Interfaces;
 
@@ -11,12 +12,21 @@ public interface IReverseProxyService
         EnableReverseProxyRequest request,
         CancellationToken cancellationToken = default);
 
+    Task<ReverseProxySiteConfigurationDto> EnableProxyAsync(string siteName, EnableReverseProxyRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default);
+
     Task<ReverseProxySiteConfigurationDto> RemoveProxyAsync(string siteName, CancellationToken cancellationToken = default);
+
+    Task<ReverseProxySiteConfigurationDto> RemoveProxyAsync(string siteName,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default);
 
     Task<ReverseProxySiteConfigurationDto> AddRewriteRuleAsync(
         string siteName,
         AddRewriteRuleRequest request,
         CancellationToken cancellationToken = default);
+
+    Task<ReverseProxySiteConfigurationDto> AddRewriteRuleAsync(string siteName, AddRewriteRuleRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Bir sitede vekil KURALI YAZMADAN, yalnızca vekilliğin ön koşullarını sağlar:

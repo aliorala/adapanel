@@ -5,7 +5,7 @@
         <h2>{{ t("panel.logs.title") }}</h2>
         <p>{{ t("panel.logs.subtitle") }}</p>
       </div>
-      <button class="secondary compact" :disabled="loading" @click="refresh">
+      <button class="secondary compact" :disabled="loading || rotationBusy" @click="refresh">
         {{ loading ? t("panel.logs.loading") : t("panel.logs.refresh") }}
       </button>
     </div>
@@ -61,10 +61,12 @@
       </div>
     </div>
 
-    <pre v-if="isTailTab" class="code-viewer">{{ filteredLines.join("\n") || t("panel.logs.empty") }}</pre>
+    <pre v-if="isTailTab" class="code-viewer">{{ tailLoading ? t("panel.common.loading") : (filteredLines.join("\n") || t("panel.logs.empty")) }}</pre>
 
     <template v-else-if="activeTab === 'rotation'">
       <p class="hint">{{ t("panel.logs.rotationHint") }}</p>
+      <p v-if="loading" class="empty-state" role="status">{{ t("panel.common.loading") }}</p>
+      <template v-if="rotationLoaded">
 
       <div class="summary-strip">
         <div class="summary-item">
@@ -85,7 +87,8 @@
         </div>
       </div>
 
-      <form class="form-grid rotation-form" @submit.prevent="saveRotation">
+      <form class="rotation-form" @submit.prevent="saveRotation">
+        <fieldset class="form-grid rotation-fields" :disabled="rotationBusy">
         <label class="check-row">
           <input v-model="rotation.settings.enabled" type="checkbox" />
           <span>{{ t("panel.logs.rotationEnabled") }}</span>
@@ -139,6 +142,7 @@
             {{ t("panel.logs.rotationRunNow") }}
           </button>
         </div>
+        </fieldset>
       </form>
 
       <div class="data-table">
@@ -162,9 +166,9 @@
           <span>{{ formatBytes(target.currentLogBytes) }} + {{ formatBytes(target.currentArchiveBytes) }}</span>
           <span>{{ formatBytes(target.freedBytes) }}</span>
         </div>
-        <p v-if="!rotationLoaded" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
-        <p v-else-if="rotation.targets.length === 0" class="empty-state">{{ t("panel.logs.rotationEmpty") }}</p>
+        <p v-if="rotation.targets.length === 0" class="empty-state">{{ t("panel.logs.rotationEmpty") }}</p>
       </div>
+      </template>
     </template>
 
     <div v-else class="data-table">
@@ -189,7 +193,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   getLogRotation,
@@ -206,6 +210,7 @@ import { useConfirm } from "../components/ConfirmDialog.vue";
 import { useSitesStore } from "../stores/sites";
 import { formatBytes as sharedFormatBytes } from "../utils/bytes";
 import { formatDateTime } from "../utils/datetime";
+import { getSessionEpoch } from "../api/client";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -228,6 +233,13 @@ const rotationLoaded = ref(false);
 // Denetim kaydı listesi BİR KEZ başarıyla okundu mu; `loading` hata durumunda da false olur.
 const auditLoaded = ref(false);
 const rotationBusy = ref(false);
+const panelLoading = ref(false), siteLoading = ref(false);
+let panelRequest = 0, siteRequest = 0;
+let disposed = false;
+const session = getSessionEpoch();
+const isCurrent = () => !disposed && getSessionEpoch() === session;
+onBeforeUnmount(() => { disposed = true; });
+const tailLoading = computed(() => activeTab.value === "site" ? siteLoading.value : panelLoading.value);
 
 // Kuyruk gösteren sekmeler: satır sayısı seçici ve kod görünümü yalnız bunlarda anlamlı.
 const isTailTab = computed(() => activeTab.value === "panel" || activeTab.value === "site");
@@ -253,7 +265,11 @@ onMounted(refresh);
 watch(selectedSiteName, refreshSiteLog);
 
 async function refresh() {
+  if (!isCurrent() || loading.value || rotationBusy.value) return;
   loading.value = true;
+  panelLoading.value = true;
+  rotationLoaded.value = false;
+  const request = ++panelRequest;
   let firstError: unknown = null;
 
   try {
@@ -265,6 +281,7 @@ async function refresh() {
       }
     }
 
+    if (!isCurrent()) return;
     selectedSiteName.value ||= sitesStore.selectedSiteName;
 
     const [panelResult, auditResult, rotationResult] = await Promise.allSettled([
@@ -272,10 +289,11 @@ async function refresh() {
       authStore.fetchAuditLogs(),
       getLogRotation()
     ]);
+    if (!isCurrent()) return;
 
-    if (panelResult.status === "fulfilled") {
+    if (panelResult.status === "fulfilled" && request === panelRequest) {
       panelLog.value = panelResult.value;
-    } else {
+    } else if (panelResult.status === "rejected" && request === panelRequest) {
       firstError ||= panelResult.reason;
     }
 
@@ -292,7 +310,9 @@ async function refresh() {
       firstError ||= rotationResult.reason;
     }
 
-    await refreshSiteLog();
+    const siteError = await refreshSiteLog();
+    if (!isCurrent()) return;
+    firstError ||= siteError;
     if (firstError) {
       showNotice(resolveApiMessage(firstError), true);
     } else {
@@ -300,37 +320,59 @@ async function refresh() {
     }
   } finally {
     loading.value = false;
+    if (request === panelRequest) panelLoading.value = false;
   }
 }
 
 async function refreshLogs() {
+  if (!isCurrent()) return;
+  const request = ++panelRequest;
+  panelLoading.value = true;
   try {
-    panelLog.value = await getPanelLog(lineCount.value);
+    const result = await getPanelLog(lineCount.value);
+    if (!isCurrent() || request !== panelRequest) return;
+    panelLog.value = result;
     await refreshSiteLog();
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent() && request === panelRequest) showNotice(resolveApiMessage(error), true);
+  } finally {
+    if (request === panelRequest) panelLoading.value = false;
   }
 }
 
 async function refreshSiteLog() {
+  if (!isCurrent()) return null;
+  const site = selectedSiteName.value, request = ++siteRequest;
+  const current = () => isCurrent() && selectedSiteName.value === site && request === siteRequest;
+  siteLog.value = emptyLog();
   if (!selectedSiteName.value) {
-    siteLog.value = emptyLog();
-    return;
+    siteLoading.value = false;
+    return null;
   }
+  siteLoading.value = true;
   try {
-    siteLog.value = await getSiteLog(selectedSiteName.value, lineCount.value);
+    const result = await getSiteLog(site, lineCount.value);
+    if (current()) siteLog.value = result;
+    return null;
   } catch (error) {
+    if (!current()) return null;
     showNotice(resolveApiMessage(error), true);
+    return error;
+  } finally {
+    if (current()) siteLoading.value = false;
   }
 }
 
 async function saveRotation() {
+  if (!isCurrent() || !rotationLoaded.value || loading.value || rotationBusy.value) return;
   rotationBusy.value = true;
   try {
-    rotation.value = await updateLogRotation(rotation.value.settings);
+    const result = await updateLogRotation({ ...rotation.value.settings });
+    if (!isCurrent()) return;
+    rotation.value = result;
     showNotice(t("panel.logs.rotationSaved"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
   } finally {
     rotationBusy.value = false;
   }
@@ -345,22 +387,25 @@ async function saveRotation() {
  * onay diyaloğu (57 ekran onu kullanıyor) her zaman çizilir ve neyin kaybedileceğini yazar.
  */
 async function runRotation() {
+  if (!isCurrent() || !rotationLoaded.value || loading.value || rotationBusy.value || !rotation.value.settings.enabled) return;
   const approved = await confirm({
     title: t("panel.logs.rotationRunTitle"),
     message: t("panel.logs.rotationRunConfirm"),
     confirmLabel: t("panel.logs.rotationRunConfirmLabel")
   });
 
-  if (!approved) {
+  if (!approved || !isCurrent() || !rotationLoaded.value || loading.value || rotationBusy.value || !rotation.value.settings.enabled) {
     return;
   }
 
   rotationBusy.value = true;
   try {
-    rotation.value = await runLogRotation();
+    const result = await runLogRotation();
+    if (!isCurrent()) return;
+    rotation.value = result;
     showNotice(t("panel.logs.rotationCompleted"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
   } finally {
     rotationBusy.value = false;
   }
@@ -445,6 +490,13 @@ function resolveApiMessage(error: unknown) {
 
 .rotation-form {
   margin-bottom: 14px;
+}
+
+.rotation-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 .rotation-form small {

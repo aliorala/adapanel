@@ -6,7 +6,7 @@
         <p class="meta">{{ t("panel.dns.subtitle") }}</p>
       </div>
       <div class="row-actions">
-        <button class="secondary compact" :disabled="!siteName || busy" @click="load">{{ t("panel.dns.refresh") }}</button>
+        <button class="secondary compact" :disabled="!siteName || busy || modeBusy || dnssecBusy || installingWindowsDns || bulk.busy.value" @click="load()">{{ t("panel.dns.refresh") }}</button>
       </div>
     </div>
 
@@ -339,7 +339,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch, type Ref } from "vue";
+import { getSessionEpoch } from "../api/client";
 import { useI18n } from "vue-i18n";
 import { deleteDnsRecord, getDnsZone, installWindowsDns as installWindowsDnsApi, resetDnsDefaults, setDnsZoneMode, setDnssec, transferDnsZoneNow, updateDnsZone, upsertDnsRecord, type DnsRecord, type DnsZone } from "../api/dns";
 import { useConfirm } from "../components/ConfirmDialog.vue";
@@ -437,7 +438,22 @@ const valueHint = computed(() => {
   return key ? t(key) : "";
 });
 
-watch(siteName, load, { immediate: true });
+let zoneRequest = 0;
+let disposed = false;
+onBeforeUnmount(() => { disposed = true; zoneRequest++; });
+function zoneContext() {
+  const site = siteName.value, request = zoneRequest, epoch = getSessionEpoch();
+  return { site, current: () => !disposed && siteName.value === site && zoneRequest === request && getSessionEpoch() === epoch };
+}
+watch(siteName, () => {
+  zone.value = null;
+  notice.value = "";
+  nameServersText.value = ""; zoneTransferText.value = ""; masterServersText.value = "";
+  zoneForm.zoneName = "";
+  selection.clear(); resetRecordForm();
+  modeBusy.value = false; dnssecBusy.value = false; installingWindowsDns.value = false;
+  void load(true);
+}, { immediate: true });
 // flush: "sync" — editRecord() önce tipi atayıp hemen ardından alanları dolduruyor;
 // izleyici geç çalışsaydı doldurulan alanları varsayılanlarla ezerdi.
 watch(() => recordForm.type, (type) => {
@@ -451,17 +467,22 @@ watch(() => recordForm.type, (type) => {
   resetMultiPartFields();
 }, { flush: "sync" });
 
-async function load() {
-  if (!siteName.value) return;
+async function load(siteChanged = false) {
+  if (disposed || (!siteChanged && (busy.value || modeBusy.value || dnssecBusy.value || installingWindowsDns.value || bulk.busy.value))) return;
+  zoneRequest++;
+  const context = zoneContext();
+  if (!context.site || disposed) { busy.value = false; return; }
   busy.value = true;
   try {
-    applyZone(await getDnsZone(siteName.value));
+    const result = await getDnsZone(context.site);
+    if (!context.current()) return;
+    applyZone(result);
     // Başka bir bölgenin/eski listenin seçimi taşınmasın.
     selection.keepOnly(zone.value?.records.map((record) => record.id) ?? []);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (context.current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    busy.value = false;
+    if (context.current()) busy.value = false;
   }
 }
 
@@ -481,41 +502,24 @@ function applyZone(next: DnsZone) {
 }
 
 async function saveZone() {
-  if (!siteName.value) return;
-  busy.value = true;
-  try {
-    zone.value = await updateDnsZone(siteName.value, {
+  const payload = {
       zoneName: zoneForm.zoneName,
       nameServers: splitLines(nameServersText.value),
       zoneTransferIps: splitLines(zoneTransferText.value)
-    });
-    showNotice(t("panel.dns.zoneSaved"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  };
+  await mutateZone(site => updateDnsZone(site, payload), "panel.dns.zoneSaved");
 }
 
 async function saveRecord() {
-  if (!siteName.value) return;
-  busy.value = true;
-  try {
-    zone.value = await upsertDnsRecord(siteName.value, {
+  const payload = {
       id: editingId.value || undefined,
       type: recordForm.type,
       host: recordForm.host,
       value: composeRecordValue(),
       ttl: recordForm.ttl,
       priority: recordForm.priority
-    });
-    resetRecordForm();
-    showNotice(t("panel.dns.recordSaved"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  };
+  await mutateZone(site => upsertDnsRecord(site, payload), "panel.dns.recordSaved", busy, resetRecordForm);
 }
 
 function editRecord(record: DnsRecord) {
@@ -603,6 +607,7 @@ function resetMultiPartFields() {
 
 async function removeRecord(recordId: string) {
   if (!siteName.value) return;
+  const context = zoneContext();
 
   const record = zone.value?.records.find((item) => item.id === recordId) ?? null;
   const impact = record
@@ -620,15 +625,7 @@ async function removeRecord(recordId: string) {
     message: t("panel.dns.confirmDelete"),
     impact,
     action: async () => {
-      busy.value = true;
-      try {
-        zone.value = await deleteDnsRecord(siteName.value, recordId);
-        showNotice(t("panel.dns.recordDeleted"), false);
-      } catch (error) {
-        showNotice(resolveApiMessage(error), true);
-      } finally {
-        busy.value = false;
-      }
+      if (context.current()) await mutateZone(site => deleteDnsRecord(site, recordId), "panel.dns.recordDeleted");
     },
   });
 }
@@ -646,6 +643,9 @@ async function removeRecord(recordId: string) {
  */
 async function removeSelectedRecords() {
   if (!siteName.value) return;
+  const context = zoneContext();
+  const targetSite = context.site;
+  const isCurrent = context.current;
 
   const targets = zoneRecords.value.filter((record) => selection.isSelected(record.id));
   if (targets.length === 0) {
@@ -666,7 +666,7 @@ async function removeSelectedRecords() {
     impact,
     requireText: String(targets.length)
   });
-  if (!onay) {
+  if (!onay || !isCurrent()) {
     return;
   }
 
@@ -674,9 +674,11 @@ async function removeSelectedRecords() {
     targets,
     (record) => `${record.type} ${displayHost(record.host)}`,
     async (record) => {
-      zone.value = await deleteDnsRecord(siteName.value, record.id);
-    }
+      const result = await deleteDnsRecord(targetSite, record.id);
+      if (isCurrent()) zone.value = result;
+    }, isCurrent
   );
+  if (!isCurrent()) return;
   selection.keepOnly(zoneRecords.value.map((record) => record.id));
   showNotice(bulk.deleteSummary(outcome), outcome.failures.length > 0);
 }
@@ -695,6 +697,7 @@ function resetRecordForm() {
 
 async function restoreDefaults() {
   if (!siteName.value) return;
+  const context = zoneContext();
 
   const managed = (zone.value?.records ?? []).filter((item) => item.isManaged).length;
   const impact = [
@@ -709,15 +712,7 @@ async function restoreDefaults() {
     impact,
     confirmLabel: t("panel.dns.restoreDefaults"),
     action: async () => {
-      busy.value = true;
-      try {
-        applyZone(await resetDnsDefaults(siteName.value));
-        showNotice(t("panel.dns.defaultsRestored"), false);
-      } catch (error) {
-        showNotice(resolveApiMessage(error), true);
-      } finally {
-        busy.value = false;
-      }
+      if (context.current()) await mutateZone(resetDnsDefaults, "panel.dns.defaultsRestored");
     },
   });
 }
@@ -731,6 +726,7 @@ async function restoreDefaults() {
  */
 async function switchToSecondary() {
   if (!siteName.value) return;
+  const context = zoneContext();
 
   const masters = splitLines(masterServersText.value);
   if (masters.length === 0) {
@@ -749,7 +745,7 @@ async function switchToSecondary() {
     requireText: zone.value?.zoneName || siteName.value,
     confirmLabel: t("panel.dns.switchToSecondary")
   });
-  if (!onay) return;
+  if (!onay || !context.current()) return;
 
   await runModeChange(() => setDnsZoneMode(siteName.value, true, masters), "panel.dns.secondaryEnabledMsg");
 }
@@ -757,13 +753,14 @@ async function switchToSecondary() {
 /** Birincile dönüş: panelin kayıtları yeniden yayınlanır (Plesk de eski kayıtları geri getirir). */
 async function switchToPrimary() {
   if (!siteName.value) return;
+  const context = zoneContext();
 
   const onay = await confirm({
     title: t("panel.dns.confirmPrimaryTitle"),
     message: t("panel.dns.confirmPrimaryMessage", { zone: zone.value?.zoneName || siteName.value }),
     confirmLabel: t("panel.dns.switchToPrimary")
   });
-  if (!onay) return;
+  if (!onay || !context.current()) return;
 
   await runModeChange(() => setDnsZoneMode(siteName.value, false, []), "panel.dns.primaryRestoredMsg");
 }
@@ -775,32 +772,33 @@ async function transferNow() {
 }
 
 async function runModeChange(action: () => Promise<DnsZone>, successKey: string) {
-  modeBusy.value = true;
+  await mutateZone(action, successKey, modeBusy);
+}
+
+async function mutateZone(action: (site: string) => Promise<DnsZone>, successKey: string, flag: Ref<boolean> = busy, onSuccess?: () => void) {
+  const context = zoneContext();
+  if (!context.site || disposed || busy.value || modeBusy.value || dnssecBusy.value || installingWindowsDns.value || bulk.busy.value) return;
+  flag.value = true;
   try {
-    applyZone(await action());
+    const result = await action(context.site);
+    if (!context.current()) return;
+    applyZone(result);
+    onSuccess?.();
     showNotice(t(successKey), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (context.current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    modeBusy.value = false;
+    if (context.current()) flag.value = false;
   }
 }
 
 async function installWindowsDns() {
-  if (!siteName.value) return;
-  installingWindowsDns.value = true;
-  try {
-    zone.value = await installWindowsDnsApi(siteName.value);
-    showNotice(t("panel.dns.windowsInstalled"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    installingWindowsDns.value = false;
-  }
+  await mutateZone(installWindowsDnsApi, "panel.dns.windowsInstalled", installingWindowsDns);
 }
 
 async function toggleDnssec(enable: boolean) {
   if (!siteName.value) return;
+  const context = zoneContext();
 
   // KAPATMAK yıkıcıdır: bölgenin imzası kalkar, üst kayıttaki DS kaydı geçersizleşir ve
   // doğrulayan çözümleyiciler alan adını GEÇİCİ OLARAK ÇÖZEMEZ. Onaysız yapılmaz.
@@ -810,20 +808,12 @@ async function toggleDnssec(enable: boolean) {
       message: t("panel.dns.confirmDnssecDisableMessage", { zone: zone.value?.zoneName || siteName.value }),
       confirmLabel: t("panel.dns.dnssecDisable")
     });
-    if (!onay) {
+    if (!onay || !context.current()) {
       return;
     }
   }
 
-  dnssecBusy.value = true;
-  try {
-    zone.value = await setDnssec(siteName.value, enable);
-    showNotice(t(enable ? "panel.dns.dnssecEnabledMsg" : "panel.dns.dnssecDisabledMsg"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    dnssecBusy.value = false;
-  }
+  await mutateZone(site => setDnssec(site, enable), enable ? "panel.dns.dnssecEnabledMsg" : "panel.dns.dnssecDisabledMsg", dnssecBusy);
 }
 
 function displayHost(host: string) {

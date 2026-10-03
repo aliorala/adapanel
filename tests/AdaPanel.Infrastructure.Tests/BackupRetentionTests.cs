@@ -32,6 +32,7 @@ public sealed class BackupRetentionTests
                     Id = "old",
                     Name = "old.zip",
                     Path = oldPath,
+                    Status = "created",
                     Format = "zip",
                     CreatedAtUtc = DateTime.UtcNow.AddDays(-30)
                 },
@@ -40,6 +41,7 @@ public sealed class BackupRetentionTests
                     Id = "recent",
                     Name = "recent.zip",
                     Path = recentPath,
+                    Status = "created",
                     Format = "zip",
                     CreatedAtUtc = DateTime.UtcNow.AddDays(-1)
                 }

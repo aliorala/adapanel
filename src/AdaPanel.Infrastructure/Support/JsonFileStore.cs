@@ -34,7 +34,11 @@ public sealed class JsonFileStore(IOptions<PanelRuntimeOptions> runtimeOptions)
         return value is null ? fallbackValue : value;
     }
 
-    public async Task WriteAsync<T>(string relativePath, T value, CancellationToken cancellationToken = default)
+    public Task WriteAsync<T>(string relativePath, T value, CancellationToken cancellationToken = default) =>
+        WriteCoreAsync(relativePath, value, null, cancellationToken);
+
+    private async Task WriteCoreAsync<T>(string relativePath, T value,
+        Func<CancellationToken, Task>? beforePublication, CancellationToken cancellationToken)
     {
         var filePath = ResolvePath(relativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(filePath) ?? dataRoot);
@@ -51,6 +55,11 @@ public sealed class JsonFileStore(IOptions<PanelRuntimeOptions> runtimeOptions)
                 await stream.FlushAsync(cancellationToken);
             }
 
+            // Validate after serialization as well as any per-file lock/read wait. Until this
+            // point the destination is unchanged; rejected authority leaves only a temp file.
+            cancellationToken.ThrowIfCancellationRequested();
+            if (beforePublication is not null) await beforePublication(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             File.Move(tempPath, filePath, overwrite: true);
         }
         finally
@@ -74,7 +83,16 @@ public sealed class JsonFileStore(IOptions<PanelRuntimeOptions> runtimeOptions)
     /// ile değiştirir, yazar. Eşzamanlı çağrılarda kayıp güncelleme olmaz (ör. iki DB kullanıcısı aynı
     /// anda eklenince ikisi de korunur). Güncellenmiş değeri döner.
     /// </summary>
-    public async Task<T> UpdateAsync<T>(string relativePath, T fallbackValue, Func<T, T> mutate, CancellationToken cancellationToken = default)
+    public Task<T> UpdateAsync<T>(string relativePath, T fallbackValue, Func<T, T> mutate, CancellationToken cancellationToken = default) =>
+        UpdateCoreAsync(relativePath, fallbackValue, mutate, null, cancellationToken);
+
+    /// <summary>Checks authority immediately before atomic publication, under the path lock.</summary>
+    internal Task<T> UpdateAsync<T>(string relativePath, T fallbackValue, Func<T, T> mutate,
+        Func<CancellationToken, Task>? beforePublication, CancellationToken cancellationToken) =>
+        UpdateCoreAsync(relativePath, fallbackValue, mutate, beforePublication, cancellationToken);
+
+    private async Task<T> UpdateCoreAsync<T>(string relativePath, T fallbackValue, Func<T, T> mutate,
+        Func<CancellationToken, Task>? beforePublication, CancellationToken cancellationToken)
     {
         var key = ResolvePath(relativePath).ToLowerInvariant();
         var gate = PathLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
@@ -83,7 +101,7 @@ public sealed class JsonFileStore(IOptions<PanelRuntimeOptions> runtimeOptions)
         {
             var current = await ReadAsync(relativePath, fallbackValue, cancellationToken);
             var updated = mutate(current);
-            await WriteAsync(relativePath, updated, cancellationToken);
+            await WriteCoreAsync(relativePath, updated, beforePublication, cancellationToken);
             return updated;
         }
         finally

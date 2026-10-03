@@ -6,6 +6,7 @@ using AdaPanel.Core.Dtos.Php;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Dtos.Waf;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.AppRuntimes;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
 
@@ -19,8 +20,16 @@ public sealed class SiteProvisioningService(
     IAppRuntimeService appRuntimeService,
     ISiteDefaultsService siteDefaultsService,
     IWafService wafService,
-    ILogger<SiteProvisioningService> logger) : ISiteProvisioningService
+    ILogger<SiteProvisioningService> logger,
+    IConcurrencyLock concurrencyLock) : ISiteProvisioningService
 {
+    // Per-instance integration seams keep lifecycle tests away from host ACLs and IIS modules.
+    internal Func<string, string, CancellationToken, Task<CommandResult>> RunPermissionCommand { get; init; } =
+        (file, arguments, token) => ProcessRunner.RunAsync(file, arguments, cancellationToken: token,
+            timeout: TimeSpan.FromSeconds(60));
+    internal Func<string, string, FolderWriteAccessProbe.Result> ProbePermission { get; init; } = FolderWriteAccessProbe.Probe;
+    internal Action<string> PublishPhpEntry { get; init; } = WebAppPublisher.EnsurePhpEntry;
+    internal Func<string, bool> PublishFrameworkRewrite { get; init; } = WebAppPublisher.TryWriteFrontControllerRewrite;
     public async Task<SiteDto> CreateAndProvisionAsync(
         CreateSiteRequest request,
         Guid? actorUserId,
@@ -30,44 +39,58 @@ public sealed class SiteProvisioningService(
         var physicalPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(request.PhysicalPath.Trim()));
         var directoryExisted = Directory.Exists(physicalPath);
         SiteDto? site = null;
+        using var creation = await SiteMutationGuard.WatchCreationAsync(concurrencyLock, request.Name, cancellationToken,
+            provisioning: true);
+        SiteMutationGuard.Target? target = null;
+        IDisposable? reservation = null;
 
         try
         {
-            site = await iisSiteService.CreateSiteAsync(request, cancellationToken);
+            site = iisSiteService is WebAdministrationSiteService native
+                ? await native.CreateSiteAsync(request, creation.RecordCommitted, cancellationToken)
+                : await iisSiteService.CreateSiteAsync(request, cancellationToken);
+            // A canceled request still needs generation evidence to safely undo a completed create.
+            target = await creation.CaptureCreatedAsync(iisSiteService, site, CancellationToken.None);
+            reservation = await target.ReserveAsync(cancellationToken);
             var profile = ResolveProfile(request.RuntimeProfile);
-            await ApplyProfileAsync(site, profile, request, actorUserId, ipAddress, cancellationToken);
+            await ApplyProfileAsync(site, target, profile, request, actorUserId, ipAddress, cancellationToken);
             site = await iisSiteService.GetSiteAsync(site.Name, cancellationToken);
             _ = await siteDefaultsService.EnsureDefaultsAsync(site, cancellationToken);
             await GrantSiteWritableAsync(site, cancellationToken);
+            await target.RunAsync(_ => Task.CompletedTask, cancellationToken);
             return site;
         }
         catch
         {
-            if (site is not null)
+            reservation?.Dispose();
+            reservation = null;
+            try
             {
-                try
+                // A native create may have committed before its firewall step fails/cancels.
+                // Only that invocation's measured result can supply missing rollback evidence.
+                if (target is null && creation.CommittedSite is { } committed)
+                    target = await creation.CaptureCreatedAsync(iisSiteService, committed, CancellationToken.None);
+                if (target is not null)
                 {
-                    await iisSiteService.DeleteSiteAsync(site.Name, CancellationToken.None);
-                }
-                catch (Exception rollbackException)
-                {
-                    logger.LogError(rollbackException, "Unable to roll back site {SiteName}.", site.Name);
+                    // Validation and the deleting marker are atomic. A replacement after releasing
+                    // the active use is preserved, including any directory now serving that site.
+                    using var deletion = await target.BeginDeletionAsync(CancellationToken.None);
+                    try { await iisSiteService.DeleteSiteAsync(target.Site.Name, CancellationToken.None); }
+                    catch (AppException absent) when (absent.ResourceAlreadyGone) { }
+                    if (!directoryExisted && Directory.Exists(physicalPath))
+                        Directory.Delete(physicalPath, recursive: true);
                 }
             }
-
-            if (!directoryExisted && Directory.Exists(physicalPath))
+            catch (Exception rollbackException)
             {
-                try
-                {
-                    Directory.Delete(physicalPath, recursive: true);
-                }
-                catch (Exception cleanupException)
-                {
-                    logger.LogWarning(cleanupException, "Unable to remove site directory {PhysicalPath} after rollback.", physicalPath);
-                }
+                logger.LogError(rollbackException, "Unable to roll back site {SiteName}; its directory was preserved.", request.Name);
             }
-
             throw;
+        }
+        finally
+        {
+            reservation?.Dispose();
+            target?.Dispose();
         }
     }
 
@@ -129,11 +152,10 @@ public sealed class SiteProvisioningService(
 
             // Hesap adi TEK KAYNAKTAN gelir: onarim yolu ayni adin hakkini GERI OKUYOR ve iki
             // yerde iki farkli ad kurmak, verilen hakki baska bir hesapta aramak olurdu.
-            var result = await ProcessRunner.RunAsync(
+            var result = await RunPermissionCommand(
                 "icacls.exe",
                 $"\"{site.PhysicalPath}\" /grant \"{PoolPrincipal(site)}:(OI)(CI)M\" /T /C /Q",
-                cancellationToken: cancellationToken,
-                timeout: TimeSpan.FromSeconds(60));
+                cancellationToken);
 
             // ProcessRunner EXCEPTION FIRLATMAZ, CommandResult döndürür. icacls'in en tipik hatası
             // ("No mapping between account names and security IDs was done" — app pool yoksa ya da adı
@@ -155,11 +177,13 @@ public sealed class SiteProvisioningService(
                     string.IsNullOrWhiteSpace(result.StandardError) ? result.StandardOutput : result.StandardError);
             }
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Site yazma izni verilemedi (en iyi çaba): {Site}", site.Name);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         await IsolateSiteAsync(site, cancellationToken);
     }
 
@@ -223,6 +247,7 @@ public sealed class SiteProvisioningService(
 
             logger.LogInformation("Site kiracı izolasyonu uygulandı: {Site} -> {Path}", site.Name, site.PhysicalPath);
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception exception)
         {
             logger.LogWarning(
@@ -243,8 +268,10 @@ public sealed class SiteProvisioningService(
         // kararı "hangi runtime seçildi" sorusuna bağlı değildir.
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             await phpService.EnsureSiteIsolationAsync(site.Name, enabled: true, cancellationToken);
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception exception)
         {
             logger.LogWarning(
@@ -258,32 +285,55 @@ public sealed class SiteProvisioningService(
     // Yeni kökte index.php varsayılan belge + temel web.config yazılır — IIS'in stok varsayılan-belge listesi
     // index.php İÇERMEZ, bu yüzden docroot=public olunca "/" 403 verirdi. Mevcut web.config'i (handler/rewrite)
     // EZMEZ; eksik öğeleri ekler (idempotent merge).
-    public async Task<SiteDto> SetDocumentRootAsync(string siteName, string physicalPath, CancellationToken cancellationToken = default)
+    public Task<SiteDto> SetDocumentRootAsync(string siteName, string physicalPath, CancellationToken cancellationToken = default) =>
+        SetDocumentRootAsync(siteName, physicalPath, (_, _) => Task.CompletedTask, cancellationToken);
+
+    public async Task<SiteDto> SetDocumentRootAsync(string siteName, string physicalPath,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default)
     {
-        var site = await iisSiteService.UpdatePhysicalPathAsync(siteName, physicalPath, cancellationToken);
+        ArgumentNullException.ThrowIfNull(beforeMutation);
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService, concurrencyLock, siteName, cancellationToken);
+        // The native adapter commits and pins under one gate; calling the public gated write
+        // inside Target.Run would deadlock, while pinning before our own write would reject it.
+        if (iisSiteService is not WebAdministrationSiteService native)
+            throw new AppException("sites.iis_not_available", 503, 503);
+        using var pinned = await native.UpdatePhysicalPathAndReserveAsync(target, physicalPath, beforeMutation, cancellationToken);
+        var site = pinned.Site;
+        cancellationToken.ThrowIfCancellationRequested();
 
         try
         {
-            WebAppPublisher.EnsurePhpEntry(site.PhysicalPath);
+            PublishPhpEntry(site.PhysicalPath);
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Belge kökü web.config'i yazılamadı (en iyi çaba): {Site}", siteName);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return site;
     }
 
     // #2 — Laravel/WordPress/Symfony pretty-URL yönlendirmesi (index.php front controller). URL Rewrite MODÜLÜ
     // gerekir; yoksa <rewrite> tüm siteyi 500.19 yapar → modül yoksa hiç yazılmaz, net hata verilir (site bozulmaz).
-    public async Task<SiteDto> EnableFrameworkRewriteAsync(string siteName, CancellationToken cancellationToken = default)
+    public Task<SiteDto> EnableFrameworkRewriteAsync(string siteName, CancellationToken cancellationToken = default) =>
+        EnableFrameworkRewriteAsync(siteName, (_, _) => Task.CompletedTask, cancellationToken);
+
+    public async Task<SiteDto> EnableFrameworkRewriteAsync(string siteName,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default)
     {
-        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-        if (!WebAppPublisher.TryWriteFrontControllerRewrite(site.PhysicalPath))
+        ArgumentNullException.ThrowIfNull(beforeMutation);
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService, concurrencyLock, siteName, cancellationToken);
+        using var reservation = await target.ReserveAsync(beforeMutation, cancellationToken);
+        var site = target.Site;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!PublishFrameworkRewrite(site.PhysicalPath))
         {
             throw new AppException("sites.url_rewrite_module_missing", 409, 409);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return site;
     }
 
@@ -320,10 +370,19 @@ public sealed class SiteProvisioningService(
     // WafService.ApplyFolderAclAsync) DACL'i `/inheritance:r /grant:r` ile BASTAN YAZAR. Yani
     // komutun basarisi klasorun SON DURUMU demek degildir; olcum bu yuzden yalitimdan SONRA ve
     // DACL'den yapilir.
-    public async Task<SitePermissionRepairResultDto> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken = default)
+    public Task<SitePermissionRepairResultDto> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken = default) =>
+        RepairPermissionsAsync(siteName, (_, _) => Task.CompletedTask, cancellationToken);
+
+    public async Task<SitePermissionRepairResultDto> RepairPermissionsAsync(string siteName,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default)
     {
-        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        ArgumentNullException.ThrowIfNull(beforeMutation);
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService, concurrencyLock, siteName, cancellationToken);
+        using var reservation = await target.ReserveAsync(beforeMutation, cancellationToken);
+        var site = target.Site;
+        cancellationToken.ThrowIfCancellationRequested();
         await GrantSiteWritableAsync(site, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         // Havuz adi IIS'ten TAZE okunur; izin de bu ada verildi.
         var principal = PoolPrincipal(site);
@@ -332,7 +391,7 @@ public sealed class SiteProvisioningService(
             ? new FolderWriteAccessProbe.Result(
                 FolderWriteAccessProbe.Access.NotGranted,
                 $"Uygulama havuzu adi IIS'ten OKUNAMADI: {site.Name}. Havuz adi tahmin edilmez, izin uygulanmadi.")
-            : FolderWriteAccessProbe.Probe(site.PhysicalPath, principal);
+            : ProbePermission(site.PhysicalPath, principal);
 
         var sonuc = BuildRepairResult(site, principal, olcum);
 
@@ -346,6 +405,7 @@ public sealed class SiteProvisioningService(
                 sonuc.Detail);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return sonuc;
     }
 
@@ -392,6 +452,7 @@ public sealed class SiteProvisioningService(
 
     private async Task ApplyProfileAsync(
         SiteDto site,
+        SiteMutationGuard.Target target,
         string profile,
         CreateSiteRequest request,
         Guid? actorUserId,
@@ -503,16 +564,17 @@ public sealed class SiteProvisioningService(
                 await EnsureComponentAsync("http-platform-handler", request.InstallRuntimeIfMissing, actorUserId, ipAddress, cancellationToken);
                 var startupFile = string.IsNullOrWhiteSpace(request.StartupFile) ? "server.js" : request.StartupFile.Trim();
                 WriteNodeStarter(site.PhysicalPath, startupFile);
-                await appRuntimeService.HostNodeAppAsync(
-                    site.Name,
-                    new HostNodeAppRequest
-                    {
-                        ComponentId = componentId,
-                        StartupFile = startupFile,
-                        WorkingDirectory = ".",
-                        EnvironmentVariables = ["NODE_ENV=production"]
-                    },
-                    cancellationToken);
+                var runtimeRequest = new HostNodeAppRequest
+                {
+                    ComponentId = componentId,
+                    StartupFile = startupFile,
+                    WorkingDirectory = ".",
+                    EnvironmentVariables = ["NODE_ENV=production"]
+                };
+                if (appRuntimeService is AppRuntimeService runtime)
+                    await runtime.HostNodeAppAsync(target, runtimeRequest, cancellationToken);
+                else
+                    await appRuntimeService.HostNodeAppAsync(site.Name, runtimeRequest, cancellationToken);
                 return;
             }
             case "python":
@@ -522,16 +584,17 @@ public sealed class SiteProvisioningService(
                 await EnsureComponentAsync("http-platform-handler", request.InstallRuntimeIfMissing, actorUserId, ipAddress, cancellationToken);
                 var startupFile = string.IsNullOrWhiteSpace(request.StartupFile) ? "app.py" : request.StartupFile.Trim();
                 WritePythonStarter(site.PhysicalPath, startupFile);
-                await appRuntimeService.HostPythonAppAsync(
-                    site.Name,
-                    new HostPythonAppRequest
-                    {
-                        ComponentId = componentId,
-                        StartupFile = startupFile,
-                        WorkingDirectory = ".",
-                        EnvironmentVariables = ["PYTHONUNBUFFERED=1"]
-                    },
-                    cancellationToken);
+                var runtimeRequest = new HostPythonAppRequest
+                {
+                    ComponentId = componentId,
+                    StartupFile = startupFile,
+                    WorkingDirectory = ".",
+                    EnvironmentVariables = ["PYTHONUNBUFFERED=1"]
+                };
+                if (appRuntimeService is AppRuntimeService runtime)
+                    await runtime.HostPythonAppAsync(target, runtimeRequest, cancellationToken);
+                else
+                    await appRuntimeService.HostPythonAppAsync(site.Name, runtimeRequest, cancellationToken);
                 return;
             }
             default:

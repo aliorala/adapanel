@@ -10,9 +10,9 @@
           {{ t("panel.nginx.refresh") }}
         </button>
         <button
-          v-if="status.isInstalled"
+          v-if="statusLoaded && status.isInstalled"
           class="danger compact"
-          :disabled="busy || softwareStore.removingComponentId === 'nginx'"
+          :disabled="loading || busy || softwareStore.removingComponentId === 'nginx'"
           @click="remove">
           {{ t("panel.nginx.remove") }}
         </button>
@@ -24,7 +24,7 @@
     <!-- Durum sunucudan gelmeden "kurulu değil" ekranı gösteriliyordu; kurulu bir Nginx'i
          yöneticinin yeniden kurmaya çalışmasına yol açan yanıltıcı bir varsayılandı. -->
     <p v-if="!statusLoaded" class="empty-state" role="status" aria-live="polite">
-      {{ t("panel.common.loading") }}
+      {{ t(loading ? "panel.common.loading" : "panel.common.loadFailed") }}
     </p>
 
     <section v-else-if="!status.isInstalled" class="nginx-empty">
@@ -35,7 +35,7 @@
       </div>
       <button
         class="compact"
-        :disabled="softwareStore.installingComponentId === 'nginx'"
+        :disabled="loading || busy || softwareStore.installingComponentId === 'nginx'"
         @click="install">
         {{ softwareStore.installingComponentId === "nginx" ? t("panel.software.installing") : t("panel.nginx.install") }}
       </button>
@@ -147,7 +147,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   configureNginx,
@@ -161,12 +161,17 @@ import {
 } from "../api/nginx";
 import { openReachable } from "../utils/url";
 import { useConfirm } from "../components/ConfirmDialog.vue";
-import { extractApiMessage } from "../stores/auth";
+import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSoftwareStore } from "../stores/software";
+import { getSessionEpoch } from "../api/client";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
 const softwareStore = useSoftwareStore();
+const sessionEpoch = getSessionEpoch();
+let disposed = false;
+const isActive = () => !disposed && sessionEpoch === getSessionEpoch();
+let statusSequence = 0;
 const loading = ref(false);
 const busy = ref(false);
 // Durum okunana kadar isInstalled=false varsayılanı "kurulu değil" olarak görünüyordu.
@@ -198,40 +203,64 @@ const form = reactive<NginxConfiguration>({
   cacheEnabled: false,
   cacheSizeMb: 256
 });
+let formRevision = 0;
+watch(form, () => { formRevision++; }, { flush: "sync" });
 
-onMounted(async () => {
+onMounted(() => {
   if (!softwareStore.catalog) {
-    await softwareStore.fetchCatalog().catch(() => undefined);
+    void softwareStore.fetchCatalog().catch(() => undefined);
   }
-  await refresh();
+  void refresh();
 });
+onUnmounted(() => { disposed = true; });
 
 async function refresh() {
+  if (!isActive() || busy.value) return false;
+  return readStatus();
+}
+
+async function readStatus() {
+  if (!isActive()) return false;
+  const sequence = ++statusSequence;
+  const revision = formRevision;
+  const current = () => isActive() && sequence === statusSequence;
   loading.value = true;
+  statusLoaded.value = false;
   try {
-    applyStatus(await getNginxStatus());
+    const result = await getNginxStatus();
+    if (!current()) return false;
+    applyStatus(result, revision === formRevision);
     statusLoaded.value = true;
+    notice.value = "";
+    return true;
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) showNotice(resolveApiMessage(error), true);
+    return false;
   } finally {
-    loading.value = false;
+    if (current()) loading.value = false;
   }
 }
 
 async function install() {
+  if (!canOperate() || status.isInstalled) return;
   busy.value = true;
   try {
     await softwareStore.installComponent("nginx");
-    await refresh();
-    showNotice(t("panel.nginx.installed"), false);
+    if (!isActive()) return;
+    if (await readStatus()) {
+      const verified = status.isInstalled && status.isStartupTaskRegistered;
+      showNotice(t(verified ? "panel.nginx.installed" : status.isInstalled ? "nginx.startup_task_failed" : "nginx.not_installed"), !verified);
+    }
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isActive()) showNotice(resolveApiMessage(error), true);
   } finally {
     busy.value = false;
   }
 }
 
 async function remove() {
+  if (!canOperate() || !status.isInstalled) return;
+  const sequence = statusSequence;
   const impact: string[] = [];
   if (status.installDir) {
     impact.push(`${t("panel.software.installDir")}: ${status.installDir}`);
@@ -247,13 +276,14 @@ async function remove() {
     confirmLabel: t("panel.confirm.remove"),
     busyLabel: t("panel.confirm.removing"),
     action: async () => {
+      if (!canOperate() || !status.isInstalled || sequence !== statusSequence) return;
       busy.value = true;
       try {
         await softwareStore.removeComponent("nginx");
-        await refresh();
-        showNotice(t("panel.nginx.removed"), false);
+        if (!isActive()) return;
+        if (await readStatus()) showNotice(t(status.isInstalled ? "nginx.remove_failed" : "panel.nginx.removed"), status.isInstalled);
       } catch (error) {
-        showNotice(resolveApiMessage(error), true);
+        if (isActive()) showNotice(resolveApiMessage(error), true);
       } finally {
         busy.value = false;
       }
@@ -262,7 +292,8 @@ async function remove() {
 }
 
 async function save() {
-  await runAction(() => configureNginx({ ...form }), "panel.nginx.saved");
+  const payload = { ...form };
+  await runAction(() => configureNginx(payload), "panel.nginx.saved", true);
 }
 
 async function changeState(action: "start" | "stop" | "reload") {
@@ -272,28 +303,42 @@ async function changeState(action: "start" | "stop" | "reload") {
     : action === "stop"
       ? "panel.nginx.stoppedMessage"
       : "panel.nginx.reloaded";
-  await runAction(operation, successKey);
+  await runAction(operation, successKey, false, action === "reload" ? undefined : action === "start");
 }
 
 async function testConfiguration() {
   await runAction(testNginxConfiguration, "panel.nginx.testPassed");
 }
 
-async function runAction(operation: () => Promise<NginxStatus>, successKey: string) {
+function canOperate() {
+  return isActive() && statusLoaded.value && !loading.value && !busy.value
+    && softwareStore.installingComponentId !== "nginx" && softwareStore.removingComponentId !== "nginx";
+}
+
+async function runAction(operation: () => Promise<NginxStatus>, successKey: string, syncForm = false, expectedRunning?: boolean) {
+  if (!canOperate() || !status.isInstalled) return;
+  ++statusSequence;
+  const revision = formRevision;
   busy.value = true;
   try {
-    applyStatus(await operation());
+    const result = await operation();
+    if (!isActive()) return;
+    applyStatus(result, syncForm && revision === formRevision);
+    if (expectedRunning !== undefined && result.isRunning !== expectedRunning) {
+      showNotice(t(expectedRunning ? "nginx.start_failed" : "nginx.stop_failed"), true);
+      return;
+    }
     showNotice(t(successKey), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isActive()) showNotice(resolveApiMessage(error), true);
   } finally {
     busy.value = false;
   }
 }
 
-function applyStatus(value: NginxStatus) {
+function applyStatus(value: NginxStatus, syncForm: boolean) {
   Object.assign(status, value);
-  if (value.isInstalled) {
+  if (value.isInstalled && syncForm) {
     Object.assign(form, {
       listenAddress: value.listenAddress,
       listenPort: value.listenPort,
@@ -312,7 +357,9 @@ function openEndpoint() {
 function resolveApiMessage(error: unknown) {
   const key = extractApiMessage(error);
   const translated = t(key);
-  return translated === key ? key : translated;
+  const message = translated === key ? key : translated;
+  const details = extractApiDetails(error);
+  return details ? `${message}\n\n${details}` : message;
 }
 
 function showNotice(message: string, isError: boolean) {
@@ -378,6 +425,7 @@ function showNotice(message: string, isError: boolean) {
 
 .check-card input {
   width: auto;
+  flex-shrink: 0;
 }
 
 .check-card span {

@@ -3,13 +3,16 @@ using AdaPanel.Api.Controllers;
 using AdaPanel.Core.Dtos.Audit;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Enums;
+using AdaPanel.Core.Entities;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Options;
 using AdaPanel.Infrastructure.RunningJobs;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace AdaPanel.Infrastructure.Tests;
@@ -32,8 +35,10 @@ namespace AdaPanel.Infrastructure.Tests;
 /// gorunmelidir; testler bunu ayrica olcer.
 /// </para>
 /// </remarks>
-public sealed class BackupAuditTrailTests
+public sealed class BackupAuditTrailTests : IDisposable
 {
+    private readonly List<AdaPanelDbContext> actorContexts = [];
+    public void Dispose() { foreach (var context in actorContexts) context.Dispose(); }
     private static readonly Guid Yonetici = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly Guid SiteSahibi = Guid.Parse("22222222-2222-2222-2222-222222222222");
 
@@ -176,7 +181,7 @@ public sealed class BackupAuditTrailTests
         CreatedAtUtc = DateTime.UtcNow
     };
 
-    private static BackupController Denetleyici(IBackupService yedekServisi, IAuditService denetim)
+    private BackupController Denetleyici(IBackupService yedekServisi, IAuditService denetim)
     {
         var kullanici = new ClaimsPrincipal(new ClaimsIdentity(
             [
@@ -198,6 +203,13 @@ public sealed class BackupAuditTrailTests
             new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = isKoku })),
             NullLogger<RunningJobService>.Instance);
 
+        var actorDb = new AdaPanelDbContext(new DbContextOptionsBuilder<AdaPanelDbContext>().UseSqlite("Data Source=:memory:").Options);
+        actorContexts.Add(actorDb);
+        actorDb.Database.OpenConnection();
+        actorDb.Database.EnsureCreated();
+        actorDb.Users.Add(new PanelUser { Id = Yonetici, UserName = "audit-admin", Email = "audit@example.test",
+            Role = UserRole.Administrator, PasswordHash = "fixture", IsActive = true });
+        actorDb.SaveChanges();
         return new BackupController(
             yedekServisi,
             new SahiplikKapsami(),
@@ -206,7 +218,8 @@ public sealed class BackupAuditTrailTests
             new ResellerSiteAssignmentTests.KullanilmayanDbSahiplik(),
             new SahteProgramServisi(),
             calisanIsler,
-            denetim)
+            denetim,
+            actorDb)
         {
             ControllerContext = new ControllerContext
             {

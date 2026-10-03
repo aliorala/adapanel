@@ -323,8 +323,8 @@
               <div class="drawer-actions" role="cell" aria-colspan="6">
                 <span class="drawer-label">{{ entry.name }}</span>
                 <button class="secondary compact" v-bind="writeGate()" @click="renamePath(entry)">{{ t("panel.files.rename") }}</button>
-                <button class="secondary compact" v-bind="writeGate()" @click="compress(entry.path)">{{ t("panel.files.compress") }}</button>
-                <button v-if="entry.extension.toLowerCase() === '.zip'" class="secondary compact" v-bind="writeGate()" @click="extract(entry.path)">
+                <button class="secondary compact" v-bind="writeGate(archiveBusy)" @click="compress(entry.path)">{{ t("panel.files.compress") }}</button>
+                <button v-if="entry.extension.toLowerCase() === '.zip'" class="secondary compact" v-bind="writeGate(archiveBusy)" @click="extract(entry.path)">
                   {{ t("panel.files.extract") }}
                 </button>
                 <!-- Yıkıcı eylem: ayırıcının ardında ve çekmecenin öbür ucunda. -->
@@ -537,6 +537,12 @@ const saving = ref(false);
 const isDirty = computed(() => Boolean(workspace.value && !workspace.value.isDirectory) && fileContent.value !== savedContent.value);
 let workspaceRequest = 0;
 let disposed = false;
+const archiveBusy = ref(false);
+let searchRequest = 0;
+function currentFileContext() {
+  const request = workspaceRequest, site = selectedSiteName.value, path = workspace.value?.path;
+  return () => !disposed && request === workspaceRequest && site === selectedSiteName.value && path === workspace.value?.path;
+}
 useNavigationGuard(() => {
   if (saving.value) return false;
   if (!isDirty.value) return true;
@@ -824,7 +830,7 @@ async function uploadSelectedFiles(event: Event) {
  * kopyalandığını sandığı bir klasörün hiç var olmaması demekti.
  */
 async function uploadMany(files: File[], folders: string[]) {
-  if (!workspace.value?.isDirectory) {
+  if (disposed || uploadBusy.value || !workspace.value?.isDirectory) {
     return;
   }
 
@@ -843,6 +849,7 @@ async function uploadMany(files: File[], folders: string[]) {
   }
 
   const hedef = workspace.value.path;
+  const isCurrent = currentFileContext();
   const failures: { name: string; reason: string }[] = [];
   uploadBusy.value = true;
   uploadDone.value = 0;
@@ -850,6 +857,7 @@ async function uploadMany(files: File[], folders: string[]) {
 
   try {
     for (const file of files) {
+      if (disposed) return;
       try {
         await uploadFile(hedef, file);
         uploadDone.value += 1;
@@ -861,6 +869,7 @@ async function uploadMany(files: File[], folders: string[]) {
     uploadBusy.value = false;
   }
 
+  if (!isCurrent()) return;
   await refresh(hedef);
   showNotice(uploadOzeti(files.length, uploadDone.value, failures, folders), failures.length > 0 || folders.length > 0);
 }
@@ -1032,12 +1041,17 @@ function tarihMetni(value: string | null) {
 }
 
 async function runSearch() {
+  const request = ++searchRequest;
+  const isCurrent = currentFileContext();
   try {
-    searchResults.value = await searchFiles(workspace.value?.path || "", searchQuery.value);
+    const result = await searchFiles(workspace.value?.path || "", searchQuery.value);
+    if (!isCurrent() || request !== searchRequest) return;
+    searchResults.value = result;
     searchPager.reset();
     // "Sonuç yok" ile "henüz aranmadı" ayrı: boş sonuç listesi sessizce kaybolmasın.
     searchRan.value = true;
   } catch (error) {
+    if (!isCurrent() || request !== searchRequest) return;
     searchResults.value = [];
     searchRan.value = false;
     showNotice(resolveApiMessage(error), true);
@@ -1045,21 +1059,25 @@ async function runSearch() {
 }
 
 async function compress(path: string) {
-  try {
-    workspace.value = await compressPath(path);
-    showNotice(t("panel.files.compressed"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  }
+  await runArchive(() => compressPath(path), "panel.files.compressed");
 }
 
 async function extract(path: string) {
+  await runArchive(() => extractPath(path), "panel.files.extracted");
+}
+
+async function runArchive(operation: () => Promise<FileWorkspace>, messageKey: string) {
+  if (archiveBusy.value || disposed || locked.value) return;
+  const isCurrent = currentFileContext();
+  archiveBusy.value = true;
   try {
-    workspace.value = await extractPath(path);
-    showNotice(t("panel.files.extracted"), false);
+    const result = await operation();
+    if (!isCurrent()) return;
+    workspace.value = result;
+    showNotice(t(messageKey), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  }
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
+  } finally { archiveBusy.value = false; }
 }
 
 async function savePermissions() {
@@ -1084,22 +1102,26 @@ async function savePermissions() {
  * başarısızlık burada doğrudan VERİ KAYBIDIR.
  */
 async function createFolder() {
+  if (disposed || locked.value || !workspace.value?.isDirectory) return;
+  const isCurrent = currentFileContext();
+  const parentPath = workspace.value.path;
   const folderName = await prompt({
     title: t("panel.files.folderPrompt"),
     label: t("panel.files.name"),
     defaultValue: "new-folder"
   });
-  if (!folderName) {
+  if (!folderName || !isCurrent() || locked.value) {
     return;
   }
 
-  const basePath = workspace.value?.path ? `${workspace.value.path}/${folderName}` : `${siteRootPath.value}/${folderName}`;
+  const basePath = `${parentPath}/${folderName}`;
   try {
     await createDirectory(basePath);
-    await refresh(workspace.value?.path || "");
+    if (!isCurrent()) return;
+    await refresh(parentPath);
     showNotice(t("panel.files.folderCreated"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
   }
 }
 
@@ -1107,18 +1129,19 @@ async function createFolder() {
  * BOŞ DOSYA OLUŞTUR — panelin en çok istenen eksiğiydi: siteye `.htaccess`, `robots.txt` ya da
  * `web.config` koymanın tek yolu dosyayı dışarıda yazıp YÜKLEMEKTİ.
  *
- * ÜZERİNE YAZMA KORUMASI: arka uçtaki `PUT /files` var olan dosyayı sormadan ezer, "yalnız yoksa
- * yaz" diye bir uç yok. Bu yüzden ad ÖNCE listede aranır. Kontrol istemcide olduğu için iki
- * eşzamanlı oturum arasında yarış açığı kalır; kapatılması arka uçta ayrı bir uç gerektirir ve
- * burada "kapandı" denmiyor.
+ * ÜZERİNE YAZMA KORUMASI: ad önce listede aranır; createFile ayrıca FailIfExists gönderir.
+ * Sunucudaki CreateNew, iki oturum aynı anda oluştursa da mevcut dosyanın ezilmesini engeller.
  */
 async function createNewFile() {
+  if (disposed || locked.value || !workspace.value?.isDirectory) return;
+  const isCurrent = currentFileContext();
+  const parentPath = workspace.value.path;
   const fileName = await prompt({
     title: t("panel.files.filePrompt"),
     label: t("panel.files.name"),
     placeholder: ".htaccess"
   });
-  if (!fileName) {
+  if (!fileName || !isCurrent() || locked.value) {
     return;
   }
 
@@ -1135,15 +1158,16 @@ async function createNewFile() {
     return;
   }
 
-  const basePath = workspace.value?.path ? `${workspace.value.path}/${name}` : `${siteRootPath.value}/${name}`;
+  const basePath = `${parentPath}/${name}`;
   try {
     await createFile(basePath);
+    if (!isCurrent()) return;
     // Dosya oluşturulup DÜZENLEYİCİDE açılır: "oluştur" sonrası kullanıcı ayrıca aramak
     // zorunda kalmasın.
     await openPath(basePath);
     showNotice(t("panel.files.fileCreated"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
   }
 }
 
@@ -1199,14 +1223,14 @@ function startTransfer(mode: "move" | "copy") {
 async function runTransfer() {
   const mode = transferMode.value;
   const targets = entries.value.filter((entry) => selection.isSelected(entry.path));
-  if (!mode || targets.length === 0) {
+  if (transferBusy.value || !mode || targets.length === 0) {
     return;
   }
 
   const destination = transferTarget.value.trim().replace(/\\/g, "/").replace(/\/+$/, "");
   // Site kökünün dışı arka uçta zaten reddedilir; burada da söylenir ki kullanıcı hatayı
   // istek gitmeden görsün. Anahtar arka ucun kullandığıyla AYNI: iki yerde iki farklı cümle olmaz.
-  if (!destination || !siteRootPath.value || !destination.startsWith(siteRootPath.value)) {
+  if (!destination || !siteRootPath.value || !(destination === siteRootPath.value || destination.startsWith(`${siteRootPath.value}/`))) {
     showNotice(t("files.path_outside_root"), true);
     return;
   }
@@ -1335,6 +1359,7 @@ async function removePath(entry: FileEntry) {
  * olursa döngü durmaz; özet "kaçı silindi, kaçı silinemedi ve neden" der.
  */
 async function removeSelected() {
+  const isCurrent = currentFileContext();
   const targets = entries.value.filter((entry) => selection.isSelected(entry.path));
   if (targets.length === 0) {
     return;
@@ -1352,11 +1377,12 @@ async function removeSelected() {
     impact,
     requireText: String(targets.length)
   });
-  if (!onay) {
+  if (!onay || !isCurrent()) {
     return;
   }
 
-  const outcome = await bulk.runBulk(targets, (entry) => entry.path, (entry) => deletePath(entry.path));
+  const outcome = await bulk.runBulk(targets, (entry) => entry.path, (entry) => deletePath(entry.path), isCurrent);
+  if (!isCurrent()) return;
   await refresh(workspace.value?.path || "");
   showNotice(bulk.deleteSummary(outcome), outcome.failures.length > 0);
 }

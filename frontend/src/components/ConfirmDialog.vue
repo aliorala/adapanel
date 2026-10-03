@@ -137,13 +137,15 @@ export function useConfirm() {
 </script>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useScrollLock } from "../composables/useScrollLock";
 
 const { t } = useI18n();
 
 // Modül kapsamındaki durum şablona ancak <script setup> bağlaması üzerinden görünür.
 const state = dialogState;
+useScrollLock(() => state.open);
 
 const dialogEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLInputElement | null>(null);
@@ -185,7 +187,6 @@ watch(
     if (open) {
       typed.value = "";
       lastFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      document.body.style.overflow = "hidden";
       await nextTick();
       // Odak diyaloga girer. Yüksek riskte doğrudan metin kutusuna; normalde kapsayıcıya
       // (silme düğmesine DEĞİL — refleksle Enter'a basılmasın).
@@ -196,15 +197,10 @@ watch(
       }
       return;
     }
-    document.body.style.overflow = "";
     lastFocused?.focus();
     lastFocused = null;
   }
 );
-
-onBeforeUnmount(() => {
-  document.body.style.overflow = "";
-});
 
 function dismiss() {
   if (state.busy) {
@@ -289,13 +285,18 @@ function trapFocus(event: KeyboardEvent) {
 
 .confirm-dialog {
   width: min(520px, 100%);
+  min-width: 0;
   max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
   overflow-y: auto;
+  overflow-wrap: anywhere;
   padding: 16px 18px;
   border-radius: var(--radius-lg);
   background: var(--surface-1);
   box-shadow: var(--shadow-elev);
 }
+
+.confirm-dialog > * { min-width: 0; }
 
 .confirm-head {
   display: grid;

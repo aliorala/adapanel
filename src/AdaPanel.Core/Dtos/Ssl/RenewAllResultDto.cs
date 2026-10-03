@@ -1,3 +1,5 @@
+using AdaPanel.Core.Common;
+
 namespace AdaPanel.Core.Dtos.Ssl;
 
 public sealed class RenewAllResultDto
@@ -20,9 +22,20 @@ public sealed class RenewAllResultDto
     public bool Measured { get; set; } = true;
 
     /// <summary>Olculemedi ya da basarisiz olduysa SEBEBI; kullaniciya gosterilir.</summary>
-    public string FailureReason { get; set; } = string.Empty;
+    private string failureReason = string.Empty;
+    public string FailureReason
+    {
+        get => failureReason;
+        set => failureReason = SecretRedactor.Redact(value);
+    }
 
-    public string Output { get; set; } = string.Empty;
+    // Command output is returned by the SSL API. Parse provider output before assigning it here.
+    private string output = string.Empty;
+    public string Output
+    {
+        get => output;
+        set => output = SecretRedactor.Redact(value);
+    }
 
     /// <summary>
     /// Yenileme turundan sonra panel kaydı (<c>config/ssl.json</c>) ile sertifika deposu

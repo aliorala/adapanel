@@ -133,13 +133,15 @@ export function usePrompt() {
 </script>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useScrollLock } from "../composables/useScrollLock";
 
 import PasswordField from "./PasswordField.vue";
 
 const { t } = useI18n();
 const state = promptState;
+useScrollLock(() => state.open);
 
 const value = ref("");
 const dialogEl = ref<HTMLElement | null>(null);
@@ -162,7 +164,6 @@ watch(
     if (open) {
       value.value = state.options?.defaultValue ?? "";
       lastFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      document.body.style.overflow = "hidden";
       await nextTick();
       inputEl.value?.focus();
       inputEl.value?.select();
@@ -170,15 +171,10 @@ watch(
     }
 
     value.value = "";
-    document.body.style.overflow = "";
     lastFocused?.focus();
     lastFocused = null;
   }
 );
-
-onBeforeUnmount(() => {
-  document.body.style.overflow = "";
-});
 
 function settle(result: string | null) {
   state.open = false;
@@ -262,11 +258,20 @@ function trapFocus(event: KeyboardEvent) {
 
 .prompt-dialog {
   width: min(30rem, 100%);
+  min-width: 0;
   display: grid;
   gap: 0.9rem;
   max-height: 90vh;
+  max-height: 90dvh;
   overflow: auto;
+  overflow-wrap: anywhere;
+  padding: 16px 18px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-elev);
 }
+
+.prompt-dialog > * { min-width: 0; }
 
 /* BOY KURALI DUSTU: `1.05rem` = 14.18px, govde metninden (13.5px) 0.68px farkliydi —
    yani bir DIYALOGUN basligi, altindaki cumleyle neredeyse ayni agirlikta okunuyordu.

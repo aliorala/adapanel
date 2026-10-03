@@ -93,6 +93,9 @@ internal sealed partial class RemoteDbAccessService(
         var mode = ParseMode(request.Mode);
         var origins = ResolveOrigins(mode, request);
 
+        // PostgreSQL users share one HBA file; firewall updates also publish an engine-wide
+        // snapshot. Serialize the complete operation with all account/resource mutations.
+        using var mutation = await DatabaseLifecycle.EnterEngineAsync(engineKey, cancellationToken);
         var profile = await DatabaseProfiles.ResolveAsync(dbContext, secretProtector, dbEngine, cancellationToken);
         var facts = await ReadFactsAsync(provider, profile, [userName], cancellationToken);
         if (!facts.TryGetValue(userName, out var userFacts) || userFacts.Hosts.Count + userFacts.Databases.Count == 0)
@@ -152,8 +155,8 @@ internal sealed partial class RemoteDbAccessService(
             var workspace = await databaseService.GetWorkspaceAsync(engineKey, cancellationToken);
             var userNames = workspace.Users
                 .Select(item => item.UserName)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(item => item, StringComparer.Ordinal)
                 .ToArray();
 
             var facts = await ReadFactsAsync(provider!, profile, userNames, cancellationToken);
@@ -483,6 +486,7 @@ internal sealed partial class RemoteDbAccessService(
     /// </remarks>
     public async Task<RemoteDbAccessDto> SetAsync(UpdateRemoteDbAccessRequest request, CancellationToken cancellationToken = default)
     {
+        using var mutation = await DatabaseLifecycle.EnterEngineAsync("mariadb", cancellationToken);
         if (!request.Enabled)
         {
             await RemoveRuleAsync(LegacyMariaDbPort, cancellationToken);
@@ -521,7 +525,7 @@ internal sealed partial class RemoteDbAccessService(
     }
 
     private static string UserKey(string engineKey, string userName) =>
-        $"{engineKey.Trim().ToLowerInvariant()}|{userName.Trim()}";
+        DatabaseAccountIdentity.FamilyKey(engineKey, userName);
 
     private Task<RemoteDbState> ReadStateAsync(CancellationToken cancellationToken)
         => fileStore.ReadAsync(StatePath, new RemoteDbState(), cancellationToken);
@@ -555,7 +559,7 @@ internal sealed partial class RemoteDbAccessService(
         public string AllowedIp { get; set; } = string.Empty;
 
         /// <summary>Anahtar: "motor|kullanici".</summary>
-        public Dictionary<string, RemoteUserAccessState> Users { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, RemoteUserAccessState> Users { get; set; } = new(StringComparer.Ordinal);
     }
 
     internal sealed class RemoteUserAccessState

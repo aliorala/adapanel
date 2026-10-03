@@ -35,7 +35,13 @@ export type BackupRecord = {
   /** AES-256-GCM ile şifreli mi (dosya adı `.zip.enc`). Geri yükleme parola ister. */
   encrypted: boolean;
   warnings: BackupRestoreWarning[];
+  /** Databases actually included; absent/null means no measurement on older records. */
+  includedDatabases?: { engine: string; databaseName: string }[] | null;
+  /** Measured component coverage at this snapshot; absent/null means unknown. */
+  includedComponents?: { kind: string; source: string }[] | null;
   preservedPath: string;
+  /** Last generic ZIP extraction destination; path still identifies the backup archive. */
+  restoredPath?: string;
 
   // --- ARTIMSAL ZİNCİR (Plesk modeli) ---
   // Eski kayıtlarda bu alanlar BOŞ gelir ve boş değerler "zincirsiz tekil tam yedek" demektir;
@@ -276,9 +282,9 @@ export async function getBackupChain(backupId: string) {
  * Yalnız kullanıcı neyi kaybedeceğini GÖRDÜKTEN sonra çağrılır: tek yedek silme
  * (`deleteBackup`) bağımlı halka varsa `409 backup.chain_has_dependents` ile reddedilir.
  */
-export async function deleteBackupChain(backupId: string) {
+export async function deleteBackupChain(backupId: string, expectedBackupIds: readonly string[]) {
   const response = await apiClient.delete<ApiEnvelope<BackupDeleteResult>>(
-    `/backup/${encodeURIComponent(backupId)}/chain`);
+    `/backup/${encodeURIComponent(backupId)}/chain`, { data: { expectedBackupIds: [...expectedBackupIds] } });
   return response.data.data;
 }
 

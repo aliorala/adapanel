@@ -18,7 +18,12 @@
       </div>
     </div>
 
-    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
+      {{ notice }}
+      <button v-if="listErrorInNotice || schedulesErrorInNotice" type="button" class="secondary compact" :disabled="busy || loading || schedulesLoading" @click="retryFailedLoads">
+        {{ t("panel.common.retry") }}
+      </button>
+    </p>
 
     <!-- DOĞRULAMA SONUCU. Üç sayı ayrı ayrı gösterilir; "ulaşılamadı" KAYIP DEĞİLDİR ve
          karıştırılırsa kullanıcı geçici bir ağ arızasında bütün geçmişini kayıp sanar. -->
@@ -126,7 +131,7 @@
         <input v-model.trim="search" type="search" :placeholder="t('panel.backup.searchPlaceholder')" />
       </label>
 
-      <span class="status-pill">
+      <span v-if="activeView === 'list'" class="status-pill">
         {{ search
           ? t("panel.backup.recordsFiltered", { shown: filteredBackups.length, total: backups.length })
           : `${backups.length} ${t("panel.backup.records")}` }}
@@ -370,7 +375,7 @@
             <div class="location-line">
               <span class="field-label">{{ t("panel.backup.location.local") }}</span>
               <code v-if="backup.path" class="path-box">{{ backup.path }}</code>
-              <span v-else class="cell-muted">{{ t("panel.backup.location.unknown") }}</span>
+              <span v-else class="cell-muted">{{ t(isAdmin ? "panel.backup.location.unknown" : "panel.backup.location.scopedHidden") }}</span>
               <button
                 v-if="backup.path"
                 type="button"
@@ -412,12 +417,12 @@
            "hiç yedek yok" demek, süzgeci fark etmeyen kullanıcıya yedekleri yok gibi gösterirdi. -->
       <p v-if="loading && backups.length === 0" class="empty-state" role="status">{{ t("panel.common.loading") }}</p>
       <SectionLoadError
-        v-else-if="listLoad.message.value"
+        v-else-if="listLoad.message.value && !listErrorInNotice"
         :message="listLoad.message.value"
         :busy="loading"
         @retry="refresh" />
-      <p v-else-if="backups.length === 0" class="empty-state">{{ t("panel.backup.empty") }}</p>
-      <p v-else-if="filteredBackups.length === 0" class="empty-state">{{ t("panel.backup.emptyFiltered") }}</p>
+      <p v-else-if="!listLoad.message.value && backups.length === 0" class="empty-state">{{ t("panel.backup.empty") }}</p>
+      <p v-else-if="!listLoad.message.value && filteredBackups.length === 0" class="empty-state">{{ t("panel.backup.emptyFiltered") }}</p>
     </div>
 
     <TablePager v-if="activeView === 'list'" :state="pager" :disabled="busy" />
@@ -482,11 +487,13 @@
             @click="restore(chainRecord, true)">
             {{ t("panel.backup.restore") }}
           </button>
-          <button class="danger compact" v-bind="writeGate(busy)" @click="removeChain(chainRecord)">
-            {{ t("panel.backup.chain.delete") }} ({{ chainDeleteTargets(chainRecord).length }})
+          <button class="danger compact"
+            v-bind="writeGate(busy || chainDeletionPlan.ambiguous, chainDeletionPlan.ambiguous ? t('backup.chain_ambiguous') : undefined)"
+            @click="removeChain(chainRecord)">
+            {{ t("panel.backup.chain.delete") }}<template v-if="!chainDeletionPlan.ambiguous"> ({{ chainDeletionPlan.targets.length }})</template>
           </button>
         </div>
-        <p class="field-hint">{{ t("panel.backup.chain.deleteWarning") }}</p>
+        <p class="field-hint">{{ t(chainDeletionPlan.ambiguous ? "backup.chain_ambiguous" : "panel.backup.chain.deleteWarning") }}</p>
       </template>
     </section>
 
@@ -717,7 +724,7 @@
       <div class="row-actions">
         <button
           class="compact"
-          v-bind="writeGate(busy || selectedItems.length === 0)"
+          v-bind="writeGate(busy || restoreItemsBusy || selectedItems.length === 0)"
           @click="restoreSelectedItems">
           {{ t("panel.backup.restoreSelected") }} ({{ selectedItems.length }})
         </button>
@@ -741,10 +748,10 @@
           <button role="tab" :aria-selected="backupKind === 'subscription'" :class="{ active: backupKind === 'subscription' }" @click="backupKind = 'subscription'">
             {{ t("panel.backup.subscription.title") }}
           </button>
-          <button role="tab" :aria-selected="backupKind === 'database'" :class="{ active: backupKind === 'database' }" @click="backupKind = 'database'">
+          <button v-if="isAdmin" role="tab" :aria-selected="backupKind === 'database'" :class="{ active: backupKind === 'database' }" @click="backupKind = 'database'">
             {{ t("panel.backup.dbTitle") }}
           </button>
-          <button role="tab" :aria-selected="backupKind === 'mail'" :class="{ active: backupKind === 'mail' }" @click="backupKind = 'mail'">
+          <button v-if="isAdmin" role="tab" :aria-selected="backupKind === 'mail'" :class="{ active: backupKind === 'mail' }" @click="backupKind = 'mail'">
             {{ t("panel.backup.mailTitle") }}
           </button>
           <button role="tab" :aria-selected="backupKind === 'panel'" v-if="isAdmin" :class="{ active: backupKind === 'panel' }" @click="backupKind = 'panel'">
@@ -979,11 +986,11 @@
         </div>
         <p v-if="schedulesLoading" class="empty-state" role="status">{{ t("panel.common.loading") }}</p>
         <SectionLoadError
-          v-else-if="schedulesLoad.message.value"
+          v-else-if="schedulesLoad.message.value && !schedulesErrorInNotice"
           :message="schedulesLoad.message.value"
           :busy="schedulesLoading"
           @retry="loadSchedules" />
-        <p v-else-if="schedules.length === 0" class="empty-state">{{ t("panel.backup.schedule.empty") }}</p>
+        <p v-else-if="!schedulesLoad.message.value && schedules.length === 0" class="empty-state">{{ t("panel.backup.schedule.empty") }}</p>
       </div>
       <TablePager :state="schedulePager" :disabled="busy" />
 
@@ -1016,7 +1023,7 @@
             <h3>{{ t("panel.backup.schedule.editTitle", { name: scheduleForm.userName || scheduleForm.userId }) }}</h3>
             <p class="meta">{{ scheduleForm.planName || t("panel.backup.schedule.noPlan") }}</p>
           </div>
-          <button type="button" class="secondary compact" @click="scheduleForm = null">
+          <button type="button" class="secondary compact" @click="closeScheduleForm">
             {{ t("panel.common.cancel") }}
           </button>
         </div>
@@ -1131,7 +1138,7 @@
 
 <script setup lang="ts">
 import { getFormattingLocale } from '../utils/locale';
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import BackupScheduleFields from "../components/BackupScheduleFields.vue";
@@ -1177,7 +1184,7 @@ import { usePrompt } from "../components/PromptDialog.vue";
 import RunningTaskBanner from "../components/RunningTaskBanner.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import TablePager from "../components/TablePager.vue";
-import { useBulkAction } from "../composables/useBulkSelection";
+import { getSessionEpoch } from "../api/client";
 import { compareNewestFirst, localDayKey, useDayGroups } from "../composables/useDayGroups";
 import { useNotice, useSectionError } from "../composables/useNotice";
 import { usePagination } from "../composables/usePagination";
@@ -1189,14 +1196,14 @@ import { copyToClipboard } from "../utils/clipboard";
 import { maskSecretsInUri } from "../utils/url";
 import { formatBytes as sharedFormatBytes } from "../utils/bytes";
 import { formatDateTime } from "../utils/datetime";
+import { getBackupDeletionPlan } from "../utils/backupDeletionPlan";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
 const fullRestore = useBackupRestore();
 const { prompt } = usePrompt();
-const { writeGate } = useSubscriptionGate();
-const { runBulk } = useBulkAction();
-const { notice, noticeError, showNotice, showError } = useNotice();
+const { writeGate, locked } = useSubscriptionGate();
+const { notice, noticeError, showNotice, showError, resolveApiMessage } = useNotice();
 const sitesStore = useSitesStore();
 const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
@@ -1208,9 +1215,18 @@ const expandedWarnings = ref("");
 /** Yolu açık olan kayıt (tek seferde bir tane): tam yollar uzun, hepsi birden açık kalmasın. */
 const expandedLocation = ref("");
 const search = ref("");
+const viewEpoch = getSessionEpoch();
+let disposed = false;
+let listRequest = 0;
+let chainRequest = 0;
+const isActive = () => !disposed && viewEpoch === getSessionEpoch();
+const canWrite = () => isActive() && !locked.value;
+const canAdminWrite = () => canWrite() && isAdmin.value;
+onBeforeUnmount(() => { disposed = true; });
 
 /** Yedek listesi ÇEKİLEMEDİ. Boş listeyle karıştırılmaz: biri "yok", diğeri "bilmiyoruz". */
 const listLoad = useSectionError();
+const listErrorInNotice = computed(() => !!listLoad.message.value && noticeError.value && notice.value.includes(listLoad.message.value));
 
 // Süren yedek işi GÖRÜNÜR (bkz. composables/useRunningTask.ts): uç işi arka plana almadığı için
 // istek uçuştayken yedek gerçekten sürüyor.
@@ -1385,13 +1401,14 @@ function safeRemote(remoteUri: string) {
 }
 
 async function copyPath(value: string) {
-  if (!value) {
+  if (!value || !isActive()) {
     return;
   }
 
   // Kopyalanmadıysa "kopyalandı" DEMEYİZ: `copyToClipboard` gerçekten kopyalayıp kopyalamadığını
   // döndürür (HTTP üzerinde pano izni verilmeyebilir).
   const copied = await copyToClipboard(value);
+  if (!isActive()) return;
   showNotice(copied ? t("panel.common.copied") : t("panel.common.copyFailed"), !copied);
 }
 
@@ -1431,6 +1448,50 @@ const databaseEngine = ref("mariadb");
 const databaseName = ref("");
 const loading = ref(false);
 const busy = ref(false);
+
+/** Hold the same lock from confirmation until its result has been measured. */
+async function withOperation(action: () => Promise<void>, writing = true) {
+  if (!isActive() || busy.value || (writing && locked.value)) return;
+  busy.value = true;
+  // A read begun before this operation cannot republish the pre-operation catalogue.
+  listRequest++;
+  loading.value = false;
+  try {
+    await action();
+  } catch (error) {
+    if (isActive()) showError(error);
+  } finally {
+    if (isActive()) busy.value = false;
+  }
+}
+
+type ReadOutcomeNotice = { message: string; failed: boolean; list: boolean; schedules: boolean; displayed: string };
+let readOutcomeNotice: ReadOutcomeNotice | null = null;
+
+function publishReadOutcome(outcome: ReadOutcomeNotice) {
+  const errors = [outcome.list ? listLoad.message.value : "", outcome.schedules ? schedulesLoad.message.value : ""].filter(Boolean);
+  outcome.displayed = [outcome.message, ...errors].filter(Boolean).join("\n\n");
+  showNotice(outcome.displayed, outcome.failed || errors.length > 0);
+}
+
+/** Updating a read must retain the mutation's warning and not overwrite a newer notice. */
+function updateReadOutcome() {
+  if (!readOutcomeNotice || notice.value !== readOutcomeNotice.displayed) return false;
+  publishReadOutcome(readOutcomeNotice);
+  return true;
+}
+
+function reportWithListState(message: string, failed = false) {
+  readOutcomeNotice = { message, failed, list: true, schedules: false, displayed: "" };
+  publishReadOutcome(readOutcomeNotice);
+}
+
+async function retryFailedLoads() {
+  if (!isActive() || busy.value || loading.value || schedulesLoading.value) return;
+  const list = listErrorInNotice.value, schedules = schedulesErrorInNotice.value;
+  if (schedules) await loadSchedules();
+  if (list) await refresh();
+}
 const targetForm = reactive<BackupTargetPayload>({
   targetType: "local",
   remoteUrl: "",
@@ -1510,6 +1571,9 @@ function backupKindLabel(type: string) {
 // Panelin varsayılan yedek şifreleme ayarı (uç yalnız yöneticiye açık).
 const encryption = ref<BackupEncryptionSettings | null>(null);
 const encryptionForm = reactive({ password: "", confirm: "", acknowledged: false });
+let encryptionRequest = 0;
+let encryptionDraft = 0;
+watch(encryptionForm, () => { encryptionDraft++; }, { flush: "sync" });
 
 const encryptionMismatch = computed(() =>
   encryptionForm.confirm.length > 0 && encryptionForm.password !== encryptionForm.confirm);
@@ -1549,9 +1613,12 @@ const browsePrefix = ref("");
 const browseEntries = ref<BackupEntry[]>([]);
 const browseTruncated = ref(false);
 const browseLoading = ref(false);
+let browseRequest = 0;
+onBeforeUnmount(() => { browseRequest++; });
 const browseLoad = useSectionError();
 const selectedItems = ref<string[]>([]);
 const itemsTargetPath = ref("");
+const restoreItemsBusy = ref(false);
 
 /**
  * Arşiv kökündeki girdilerin ÖNEK gruplaması.
@@ -1680,15 +1747,18 @@ const verification = ref<BackupVerificationResult | null>(null);
  * balonunda gösterilseydi kullanıcı hangi yedeğin kayıp olduğunu göremezdi.
  */
 async function verify() {
+  if (!isActive() || verifying.value || busy.value) return;
   verifying.value = true;
   try {
-    verification.value = await verifyBackups();
+    const result = await verifyBackups();
+    if (!isActive()) return;
+    verification.value = result;
     // Ölçüm kayıtlara işlendi (uzak durum); liste tazelenmezse rozetler eski kalırdı.
     await refresh();
   } catch (error) {
-    showError(error);
+    if (isActive()) showError(error);
   } finally {
-    verifying.value = false;
+    if (isActive()) verifying.value = false;
   }
 }
 
@@ -1710,6 +1780,10 @@ const schedulePager = usePagination(schedules);
 const schedulesLoading = ref(false);
 const schedulesLoaded = ref(false);
 const schedulesLoad = useSectionError();
+const schedulesErrorInNotice = computed(() => !!schedulesLoad.message.value && noticeError.value && notice.value.includes(schedulesLoad.message.value));
+let schedulesRequest = 0;
+let scheduleFormRequest = 0;
+const scheduleFormLoading = ref(false);
 const newScheduleUserId = ref("");
 
 type ScheduleFormState = {
@@ -1738,6 +1812,8 @@ type ScheduleFormState = {
 
 const scheduleForm = ref<ScheduleFormState | null>(null);
 const scheduleThrottled = ref(false);
+let scheduleDraft = 0;
+watch(scheduleForm, () => { scheduleDraft++; }, { deep: true, flush: "sync" });
 
 /** Sunucudan gelen abonelik programını ortak biçime çevirir (liste satırı ve form aynı yerden okur). */
 function scheduleToPlan(schedule: SubscriptionBackupSchedule): BackupSchedulePlan {
@@ -1766,6 +1842,9 @@ const autoLoad = useSectionError();
  * Artık mod ve saat doğrudan taşınıyor; eşleme yok, dolayısıyla kayma da yok.
  */
 const autoSchedule = reactive<BackupSchedulePlan>(bosProgram());
+let autoRequest = 0;
+let autoDraft = 0;
+watch([autoForm, autoSchedule], () => { autoDraft++; }, { deep: true, flush: "sync" });
 const autoServerZone = computed(
   () => autoStatus.value?.serverTimeZoneDisplayName || autoStatus.value?.serverTimeZoneId || ""
 );
@@ -1775,16 +1854,21 @@ onMounted(async () => {
   if (sitesStore.sites.length === 0) {
     await sitesStore.fetchSites().catch(() => undefined);
   }
+  if (!isActive()) return;
   await refresh();
+  if (!isActive()) return;
   await loadSubscriptionChoices();
+  if (!isActive()) return;
   if (isAdmin.value) {
     await loadAutoBackup();
+    if (!isActive()) return;
     await loadEncryption();
+    if (!isActive()) return;
     await loadBackupRoot();
   }
 
   // Sunucuda süren iş varsa şerit ekran açılır açılmaz dolar (yenilenmiş sayfa dahil).
-  await serverBackup.start();
+  if (isActive()) await serverBackup.start();
 });
 
 /*
@@ -1809,11 +1893,13 @@ watch(
  * etkilenmez — kök yolu bir kolaylıktır, listenin koşulu değildir.
  */
 async function loadBackupRoot() {
+  if (!isActive()) return;
   try {
     const preferences = await getPanelPreferences();
+    if (!isActive()) return;
     backupRoot.value = preferences.defaultBackupRoot ?? "";
   } catch {
-    backupRoot.value = "";
+    if (isActive()) backupRoot.value = "";
   }
 }
 
@@ -1825,13 +1911,15 @@ async function loadBackupRoot() {
  * olurdu (alt-kullanıcının kendi aboneliği yoktur, ana hesabınkini paylaşır).
  */
 async function loadSubscriptionChoices() {
+  if (!isActive()) return;
   if (canPickSubscription.value && authStore.users.length === 0) {
-    await authStore.fetchUsers().catch((error: unknown) => showError(error));
+    await authStore.fetchUsers().catch((error: unknown) => { if (isActive()) showError(error); });
   }
-
+  if (!isActive()) return;
   if (!isAdmin.value) {
     try {
       const usage = await getMySubscription();
+      if (!isActive()) return;
       ownSubscriptionId.value = usage.userId;
       ownSubscriptionName.value = usage.userName;
       if (!subscriptionUserId.value) {
@@ -1843,15 +1931,20 @@ async function loadSubscriptionChoices() {
     } catch {
       // Abonelik kaydı yoksa seçici boş kalır ve ekranda sebebi yazan uyarı görünür;
       // uydurma bir kimlikle istek göndermek 403 üretirdi.
-      ownSubscriptionId.value = "";
+      if (isActive()) ownSubscriptionId.value = "";
     }
   }
 }
 
 async function loadEncryption() {
+  if (!isActive() || !isAdmin.value || busy.value) return;
+  const request = ++encryptionRequest;
+  const isCurrent = () => isActive() && isAdmin.value && request === encryptionRequest;
   try {
-    encryption.value = await getBackupEncryption();
+    const settings = await getBackupEncryption();
+    if (isCurrent()) encryption.value = settings;
   } catch (error) {
+    if (!isCurrent()) return;
     // Kasa bu kurulumda yoksa (`backup.encryption_unavailable`) kart gizlenir; yedek listesi
     // etkilenmez. Sebep yine de şeritte söylenir — sessizce kaybolmaz.
     encryption.value = null;
@@ -1860,42 +1953,46 @@ async function loadEncryption() {
 }
 
 async function saveEncryption() {
-  if (!canSaveEncryption.value) {
+  if (!canAdminWrite() || !encryption.value || !canSaveEncryption.value) {
     return;
   }
 
-  busy.value = true;
-  try {
-    encryption.value = await setBackupEncryption(encryptionForm.password);
-    resetEncryptionForm();
+  await withOperation(async () => {
+    encryptionRequest++;
+    const draft = encryptionDraft;
+    const settings = await setBackupEncryption(encryptionForm.password);
+    if (!isActive() || !isAdmin.value) return;
+    encryption.value = settings;
+    if (draft === encryptionDraft) resetEncryptionForm();
     showNotice(t("backup.encryption_saved"), false);
-  } catch (error) {
-    showError(error);
-  } finally {
-    busy.value = false;
-  }
+  });
 }
 
 async function disableEncryption() {
+  if (!canAdminWrite() || !encryption.value) return;
   // Yıkıcı: bundan sonraki yedekler şifresiz alınır. MEVCUT şifreli yedekler yine parola ister —
   // onay metni bunu açıkça söylüyor.
-  await confirm({
-    title: t("panel.backup.encryptionDisableTitle"),
-    message: t("panel.backup.encryptionDisableMessage"),
-    confirmLabel: t("panel.backup.encryptionDisable"),
-    action: async () => {
-      busy.value = true;
-      try {
-        // Boş parola = kaydı sil + şifrelemeyi kapat (sunucu sözleşmesi).
-        encryption.value = await setBackupEncryption("");
-        resetEncryptionForm();
-        showNotice(t("backup.encryption_saved"), false);
-      } catch (error) {
-        showError(error);
-      } finally {
-        busy.value = false;
+  await withOperation(async () => {
+    const draft = encryptionDraft;
+    await confirm({
+      title: t("panel.backup.encryptionDisableTitle"),
+      message: t("panel.backup.encryptionDisableMessage"),
+      confirmLabel: t("panel.backup.encryptionDisable"),
+      action: async () => {
+        if (!canAdminWrite()) return;
+        encryptionRequest++;
+        try {
+          // Boş parola = kaydı sil + şifrelemeyi kapat (sunucu sözleşmesi).
+          const settings = await setBackupEncryption("");
+          if (!isActive() || !isAdmin.value) return;
+          encryption.value = settings;
+          if (draft === encryptionDraft) resetEncryptionForm();
+          showNotice(t("backup.encryption_saved"), false);
+        } catch (error) {
+          if (isActive()) showError(error);
+        }
       }
-    }
+    });
   });
 }
 
@@ -1915,18 +2012,35 @@ function resetEncryptionForm() {
  * kalkıyordu. Artık okunamadıysa bunu SÖYLÜYORUZ ve tekrar deneme yolu bırakıyoruz.
  */
 async function loadAutoBackup() {
+  if (busy.value) return false;
+  return readAutoBackup();
+}
+
+async function readAutoBackup() {
+  if (!isActive() || !isAdmin.value) return false;
+  const request = ++autoRequest;
+  const draft = autoDraft;
+  const isCurrent = () => isActive() && isAdmin.value && request === autoRequest;
   try {
-    autoStatus.value = await getAutomation();
-    applyAutoSettings(autoStatus.value.settings);
+    const status = await getAutomation();
+    if (!isCurrent()) return false;
+    autoStatus.value = status;
+    if (draft === autoDraft) applyAutoSettings(autoStatus.value.settings);
     autoLoad.clear();
+    return true;
   } catch (error) {
-    autoLoad.capture(error);
+    if (isCurrent()) {
+      autoStatus.value = null;
+      autoForm.value = null;
+      autoLoad.capture(error);
+    }
+    return false;
   }
 }
 
 /** Sunucudan gelen (normalize edilmiş) ayarları forma ve ortak program biçimine yazar. */
 function applyAutoSettings(settings: AutomationSettings) {
-  autoForm.value = { ...settings };
+  autoForm.value = { ...settings, backupDatabaseEngines: [...(settings.backupDatabaseEngines ?? [])] };
   Object.assign(autoSchedule, {
     mode: settings.backupScheduleMode,
     intervalHours: settings.backupIntervalHours,
@@ -1940,12 +2054,14 @@ function applyAutoSettings(settings: AutomationSettings) {
 }
 
 async function saveAutoBackup() {
-  if (!autoForm.value) return;
-  busy.value = true;
-  try {
+  if (!canAdminWrite() || !autoForm.value) return;
+  await withOperation(async () => {
+    autoRequest++;
+    const draft = autoDraft;
     // backupRemotePassword boş = sunucudaki kayıtlı parola korunur (Otomasyon ekranıyla aynı sözleşme).
-    autoStatus.value = await updateAutomation({
-      ...autoForm.value,
+    const status = await updateAutomation({
+      ...autoForm.value!,
+      backupDatabaseEngines: [...autoForm.value!.backupDatabaseEngines],
       backupScheduleMode: autoSchedule.mode,
       backupIntervalHours: autoSchedule.intervalHours,
       backupScheduleHour: autoSchedule.hour,
@@ -1956,26 +2072,34 @@ async function saveAutoBackup() {
       backupScheduleSecondMinute: autoSchedule.secondMinute ?? 0,
       backupRemotePassword: ""
     });
-    applyAutoSettings(autoStatus.value.settings);
+    if (!isActive() || !isAdmin.value) return;
+    autoStatus.value = status;
+    if (draft === autoDraft) applyAutoSettings(status.settings);
     showNotice(t("panel.backup.autoSaved"), false);
-  } catch (error) {
-    showError(error);
-  } finally {
-    busy.value = false;
-  }
+  });
 }
 
 async function refresh() {
+  if (!isActive()) return false;
+  const request = ++listRequest;
+  const isCurrent = () => isActive() && request === listRequest;
   loading.value = true;
   try {
-    backups.value = await getBackups();
+    const rows = await getBackups();
+    if (!isCurrent()) return false;
+    backups.value = rows;
+    const previousError = listLoad.message.value;
     listLoad.clear();
+    if (!updateReadOutcome() && noticeError.value && notice.value === previousError) showNotice("");
+    return true;
   } catch (error) {
+    if (!isCurrent()) return false;
     // Liste ÇEKİLEMEDİ: eski içerik silinip "yedek yok" gösterilmez.
     listLoad.capture(error);
-    showError(error);
+    if (!updateReadOutcome()) showError(error);
+    return false;
   } finally {
-    loading.value = false;
+    if (isCurrent()) loading.value = false;
   }
 }
 
@@ -1984,6 +2108,8 @@ function toggleWarnings(backupId: string) {
 }
 
 async function createSelectedBackup() {
+  if (!canWrite() || busy.value) return;
+  if (!isAdmin.value && backupKind.value !== "site" && backupKind.value !== "subscription") return;
   if (backupKind.value === "site") {
     await createSiteBackup();
     return;
@@ -1995,15 +2121,19 @@ async function createSelectedBackup() {
   }
 
   if (backupKind.value === "mail") {
-    // Yıkıcı değil (yalnız servis kısa süre durur) → nötr ton: kırmızı düğme ve "geri alınamaz" uyarısı yok.
-    const approved = await confirm({
-      title: t("panel.confirm.mailBackupTitle"),
-      message: t("panel.backup.confirmMailBackup"),
-      tone: "neutral",
-      confirmLabel: t("panel.backup.mailAction"),
+    const target = buildTargetPayload();
+    const label = runningLabel();
+    await withOperation(async () => {
+      // Yıkıcı değil (yalnız servis kısa süre durur) → nötr ton: kırmızı düğme ve "geri alınamaz" uyarısı yok.
+      const approved = await confirm({
+        title: t("panel.confirm.mailBackupTitle"),
+        message: t("panel.backup.confirmMailBackup"),
+        tone: "neutral",
+        confirmLabel: t("panel.backup.mailAction"),
+      });
+      if (!approved || !canAdminWrite()) return;
+      await performBackup(() => backupMail(target), label, target.encryptionPassword);
     });
-    if (!approved) return;
-    await runBackup(() => backupMail(buildTargetPayload()));
     return;
   }
 
@@ -2040,36 +2170,38 @@ async function createSubscriptionBackup() {
 }
 
 async function createDatabaseBackup() {
+  if (!canAdminWrite()) return;
   await runBackup(() => backupDatabase(databaseEngine.value, databaseName.value, buildTargetPayload()));
 }
 
 async function createDatabaseToConfiguredFtp() {
-  busy.value = true;
-  try {
+  if (!canAdminWrite()) return;
+  const engine = databaseEngine.value;
+  const name = databaseName.value;
+  const encryptionPassword = targetForm.encryptionPassword;
+  const label = runningLabel();
+  await withOperation(async () => {
     const { settings } = await getAutomation();
+    if (!canAdminWrite()) return;
     if (settings.backupTargetType !== 'ftp' || !settings.backupRemoteUrl) {
       showNotice(t('backup.retry_target_changed'), true);
       return;
     }
-    const engine = databaseEngine.value;
-    const name = databaseName.value;
     const target = settings.backupRemoteUrl;
-    const encryptionPassword = targetForm.encryptionPassword;
     await confirm({
       title: t('panel.backup.createToConfiguredFtp'),
       message: t('panel.backup.createToConfiguredFtpConfirm'),
       impact: [`${engine}: ${name || t('panel.backup.allDatabases')}`, target],
       tone: 'neutral',
       confirmLabel: t('panel.backup.createToConfiguredFtp'),
-      action: () => runBackup(() => backupDatabase(engine, name, {
-        useConfiguredFtpTarget: true, remoteUrl: target, encryptionPassword
-      }))
+      action: async () => {
+        if (!canAdminWrite()) return;
+        await performBackup(() => backupDatabase(engine, name, {
+          useConfiguredFtpTarget: true, remoteUrl: target, encryptionPassword
+        }), label, encryptionPassword);
+      }
     });
-  } catch (error) {
-    showError(error);
-  } finally {
-    busy.value = false;
-  }
+  });
 }
 
 /** Süren yedeğin şeritte yazacağı metin: NE alınıyor (tür + kaynak). */
@@ -2091,13 +2223,19 @@ function runningLabel() {
 }
 
 async function runBackup(operation: () => Promise<BackupRecord>) {
-  busy.value = true;
+  await withOperation(() => performBackup(operation, runningLabel(), targetForm.encryptionPassword));
+}
+
+async function performBackup(operation: () => Promise<BackupRecord>, label: string, submittedPassword: string) {
+  if (!canWrite()) return;
   // Yedek uçları işi ARKA PLANA ALMIYOR: istek uçuştayken yedek gerçekten sürüyor, bu yüzden
   // şeritte gösterilen süre işin gerçek süresidir.
-  runningBackup.begin(runningLabel());
+  runningBackup.begin(label);
   try {
     const created = await operation();
+    if (!isActive()) return;
     await refresh();
+    if (!isActive()) return;
     search.value = "";
     pager.reset();
     const closed = new Set(collapsedDays.value);
@@ -2106,13 +2244,12 @@ async function runBackup(operation: () => Promise<BackupRecord>) {
     activeView.value = "list";
     // Bu yedeğe özel parola tek seferliktir; formda asılı kalıp bir sonraki yedeğe sessizce
     // taşınmaz (kullanıcı hangi parolayla şifrelediğini karıştırmasın).
-    targetForm.encryptionPassword = "";
+    if (targetForm.encryptionPassword === submittedPassword) targetForm.encryptionPassword = "";
     reportCreateResult(created);
   } catch (error) {
-    showError(error);
+    if (isActive()) showError(error);
   } finally {
-    busy.value = false;
-    runningBackup.end();
+    if (isActive()) runningBackup.end();
   }
 }
 
@@ -2125,12 +2262,12 @@ async function runBackup(operation: () => Promise<BackupRecord>) {
 function reportCreateResult(record: BackupRecord) {
   const warnings = record.warnings ?? [];
   if (warnings.length === 0) {
-    showNotice(t("panel.backup.created"), false);
+    reportWithListState(t("panel.backup.created"));
     return;
   }
 
   expandedWarnings.value = record.id;
-  showNotice([
+  reportWithListState([
     t(record.status === "created_with_errors" ? "panel.backup.createdWithErrors" : "panel.backup.createdWithWarnings"),
     `${t("panel.backup.warningsListTitle", { name: record.name })}:`,
     warningText(record)
@@ -2145,36 +2282,38 @@ function reportCreateResult(record: BackupRecord) {
  * anlatmayan bir yol olurdu. Kopuksa zincir paneli açılır ve eksik halkanın ADI görünür.
  */
 async function restore(backup: BackupRecord, chainChecked = false) {
-  if (!chainChecked && backup.chainId) {
-    // Zinciri ÖLÇEMEDİYSEK de devam etmeyiz: kopuk bir zinciri geri yüklemeye başlamak, canlı
-    // içeriğin üzerine eksik bir durum yazmak demektir. Sebep şeritte yazar, kullanıcı yineleyebilir.
-    let resolved: BackupChain;
-    busy.value = true;
-    try {
-      resolved = await getBackupChain(backup.id);
-    } catch (error) {
-      showError(error);
-      return;
-    } finally {
-      busy.value = false;
+  backup = { ...backup };
+  await withOperation(async () => {
+    if (!chainChecked && backup.chainId) {
+      // Zinciri ÖLÇEMEDİYSEK de devam etmeyiz: kopuk bir zinciri geri yüklemeye başlamak, canlı
+      // içeriğin üzerine eksik bir durum yazmak demektir. Sebep şeritte yazar, kullanıcı yineleyebilir.
+      let resolved: BackupChain;
+      try {
+        resolved = await getBackupChain(backup.id);
+        if (!canWrite()) return;
+      } catch (error) {
+        if (isActive()) showError(error);
+        return;
+      }
+
+      // Zincir SAĞLAMSA panel durumuna dokunulmaz (kullanıcı onu açmadı); kopuksa panel bu kayda
+      // bağlanır ve eksik halkanın ADI ekranda görünür.
+      if (resolved.broken) {
+        chainRequest++;
+        chainRecord.value = backup;
+        chain.value = resolved;
+        chainLoad.clear();
+        closeBrowser();
+        activeView.value = "list";
+        showNotice(
+          `${t("panel.backup.chain.broken")} — ${t("panel.backup.chain.missing")}: ${resolved.missingLinks.join(", ")}`,
+          true);
+        return;
+      }
     }
 
-    // Zincir SAĞLAMSA panel durumuna dokunulmaz (kullanıcı onu açmadı); kopuksa panel bu kayda
-    // bağlanır ve eksik halkanın ADI ekranda görünür.
-    if (resolved.broken) {
-      chainRecord.value = backup;
-      chain.value = resolved;
-      chainLoad.clear();
-      browseRecord.value = null;
-      activeView.value = "list";
-      showNotice(
-        `${t("panel.backup.chain.broken")} — ${t("panel.backup.chain.missing")}: ${resolved.missingLinks.join(", ")}`,
-        true);
-      return;
-    }
-  }
-
-  await fullRestore.restore(backup, reportRestoreResult, showError, refresh);
+    await fullRestore.restore(backup, reportRestoreResult, showError, refresh);
+  });
 }
 
 /**
@@ -2204,7 +2343,7 @@ async function askBackupPassword() {
 function reportRestoreResult(record: BackupRecord) {
   const report = restoreResult(record, t);
   if (report.failed) expandedWarnings.value = record.id;
-  showNotice(report.message, report.failed);
+  reportWithListState(report.message, report.failed);
 }
 
 /** Tek bir uyarının çevrilmiş satırı ("hedef: sebep"). */
@@ -2243,14 +2382,17 @@ function backupImpact(backup: BackupRecord) {
 // =====================================================================================
 
 async function openChain(backup: BackupRecord) {
-  browseRecord.value = null;
+  if (!isActive() || busy.value) return;
+  closeBrowser();
   activeView.value = "list";
   await loadChain(backup);
 }
 
 function closeChain() {
+  chainRequest++;
   chainRecord.value = null;
   chain.value = null;
+  chainLoading.value = false;
   chainLoad.clear();
 }
 
@@ -2267,108 +2409,116 @@ async function reloadChain() {
  * A yedeğinin başlığı altında B yedeğinin zincirini göstermeye açık kapı bırakıyordu.
  */
 async function loadChain(backup: BackupRecord) {
-  chainRecord.value = backup;
+  if (!isActive()) return null;
+  const request = ++chainRequest;
+  const isCurrent = () => isActive() && request === chainRequest;
+  chainRecord.value = { ...backup };
+  chain.value = null;
   chainLoading.value = true;
   try {
-    chain.value = await getBackupChain(backup.id);
+    const result = await getBackupChain(backup.id);
+    if (!isCurrent()) return null;
+    chain.value = result;
     chainLoad.clear();
     return chain.value;
   } catch (error) {
+    if (!isCurrent()) return null;
     chain.value = null;
     chainLoad.capture(error);
     return null;
   } finally {
-    chainLoading.value = false;
+    if (isCurrent()) chainLoading.value = false;
   }
 }
 
-/**
- * Bu yedek silinirse KULLANILAMAZ hâle gelecek kayıtlar (kendisi dahil).
- *
- * Sunucudaki ölçüyle aynı: aynı zincirde SONRA gelen halkalar. Kullanıcı kaç yedeğin gideceğini
- * onay diyaloğunda görür; sunucunun 409 ayrıntısı da adlarını yazar.
- */
+const chainDeletionPlan = computed(() => chainRecord.value
+  ? getBackupDeletionPlan(backups.value, chainRecord.value)
+  : { targets: [], ambiguous: false });
+
+/** Only actual descendants belong to the selected branch's destructive impact. */
 function chainDeleteTargets(backup: BackupRecord) {
-  if (!backup.chainId) {
-    return [backup];
-  }
-
-  const dependents = backups.value.filter((item) =>
-    item.id !== backup.id &&
-    item.chainId === backup.chainId &&
-    (item.chainIndex > backup.chainIndex ||
-      (item.chainIndex === backup.chainIndex && item.createdAtUtc > backup.createdAtUtc)));
-
-  return [backup, ...dependents];
+  return getBackupDeletionPlan(backups.value, backup).targets;
 }
 
 async function retryRemote(backup: BackupRecord) {
-  await loadAutoBackup();
-  if (!autoForm.value || autoForm.value.backupTargetType !== 'ftp') {
-    showNotice(t('backup.retry_target_changed'), true);
-    return;
-  }
-  const target = autoForm.value.backupRemoteUrl;
-  await confirm({
-    title: t('panel.backup.retryRemote'),
-    message: t('panel.backup.retryRemoteConfirm'),
-    tone: 'neutral',
-    confirmLabel: t('panel.backup.retryRemote'),
-    impact: [backup.name, target],
-    action: async () => {
-      busy.value = true;
-      try {
-        await retryRemoteUpload(backup.id, target);
-        await refresh();
-        showNotice(t('backup.remote_retried'), false);
-      } catch (error) { showError(error); }
-      finally { busy.value = false; }
+  if (!canAdminWrite()) return;
+  backup = { ...backup };
+  await withOperation(async () => {
+    if (!await readAutoBackup()) {
+      if (isActive() && autoLoad.message.value) showNotice(autoLoad.message.value, true);
+      return;
     }
+    if (!canAdminWrite()) return;
+    if (!autoForm.value || autoForm.value.backupTargetType !== 'ftp' || !autoForm.value.backupRemoteUrl) {
+      showNotice(t('backup.retry_target_changed'), true);
+      return;
+    }
+    const target = autoForm.value.backupRemoteUrl;
+    await confirm({
+      title: t('panel.backup.retryRemote'),
+      message: t('panel.backup.retryRemoteConfirm'),
+      tone: 'neutral',
+      confirmLabel: t('panel.backup.retryRemote'),
+      impact: [backup.name, target],
+      action: async () => {
+        if (!canAdminWrite()) return;
+        try {
+          await retryRemoteUpload(backup.id, target);
+          if (!isActive()) return;
+          await refresh();
+          if (isActive()) reportWithListState(t('backup.remote_retried'));
+        } catch (error) { if (isActive()) showError(error); }
+      }
+    });
   });
 }
 
 async function removeBackup(backup: BackupRecord) {
+  backup = { ...backup };
   // 409 "bağımlı halka var" sonucunda İKİNCİ bir onay gerekir; onay diyaloğu aynı anda tek
   // örnektir, bu yüzden zincir onayı ilk diyalog KAPANDIKTAN sonra açılır.
   let dependentsRejected = false;
   let dependentsDetail = "";
 
-  await confirm({
-    title: t("panel.confirm.deleteBackupTitle", { name: backup.name }),
-    message: t("panel.backup.confirmDelete", { name: backup.name }),
-    impact: backupImpact(backup),
-    action: async () => {
-      busy.value = true;
-      try {
-        await deleteBackup(backup.id);
-        await refresh();
-        if (browseRecord.value?.id === backup.id) {
-          closeBrowser();
+  await withOperation(async () => {
+    await confirm({
+      title: t("panel.confirm.deleteBackupTitle", { name: backup.name }),
+      message: t("panel.backup.confirmDelete", { name: backup.name }),
+      impact: backupImpact(backup),
+      action: async () => {
+        if (!canWrite()) return;
+        try {
+          await deleteBackup(backup.id);
+          if (!isActive()) return;
+          await refresh();
+          if (!isActive()) return;
+          if (browseRecord.value?.id === backup.id) {
+            closeBrowser();
+          }
+          if (chainRecord.value?.id === backup.id) {
+            closeChain();
+          }
+          reportWithListState(t("panel.backup.deletedNotice"));
+        } catch (error) {
+          if (!isActive()) return;
+          if (extractApiMessage(error) === "backup.chain_has_dependents") {
+            // Otomatik olarak zincir silmeye GEÇMEYİZ: kullanıcı ne kaybedeceğini görmeli.
+            // Ayrıntı (bağımlı halkaların adları) boş gelse bile akış devam eder; kaybedilecek
+            // kayıtları ekran zaten kendi listesinden de çözebiliyor.
+            dependentsRejected = true;
+            dependentsDetail = extractApiDetails(error);
+            return;
+          }
+          showError(error);
         }
-        if (chainRecord.value?.id === backup.id) {
-          closeChain();
-        }
-        showNotice(t("panel.backup.deletedNotice"), false);
-      } catch (error) {
-        if (extractApiMessage(error) === "backup.chain_has_dependents") {
-          // Otomatik olarak zincir silmeye GEÇMEYİZ: kullanıcı ne kaybedeceğini görmeli.
-          // Ayrıntı (bağımlı halkaların adları) boş gelse bile akış devam eder; kaybedilecek
-          // kayıtları ekran zaten kendi listesinden de çözebiliyor.
-          dependentsRejected = true;
-          dependentsDetail = extractApiDetails(error);
-          return;
-        }
-        showError(error);
-      } finally {
-        busy.value = false;
-      }
-    },
-  });
+      },
+    });
 
-  // Sunucu 409 verdiyse kullanıcı zinciri görerek ikinci bir karar verir.
-  if (dependentsRejected) {
-    await removeChain(backup, dependentsDetail);
-  }
+    // Sunucu 409 verdiyse kullanıcı zinciri görerek ikinci bir karar verir.
+    if (dependentsRejected && canWrite()) {
+      await confirmRemoveChain(backup, dependentsDetail);
+    }
+  });
 }
 
 /**
@@ -2376,7 +2526,18 @@ async function removeBackup(backup: BackupRecord) {
  * yazılması istenir; kaç yedeğin gideceği ve adları onay kutusunda listelenir.
  */
 async function removeChain(backup: BackupRecord, dependentsDetail = "") {
-  const targets = chainDeleteTargets(backup);
+  backup = { ...backup };
+  await withOperation(() => confirmRemoveChain(backup, dependentsDetail));
+}
+
+async function confirmRemoveChain(backup: BackupRecord, dependentsDetail: string) {
+  const plan = getBackupDeletionPlan(backups.value, backup);
+  if (plan.ambiguous) {
+    showNotice(t("backup.chain_ambiguous"), true);
+    return;
+  }
+  const targets = plan.targets.map(({ id, name }) => ({ id, name }));
+  const expectedBackupIds = targets.map(item => item.id);
   const impact = targets.map((item) => item.name);
   if (dependentsDetail) {
     impact.push(dependentsDetail);
@@ -2391,38 +2552,46 @@ async function removeChain(backup: BackupRecord, dependentsDetail = "") {
     requireText: backup.name,
     confirmLabel: t("panel.backup.chain.delete"),
     action: async () => {
-      busy.value = true;
+      if (!canWrite()) return;
       try {
-        const result = await deleteBackupChain(backup.id);
+        const result = await deleteBackupChain(backup.id, expectedBackupIds);
+        if (!isActive()) return;
         await refresh();
+        if (!isActive()) return;
         if (chainRecord.value && result.deletedIds.includes(chainRecord.value.id)) {
           closeChain();
         }
         if (browseRecord.value && result.deletedIds.includes(browseRecord.value.id)) {
           closeBrowser();
         }
-        showNotice(t("panel.backup.chain.deletedNotice", {
-          count: result.deletedIds.length,
-          names: result.deletedNames.join(", ")
-        }), false);
+        const deletedIds = new Set(result.deletedIds);
+        const remaining = targets.filter(item => !deletedIds.has(item.id));
+        if (remaining.length > 0) {
+          reportWithListState(t("panel.backup.chain.partialDeleted", {
+            count: deletedIds.size,
+            names: remaining.map(item => item.name).join(", ")
+          }), true);
+        } else {
+          reportWithListState(t("panel.backup.chain.deletedNotice", {
+            count: deletedIds.size,
+            names: result.deletedNames.join(", ")
+          }), false);
+        }
       } catch (error) {
-        showError(error);
-      } finally {
-        busy.value = false;
+        if (!isActive()) return;
+        if (extractApiMessage(error) === "backup.chain_changed") {
+          await refresh();
+          if (isActive()) reportWithListState(t("backup.chain_changed"), true);
+        } else {
+          showError(error);
+        }
       }
     },
   });
 }
 
 async function download(backup: BackupRecord) {
-  busy.value = true;
-  try {
-    await downloadBackup(backup.id, backup.name);
-  } catch (error) {
-    showError(error);
-  } finally {
-    busy.value = false;
-  }
+  await withOperation(() => downloadBackup(backup.id, backup.name), false);
 }
 
 function buildTargetPayload() {
@@ -2434,8 +2603,10 @@ function buildTargetPayload() {
 // =====================================================================================
 
 async function openBrowser(backup: BackupRecord) {
+  if (!isActive() || (busy.value && !browseLoading.value)) return;
+  closeBrowser();
   browseRecord.value = backup;
-  chainRecord.value = null;
+  closeChain();
   activeView.value = "list";
   selectedItems.value = [];
   itemsTargetPath.value = "";
@@ -2443,6 +2614,11 @@ async function openBrowser(backup: BackupRecord) {
 }
 
 function closeBrowser() {
+  browseRequest++;
+  if (browseLoading.value) busy.value = false;
+  browseLoading.value = false;
+  browsePrefix.value = "";
+  browseTruncated.value = false;
   browseRecord.value = null;
   browseEntries.value = [];
   selectedItems.value = [];
@@ -2450,16 +2626,24 @@ function closeBrowser() {
 }
 
 async function navigateTo(prefix: string) {
-  if (!browseRecord.value) return;
+  if (!isActive() || !browseRecord.value || (busy.value && !browseLoading.value)) return;
+  const recordId = browseRecord.value.id;
+  const request = ++browseRequest;
+  const isCurrent = () => isActive() && request === browseRequest && browseRecord.value?.id === recordId;
+  browsePrefix.value = prefix;
+  browseEntries.value = [];
+  browseTruncated.value = false;
   browseLoading.value = true;
   busy.value = true;
   try {
-    const result = await getBackupEntries(browseRecord.value.id, prefix);
+    const result = await getBackupEntries(recordId, prefix);
+    if (!isCurrent()) return;
     browsePrefix.value = result.prefix;
     browseEntries.value = result.entries;
     browseTruncated.value = result.truncated;
     browseLoad.clear();
   } catch (error) {
+    if (!isCurrent()) return;
     /*
      * Gözatma ucu parola ALMAZ (bilerek: parolayı sorgu dizesine koymak onu IIS erişim
      * günlüklerine ve tarayıcı geçmişine yazmak olurdu). Şifreli yedekte gözatma yalnız panelde
@@ -2472,101 +2656,76 @@ async function navigateTo(prefix: string) {
       browseLoad.capture(error);
     }
   } finally {
-    browseLoading.value = false;
-    busy.value = false;
+    if (isCurrent()) {
+      browseLoading.value = false;
+      busy.value = false;
+    }
   }
 }
 
 /**
  * SEÇİLEN öğeleri geri yükler ve sonucu DÜRÜST raporlar.
  *
- * Tek çağrı hızlıdır ama yarıda hata alırsa sunucu "hiçbir şey olmadı" demez: o ana kadar
- * çıkarılan dosyalar diskte kalır. Bu yüzden hata durumunda öğeler TEK TEK denenir ve özet
- * "N öğeden K tanesi geri yüklendi, M tanesi YÜKLENMEDİ: sebep" biçiminde verilir. Sağlıklı
- * durumda ek istek yapılmaz.
+ * Yarıda hata alınırsa önceki dosyalar diskte kalmış olabilir. Aynı yazmayı yeniden
+ * göndermek sonuç ölçmek değildir: otomatik tekrar yapılmaz, belirsizlik bildirilir.
  */
 async function restoreSelectedItems() {
   const record = browseRecord.value;
-  if (!record || selectedItems.value.length === 0) return;
+  if (!canWrite() || busy.value || !record || restoreItemsBusy.value || selectedItems.value.length === 0) return;
+  const request = browseRequest, epoch = getSessionEpoch();
+  const isCurrent = () => canWrite() && request === browseRequest && browseRecord.value?.id === record.id && epoch === getSessionEpoch();
+  const items = [...selectedItems.value];
+  const targetPath = itemsTargetPath.value;
 
-  // Şifreli yedekte parola önce sorulur (gözatma kayıtlı parolayla çalışmış olabilir, ama
-  // geri yükleme ucu isteğe ait parolayı da kabul eder).
-  let password = "";
-  if (record.encrypted) {
-    const entered = await askBackupPassword();
-    if (entered === null) {
-      return;
+  await withOperation(async () => {
+    // Şifreli yedekte parola önce sorulur (gözatma kayıtlı parolayla çalışmış olabilir, ama
+    // geri yükleme ucu isteğe ait parolayı da kabul eder).
+    let password = "";
+    if (record.encrypted) {
+      const entered = await askBackupPassword();
+      if (entered === null || !isCurrent()) {
+        return;
+      }
+
+      password = entered;
     }
 
-    password = entered;
-  }
+    const impact = [
+      `${t("panel.backup.name")}: ${record.name}`,
+      `${t("panel.backup.restoreSelected")}: ${items.length}`,
+      `${t("panel.backup.itemsTarget")}: ${targetPath || t("panel.backup.itemsTargetOriginal")}`
+    ];
 
-  const items = [...selectedItems.value];
-  const impact = [
-    `${t("panel.backup.name")}: ${record.name}`,
-    `${t("panel.backup.restoreSelected")}: ${items.length}`,
-    `${t("panel.backup.itemsTarget")}: ${itemsTargetPath.value || t("panel.backup.itemsTargetOriginal")}`
-  ];
-
-  // Yüksek riskli onay: seçilen öğeler hedeftekilerin ÜZERİNE yazılır → yedek adı yazılmadan devam edilemez.
-  await confirm({
-    title: t("panel.confirm.restoreBackupTitle", { name: record.name }),
-    message: t("panel.backup.confirmRestoreItems"),
-    impact,
-    requireText: record.name,
-    confirmLabel: t("panel.backup.restore"),
-    busyLabel: t("panel.backup.restoring"),
-    action: async () => {
-      busy.value = true;
-      try {
-        const result = await restoreBackupItems(record.id, items, itemsTargetPath.value, password);
-        selectedItems.value = [];
-        showNotice(t("panel.backup.itemsRestoredAll", {
-          items: items.length,
-          count: result.restoredCount,
-          target: result.targetRoot
-        }), false);
-      } catch (error) {
-        if (items.length === 1) {
-          showError(error);
-          return;
+    // Yüksek riskli onay: seçilen öğeler hedeftekilerin ÜZERİNE yazılır → yedek adı yazılmadan devam edilemez.
+    await confirm({
+      title: t("panel.confirm.restoreBackupTitle", { name: record.name }),
+      message: t("panel.backup.confirmRestoreItems"),
+      impact,
+      requireText: record.name,
+      confirmLabel: t("panel.backup.restore"),
+      busyLabel: t("panel.backup.restoring"),
+      action: async () => {
+        if (!isCurrent() || restoreItemsBusy.value) return;
+        restoreItemsBusy.value = true;
+        try {
+          const result = await restoreBackupItems(record.id, items, targetPath, password);
+          if (!isCurrent()) return;
+          if (selectedItems.value.length === items.length && selectedItems.value.every((item, index) => item === items[index])) selectedItems.value = [];
+          showNotice(t("panel.backup.itemsRestoredAll", {
+            items: items.length,
+            count: result.restoredCount,
+            target: result.targetRoot
+          }), false);
+        } catch (error) {
+          if (isCurrent()) showNotice(`${resolveApiMessage(error)}\n\n${t("panel.backup.itemsRestoreUnconfirmed")}`, true);
+        } finally {
+          if (isActive()) restoreItemsBusy.value = false;
+          password = "";
         }
-
-        await reportPartialItemRestore(record, items, password);
-      } finally {
-        busy.value = false;
-        password = "";
-      }
-    },
+      },
+    });
+    password = "";
   });
-}
-
-/** Toplu çağrı yarıda kaldı: hangi öğenin geçtiğini TEK TEK ölçüp sebebiyle raporlar. */
-async function reportPartialItemRestore(record: BackupRecord, items: string[], password: string) {
-  const outcome = await runBulk(
-    items,
-    (item) => item,
-    (item) => restoreBackupItems(record.id, [item], itemsTargetPath.value, password));
-
-  selectedItems.value = outcome.failures.map((failure) => failure.key);
-
-  if (outcome.failures.length === 0) {
-    showNotice(t("panel.backup.itemsRestoredAll", {
-      items: outcome.total,
-      count: outcome.done,
-      target: itemsTargetPath.value || t("panel.backup.itemsTargetOriginal")
-    }), false);
-    return;
-  }
-
-  const head = t("panel.backup.itemsRestoredPartial", {
-    total: outcome.total,
-    done: outcome.done,
-    failed: outcome.failures.length
-  });
-  const lines = outcome.failures.map((failure) =>
-    t("panel.bulk.failedItem", { name: failure.key, reason: failure.reason }));
-  showNotice([head, ...lines].join("\n"), true);
 }
 
 // =====================================================================================
@@ -2574,6 +2733,7 @@ async function reportPartialItemRestore(record: BackupRecord, items: string[], p
 // =====================================================================================
 
 async function openSchedules() {
+  if (!isActive()) return;
   activeView.value = "schedules";
   if (!schedulesLoaded.value) {
     await loadSchedules();
@@ -2581,35 +2741,78 @@ async function openSchedules() {
 }
 
 async function loadSchedules() {
+  if (busy.value) return false;
+  return readSchedules();
+}
+
+async function readSchedules() {
+  if (!isActive()) return false;
+  const request = ++schedulesRequest;
+  const isCurrent = () => isActive() && request === schedulesRequest;
   schedulesLoading.value = true;
   try {
-    schedules.value = await getBackupSchedules();
-    schedulesLoad.clear();
-  } catch (error) {
-    schedules.value = [];
-    schedulesLoad.capture(error);
-  } finally {
-    schedulesLoading.value = false;
+    const rows = await getBackupSchedules();
+    if (!isCurrent()) return false;
+    schedules.value = rows;
     schedulesLoaded.value = true;
+    schedulesLoad.clear();
+    updateReadOutcome();
+    return true;
+  } catch (error) {
+    if (isCurrent()) {
+      schedulesLoaded.value = false;
+      schedulesLoad.capture(error);
+      updateReadOutcome();
+    }
+    return false;
+  } finally {
+    if (isCurrent()) schedulesLoading.value = false;
   }
 }
 
 /** Kayıtlı programı (yoksa VARSAYILANLARI) forma alır. */
 async function openScheduleForm(userId: string) {
+  if (!isActive() || (busy.value && !scheduleFormLoading.value)) return;
   if (!userId) {
     showNotice(t("panel.backup.subscription.required"), true);
     return;
   }
 
+  const request = ++scheduleFormRequest;
+  const isCurrent = () => isActive() && request === scheduleFormRequest;
+  scheduleFormLoading.value = true;
   busy.value = true;
   try {
     const dto = await getBackupSchedule(userId);
-    applyScheduleToForm(dto);
+    if (isCurrent()) applyScheduleToForm(dto);
   } catch (error) {
-    showError(error);
+    if (isCurrent()) {
+      scheduleForm.value = null;
+      showError(error);
+    }
   } finally {
-    busy.value = false;
+    if (isCurrent()) {
+      busy.value = false;
+      scheduleFormLoading.value = false;
+    }
   }
+}
+
+function closeScheduleForm() {
+  scheduleFormRequest++;
+  scheduleForm.value = null;
+  if (scheduleFormLoading.value) busy.value = false;
+  scheduleFormLoading.value = false;
+}
+
+function invalidateSchedulesRead() {
+  schedulesRequest++;
+  schedulesLoading.value = false;
+}
+
+function reportScheduleResult(message: string, failed = false, includeList = false) {
+  readOutcomeNotice = { message, failed, list: includeList, schedules: true, displayed: "" };
+  publishReadOutcome(readOutcomeNotice);
 }
 
 function applyScheduleToForm(dto: SubscriptionBackupSchedule) {
@@ -2645,8 +2848,9 @@ async function saveSchedule() {
   const form = scheduleForm.value;
   if (!form) return;
 
-  busy.value = true;
-  try {
+  await withOperation(async () => {
+    invalidateSchedulesRead();
+    const draft = scheduleDraft;
     const dto = await updateBackupSchedule(form.userId, {
       enabled: form.enabled,
       scheduleMode: form.plan.mode,
@@ -2672,79 +2876,82 @@ async function saveSchedule() {
       remotePassword: form.remotePassword
     });
 
-    applyScheduleToForm(dto);
-    await loadSchedules();
+    if (!isActive()) return;
+    if (draft === scheduleDraft && scheduleForm.value === form) applyScheduleToForm(dto);
+    await readSchedules();
+    if (!isActive()) return;
 
     if (dto.throttledByQuota) {
       // Kaydedildi AMA istenen sıklıkla değil: sebebi (plan kotası) söylenmeden "kaydedildi"
       // demek, kullanıcının kurmadığı bir programı kurdu sanmasıdır.
-      showNotice(t("panel.backup.schedule.throttled", { hours: dto.intervalHours }), true);
+      reportScheduleResult(t("panel.backup.schedule.throttled", { hours: dto.intervalHours }), true);
       return;
     }
 
-    showNotice(t("backup.schedule_saved"), false);
-  } catch (error) {
-    showError(error);
-  } finally {
-    busy.value = false;
-  }
+    reportScheduleResult(t("backup.schedule_saved"));
+  });
 }
 
 async function removeSchedule(schedule: SubscriptionBackupSchedule) {
-  await confirm({
-    title: t("panel.backup.schedule.removeTitle"),
-    message: t("panel.backup.schedule.removeMessage"),
-    impact: [schedule.userName || schedule.userId],
-    confirmLabel: t("panel.backup.schedule.remove"),
-    action: async () => {
-      busy.value = true;
-      try {
-        await deleteBackupSchedule(schedule.userId);
-        if (scheduleForm.value?.userId === schedule.userId) {
-          scheduleForm.value = null;
+  schedule = { ...schedule };
+  await withOperation(async () => {
+    invalidateSchedulesRead();
+    await confirm({
+      title: t("panel.backup.schedule.removeTitle"),
+      message: t("panel.backup.schedule.removeMessage"),
+      impact: [schedule.userName || schedule.userId],
+      confirmLabel: t("panel.backup.schedule.remove"),
+      action: async () => {
+        if (!canWrite()) return;
+        try {
+          await deleteBackupSchedule(schedule.userId);
+          if (!isActive()) return;
+          if (scheduleForm.value?.userId === schedule.userId) {
+            closeScheduleForm();
+          }
+          await readSchedules();
+          if (isActive()) reportScheduleResult(t("backup.schedule_deleted"));
+        } catch (error) {
+          if (isActive()) showError(error);
         }
-        await loadSchedules();
-        showNotice(t("backup.schedule_deleted"), false);
-      } catch (error) {
-        showError(error);
-      } finally {
-        busy.value = false;
-      }
-    },
+      },
+    });
   });
 }
 
 async function runScheduleNow(schedule: SubscriptionBackupSchedule) {
-  const approved = await confirm({
-    title: t("panel.backup.schedule.runTitle"),
-    message: t("panel.backup.schedule.runMessage"),
-    tone: "neutral",
-    confirmLabel: t("panel.backup.schedule.runNow"),
-    impact: [schedule.userName || schedule.userId]
-  });
-  if (!approved) return;
+  schedule = { ...schedule };
+  await withOperation(async () => {
+    invalidateSchedulesRead();
+    const draft = scheduleDraft;
+    const approved = await confirm({
+      title: t("panel.backup.schedule.runTitle"),
+      message: t("panel.backup.schedule.runMessage"),
+      tone: "neutral",
+      confirmLabel: t("panel.backup.schedule.runNow"),
+      impact: [schedule.userName || schedule.userId]
+    });
+    if (!approved || !canWrite()) return;
 
-  busy.value = true;
-  try {
     const dto = await runBackupScheduleNow(schedule.userId);
-    await loadSchedules();
+    if (!isActive()) return;
+    await readSchedules();
+    if (!isActive()) return;
     await refresh();
-    if (scheduleForm.value?.userId === dto.userId) {
+    if (!isActive()) return;
+    if (draft === scheduleDraft && scheduleForm.value?.userId === dto.userId) {
       applyScheduleToForm(dto);
     }
 
     // "Başlatıldı" demek yetmez: tur bittiğinde sonucu kaydın kendisi taşır.
     if (dto.lastStatus === "failed" || dto.lastStatus === "completed_with_errors") {
-      showNotice([lastStatusLabel(dto), dto.lastDetails].filter(Boolean).join("\n"), true);
+      reportScheduleResult([lastStatusLabel(dto), dto.lastDetails].filter(Boolean).join("\n"), true, true);
       return;
     }
 
-    showNotice([t("backup.schedule_run"), dto.lastDetails].filter(Boolean).join("\n"), false);
-  } catch (error) {
-    showError(error);
-  } finally {
-    busy.value = false;
-  }
+    const confirmed = dto.lastStatus === "completed";
+    reportScheduleResult([t(confirmed ? "backup.schedule_run" : "panel.backup.schedule.resultUnconfirmed"), dto.lastDetails].filter(Boolean).join("\n"), !confirmed, true);
+  });
 }
 
 function retentionLabel(schedule: SubscriptionBackupSchedule) {
@@ -2823,10 +3030,25 @@ function statusTone(status: string) {
   align-content: start;
 }
 
+.backup-table {
+  --backup-row-min-width: 1040px;
+}
+
+.backup-create {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.backup-create .section-head,
+.backup-create .section-head > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
 /* Eylem sütunu SABİT genişlikte: düğmeler her satırda aynı düzende otursun, satırdan satıra
    yeri kaymasın (oransal genişlikte uzun yedek adları düğme sütununu daraltıp diziliş bozuyordu). */
 .backup-row {
-  grid-template-columns: minmax(200px, 1.3fr) minmax(0, 1.2fr) minmax(0, 0.9fr) minmax(0, 1fr) 320px;
+  min-width: var(--backup-row-min-width);
+  grid-template-columns: minmax(200px, 1.3fr) minmax(160px, 1.2fr) minmax(110px, 0.9fr) minmax(150px, 1fr) 320px;
   align-items: start;
 }
 
@@ -2855,9 +3077,10 @@ function statusTone(status: string) {
 }
 
 .schedule-row {
+  min-width: 1240px;
   grid-template-columns:
-    minmax(140px, 1.1fr) minmax(0, 0.8fr) minmax(0, 0.9fr)
-    minmax(0, 0.9fr) minmax(0, 0.7fr) minmax(0, 1.2fr) 250px;
+    minmax(180px, 1.1fr) minmax(110px, 0.8fr) minmax(145px, 0.9fr)
+    minmax(130px, 0.9fr) minmax(110px, 0.7fr) minmax(210px, 1.2fr) 250px;
   align-items: start;
 }
 
@@ -2902,7 +3125,7 @@ function statusTone(status: string) {
   justify-content: space-between;
   gap: var(--sp-10);
   flex-wrap: wrap;
-  min-width: 720px;
+  min-width: var(--backup-row-min-width);
   /* 9px 11px -> --sp-10 --sp-12: ölçeğe girmenin YANINDA ölçülebilir bir hizalama da getiriyor.
      `.data-row` dolgusu tam olarak 10/12; gün başlığı 9/11 ile her kenarda 1px içeride
      duruyordu, yani başlığın metni altındaki satırların metniyle AYNI x'te başlamıyordu. */
@@ -3007,6 +3230,11 @@ function statusTone(status: string) {
   min-width: 0;
 }
 
+.toolbar-search > .meta {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .auto-run-line {
   display: flex;
   align-items: center;
@@ -3082,15 +3310,16 @@ function statusTone(status: string) {
    yerine gecmez, YANINDA durur. */
 .warning-detail,
 .location-detail {
+  position: sticky;
+  left: var(--sp-16);
   margin-left: var(--sp-16);
   border-left: 3px solid var(--warn-1);
   border-top: none;
   background: var(--surface-2);
-  /* KAYAN TABLODA DA BAĞLI KALIR. Satırlar `min-width: 720px`; ayrıntı kutusunda bu yoktu, yani
-     tablo yana kaydırıldığında satır sağa doğru uzayıp kutu olduğu yerde kalıyor ve girinti
-     ipucu kopuyordu — gün başlığında AYNI hata ölçülüp `min-width: 720px` ile düzeltilmişti.
-     Girinti kadarı düşülür ki kutu satırdan daha geniş olup taşmasın. */
-  min-width: calc(720px - var(--sp-16));
+  /* Yatay kaydırılan satırın açıklaması görünür tablo alanında okunabilir kalır. */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .location-detail {

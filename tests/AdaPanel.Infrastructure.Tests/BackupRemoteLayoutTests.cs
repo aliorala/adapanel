@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Net;
 using Microsoft.AspNetCore.DataProtection;
 using System.Net.Sockets;
@@ -571,7 +572,7 @@ public sealed class BackupRemoteLayoutTests
 
         await alan.KayitlariYazAsync(
             EskiKayit(alan, "eski", $"ftp://127.0.0.1:{sunucu.Port}{eskiUzakYol}", gunOnce: 40),
-            TazeKayit(alan, "taze"));
+            TazeFtpKayit(alan, sunucu, "taze"));
 
         var silinen = await alan.ServisKur().PruneAsync(
             retentionDays: 7,
@@ -597,7 +598,7 @@ public sealed class BackupRemoteLayoutTests
 
         await alan.KayitlariYazAsync(
             EskiKayit(alan, "eski", $"ftp://127.0.0.1:{sunucu.Port}{duzYol}", gunOnce: 40),
-            TazeKayit(alan, "taze"));
+            TazeFtpKayit(alan, sunucu, "taze"));
 
         var silinen = await alan.ServisKur().PruneAsync(
             retentionDays: 7,
@@ -625,7 +626,7 @@ public sealed class BackupRemoteLayoutTests
         const string path = "/yedekler/2026-08-01/sites/shop.example.com/eski.zip";
         server.DosyaKoy(path);
         if (keepOtherFile) server.DosyaKoy("/yedekler/2026-08-01/sites/other/keep.zip");
-        await alan.KayitlariYazAsync(EskiKayit(alan, "eski", server.TabanAdres(path.TrimStart('/')), 40), TazeKayit(alan, "taze"));
+        await alan.KayitlariYazAsync(EskiKayit(alan, "eski", server.TabanAdres(path.TrimStart('/')), 40), TazeFtpKayit(alan, server, "taze"));
 
         var result = await alan.ServisKur().PruneAsync(7,
             new BackupPruneRemoteOptions { UserName = "u", Password = "p" }, alan.Iptal);
@@ -697,7 +698,7 @@ public sealed class BackupRemoteLayoutTests
         const string uzak = "https://bulut.ornek.com/dav/yedek/2026-08-01/sites/site.zip";
         var eski = EskiKayit(alan, "eski", uzak, gunOnce: 40);
         eski.TargetType = "webdav";
-        await alan.KayitlariYazAsync(eski, TazeKayit(alan, "taze"));
+        await alan.KayitlariYazAsync(eski, TazeKayit(alan, "taze", "https://bulut.ornek.com/dav/yedek/current/sites/taze.zip"));
 
         var silinen = await alan.ServisKur(kayitci).PruneAsync(
             retentionDays: 7,
@@ -887,12 +888,15 @@ public sealed class BackupRemoteLayoutTests
 
     /// <summary>
     /// Budamanin "kaynak korumasi" kurali: bir kaynagin GUNCEL yedegi yoksa eskisine dokunulmaz.
-    /// Eski kaydin silinebilmesi icin ayni kaynaktan taze bir yedek gerekir.
+    /// Eski uzak kaydin silinebilmesi icin ayni kaynaktan taze ve uzak kopyasi bulunan
+    /// bir yedek gerekir. Test burada silme yolunu olcer, off-site korumasini atlamaz.
     /// </summary>
-    private static BackupRecordDto TazeKayit(GeciciAlan alan, string id)
+    private static BackupRecordDto TazeKayit(GeciciAlan alan, string id, string remoteUri)
     {
         var yol = Path.Combine(alan.Kok, $"{id}.zip");
-        File.WriteAllText(yol, "taze yedek");
+        using (var archive = ZipFile.Open(yol, ZipArchiveMode.Create))
+        using (var writer = new StreamWriter(archive.CreateEntry("files/index.txt").Open()))
+            writer.Write("taze yedek");
         return new BackupRecordDto
         {
             Id = id,
@@ -902,9 +906,22 @@ public sealed class BackupRemoteLayoutTests
             Path = yol,
             Format = "zip",
             CreatedAtUtc = DateTime.UtcNow,
-            TargetType = "local",
-            Status = "created"
+            TargetType = remoteUri.StartsWith("ftp:", StringComparison.Ordinal) ? "ftp" : "webdav",
+            RemoteUri = remoteUri,
+            RemoteState = BackupPresence.Present,
+            IntegrityState = BackupArchiveProbe.Measure(yol, "zip").State,
+            Size = new FileInfo(yol).Length,
+            Status = "created_remote_synced"
         };
+    }
+
+    private static BackupRecordDto TazeFtpKayit(GeciciAlan alan, SahteFtpSunucusu server, string id)
+    {
+        var path = $"/yedekler/current/sites/shop.example.com/{id}.zip";
+        var record = TazeKayit(alan, id, server.TabanAdres(path.TrimStart('/')));
+        server.DosyaKoy(path);
+        server.Dosyalar[path] = File.ReadAllBytes(record.Path);
+        return record;
     }
 
     private sealed class SahteDokumcu(bool bosDokum) : IDatabaseService

@@ -46,6 +46,13 @@ public interface ISubscriptionBackupScheduleService
     /// </summary>
     Task<SubscriptionBackupScheduleDto> RunNowAsync(Guid userId, CancellationToken cancellationToken = default);
 
+    async Task<SubscriptionBackupScheduleDto> RunNowAsync(Guid userId, Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken = default)
+    {
+        await beforeMutation(cancellationToken);
+        return await RunNowAsync(userId, cancellationToken);
+    }
+
     /// <summary>
     /// Zamanı gelen bütün abonelik programlarını çalıştırır (arka plan işçisi çağırır).
     /// Bir aboneliğin hatası turu düşürmez; diğerleri işlenmeye devam eder.

@@ -5,7 +5,7 @@
         <h3>{{ t("panel.webdb.title") }}</h3>
         <p>{{ t("panel.webdb.subtitle") }}</p>
       </div>
-      <button class="secondary compact" :disabled="loading" @click="refreshWorkspace">
+      <button class="secondary compact" :disabled="loading || !!busyProvider || openingPma" @click="refreshWorkspace">
         {{ t("panel.webdb.refresh") }}
       </button>
     </div>
@@ -15,15 +15,15 @@
     <div class="summary-strip">
       <div class="summary-item">
         <span>{{ t("panel.webdb.providers") }}</span>
-        <strong>{{ deployments.length }}</strong>
+        <strong>{{ workspaceLoaded ? deployments.length : "—" }}</strong>
       </div>
       <div class="summary-item">
         <span>{{ t("panel.webdb.readyCount") }}</span>
-        <strong>{{ deployedCount }}</strong>
+        <strong>{{ workspaceLoaded ? deployedCount : "—" }}</strong>
       </div>
       <div class="summary-item">
         <span>{{ t("panel.webdb.installedCount") }}</span>
-        <strong>{{ installedCount }}</strong>
+        <strong>{{ workspaceLoaded ? installedCount : "—" }}</strong>
       </div>
       <div class="summary-item">
         <span>{{ t("panel.webdb.access") }}</span>
@@ -65,36 +65,42 @@
         <span>{{ accessModeLabel(item.accessMode) }}</span>
         <a v-if="item.url && item.isDeployed" :href="accessUrl(item)" target="_blank" rel="noreferrer">{{ accessUrl(item) }}</a>
         <span v-else class="muted-cell">{{ item.provider === "pgadmin" ? t("panel.webdb.desktopLaunchHint") : "-" }}</span>
-        <span class="row-actions">
+        <div class="row-actions">
           <button
             class="compact"
-            v-bind="writeGate(busyProvider === item.provider || (item.provider === 'pgadmin' && item.isInstalled))"
+            v-bind="writeGate(!workspaceLoaded || loading || !!busyProvider || openingPma || (item.provider === 'pgadmin' && item.isInstalled))"
             @click="runAction(item.provider, item.componentId)">
             {{ actionLabel(item) }}
           </button>
-          <button
-            v-if="item.provider === 'phpmyadmin' && item.isDeployed"
-            class="secondary compact"
-            :disabled="openingPma"
-            @click="openPhpMyAdminRoot">
-            {{ openingPma ? t("panel.database.opening") : t("panel.webdb.open") }}
-          </button>
+          <div v-if="item.provider === 'phpmyadmin' && item.isDeployed" class="webdb-login">
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.database.engineLabel") }}</span>
+              <select v-model="selectedEngine" :disabled="loading || !!busyProvider || openingPma || !engineChoices.length">
+                <option v-if="!engineChoices.length" value="">{{ t("panel.webdb.noReadyEngine") }}</option>
+                <option v-for="engine in engineChoices" :key="engine.engine" :value="engine.engine">{{ engine.displayName }}</option>
+              </select>
+            </label>
+            <button class="secondary compact" v-bind="writeGate(!canOpenPhpMyAdmin)" @click="openPhpMyAdminRoot">
+              {{ openingPma ? t("panel.database.opening") : t("panel.webdb.open") }}
+            </button>
+          </div>
           <a v-else-if="item.url && item.isDeployed" class="secondary-link" :href="accessUrl(item)" target="_blank" rel="noreferrer">
             {{ t("panel.webdb.open") }}
           </a>
-        </span>
+        </div>
       </div>
       <!-- `deployments` çalışma alanından TÜRETİLİR; alan gelmeden de okunmadan da boş görünür.
            `loading` hata durumunda false olduğu için eski koşul "dağıtım yok" diyordu. Çalışma
            alanının KENDİSİ geldi mi, ölçüt bu. -->
-      <p v-if="!workspace" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+      <p v-if="!workspaceLoaded" class="empty-state" role="status" aria-live="polite">{{ t(loading ? "panel.common.loading" : "panel.common.loadFailed") }}</p>
       <p v-else-if="deployments.length === 0" class="empty-state">{{ t("panel.webdb.empty") }}</p>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { CanceledError } from "axios";
 import { useI18n } from "vue-i18n";
 import {
   deployAdminer,
@@ -103,8 +109,9 @@ import {
   type WebDbDeployment,
   type WebDbWorkspace
 } from "../api/webdb";
-import { openPhpMyAdmin } from "../api/databases";
-import { openReachable, toReachableUrl } from "../utils/url";
+import { getDatabaseEngines, openPhpMyAdmin, type DatabaseEngineStatus } from "../api/databases";
+import { getSessionEpoch } from "../api/client";
+import { openAsyncReachable } from "../utils/externalTab";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSoftwareStore } from "../stores/software";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
@@ -112,23 +119,40 @@ import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
-const { writeGate } = useSubscriptionGate();
+const { writeGate, locked } = useSubscriptionGate();
 const softwareStore = useSoftwareStore();
 const workspace = ref<WebDbWorkspace | null>(null);
+const workspaceLoaded = ref(false);
+const engines = ref<DatabaseEngineStatus[]>([]);
+const enginesLoaded = ref(false);
+const selectedEngine = ref("");
+const engineChoices = computed(() => enginesLoaded.value ? engines.value.filter(engine =>
+  ["mariadb", "mysql"].includes(engine.engine) && engine.installed && engine.ready) : []);
+const sessionEpoch = getSessionEpoch();
+let disposed = false, readSequence = 0, loginVersion = 0;
+const isActive = () => !disposed && sessionEpoch === getSessionEpoch();
+watch(selectedEngine, () => { loginVersion++; }, { flush: "sync" });
 const busyProvider = ref("");
 const openingPma = ref(false);
+const canOpenPhpMyAdmin = computed(() => isActive() && workspaceLoaded.value && !loading.value &&
+  !busyProvider.value && !openingPma.value && !locked.value && engineChoices.value.some(engine => engine.engine === selectedEngine.value) &&
+  deployments.value.some(item => item.provider === "phpmyadmin" && item.isDeployed));
 
 async function openPhpMyAdminRoot() {
+  if (!isActive() || !canOpenPhpMyAdmin.value) return;
+  const engine = selectedEngine.value, version = loginVersion;
+  const current = () => isActive() && version === loginVersion;
   openingPma.value = true;
   try {
-    // Genel açılış: root (tüm veritabanları). Tek DB için Veritabanları ekranındaki düğme kullanılır.
-    const result = await openPhpMyAdmin("mariadb");
-    openReachable(result.url);
+    await openAsyncReachable(async () => {
+      const result = await openPhpMyAdmin(engine);
+      if (!current()) throw new CanceledError("Database tool context changed");
+      return result.url;
+    });
   } catch (error) {
-    notice.value = resolveApiMessage(error);
-    noticeError.value = true;
+    if (current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    openingPma.value = false;
+    if (isActive()) openingPma.value = false;
   }
 }
 const loading = ref(false);
@@ -139,21 +163,54 @@ const deployedCount = computed(() => deployments.value.filter((item) => item.isH
 const installedCount = computed(() => deployments.value.filter((item) => item.isInstalled).length);
 
 onMounted(refreshWorkspace);
+onUnmounted(() => { disposed = true; ++readSequence; ++loginVersion; });
 
 async function refreshWorkspace() {
+  if (!isActive() || busyProvider.value || openingPma.value) return false;
+  return readWorkspace();
+}
+
+async function readWorkspace() {
+  const sequence = ++readSequence;
+  const current = () => isActive() && sequence === readSequence;
   loading.value = true;
+  workspaceLoaded.value = false;
+  enginesLoaded.value = false;
   try {
-    workspace.value = await getWebDbWorkspace();
-    notice.value = "";
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    const [deploymentResult, engineResult] = await Promise.allSettled([getWebDbWorkspace(), getDatabaseEngines()]);
+    if (!current()) return false;
+    const errors: string[] = [];
+    if (deploymentResult.status === "fulfilled") {
+      workspace.value = deploymentResult.value;
+      workspaceLoaded.value = true;
+    } else {
+      workspace.value = null;
+      errors.push(resolveApiMessage(deploymentResult.reason));
+    }
+    if (engineResult.status === "fulfilled") {
+      engines.value = engineResult.value;
+      enginesLoaded.value = true;
+    } else {
+      engines.value = [];
+      errors.push(resolveApiMessage(engineResult.reason));
+    }
+    if (!engineChoices.value.some(engine => engine.engine === selectedEngine.value)) {
+      selectedEngine.value = engineChoices.value[0]?.engine ?? "";
+    }
+    showNotice([...new Set(errors)].join("\n\n"), errors.length > 0);
+    return errors.length === 0;
   } finally {
-    loading.value = false;
+    if (current()) loading.value = false;
   }
 }
 
 async function runAction(provider: string, componentId: string) {
+  if (!isActive() || !workspaceLoaded.value || loading.value || busyProvider.value || openingPma.value || locked.value) return;
+  const target = deployments.value.find(item => item.provider === provider && item.componentId === componentId);
+  if (!target || !["pgadmin", "adminer", "phpmyadmin"].includes(provider) || (provider === "pgadmin" && target.isInstalled)) return;
   busyProvider.value = provider;
+  ++readSequence;
+  let completed = false;
   try {
     if (provider === "pgadmin") {
       await softwareStore.installComponent(componentId);
@@ -163,15 +220,16 @@ async function runAction(provider: string, componentId: string) {
       await deployPhpMyAdmin();
     }
 
-    await refreshWorkspace();
-    showNotice(
-      provider === "pgadmin" ? t("panel.webdb.installedMessage") : t("panel.webdb.deployedMessage"),
-      false
-    );
+    completed = true;
+    if (!isActive()) return;
+    if (!await readWorkspace()) return;
+    const measured = deployments.value.find(item => item.provider === provider);
+    const verified = !!measured && (provider === "pgadmin" ? measured.isInstalled : measured.isDeployed && measured.isHealthy);
+    showNotice(t(verified ? provider === "pgadmin" ? "panel.webdb.installedMessage" : "panel.webdb.deployedMessage" : "panel.webdb.resultUnconfirmed"), !verified);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isActive()) showNotice(completed ? `${t("panel.webdb.resultUnconfirmed")}\n\n${resolveApiMessage(error)}` : resolveApiMessage(error), true);
   } finally {
-    busyProvider.value = "";
+    if (isActive()) busyProvider.value = "";
   }
 }
 
@@ -264,6 +322,18 @@ function resolveApiMessage(error: unknown) {
   color: var(--text-muted);
 }
 
+.webdb-login {
+  display: grid;
+  gap: var(--sp-6);
+  min-width: 0;
+  width: 100%;
+}
+
+.webdb-login select {
+  width: 100%;
+  min-width: 0;
+}
+
 .secondary-link {
   padding: 7px 9px;
   border-radius: var(--radius-sm);
@@ -314,6 +384,7 @@ function resolveApiMessage(error: unknown) {
 @media (max-width: 1080px) {
   .webdb-row {
     grid-template-columns: 1fr;
+    min-width: 0;
   }
 
   .webdb-row.table-head {

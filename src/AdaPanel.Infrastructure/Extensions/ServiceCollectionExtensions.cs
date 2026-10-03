@@ -108,6 +108,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPhpService, Php.PhpService>();
         services.AddScoped<IAspNetService, AspNet.AspNetService>();
         services.AddScoped<IAppRuntimeService, AppRuntimes.AppRuntimeService>();
+        services.AddScoped<IAppRuntimeInventoryService, AppRuntimes.AppRuntimeInventoryService>();
         services.AddScoped<IReverseProxyService, ReverseProxy.ReverseProxyService>();
         services.AddScoped<INginxService, Nginx.NginxService>();
         services.AddScoped<Database.DatabaseCredentialStore>();

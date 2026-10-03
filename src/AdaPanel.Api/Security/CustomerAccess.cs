@@ -470,29 +470,35 @@ public static class CustomerAccess
             return null; // yönetici/operatör
         }
 
-        var sahipli = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var sahipli = new HashSet<string>(StringComparer.Ordinal);
+        var bilinenSahiplik = new HashSet<string>(StringComparer.Ordinal);
         var sahipler = new List<Guid> { await GetSubscriptionUserIdAsync(scopes, user, cancellationToken) };
         if (IsReseller(user))
         {
             sahipler.AddRange(await scopes.GetOwnedUserIdsAsync(user.GetRequiredUserId(), cancellationToken));
         }
 
-        foreach (var sahip in sahipler.Distinct())
+        var izinliSahipler = sahipler.ToHashSet();
+        // Use one ownership snapshot for both allowed keys and legacy fallback. A failed
+        // read must never turn someone else's database into an apparently unowned one.
+        foreach (var kayit in await ownership.GetAllAsync(cancellationToken))
         {
-            foreach (var (engine, databaseName) in await ownership.GetOwnedAsync(sahip, cancellationToken))
+            var anahtar = TenantDatabaseScope.Anahtar(kayit.Engine, kayit.DatabaseName);
+            bilinenSahiplik.Add(anahtar);
+            if (izinliSahipler.Contains(kayit.OwnerUserId))
             {
-                sahipli.Add(TenantDatabaseScope.Anahtar(engine, databaseName));
+                sahipli.Add(anahtar);
             }
         }
 
-        var adEslesen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var adEslesen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var site in kapsamdakiSiteler)
         {
             adEslesen.Add(site.Trim());
             adEslesen.Add(ResourceNaming.DatabaseNameFromSite(site));
         }
 
-        return new TenantDatabaseScope(sahipli, adEslesen);
+        return new TenantDatabaseScope(sahipli, adEslesen, bilinenSahiplik);
     }
 
     /// <summary>
@@ -522,12 +528,13 @@ public static class CustomerAccess
 /// Kiracının dokunabileceği veritabanları: motor+ad ile sahipli olanlar + ada göre sitesine
 /// ait olanlar.
 /// </summary>
-public sealed record TenantDatabaseScope(HashSet<string> Sahipli, HashSet<string> AdEslesen)
+public sealed record TenantDatabaseScope(HashSet<string> Sahipli, HashSet<string> AdEslesen, HashSet<string> BilinenSahiplik)
 {
     public static string Anahtar(string? engine, string? name) =>
-        $"{(engine ?? string.Empty).Trim()}|{(name ?? string.Empty).Trim()}";
+        DatabaseResourceIdentity.Key(engine, name);
 
     public bool Icerir(string? engine, string? name) =>
         Sahipli.Contains(Anahtar(engine, name)) ||
-        AdEslesen.Contains((name ?? string.Empty).Trim());
+        (!BilinenSahiplik.Contains(Anahtar(engine, name)) &&
+         AdEslesen.Any(siteName => DatabaseResourceIdentity.Same(engine, siteName, engine, name)));
 }

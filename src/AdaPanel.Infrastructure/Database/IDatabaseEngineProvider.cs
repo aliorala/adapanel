@@ -52,6 +52,11 @@ internal interface IDatabaseEngineProvider
     Task SetRootPasswordAsync(DatabaseConnectionProfile profile, string newPassword, CancellationToken cancellationToken)
         => Task.CompletedTask;
 
+    // Verify a fresh authenticated connection, never an already authenticated pooled session.
+    // False means authentication was rejected; unavailable/unknown results must throw.
+    Task<bool> VerifyAdminPasswordAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
+        => throw new NotSupportedException("Administrative password verification is not supported.");
+
     /// <summary>
     /// Uzak erişimin bu motordaki mekanizması: <c>mysqlHost</c>, <c>pgHba</c> ya da <c>none</c>.
     /// </summary>

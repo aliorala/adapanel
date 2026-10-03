@@ -7,16 +7,16 @@
       </div>
 
       <div v-if="activeWorkspace === 'components'" class="software-actions">
-        <button class="secondary compact" :disabled="softwareStore.loading" @click="refreshCatalog">
+        <button class="secondary compact" :disabled="actionsBusy" @click="refreshCatalog">
           {{ softwareStore.loading ? t("panel.software.scanning") : t("panel.software.scanSystem") }}
         </button>
-        <button class="secondary compact" :disabled="softwareStore.checkingUpdates" @click="checkForUpdates">
+        <button class="secondary compact" :disabled="actionsBusy || !canWrite" @click="checkForUpdates">
           <span v-if="softwareStore.updatableCount > 0 && !softwareStore.checkingUpdates" class="update-count">
             {{ softwareStore.updatableCount }}
           </span>
           {{ softwareStore.checkingUpdates ? t("panel.software.checkingUpdates") : t("panel.software.checkUpdates") }}
         </button>
-        <button class="compact" :disabled="softwareStore.installingDefaults" @click="installDefaultStack">
+        <button class="compact" :disabled="actionsBusy || !canWrite || !softwareStore.catalog?.defaults.length" @click="installDefaultStack">
           {{ softwareStore.installingDefaults ? t("panel.software.installing") : t("panel.software.installDefaults") }}
         </button>
       </div>
@@ -179,16 +179,16 @@
           </span>
           <div class="row-actions">
             <button
-              v-if="item.installed?.updateAvailable"
+              v-if="canUpdate(item)"
               class="compact"
-              :disabled="softwareStore.installingComponentId === item.id || softwareStore.removingComponentId === item.id"
+              :disabled="actionsBusy || !canWrite"
               @click="updateComponent(item)">
               {{ softwareStore.installingComponentId === item.id ? t("panel.software.installing") : t("panel.software.update") }}
             </button>
             <button
               v-if="showInstallButton(item)"
               class="compact"
-              :disabled="softwareStore.installingComponentId === item.id || softwareStore.removingComponentId === item.id"
+              :disabled="actionsBusy || !canWrite"
               @click="installComponent(item.id)">
               {{
                 softwareStore.installingComponentId === item.id
@@ -201,7 +201,7 @@
             <button
               v-if="item.installed"
               class="secondary compact"
-              :disabled="softwareStore.removingComponentId === item.id || softwareStore.installingComponentId === item.id"
+              :disabled="actionsBusy || !canWrite"
               @click="removeComponent(item.id)">
               {{ softwareStore.removingComponentId === item.id ? t("panel.software.removing") : t("panel.software.remove") }}
             </button>
@@ -253,7 +253,7 @@
           </label>
           <button
             class="secondary compact chip-remove"
-            :disabled="softwareStore.removingComponentId === item.componentId"
+            :disabled="actionsBusy || !canWrite"
             @click="removeComponent(item.componentId)">
             {{ softwareStore.removingComponentId === item.componentId ? t("panel.software.removing") : t("panel.software.remove") }}
           </button>
@@ -277,7 +277,11 @@
 <script setup lang="ts">
 import { getFormattingLocale } from '../utils/locale';
 import { componentNote } from '../utils/componentNote';
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onScopeDispose, ref, watch } from "vue";
+import { CanceledError } from "axios";
+import { getSessionEpoch } from "../api/client";
+import { useSubscriptionStore } from "../stores/subscription";
+import type { OperationProgress } from "../stores/setup";
 import { useI18n } from "vue-i18n";
 import AppStoreView from "./AppStoreView.vue";
 import { getSoftwareRunningJobs } from "../api/software";
@@ -285,7 +289,7 @@ import { useConfirm } from "../components/ConfirmDialog.vue";
 import RunningTaskBanner from "../components/RunningTaskBanner.vue";
 import { runningJobLabel, useServerRunningTask } from "../composables/useRunningTask";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
-import { useSoftwareStore, type ComponentManifestItem, type InstalledComponent } from "../stores/software";
+import { useSoftwareStore, type ComponentManifestItem, type InstalledComponent, type ComponentInstallResult } from "../stores/software";
 
 type CategoryKey = "all" | "installed" | "runtime" | "database" | "services" | "tools";
 type WorkspaceKey = "applications" | "components";
@@ -294,6 +298,7 @@ type ManifestRow = ComponentManifestItem & { installed: InstalledComponent | nul
 const { t } = useI18n();
 const { confirm } = useConfirm();
 const softwareStore = useSoftwareStore();
+const subscription = useSubscriptionStore();
 
 const notice = ref("");
 const noticeDetails = ref("");
@@ -301,6 +306,23 @@ const noticeError = ref(false);
 const search = ref("");
 const activeCategory = ref<CategoryKey>("all");
 const activeWorkspace = ref<WorkspaceKey>("applications");
+const busy = ref(false);
+const verificationRequired = ref(false);
+const liveProgress = ref<OperationProgress | null>(null);
+const session = getSessionEpoch();
+let disposed = false, generation = 0;
+let stopProgress: (() => void) | undefined;
+const contextCurrent = (context = generation) => !disposed && session === getSessionEpoch() && context === generation && activeWorkspace.value === "components";
+const storeBusy = computed(() => softwareStore.loading || softwareStore.checkingUpdates || !!softwareStore.installingComponentId || !!softwareStore.removingComponentId || softwareStore.installingDefaults);
+const actionsBusy = computed(() => busy.value || storeBusy.value || serverSoftware.running.value);
+const canWrite = computed(() => softwareStore.loaded && !subscription.isSuspended && !verificationRequired.value);
+const mayStart = (write = true) => contextCurrent() && !actionsBusy.value && (!write || canWrite.value);
+watch(activeWorkspace, () => {
+  generation++; stopProgress?.(); liveProgress.value = null;
+  showNotice("", false);
+  if (activeWorkspace.value === "components" && !softwareStore.loaded) void refreshCatalog();
+}, { flush: "sync" });
+onScopeDispose(() => { disposed = true; generation++; stopProgress?.(); });
 
 const manifestRows = computed<ManifestRow[]>(() => {
   const installedMap = new Map((softwareStore.catalog?.installed ?? []).map((item) => [item.componentId, item]));
@@ -387,7 +409,12 @@ function componentTypeLabel(type: string): string {
  * kirletmek olurdu.
  */
 const serverSoftware = useServerRunningTask({
-  fetchStatus: getSoftwareRunningJobs,
+  fetchStatus: async () => {
+    if (disposed || session !== getSessionEpoch()) throw new CanceledError("Software session changed");
+    const status = await getSoftwareRunningJobs();
+    if (disposed || session !== getSessionEpoch()) throw new CanceledError("Software session changed");
+    return status;
+  },
   label: (job) => runningJobLabel(t, job),
   interruptedLabel: (job) =>
     t("panel.runningJob.interrupted", {
@@ -408,12 +435,14 @@ onMounted(serverSoftware.start);
 watch(
   () => serverSoftware.job.value,
   async (yeni, eski) => {
-    if (eski && !yeni && !softwareStore.installingComponentId && !softwareStore.installingDefaults) {
-      await softwareStore.fetchCatalog().catch(() => undefined);
+    if (eski && !yeni && !disposed && session === getSessionEpoch() && !busy.value && !storeBusy.value) {
+      busy.value = true;
+      try { await softwareStore.fetchCatalog(); }
+      catch { /* Keep the store's failed measurement state; do not claim completion. */ }
+      finally { busy.value = false; }
     }
   });
 
-const liveProgress = computed(() => softwareStore.liveProgress);
 const liveProgressLabel = computed(() => {
   const running = liveProgress.value?.steps.find((step) => step.status === "running");
   return running
@@ -453,17 +482,30 @@ const categoryTabs = computed(() => {
 });
 
 async function refreshCatalog() {
+  if (!mayStart(false)) return;
+  const context = generation;
+  busy.value = true;
   try {
     await softwareStore.fetchCatalog();
+    if (!contextCurrent(context)) return;
+    if (!softwareStore.loaded) { reportUnconfirmed(); return; }
+    verificationRequired.value = false;
     showNotice(t("panel.software.refreshed"), false);
   } catch (error) {
-    showApiError(error);
+    if (contextCurrent(context)) showApiError(error);
+  } finally {
+    busy.value = false;
   }
 }
 
 async function checkForUpdates() {
+  if (!mayStart()) return;
+  const context = generation;
+  busy.value = true;
   try {
     await softwareStore.checkForUpdates();
+    if (!contextCurrent(context)) return;
+    if (!softwareStore.loaded) { reportUnconfirmed(); return; }
     const count = softwareStore.updatableCount;
     const failed = softwareStore.failedCount;
     const incomplete = softwareStore.incompleteCheckCount;
@@ -475,51 +517,99 @@ async function checkForUpdates() {
     showNotice([result, incomplete > 0 ? t("panel.software.updatesIncomplete", { count: incomplete }) : ""].filter(Boolean).join(" "),
       failed > 0 || incomplete > 0);
   } catch (error) {
-    showApiError(error);
+    if (contextCurrent(context)) showApiError(error);
+  } finally {
+    busy.value = false;
   }
 }
 
 // İşlem sürerken /software/operations/progress'i yoklayıp canlı adımları gösterir;
 // iş bitince yoklamayı durdurur. Böylece kurulum donmuş gibi görünmez.
-async function pollProgressWhile<T>(work: Promise<T>): Promise<T> {
+async function pollProgressWhile<T>(work: Promise<T>, context: number): Promise<T> {
   let active = true;
-  const loop = (async () => {
-    while (active) {
-      try {
-        await softwareStore.fetchOperationProgress();
-      } catch {
-        // geçici hata; bir sonraki turda yeniden dene
-      }
-      if (!active) break;
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stop = () => { active = false; if (timer !== undefined) clearTimeout(timer); };
+  stopProgress = stop;
+  liveProgress.value = null;
+  const poll = async () => {
+    if (!active || !contextCurrent(context)) { stop(); return; }
+    try {
+      const progress = await softwareStore.fetchOperationProgress();
+      if (active && contextCurrent(context)) liveProgress.value = progress;
+    } catch {
+      // A transient progress read must not replace the operation's own result.
     }
-  })();
+    if (active && contextCurrent(context)) timer = setTimeout(() => { void poll(); }, 1500);
+  };
+  void poll();
 
   try {
     return await work;
   } finally {
-    active = false;
-    await loop.catch(() => undefined);
-    softwareStore.liveProgress = null;
+    stop();
+    if (stopProgress === stop) stopProgress = undefined;
+    if (contextCurrent(context)) liveProgress.value = null;
   }
 }
 
 async function installComponent(componentId: string) {
+  const item = manifestRows.value.find(row => row.id === componentId);
+  if (!mayStart() || !item || !showInstallButton(item)) return;
+  const context = generation;
+  busy.value = true;
   try {
-    const result = await pollProgressWhile(softwareStore.installComponent(componentId));
+    await runInstall(componentId, false, context);
+  } finally {
+    busy.value = false;
+  }
+}
+
+function reportUnconfirmed() {
+  verificationRequired.value = true;
+  showNotice(t("panel.software.resultUnconfirmed"), true);
+}
+
+function installationConfirmed(result: ComponentInstallResult, componentId: string): boolean {
+  const measured = installedRows.value.find(item => item.componentId === componentId);
+  return softwareStore.loaded && result.componentId === componentId && result.status.toLowerCase() === "installed" &&
+    measured?.status.toLowerCase() === "installed" && !!measured.version && (!result.version || measured.version === result.version);
+}
+
+async function runInstall(componentId: string, force: boolean, context: number) {
+  try {
+    const work = force ? softwareStore.installComponent(componentId, true) : softwareStore.installComponent(componentId);
+    const result = await pollProgressWhile(work, context);
+    if (!contextCurrent(context)) return;
+    if (result.status.toLowerCase() === "failed") { showNotice(translate(result.message), true); return; }
+    if (!installationConfirmed(result, componentId)) { reportUnconfirmed(); return; }
     showNotice(translate(result.message), false);
   } catch (error) {
-    showApiError(error);
+    if (contextCurrent(context)) { verificationRequired.value = true; showApiError(error); }
   }
 }
 
 // Servisi olan bileşenler (veritabanı motorları, mail, önbellek) yükseltme sırasında KISA SÜRE DURUR.
 // Bunu sessizce yapmak yanlış olur; onay isteriz. Servissiz araçlar (phpMyAdmin, win-acme...) doğrudan.
-const RESTARTS_ON_UPDATE = ["mysql-8", "mariadb-11", "postgresql-16", "stalwart-mail", "redis", "memcached", "docker"];
+const RESTARTS_ON_UPDATE = ["mysql-8", "mariadb-11", "postgresql-16", "stalwart-mail", "redis", "memcached", "docker", "nginx"];
 
 async function updateComponent(item: { id: string; installed?: { version?: string; availableVersion?: string } | null; displayName?: string }) {
-  const risky = RESTARTS_ON_UPDATE.includes(item.id.toLowerCase());
-  if (risky) {
+  const componentId = item.id;
+  const target = manifestRows.value.find(row => row.id === componentId);
+  if (!mayStart() || !target || !canUpdate(target)) return;
+  const context = generation;
+  const catalog = softwareStore.catalog;
+  const fingerprint = JSON.stringify(target.installed);
+  const confirmed = () => contextCurrent(context) && canWrite.value && !storeBusy.value && !serverSoftware.running.value &&
+    catalog === softwareStore.catalog && fingerprint === JSON.stringify(installedRows.value.find(row => row.componentId === componentId));
+  busy.value = true;
+  let invoked = false;
+  const action = async () => {
+    if (invoked || !confirmed()) return;
+    invoked = true;
+    await runInstall(componentId, true, context);
+  };
+  try {
+    if (!RESTARTS_ON_UPDATE.includes(componentId.toLowerCase())) { await action(); return; }
     await confirm({
       title: t("panel.software.updateConfirmTitle"),
       message: t("panel.software.updateConfirmMessage"),
@@ -527,32 +617,28 @@ async function updateComponent(item: { id: string; installed?: { version?: strin
       busyLabel: t("panel.software.installing"),
       tone: "neutral",
       impact: [
-        `${item.displayName ?? item.id}: ${item.installed?.version ?? "?"} → ${item.installed?.availableVersion ?? "?"}`,
+        `${target.displayName}: ${target.installed?.version ?? "?"} → ${target.installed?.availableVersion ?? "?"}`,
         t("panel.software.updateConfirmService")
       ],
-      action: async () => {
-        await runUpdate(item.id);
-      }
+      action
     });
-    return;
+  } finally {
+    busy.value = false;
   }
-
-  await runUpdate(item.id);
 }
 
-async function runUpdate(componentId: string) {
-  try {
-    // force=true: sunucu "zaten kurulu" deyip atlamasın — yükseltmenin tek yolu bu.
-    const result = await pollProgressWhile(softwareStore.installComponent(componentId, true));
-    showNotice(translate(result.message), false);
-  } catch (error) {
-    showApiError(error);
-  }
+function canUpdate(item: ManifestRow): boolean {
+  return item.installed?.status.toLowerCase() === "installed" && item.installed.updateAvailable && !!item.installed.availableVersion;
 }
 
 async function installDefaultStack() {
+  if (!mayStart() || !softwareStore.catalog?.defaults.length) return;
+  const context = generation;
+  const defaults = softwareStore.catalog.defaults.map(item => item.id);
+  busy.value = true;
   try {
-    const results = await pollProgressWhile(softwareStore.installDefaultStack());
+    const results = await pollProgressWhile(softwareStore.installDefaultStack(), context);
+    if (!contextCurrent(context)) return;
     const failed = results.filter((result) => result.status.toLowerCase() === "failed");
     if (failed.length > 0) {
       showNotice(
@@ -563,14 +649,22 @@ async function installDefaultStack() {
       return;
     }
 
+    if (!defaults.every(id => results.some(result => installationConfirmed(result, id))) ||
+      !results.every(result => installationConfirmed(result, result.componentId))) { reportUnconfirmed(); return; }
     showNotice(t("software.defaults.completed"), false);
   } catch (error) {
-    showApiError(error);
+    if (contextCurrent(context)) { verificationRequired.value = true; showApiError(error); }
+  } finally {
+    busy.value = false;
   }
 }
 
 async function removeComponent(componentId: string) {
   const installed = installedRows.value.find((item) => item.componentId === componentId);
+  if (!mayStart() || !installed) return;
+  const context = generation;
+  const catalog = softwareStore.catalog;
+  const fingerprint = JSON.stringify(installed);
   const displayName = installed?.displayName || componentId;
   const message = installed?.isSystemDetected
     ? t(
@@ -593,7 +687,9 @@ async function removeComponent(componentId: string) {
   }
 
   // Yüksek riskli onay: bileşen kaldırma (sistem geneli) → bileşen adı yazılmadan devam edilemez.
-  await confirm({
+  busy.value = true;
+  let invoked = false;
+  try { await confirm({
     title: t("panel.confirm.removeComponentTitle", { name: displayName }),
     message,
     impact,
@@ -601,14 +697,19 @@ async function removeComponent(componentId: string) {
     confirmLabel: t("panel.confirm.remove"),
     busyLabel: t("panel.confirm.removing"),
     action: async () => {
+      if (invoked || !contextCurrent(context) || !canWrite.value || storeBusy.value || serverSoftware.running.value ||
+        catalog !== softwareStore.catalog || fingerprint !== JSON.stringify(installedRows.value.find(row => row.componentId === componentId))) return;
+      invoked = true;
       try {
         await softwareStore.removeComponent(componentId);
+        if (!contextCurrent(context)) return;
+        if (!softwareStore.loaded || installedRows.value.some(item => item.componentId === componentId)) { reportUnconfirmed(); return; }
         showNotice(t("software.remove.completed"), false);
       } catch (error) {
-        showApiError(error);
+        if (contextCurrent(context)) { verificationRequired.value = true; showApiError(error); }
       }
     },
-  });
+  }); } finally { busy.value = false; }
 }
 
 function componentCategory(item: ComponentManifestItem): CategoryKey {
@@ -647,7 +748,7 @@ function showInstallButton(item: ManifestRow): boolean {
     return true;
   }
 
-  return (item.installed.status ?? "").toLowerCase() !== "installed";
+  return isFailed(item.installed);
 }
 
 function statusClass(status?: string) {

@@ -5,32 +5,33 @@
         <h3>{{ t("panel.database.toolSettings.title") }}</h3>
         <p class="meta">{{ t("panel.database.toolSettings.subtitle") }}</p>
       </div>
-      <button class="secondary compact" :disabled="loading" @click="load">{{ t("panel.database.toolSettings.refresh") }}</button>
+      <button class="secondary compact" :disabled="loading || saving || redisBusy || remoteLoading || remoteBusy" @click="refreshAll">{{ t("panel.database.toolSettings.refresh") }}</button>
     </div>
 
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
+    <p v-if="loading" class="empty-state" role="status">{{ t("panel.common.loading") }}</p>
 
     <div v-if="loaded" class="form-surface">
       <div class="form-grid">
         <label>
           <span class="field-label">{{ t("panel.database.toolSettings.uploadMax") }}</span>
-          <input v-model="form.uploadMaxFilesize" placeholder="512M" />
+          <input v-model="form.uploadMaxFilesize" :disabled="saving" placeholder="512M" />
         </label>
         <label>
           <span class="field-label">{{ t("panel.database.toolSettings.postMax") }}</span>
-          <input v-model="form.postMaxSize" placeholder="512M" />
+          <input v-model="form.postMaxSize" :disabled="saving" placeholder="512M" />
         </label>
         <label>
           <span class="field-label">{{ t("panel.database.toolSettings.memory") }}</span>
-          <input v-model="form.memoryLimit" placeholder="512M" />
+          <input v-model="form.memoryLimit" :disabled="saving" placeholder="512M" />
         </label>
         <label>
           <span class="field-label">{{ t("panel.database.toolSettings.maxExec") }}</span>
-          <input v-model.number="form.maxExecutionTime" type="number" min="0" max="86400" />
+          <input v-model.number="form.maxExecutionTime" :disabled="saving" type="number" min="0" max="3600" />
         </label>
       </div>
       <div class="row-actions">
-        <button :disabled="saving" @click="save">
+        <button :disabled="saving || loading || redisBusy" @click="save">
           {{ saving ? t("panel.database.toolSettings.saving") : t("panel.database.toolSettings.save") }}
         </button>
       </div>
@@ -40,7 +41,7 @@
         <span :class="['status-pill', redisEnabled ? 'ok' : '']">
           {{ redisEnabled ? t("panel.database.toolSettings.redisOn") : t("panel.database.toolSettings.redisOff") }}
         </span>
-        <button v-if="!redisEnabled" class="secondary" :disabled="redisBusy" @click="enableRedis">
+        <button v-if="!redisEnabled" class="secondary" :disabled="redisBusy || saving || loading" @click="enableRedis">
           {{ redisBusy ? t("panel.database.toolSettings.enablingRedis") : t("panel.database.toolSettings.enableRedis") }}
         </button>
       </div>
@@ -55,15 +56,17 @@
         </div>
         <!-- Okunamadıysa DURUM ROZETİ GÖSTERİLMEZ: "Kapalı" demek, ölçemediğimizi ölçtük gibi
              sunmaktı ve kullanıcı açık olan bir erişimi kapalı sanıyordu. -->
-        <span v-if="!remoteError" :class="['status-pill', remote.enabled ? 'ok' : '']">
+        <span v-if="remoteLoaded" :class="['status-pill', remote.enabled ? 'ok' : '']">
           {{ remote.enabled ? t("panel.database.remote.on") : t("panel.database.remote.off") }}
         </span>
       </div>
       <p v-if="remoteError" class="notice error" role="alert">{{ remoteError }}</p>
+      <p v-if="remoteLoading" class="empty-state" role="status">{{ t("panel.common.loading") }}</p>
+      <template v-if="remoteLoaded">
       <div class="form-grid">
         <label>
           <span class="field-label">{{ t("panel.database.remote.ip") }}</span>
-          <input v-model.trim="remote.allowedIp" :placeholder="t('panel.database.remote.ipPlaceholder')" />
+          <input v-model.trim="remote.allowedIp" :disabled="remoteBusy" :placeholder="t('panel.database.remote.ipPlaceholder')" />
         </label>
       </div>
       <p v-if="remote.enabled" class="hint conn">
@@ -78,15 +81,17 @@
           {{ remoteBusy ? t("panel.database.remote.working") : t("panel.database.remote.disable") }}
         </button>
       </div>
+      </template>
       <p class="hint">{{ t("panel.database.remote.help") }}</p>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { enableRedisExtension, getGlobalPhpSettings, updateGlobalPhpSettings } from "../api/php";
+import { enableRedisExtension, getGlobalPhpSettings, updateGlobalPhpSettings, type SitePhpSettings } from "../api/php";
+import { getSessionEpoch } from "../api/client";
 import { getRemoteDbAccess, setRemoteDbAccess } from "../api/databases";
 import { extractApiMessage } from "../stores/auth";
 
@@ -107,60 +112,77 @@ const form = reactive({
 });
 const remote = reactive({ enabled: false, allowedIp: "", serverHost: "", port: 3306 });
 const remoteBusy = ref(false);
+const remoteLoading = ref(false);
+const remoteLoaded = ref(false);
+let disposed = false;
+const session = getSessionEpoch();
+const isCurrent = () => !disposed && getSessionEpoch() === session;
+onBeforeUnmount(() => { disposed = true; });
 
-onMounted(() => {
-  void load();
-  void loadRemote();
-});
+onMounted(refreshAll);
+
+async function refreshAll() {
+  await Promise.all([load(), loadRemote()]);
+}
+
+function applySettings(settings: SitePhpSettings) {
+  form.uploadMaxFilesize = settings.uploadMaxFilesize || "";
+  form.postMaxSize = settings.postMaxSize || "";
+  form.memoryLimit = settings.memoryLimit || "";
+  form.maxExecutionTime = settings.maxExecutionTime ?? 300;
+  form.displayErrors = settings.displayErrors;
+  redisEnabled.value = settings.redisEnabled ?? false;
+  loaded.value = true;
+}
 
 async function load() {
+  if (!isCurrent() || loading.value || saving.value || redisBusy.value) return;
   loading.value = true;
+  loaded.value = false;
+  notice.value = "";
   try {
     const settings = await getGlobalPhpSettings();
-    form.uploadMaxFilesize = settings.uploadMaxFilesize || "";
-    form.postMaxSize = settings.postMaxSize || "";
-    form.memoryLimit = settings.memoryLimit || "";
-    // 0 = süresiz; "|| 300" 0'ı falsy sayıp eziyordu → ?? ile sadece null/undefined'da varsayılan kullan.
-    form.maxExecutionTime = settings.maxExecutionTime ?? 300;
-    form.displayErrors = settings.displayErrors;
-    redisEnabled.value = settings.redisEnabled ?? false;
-    loaded.value = true;
+    if (isCurrent()) applySettings(settings);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
   } finally {
     loading.value = false;
   }
 }
 
 async function save() {
+  if (!isCurrent() || !loaded.value || loading.value || saving.value || redisBusy.value) return;
   saving.value = true;
   try {
-    await updateGlobalPhpSettings({
+    const settings = await updateGlobalPhpSettings({
       uploadMaxFilesize: form.uploadMaxFilesize,
       postMaxSize: form.postMaxSize,
       memoryLimit: form.memoryLimit,
       maxExecutionTime: form.maxExecutionTime,
       displayErrors: form.displayErrors
     });
+    if (!isCurrent()) return;
+    applySettings(settings);
     showNotice(t("panel.database.toolSettings.saved"), false);
-    await load();
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
   } finally {
     saving.value = false;
   }
 }
 
 async function enableRedis() {
+  if (!isCurrent() || !loaded.value || redisBusy.value || loading.value || saving.value) return;
   redisBusy.value = true;
   try {
     const result = await enableRedisExtension();
-    redisEnabled.value = true;
+    if (!isCurrent()) return;
+    redisEnabled.value = result.enabled;
     showNotice(result.message === "already"
       ? t("panel.database.toolSettings.redisAlready")
       : t("panel.database.toolSettings.redisEnabled"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
   } finally {
     redisBusy.value = false;
   }
@@ -169,33 +191,42 @@ async function enableRedis() {
 const remoteError = ref("");
 
 async function loadRemote() {
+  if (!isCurrent() || remoteLoading.value || remoteBusy.value) return;
+  remoteLoading.value = true;
+  remoteLoaded.value = false;
   remoteError.value = "";
   try {
     const data = await getRemoteDbAccess();
+    if (!isCurrent()) return;
     remote.enabled = data.enabled;
     remote.allowedIp = data.allowedIp;
     remote.serverHost = data.serverHost;
     remote.port = data.port;
+    remoteLoaded.value = true;
   } catch (error) {
     // ÖLÇEMEDİK ≠ KAPALI. Sessizce geçilince `remote` başlangıç değerlerinde kalıyor
     // (enabled: false) ve rozet "Kapalı" diyordu — uzak erişim sunucuda AÇIK olsa bile.
     // Kullanıcı güvenlik durumunu yanlış okuyor, "Etkinleştir"e basıp izin listesini boş IP ile
     // ezebiliyordu.
-    remoteError.value = resolveApiMessage(error);
+    if (isCurrent()) remoteError.value = resolveApiMessage(error);
+  } finally {
+    remoteLoading.value = false;
   }
 }
 
 async function setRemote(enabled: boolean) {
+  if (!isCurrent() || !remoteLoaded.value || remoteLoading.value || remoteBusy.value) return;
   remoteBusy.value = true;
   try {
     const data = await setRemoteDbAccess(enabled, remote.allowedIp);
+    if (!isCurrent()) return;
     remote.enabled = data.enabled;
     remote.allowedIp = data.allowedIp;
     remote.serverHost = data.serverHost;
     remote.port = data.port;
     showNotice(enabled ? t("panel.database.remote.enabledMsg") : t("panel.database.remote.disabledMsg"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
   } finally {
     remoteBusy.value = false;
   }

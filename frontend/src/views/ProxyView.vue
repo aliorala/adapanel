@@ -8,15 +8,16 @@
 
       <button
         class="secondary compact"
-        :disabled="!selectedSiteName || proxyStore.loadingSiteName === selectedSiteName"
+        :disabled="!selectedSiteName || readLoading || busy"
         @click="refreshConfiguration">
         {{ t("panel.proxy.refresh") }}
       </button>
     </div>
 
-    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
-      {{ notice }}
-    </p>
+    <div v-if="notice" :class="['notice', 'page-notice', 'proxy-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
+      <p>{{ notice }}</p>
+      <button type="button" class="secondary notice-close" :aria-label="t('panel.common.dismissNotice')" @click="notice = ''">×</button>
+    </div>
 
     <div class="module-toolbar">
       <div class="segmented-tabs" role="tablist">
@@ -43,17 +44,17 @@
          yukarida. `SectionLoadError` hem durumu duzeltiyor hem yerinde bir "Tekrar dene"
          veriyor. Mesaji TEKRARLAMIYOR: ayni cumle uc satir yukarida zaten yaziyor. -->
     <SectionLoadError
-      v-if="selectedSiteName && !currentConfiguration && configFailed"
-      :busy="proxyStore.loadingSiteName === selectedSiteName"
+      v-if="selectedSiteName && (configFailed || (!measured && !!currentConfiguration && !readLoading && !busy))"
+      :busy="readLoading || busy"
       @retry="refreshConfiguration" />
 
     <!-- Yapılandırma sunucudan gelmeden özet "devre dışı", form da varsayılan değerlerle
          görünüyordu; kullanıcı proxy'yi kapalı sanıp yanlış karar veriyordu. -->
-    <p v-else-if="selectedSiteName && !currentConfiguration" class="empty-state" role="status" aria-live="polite">
+    <p v-if="selectedSiteName && !currentConfiguration && !configFailed" class="empty-state" role="status" aria-live="polite">
       {{ t("panel.common.loading") }}
     </p>
 
-    <template v-else-if="selectedSiteName">
+    <template v-else-if="selectedSiteName && currentConfiguration">
       <div class="summary-strip">
         <article class="summary-item">
           <span class="tile-label">{{ t("panel.proxy.arrStatus") }}</span>
@@ -112,14 +113,14 @@
 
           <div class="action-row">
             <button
-              v-bind="writeGate(!selectedSiteName || proxyStore.savingSiteName === selectedSiteName)"
+              v-bind="writeGate(!canWrite || busy || !proxyForm.destinationUrl.trim())"
               @click="saveProxy">
               {{ proxyStore.savingSiteName === selectedSiteName ? t("panel.proxy.saving") : t("panel.proxy.save") }}
             </button>
 
             <button
               class="danger"
-              v-bind="writeGate(!currentConfiguration?.isProxyEnabled || proxyStore.removingSiteName === selectedSiteName)"
+              v-bind="writeGate(!canWrite || busy || !currentConfiguration?.isProxyEnabled)"
               @click="removeProxy">
               {{ proxyStore.removingSiteName === selectedSiteName ? t("panel.proxy.removing") : t("panel.proxy.remove") }}
             </button>
@@ -191,7 +192,7 @@
           <!-- Örnek değerler formdan çıkınca (bkz. REWRITE_FORM_BOS) üç alan da boş başlıyor;
                düğme artık BOŞ kural göndermiyor. Öncesinde bunu "dolu varsayılanlar" gizliyordu. -->
           <button
-            v-bind="writeGate(!selectedSiteName || !rewriteFormDolu || proxyStore.rewritingSiteName === selectedSiteName)"
+            v-bind="writeGate(!canWrite || busy || !rewriteFormDolu)"
             @click="saveRewriteRule">
             {{ proxyStore.rewritingSiteName === selectedSiteName ? t("panel.proxy.savingRule") : t("panel.proxy.saveRule") }}
           </button>
@@ -235,14 +236,15 @@
       </div>
     </template>
 
-    <p v-else class="meta">
+    <p v-else-if="!selectedSiteName" class="meta">
       {{ t("panel.proxy.selectSiteHint") }}
     </p>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { isCancel } from "axios";
 import { useI18n } from "vue-i18n";
 import { useProxyStore } from "../stores/proxy";
 import { useSitesStore } from "../stores/sites";
@@ -250,11 +252,15 @@ import { useConfirm } from "../components/ConfirmDialog.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import { useNotice } from "../composables/useNotice";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { useAuthStore } from "../stores/auth";
+import { getSessionEpoch } from "../api/client";
+import type { ReverseProxyConfiguration, SaveReverseProxyPayload, SaveRewriteRulePayload } from "../api/proxy";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
-const { writeGate } = useSubscriptionGate();
+const { writeGate, locked } = useSubscriptionGate();
+const authStore = useAuthStore();
 const proxyStore = useProxyStore();
 const sitesStore = useSitesStore();
 const { confirm } = useConfirm();
@@ -263,6 +269,14 @@ const activeSection = ref<"proxy" | "rewrite">("proxy");
 // Seçili sitenin yapılandırması OKUNAMADI mı. Yalnız "null" bakmak yetmiyordu: null hem
 // "henüz gelmedi" hem "gelemedi" demekti ve ekran ikisini de "Yükleniyor…" diye çiziyordu.
 const configFailed = ref(false);
+const session = getSessionEpoch();
+let disposed = false, generation = 0, readRequest = 0, proxyRevision = 0, rewriteRevision = 0;
+const measured = ref(false), readLoading = ref(false), actionBusy = ref(false);
+const isActive = () => !disposed && session === getSessionEpoch();
+onBeforeUnmount(() => { disposed = true; generation++; readRequest++; });
+const busy = computed(() => actionBusy.value || !!proxyStore.savingSiteName || !!proxyStore.removingSiteName || !!proxyStore.rewritingSiteName);
+const canWrite = computed(() => isActive() && !locked.value && measured.value && proxyStore.measured[selectedSiteName.value] === true &&
+  authStore.session?.isAuthenticated === true && ["Administrator", "Reseller"].includes(authStore.session.user?.role ?? ""));
 
 const selectedSiteName = computed({
   get: () => sitesStore.selectedSiteName,
@@ -277,6 +291,15 @@ const proxyForm = reactive({
   mountPath: "/",
   enableHtmlLinkRewrite: true
 });
+let cleanProxyDraft = JSON.stringify(proxyForm);
+function context() {
+  const site = selectedSiteName.value, version = generation, actor = authStore.session?.user?.id, role = authStore.session?.user?.role;
+  return { site, current: () => isActive() && generation === version && selectedSiteName.value === site && authStore.session?.user?.id === actor && authStore.session?.user?.role === role };
+}
+function applyConfiguration(configuration: ReverseProxyConfiguration) {
+  Object.assign(proxyForm, { destinationUrl: configuration.destinationUrl, mountPath: configuration.mountPath || "/", enableHtmlLinkRewrite: configuration.hasHtmlLinkRewrite });
+  cleanProxyDraft = JSON.stringify(proxyForm);
+}
 
 /*
  * ÖRNEK DEĞERLER FORMDAN ÇIKARILDI — bu bir görünüm düzeltmesi değil, VERİ RİSKİYDİ.
@@ -316,112 +339,118 @@ onMounted(async () => {
       await sitesStore.fetchSites();
     }
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isActive() && !isCancel(error)) showNotice(resolveApiMessage(error), true);
   }
 });
 
-watch(selectedSiteName, async (siteName) => {
-  if (!siteName) {
-    return;
-  }
-
-  try {
-    configFailed.value = false;
-    await proxyStore.fetchConfiguration(siteName);
-  } catch (error) {
-    configFailed.value = true;
-    showNotice(resolveApiMessage(error), true);
-  }
-}, { immediate: true });
-
-watch(currentConfiguration, (configuration) => {
-  if (!configuration) {
-    return;
-  }
-
-  proxyForm.destinationUrl = configuration.destinationUrl || "";
-  proxyForm.mountPath = configuration.mountPath || "/";
-  proxyForm.enableHtmlLinkRewrite = configuration.hasHtmlLinkRewrite;
-}, { immediate: true });
+watch(proxyForm, () => { proxyRevision++; }, { deep: true, flush: "sync" });
+watch(rewriteForm, () => { rewriteRevision++; }, { deep: true, flush: "sync" });
+watch(selectedSiteName, site => {
+  if (!isActive()) return;
+  generation++; readRequest++; measured.value = false; readLoading.value = false; configFailed.value = false; notice.value = "";
+  Object.assign(proxyForm, { destinationUrl: "", mountPath: "/", enableHtmlLinkRewrite: true });
+  Object.assign(rewriteForm, REWRITE_FORM_BOS); cleanProxyDraft = JSON.stringify(proxyForm);
+  const cached = proxyStore.getConfiguration(site); if (cached) applyConfiguration(cached);
+  if (site) void loadConfiguration();
+}, { immediate: true, flush: "sync" });
 
 async function refreshConfiguration() {
-  if (!selectedSiteName.value) {
-    showNotice(t("panel.proxy.selectSiteHint"), true);
-    return;
-  }
-
+  if (!isActive() || busy.value || readLoading.value || !selectedSiteName.value) return;
+  await loadConfiguration(true);
+}
+async function loadConfiguration(announce = false) {
+  const target = context(), request = ++readRequest, revision = proxyRevision;
+  const clean = cleanProxyDraft === JSON.stringify(proxyForm), current = () => target.current() && request === readRequest;
+  readLoading.value = true;
   try {
-    configFailed.value = false;
-    await proxyStore.fetchConfiguration(selectedSiteName.value);
-    showNotice(t("panel.proxy.refreshed"), false);
+    const configuration = await proxyStore.fetchConfiguration(target.site);
+    if (!current()) return;
+    measured.value = true; configFailed.value = false;
+    if (clean && proxyRevision === revision) applyConfiguration(configuration);
+    if (announce) showNotice(t("panel.proxy.refreshed"), false);
   } catch (error) {
-    configFailed.value = true;
-    showNotice(resolveApiMessage(error), true);
-  }
+    if (current() && !isCancel(error)) { measured.value = false; configFailed.value = true; showNotice(resolveApiMessage(error), true); }
+  } finally { if (current()) readLoading.value = false; }
 }
 
-async function saveProxy() {
-  if (!selectedSiteName.value) {
-    showNotice(t("panel.proxy.selectSiteHint"), true);
-    return;
-  }
-
+function beginWrite() { actionBusy.value = true; readRequest++; readLoading.value = false; notice.value = ""; }
+function unconfirmed(site: string) {
+  measured.value = false; proxyStore.measured[site] = false; configFailed.value = true;
+  showNotice(t("panel.proxy.resultUnconfirmed"), true);
+}
+function proxyMatches(configuration: ReverseProxyConfiguration, submitted: SaveReverseProxyPayload): boolean {
   try {
-    await proxyStore.saveProxy(selectedSiteName.value, { ...proxyForm });
+    const url = (value: string) => { const normalized = new URL(value.trim()); normalized.search = ""; normalized.hash = ""; return normalized.href.replace(/\/+$/, ""); };
+    let mount = submitted.mountPath.trim() || "/"; if (!mount.startsWith("/")) mount = `/${mount}`; mount = mount.replace(/\/+$/, "") || "/";
+    return configuration.isArrEnabled && configuration.isProxyEnabled && url(configuration.destinationUrl) === url(submitted.destinationUrl) &&
+      configuration.mountPath === mount && configuration.hasHtmlLinkRewrite === (mount !== "/" && submitted.enableHtmlLinkRewrite);
+  } catch { return false; }
+}
+function rewriteMatches(configuration: ReverseProxyConfiguration, submitted: SaveRewriteRulePayload) {
+  return configuration.rewriteRules.some(rule => rule.name === submitted.name.trim() && rule.matchPattern === submitted.matchPattern.trim() && rule.rewriteUrl === submitted.rewriteUrl.trim() &&
+    rule.stopProcessing === submitted.stopProcessing && rule.appendQueryString === submitted.appendQueryString && rule.ignoreCase === submitted.ignoreCase);
+}
+async function saveProxy() {
+  if (!canWrite.value || busy.value || !proxyForm.destinationUrl.trim()) return;
+  const target = context(), submitted = { ...proxyForm }, revision = proxyRevision; beginWrite();
+  try {
+    const result = await proxyStore.saveProxy(target.site, submitted);
+    if (!target.current()) return;
+    if (!proxyMatches(result, submitted)) { unconfirmed(target.site); return; }
+    measured.value = true; configFailed.value = false;
+    if (proxyRevision === revision) applyConfiguration(result);
     showNotice(t("proxy.proxy_enabled"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  }
+    if (target.current() && !isCancel(error)) { measured.value = false; configFailed.value = true; showNotice(resolveApiMessage(error), true); }
+  } finally { actionBusy.value = false; }
 }
 
 async function removeProxy() {
-  if (!selectedSiteName.value) {
-    showNotice(t("panel.proxy.selectSiteHint"), true);
-    return;
-  }
-
-  // Kaldırma sitenin YÖNLENDİRMESİNİ keser (site anında erişilemez hâle gelebilir): onaysız yapılmaz.
-  const site = selectedSiteName.value;
-  await confirm({
-    title: t("panel.proxy.confirmRemoveTitle"),
-    message: t("panel.proxy.confirmRemoveMessage", { name: site }),
-    impact: [site, currentConfiguration.value?.destinationUrl || ""].filter((line) => line.length > 0),
-    confirmLabel: t("panel.proxy.remove"),
-    action: async () => {
-      try {
-        await proxyStore.removeProxy(site);
-        proxyForm.destinationUrl = "";
-        proxyForm.mountPath = "/";
-        proxyForm.enableHtmlLinkRewrite = true;
-        showNotice(t("proxy.proxy_removed"), false);
-      } catch (error) {
-        showNotice(resolveApiMessage(error), true);
+  if (!canWrite.value || busy.value || !currentConfiguration.value?.isProxyEnabled) return;
+  const target = context(), revision = proxyRevision, destination = currentConfiguration.value.destinationUrl; beginWrite();
+  try {
+    await confirm({
+      title: t("panel.proxy.confirmRemoveTitle"),
+      message: t("panel.proxy.confirmRemoveMessage", { name: target.site }),
+      impact: [target.site, destination].filter(Boolean), confirmLabel: t("panel.proxy.remove"),
+      action: async () => {
+        if (!target.current() || !canWrite.value) return;
+        try {
+          const result = await proxyStore.removeProxy(target.site);
+          if (!target.current()) return;
+          if (result.isProxyEnabled || result.hasHtmlLinkRewrite || result.destinationUrl) { unconfirmed(target.site); return; }
+          measured.value = true; configFailed.value = false;
+          if (proxyRevision === revision) applyConfiguration(result);
+          showNotice(t("proxy.proxy_removed"), false);
+        } catch (error) {
+          if (target.current() && !isCancel(error)) { measured.value = false; configFailed.value = true; showNotice(resolveApiMessage(error), true); }
+        }
       }
-    }
-  });
+    });
+  } finally { actionBusy.value = false; }
 }
 
 async function saveRewriteRule() {
-  if (!selectedSiteName.value) {
-    showNotice(t("panel.proxy.selectSiteHint"), true);
-    return;
-  }
-
+  if (!canWrite.value || busy.value || !rewriteFormDolu.value) return;
+  const target = context(), submitted = { ...rewriteForm }, revision = rewriteRevision; beginWrite();
   try {
-    await proxyStore.saveRewriteRule(selectedSiteName.value, { ...rewriteForm });
-    // TÜM alanlar sıfırlanır, yalnız `name` değil. Önceden desen ve hedef kutuda KALIYORDU:
-    // ikinci bir kural eklemek isteyen kullanıcı, bir öncekinin deseniyle dolu bir formla
-    // karşılaşıyor ve yeni ada eski kuralı kaydedebiliyordu.
-    Object.assign(rewriteForm, REWRITE_FORM_BOS);
+    const result = await proxyStore.saveRewriteRule(target.site, submitted);
+    if (!target.current()) return;
+    if (!rewriteMatches(result, submitted)) { unconfirmed(target.site); return; }
+    measured.value = true; configFailed.value = false;
+    if (rewriteRevision === revision) Object.assign(rewriteForm, REWRITE_FORM_BOS);
     showNotice(t("proxy.rewrite_rule_saved"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  }
+    if (target.current() && !isCancel(error)) { measured.value = false; configFailed.value = true; showNotice(resolveApiMessage(error), true); }
+  } finally { actionBusy.value = false; }
 }
 
 </script>
 
 <style scoped>
+.proxy-notice { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: var(--sp-8); }
+.proxy-notice p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.notice-close { width: 28px; height: 28px; padding: 0; color: inherit; }
 .proxy-panel,
 .proxy-columns,
 .proxy-card,
@@ -557,6 +586,17 @@ label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
 /* 760 -> 720: base.css'in tek sutuna dustugu esik (ve `.panel` dolgusunun daraldigi nokta).
    Iki ayri esik, 720-760 arasinda yarim uygulanmis bir yerlesim uretiyordu. */
 @media (max-width: 720px) {
+  .segmented-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .segmented-tabs button {
+    min-width: 0;
+    white-space: normal;
+  }
+
   .action-row {
     flex-direction: column;
     align-items: stretch;

@@ -15,6 +15,9 @@ public sealed class DatabaseEngineStatusDto
     /// <summary>true ise panel bağlanıp yönetebiliyor; false ise yönetici parolası gerekiyor.</summary>
     public bool Ready { get; init; }
 
+    /// <summary>A saved administrator password change still needs authentication verification.</summary>
+    public bool AdminPasswordPending { get; init; }
+
     /// <summary>true ise motor Windows'ta zaten kuruluydu ve AdaPanel keşfetti.</summary>
     public bool SystemDetected { get; init; }
 

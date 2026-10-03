@@ -31,7 +31,7 @@
           <option value="">{{ t("panel.php.selectSite") }}</option>
           <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">{{ site.name }}</option>
         </select>
-        <button class="secondary compact" :disabled="!selectedSiteName" @click="refreshAll">
+        <button class="secondary compact" :disabled="loading || !!busyAction" @click="refreshAll">
           {{ t("panel.security.refresh") }}
         </button>
       </div>
@@ -47,7 +47,7 @@
           <button class="secondary compact" :disabled="!selectedSiteName" @click="showSiteForm = !showSiteForm">
             {{ showSiteForm ? t("panel.common.cancel") : t("panel.security.advancedSettings") }}
           </button>
-          <button class="compact" :disabled="!selectedSiteName || busyAction === 'rules'" @click="runSiteAction('rules')">
+          <button class="compact" :disabled="!selectedSiteName || loading || !!busyAction" @click="runSiteAction('rules')">
             {{ busyAction === "rules" ? t("panel.security.busy") : t("panel.security.basicRules") }}
           </button>
         </div>
@@ -145,13 +145,13 @@
              bir hiyerarsiyi anlatiyordu. Bolumun tek birincil eylemi baslik satirindaki
              "Temel kurallar" olarak kaldi. -->
         <div class="row-actions">
-          <button class="secondary compact" :disabled="!selectedSiteName || busyAction === 'isolate'" @click="runSiteAction('isolate')">
+          <button class="secondary compact" :disabled="!selectedSiteName || loading || !!busyAction" @click="runSiteAction('isolate')">
             {{ busyAction === "isolate" ? t("panel.security.busy") : t("panel.security.isolate") }}
           </button>
-          <button class="secondary compact" :disabled="!selectedSiteName || busyAction === 'acl'" @click="runSiteAction('acl')">
+          <button class="secondary compact" :disabled="!selectedSiteName || loading || !!busyAction" @click="runSiteAction('acl')">
             {{ busyAction === "acl" ? t("panel.security.busy") : t("panel.security.applyAcl") }}
           </button>
-          <button class="secondary compact" :disabled="!selectedSiteName || busyAction === 'rate'" @click="runSiteAction('rate')">
+          <button class="secondary compact" :disabled="!selectedSiteName || loading || !!busyAction" @click="runSiteAction('rate')">
             {{ busyAction === "rate" ? t("panel.security.busy") : t("panel.security.saveRate") }}
           </button>
         </div>
@@ -197,10 +197,10 @@
              tehlike tonunda ve `margin-left: auto` ile satirin obur ucunda, sabit yerde durur.
              Metin de tek basina yeterli degildi — iki etiket de ayni uzunlukta ve ayni gride. -->
         <div class="row-actions">
-          <button class="compact" :disabled="busyAction === 'allow'" @click="saveFirewall(true)">
+          <button class="compact" :disabled="globalLoading || !!busyAction" @click="saveFirewall(true)">
             {{ busyAction === "allow" ? t("panel.security.busy") : t("panel.firewall.allow") }}
           </button>
-          <button class="danger compact destructive-slot" :disabled="busyAction === 'block'" @click="saveFirewall(false)">
+          <button class="danger compact destructive-slot" :disabled="globalLoading || !!busyAction" @click="saveFirewall(false)">
             {{ busyAction === "block" ? t("panel.security.busy") : t("panel.firewall.block") }}
           </button>
         </div>
@@ -233,7 +233,7 @@
             <button
               v-if="rule.displayName.startsWith('AdaPanel ')"
               class="danger compact"
-              :disabled="busyAction === `remove:${rule.displayName}`"
+              :disabled="globalLoading || !!busyAction"
               @click="removeRule(rule.displayName)">
               {{ busyAction === `remove:${rule.displayName}` ? t("panel.security.busy") : t("panel.sites.delete") }}
             </button>
@@ -277,7 +277,7 @@
       <div v-else-if="!avStatus.isInstalled" class="form-surface">
         <p class="meta">{{ t("panel.antivirus.installHint") }}</p>
         <div class="row-actions">
-          <button class="compact" :disabled="busyAction === 'av'" @click="installAv">
+          <button class="compact" :disabled="globalLoading || !!busyAction" @click="installAv">
             {{ busyAction === "av" ? t("panel.antivirus.installing") : t("panel.antivirus.install") }}
           </button>
         </div>
@@ -294,7 +294,7 @@
                   : t("panel.antivirus.defsMissing") }}
               </p>
             </div>
-            <button class="secondary compact" :disabled="busyAction === 'av'" @click="updateAvDefs">
+            <button class="secondary compact" :disabled="globalLoading || !!busyAction || avServerScan !== null" @click="updateAvDefs">
               {{ busyAction === "av" ? t("panel.antivirus.updating") : t("panel.antivirus.updateDefs") }}
             </button>
           </div>
@@ -321,7 +321,7 @@
           <div class="row-actions">
             <button
               class="compact"
-              :disabled="busyAction === 'av' || avServerScan !== null || !avSiteName || !avStatus.databaseReady"
+              :disabled="globalLoading || !!busyAction || avServerScan !== null || !avSiteName || !avStatus.databaseReady"
               @click="runAvScan">
               {{ busyAction === "av" || avServerScan ? t("panel.antivirus.scanning") : t("panel.antivirus.scan") }}
             </button>
@@ -336,7 +336,7 @@
                    ölçülmedi, yazmak taramanın bittiğini ve boş çıktığını sandırırdı. -->
               <p class="meta">
                 {{ new Date(avStatus.lastScan.startedAtUtc).toLocaleString(getFormattingLocale()) }}
-                <template v-if="avStatus.lastScan.status !== 'interrupted'">
+                <template v-if="avStatus.lastScan.status === 'clean' || avStatus.lastScan.status === 'infected'">
                   • {{ t("panel.antivirus.scanSummary", {
                     files: avStatus.lastScan.scannedFiles,
                     seconds: avStatus.lastScan.durationSeconds
@@ -349,10 +349,10 @@
                  biri "sunucunda zararlı dosya var", diğeri "ölçüm tamamlanmadı". Rozetin metni
                  zaten üçünü ayırıyordu; eksik olan renk kanalının aynı şeyi söylemesiydi. -->
             <span :class="['status-pill', scanTone(avStatus.lastScan.status)]">
-              {{ t(`panel.antivirus.status.${avStatus.lastScan.status}`) }}
+              {{ scanLabel(avStatus.lastScan.status) }}
             </span>
           </div>
-          <p v-if="avStatus.lastScan.status === 'failed'" class="notice error" role="alert">{{ avStatus.lastScan.detail }}</p>
+          <p v-if="avStatus.lastScan.status === 'failed'" class="notice error" role="alert">{{ avStatus.lastScan.detail || t('panel.antivirus.scanUnconfirmed') }}</p>
           <p v-else-if="avStatus.lastScan.status === 'interrupted'" class="notice error" role="alert">
             {{ t("panel.antivirus.interruptedHint") }}
           </p>
@@ -366,7 +366,8 @@
               <strong>{{ finding.signature }}</strong>
             </div>
           </div>
-          <p v-else class="empty-state">{{ t("panel.antivirus.noFindings") }}</p>
+          <p v-else-if="avStatus.lastScan.status === 'clean'" class="empty-state">{{ t("panel.antivirus.noFindings") }}</p>
+          <p v-else class="notice error" role="alert">{{ t("panel.antivirus.scanUnconfirmed") }}</p>
         </div>
       </template>
     </template>
@@ -385,7 +386,7 @@
 
       <!-- Kaba kuvvet ayarları gelmeden anahtar ve eşikler varsayılan değerlerini gösteriyordu. -->
       <p v-if="!bruteForceLoaded" class="empty-state" role="status" aria-live="polite">
-        {{ t("panel.common.loading") }}
+        {{ bruteForceReadError ? t("panel.common.loadFailed") : t("panel.common.loading") }}
       </p>
 
       <div v-else class="form-surface">
@@ -408,7 +409,7 @@
           </label>
         </div>
         <div class="row-actions">
-          <button class="compact" :disabled="busyAction === 'bruteforce'" @click="saveBruteForce">
+          <button class="compact" :disabled="!bruteForceLoaded || globalLoading || !!busyAction" @click="saveBruteForce">
             {{ busyAction === "bruteforce" ? t("panel.security.busy") : t("panel.common.save") }}
           </button>
         </div>
@@ -427,13 +428,13 @@
           <span>{{ ban.failedAttempts }}</span>
           <span class="cell-muted">{{ new Date(ban.bannedAtUtc).toLocaleString(getFormattingLocale()) }}</span>
           <span class="cell-muted">{{ ban.expiresAtUtc ? new Date(ban.expiresAtUtc).toLocaleString(getFormattingLocale()) : t("panel.bruteforce.permanent") }}</span>
-          <button class="secondary compact row-button" :disabled="busyAction === 'unban'" @click="unban(ban.ipAddress)">
+          <button class="secondary compact row-button" :disabled="globalLoading || !!busyAction" @click="unban(ban.ipAddress)">
             {{ t("panel.bruteforce.unban") }}
           </button>
         </div>
         <!-- Yasaklı IP listesi kaba kuvvet durumuyla BİRLİKTE gelir; bekleme/hata ayrımı için
              zaten var olan `bruteForceLoaded` kullanılır, ayrı bir sayaç uydurulmaz. -->
-        <p v-if="!bruteForceLoaded" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+        <p v-if="!bruteForceLoaded" class="empty-state" role="status" aria-live="polite">{{ bruteForceReadError ? t("panel.common.loadFailed") : t("panel.common.loading") }}</p>
         <p v-else-if="bannedIps.length === 0" class="empty-state">{{ t("panel.bruteforce.empty") }}</p>
       </div>
     </template>
@@ -448,6 +449,7 @@ import { allowPort, blockPort, getFirewallRules, removeFirewallRule, type Firewa
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import RunningTaskBanner from "../components/RunningTaskBanner.vue";
 import { useRunningTask } from "../composables/useRunningTask";
+import { getSessionEpoch } from "../api/client";
 import {
   applyAcl,
   enableBasicRules,
@@ -466,6 +468,7 @@ import {
   installAntivirus,
   scanAntivirus,
   updateAntivirusDefinitions,
+  type AntivirusScanResult,
   type AntivirusStatus
 } from "../api/antivirus";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
@@ -476,6 +479,11 @@ import { useSitesStore } from "../stores/sites";
 const { t } = useI18n();
 const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
+const sessionEpoch = getSessionEpoch();
+let disposed = false;
+const isActive = () => !disposed && sessionEpoch === getSessionEpoch();
+let siteGeneration = 0, refreshGeneration = 0;
+const siteLoading = ref(false), globalLoading = ref(false);
 const securityConfig = ref<SiteSecurityConfiguration | null>(null);
 const firewallRules = ref<FirewallRule[]>([]);
 // Kural listesi BİR KEZ başarıyla okundu mu. `loading` hata durumunda da false olur; boş dizi
@@ -484,7 +492,7 @@ const firewallLoaded = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
 const busyAction = ref("");
-const loading = ref(false);
+const loading = computed(() => siteLoading.value || globalLoading.value);
 const activeSection = ref<"site" | "firewall" | "bruteforce" | "antivirus">("site");
 // ClamAV antivirüs (Güvenlik > Antivirüs). Durum sekme ilk açıldığında yüklenir.
 const avStatus = ref<AntivirusStatus | null>(null);
@@ -520,6 +528,8 @@ const avServerScan = computed(() => avStatus.value?.runningScan ?? null);
 // Yoklama her tamamlandığında tazelenir; ekrandaki geçen süre bundan hesaplanır.
 const avClockMs = ref(Date.now());
 let avPollTimer: ReturnType<typeof setTimeout> | undefined;
+let avGeneration = 0;
+let avPending: Promise<AntivirusStatus | null> | undefined;
 
 const avServerElapsedText = computed(() => {
   const scan = avServerScan.value;
@@ -554,6 +564,7 @@ const firewallForm = reactive({ ruleName: "", port: 0, protocol: "TCP" });
 const bannedIps = ref<BannedIp[]>([]);
 // Ayarlar okunmadan önceki varsayılanlar gerçek yapılandırma sanılıyordu.
 const bruteForceLoaded = ref(false);
+const bruteForceReadError = ref(false);
 const bruteWhitelistText = ref("");
 const bruteForm = reactive<BruteForceSettings>({
   enabled: true,
@@ -572,12 +583,20 @@ onMounted(async () => {
   try {
     if (sitesStore.sites.length === 0) await sitesStore.fetchSites();
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isActive()) showNotice(resolveApiMessage(error), true);
   }
-  await refreshAll();
+  if (isActive()) await refreshAll();
 });
 
-watch(selectedSiteName, refreshAll);
+watch(selectedSiteName, () => {
+  securityConfig.value = null;
+  aclForm.principal = "";
+  aclForm.rights = "M";
+  rateForm.requestsPerMinute = 120;
+  showSiteForm.value = false;
+  notice.value = "";
+  void refreshSiteSecurity();
+});
 
 watch(activeSection, async (section) => {
   if (section === "antivirus" && avStatus.value === null) {
@@ -590,13 +609,25 @@ watch(activeSection, async (section) => {
 // serpiştirmek, bir yolu unutup zamanlayıcıyı sonsuza kadar açık bırakma riski taşırdı.
 watch([avServerScan, avTask.running], avSyncPolling, { immediate: true });
 
-async function refreshAvStatus() {
-  try {
-    avStatus.value = await getAntivirusStatus();
-    avClockMs.value = Date.now();
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  }
+async function refreshAvStatus(): Promise<AntivirusStatus | null> {
+  if (!isActive()) return null;
+  if (avPending) return avPending;
+  const generation = avGeneration;
+  avPending = (async () => {
+    try {
+      const status = await getAntivirusStatus();
+      if (!isActive() || generation !== avGeneration) return null;
+      avStatus.value = status;
+      avClockMs.value = Date.now();
+      return status;
+    } catch (error) {
+      if (isActive() && generation === avGeneration) showNotice(resolveApiMessage(error), true);
+      return null;
+    } finally {
+      if (generation === avGeneration) avPending = undefined;
+    }
+  })();
+  return avPending;
 }
 
 /**
@@ -617,6 +648,7 @@ function avStopPolling() {
 }
 
 function avSyncPolling() {
+  if (!isActive()) { avStopPolling(); return; }
   if (avServerScan.value !== null && !avTask.running.value) {
     if (avPollTimer === undefined) {
       avPollTimer = setTimeout(avPollTick, 15_000);
@@ -629,8 +661,11 @@ function avSyncPolling() {
 
 async function avPollTick() {
   avPollTimer = undefined;
-  const oncedenSuruyordu = avServerScan.value !== null;
-  await refreshAvStatus();
+  if (!isActive() || avTask.running.value) return;
+  const generation = avGeneration;
+  const previousScan = avServerScan.value;
+  const status = await refreshAvStatus();
+  if (!isActive() || generation !== avGeneration) return;
 
   if (avServerScan.value !== null) {
     avSyncPolling();
@@ -639,20 +674,39 @@ async function avPollTick() {
 
   // Tarama BİTTİ. Sonucu bu sekme istemedi (sayfa yenilenmişti), o yüzden sonucu burada duyurmak
   // gerekiyor; aksi halde şerit sessizce kaybolur ve kullanıcı ne olduğunu anlamaz.
-  if (oncedenSuruyordu && !avTask.running.value) {
-    const son = avStatus.value?.lastScan ?? null;
-    if (son?.status === "infected") {
-      showNotice(t("panel.antivirus.scanInfected", { count: son.infectedCount }), true);
-    } else if (son?.status === "clean") {
-      showNotice(t("panel.antivirus.scanClean"), false);
-    } else if (son?.status === "interrupted") {
-      showNotice(t("panel.antivirus.interruptedHint"), true);
-    }
+  if (status && previousScan && !avTask.running.value) {
+    const result = status.lastScan;
+    // An aborted engine run may leave an older result behind. Only this scan's
+    // target and start time can establish how the just-finished scan ended.
+    if (result?.target === previousScan.target && result.startedAtUtc === previousScan.startedAtUtc) showScanResult(result);
+    else showNotice(t("panel.antivirus.scanUnconfirmed"), true);
   }
 }
 
 // Bileşen yok olduktan sonra yoklamaya devam eden bir zamanlayıcı sızıntıdır.
+onUnmounted(() => {
+  disposed = true;
+  ++avGeneration;
+  avPending = undefined;
+});
 onUnmounted(avStopPolling);
+
+function beginAv(label: string) {
+  ++avGeneration;
+  avPending = undefined;
+  avStopPolling();
+  busyAction.value = "av";
+  avTask.begin(label);
+  const generation = avGeneration;
+  return () => isActive() && generation === avGeneration;
+}
+
+function showScanResult(result: AntivirusScanResult) {
+  if (result.status === "infected") showNotice(t("panel.antivirus.scanInfected", { count: result.infectedCount }), true);
+  else if (result.status === "clean") showNotice(t("panel.antivirus.scanClean"), false);
+  else if (result.status === "interrupted") showNotice(t("panel.antivirus.interruptedHint"), true);
+  else showNotice([t("panel.antivirus.scanUnconfirmed"), result.detail].filter(Boolean).join("\n\n"), true);
+}
 
 /*
  * ANTİVİRÜS İŞLERİ "SÜRÜYOR" ŞERİDİNE BAĞLANDI (composables/useRunningTask.ts).
@@ -671,74 +725,105 @@ onUnmounted(avStopPolling);
  * gerçek zarar buydu.
  */
 async function installAv() {
-  busyAction.value = "av";
-  avTask.begin(t("panel.antivirus.runningInstall"));
+  if (!isActive() || busyAction.value || globalLoading.value) return;
+  const current = beginAv(t("panel.antivirus.runningInstall"));
   try {
-    avStatus.value = await installAntivirus();
+    const status = await installAntivirus();
+    if (!current()) return;
+    avStatus.value = status;
     showNotice(t("panel.antivirus.installed"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    avTask.end();
-    busyAction.value = "";
+    if (current()) { avTask.end(); busyAction.value = ""; }
   }
 }
 
 async function updateAvDefs() {
-  busyAction.value = "av";
-  avTask.begin(t("panel.antivirus.runningDefs"));
+  if (!isActive() || busyAction.value || globalLoading.value || avServerScan.value !== null) return;
+  const current = beginAv(t("panel.antivirus.runningDefs"));
   try {
-    avStatus.value = await updateAntivirusDefinitions();
+    const status = await updateAntivirusDefinitions();
+    if (!current()) return;
+    avStatus.value = status;
     showNotice(t("panel.antivirus.defsDone"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    avTask.end();
-    busyAction.value = "";
+    if (current()) { avTask.end(); busyAction.value = ""; }
   }
 }
 
 async function runAvScan() {
-  if (!avSiteName.value || avServerScan.value !== null) return;
-  busyAction.value = "av";
-  avTask.begin(t("panel.antivirus.runningScan", { site: avSiteName.value }));
+  if (!isActive() || busyAction.value || globalLoading.value || !avSiteName.value || avServerScan.value !== null) return;
+  const site = avSiteName.value;
+  const current = beginAv(t("panel.antivirus.runningScan", { site }));
   try {
-    const result = await scanAntivirus(avSiteName.value);
+    const result = await scanAntivirus(site);
+    if (!current()) return;
+    if (avStatus.value) avStatus.value = { ...avStatus.value, runningScan: null, lastScan: result };
     await refreshAvStatus();
-    showNotice(
-      result.status === "infected"
-        ? t("panel.antivirus.scanInfected", { count: result.infectedCount })
-        : t("panel.antivirus.scanClean"),
-      result.status === "infected");
+    if (current()) showScanResult(result);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    avTask.end();
-    busyAction.value = "";
+    if (current()) { avTask.end(); busyAction.value = ""; }
   }
 }
 
 async function refreshAll() {
-  loading.value = true;
+  if (!isActive() || busyAction.value) return;
+  const generation = ++refreshGeneration;
+  const current = () => isActive() && generation === refreshGeneration;
+  globalLoading.value = true;
+  bruteForceLoaded.value = false;
+  bruteForceReadError.value = false;
+  bannedIps.value = [];
+  const read = async (action: () => Promise<void>) => {
+    try { await action(); }
+    catch (error) { if (current()) showNotice(resolveApiMessage(error), true); }
+  };
   try {
-    firewallRules.value = await getFirewallRules();
-    firewallLoaded.value = true;
-    await refreshBruteForce();
-    if (selectedSiteName.value) {
-      securityConfig.value = await getSiteSecurity(selectedSiteName.value);
-      aclForm.principal = securityConfig.value.principal || aclForm.principal;
-      rateForm.requestsPerMinute = securityConfig.value.requestsPerMinute || rateForm.requestsPerMinute;
-    }
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    await Promise.all([
+      read(async () => {
+        const rules = await getFirewallRules();
+        if (current()) { firewallRules.value = rules; firewallLoaded.value = true; }
+      }),
+      read(async () => {
+        try {
+          const status = await getBruteForce();
+          if (current()) applyBruteForce(status.settings, status.bannedIps);
+        } catch (error) {
+          if (current()) bruteForceReadError.value = true;
+          throw error;
+        }
+      }),
+      refreshSiteSecurity(),
+      activeSection.value === "antivirus" ? refreshAvStatus() : Promise.resolve()
+    ]);
   } finally {
-    loading.value = false;
+    if (current()) globalLoading.value = false;
   }
 }
 
-async function refreshBruteForce() {
-  const status = await getBruteForce();
-  applyBruteForce(status.settings, status.bannedIps);
+async function refreshSiteSecurity() {
+  if (!isActive()) return;
+  const generation = ++siteGeneration;
+  const site = selectedSiteName.value;
+  const current = () => isActive() && generation === siteGeneration && site === selectedSiteName.value;
+  siteLoading.value = !!site;
+  if (!site) return;
+  try {
+    const config = await getSiteSecurity(site);
+    if (!current()) return;
+    securityConfig.value = config;
+    aclForm.principal = config.principal;
+    rateForm.requestsPerMinute = config.requestsPerMinute || 120;
+  } catch (error) {
+    if (current()) showNotice(resolveApiMessage(error), true);
+  } finally {
+    if (current()) siteLoading.value = false;
+  }
 }
 
 function applyBruteForce(settings: BruteForceSettings, bans: BannedIp[]) {
@@ -746,9 +831,11 @@ function applyBruteForce(settings: BruteForceSettings, bans: BannedIp[]) {
   bruteWhitelistText.value = settings.whitelistedIps.join(", ");
   bannedIps.value = bans;
   bruteForceLoaded.value = true;
+  bruteForceReadError.value = false;
 }
 
 async function saveBruteForce() {
+  if (!isActive() || !bruteForceLoaded.value || busyAction.value || globalLoading.value) return;
   busyAction.value = "bruteforce";
   try {
     const whitelist = bruteWhitelistText.value
@@ -756,55 +843,67 @@ async function saveBruteForce() {
       .map((value) => value.trim())
       .filter((value) => value.length > 0);
     const status = await updateBruteForce({ ...bruteForm, whitelistedIps: whitelist });
+    if (!isActive()) return;
     applyBruteForce(status.settings, status.bannedIps);
     showNotice(t("panel.bruteforce.saved"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isActive()) showNotice(resolveApiMessage(error), true);
   } finally {
     busyAction.value = "";
   }
 }
 
 async function unban(ipAddress: string) {
+  if (!isActive() || busyAction.value || globalLoading.value) return;
   busyAction.value = "unban";
   try {
     const status = await unbanIp(ipAddress);
+    if (!isActive()) return;
     applyBruteForce(status.settings, status.bannedIps);
     showNotice(t("panel.bruteforce.unbanned"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isActive()) showNotice(resolveApiMessage(error), true);
   } finally {
     busyAction.value = "";
   }
 }
 
 async function runSiteAction(action: "isolate" | "acl" | "rate" | "rules") {
-  if (!selectedSiteName.value) return;
+  if (!isActive() || busyAction.value || !selectedSiteName.value || loading.value) return;
+  const site = selectedSiteName.value;
+  const generation = ++siteGeneration;
+  const current = () => isActive() && generation === siteGeneration && site === selectedSiteName.value;
   busyAction.value = action;
   try {
-    if (action === "isolate") securityConfig.value = await isolateSite(selectedSiteName.value);
-    else if (action === "acl") securityConfig.value = await applyAcl(selectedSiteName.value, aclForm.principal, aclForm.rights);
-    else if (action === "rate") securityConfig.value = await setRateLimit(selectedSiteName.value, rateForm.requestsPerMinute, 30);
-    else securityConfig.value = await enableBasicRules(selectedSiteName.value);
+    const config = action === "isolate" ? await isolateSite(site)
+      : action === "acl" ? await applyAcl(site, aclForm.principal, aclForm.rights)
+      : action === "rate" ? await setRateLimit(site, rateForm.requestsPerMinute, 30)
+      : await enableBasicRules(site);
+    if (!current()) return;
+    securityConfig.value = config;
     showNotice(t("panel.security.saved"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) showNotice(resolveApiMessage(error), true);
   } finally {
     busyAction.value = "";
   }
 }
 
 async function saveFirewall(allow: boolean) {
+  if (!isActive() || busyAction.value || globalLoading.value) return;
   busyAction.value = allow ? "allow" : "block";
   try {
     if (allow) await allowPort(firewallForm.port, firewallForm.protocol, firewallForm.ruleName);
     else await blockPort(firewallForm.port, firewallForm.protocol, firewallForm.ruleName);
-    firewallRules.value = await getFirewallRules();
+    if (!isActive()) return;
+    const rules = await getFirewallRules();
+    if (!isActive()) return;
+    firewallRules.value = rules;
     firewallLoaded.value = true;
     showFirewallForm.value = false;
     showNotice(t("panel.firewall.saved"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isActive()) showNotice(resolveApiMessage(error), true);
   } finally {
     busyAction.value = "";
   }
@@ -812,19 +911,24 @@ async function saveFirewall(allow: boolean) {
 
 /** Panelin kendi güvenlik duvarı kuralını kaldırır (yanlışlıkla eklenen engellemenin geri alma yolu). */
 async function removeRule(ruleName: string) {
+  if (!isActive() || busyAction.value || globalLoading.value) return;
   await confirm({
     title: t("panel.firewall.confirmRemoveTitle", { name: ruleName }),
     message: t("panel.firewall.confirmRemove"),
     impact: [ruleName],
     action: async () => {
+      if (!isActive() || busyAction.value || globalLoading.value) return;
       busyAction.value = `remove:${ruleName}`;
       try {
         await removeFirewallRule(ruleName);
-        firewallRules.value = await getFirewallRules();
+        if (!isActive()) return;
+        const rules = await getFirewallRules();
+        if (!isActive()) return;
+        firewallRules.value = rules;
         firewallLoaded.value = true;
         showNotice(t("panel.firewall.removed"), false);
       } catch (error) {
-        showNotice(resolveApiMessage(error), true);
+        if (isActive()) showNotice(resolveApiMessage(error), true);
       } finally {
         busyAction.value = "";
       }
@@ -878,6 +982,12 @@ function actionTone(action: string): string {
 function scanTone(status: string): string {
   if (status === "clean") return "ok";
   return status === "infected" ? "danger" : "warn";
+}
+
+function scanLabel(status: string): string {
+  return ["clean", "infected", "failed", "interrupted"].includes(status)
+    ? t(`panel.antivirus.status.${status}`)
+    : t("panel.antivirus.scanUnconfirmed");
 }
 
 function resolveApiMessage(error: unknown) {

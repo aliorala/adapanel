@@ -4,7 +4,8 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Interfaces;
-using AdaPanel.Infrastructure.Audit;
+using AdaPanel.Data.Persistence;
+using AdaPanel.Infrastructure.Database;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -23,7 +24,7 @@ public sealed class ResellerDatabasesController(
     IDatabaseOwnershipService dbOwnership,
     ICustomerScopeService customerScopes,
     IAuditService auditService,
-    ILogger<ResellerDatabasesController> logger) : ControllerBase
+    AdaPanelDbContext dbContext) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<OwnedDatabaseDto>>>> GetMineAsync(CancellationToken cancellationToken)
@@ -43,54 +44,32 @@ public sealed class ResellerDatabasesController(
         [FromBody] CreateDatabaseRequest request,
         CancellationToken cancellationToken)
     {
-        var userId = User.GetRequiredUserId();
+        var authority = await DatabaseActorAuthority.CaptureAsync(dbContext, customerScopes, User, cancellationToken);
+        var userId = authority.UserId;
         // Sahiplik ve kota abonelik kimliğiyle işler (alt-kullanıcı → parent); audit gerçek aktörle yazılır.
-        var subscriptionId = await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken);
+        var subscriptionId = authority.SubscriptionId;
 
-        // M1: kota (admin sınırsız; MaxDatabases>0 ise sahip olunan DB sayısı sınırı aşamaz).
-        if (!User.IsInRole("Administrator"))
+        // Count, provider creation and ownership commit share the subscription/resource leases.
+        // Different database names must not both consume the same final quota slot.
+        using (await DatabaseLifecycle.EnterSubscriptionAsync(subscriptionId, cancellationToken))
         {
-            var scope = await customerScopes.GetScopeAsync(userId, cancellationToken);
-            if (scope.MaxDatabases > 0 && await dbOwnership.CountForOwnerAsync(subscriptionId, cancellationToken) >= scope.MaxDatabases)
-            {
-                throw new AppException("database.quota_exceeded", 403, 403);
-            }
-        }
-
-        // GÜVENLİK (çapraz-kiracı): istek bir SİTE adı taşıyabiliyor ve servis onu doğrudan
-        // siteDatabaseLinks.LinkAsync'e veriyor. Denetlenmezse kiracı kendi veritabanını
-        // BAŞKASININ sitesine bağlayabilirdi — o site silindiğinde cascade veritabanını DROP eder.
-        if (!string.IsNullOrWhiteSpace(request.SiteName))
-        {
-            await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
-        }
-
-        // Veritabanı ile sahiplik kaydı TEK PARÇA olmalı. Önceden veritabanı yaratılıyor, sonra
-        // kayıt yazılıyordu; arada bir hata (ör. kullanıcı adı zaten var → 409) sahiplik kaydını
-        // hiç yazdırmıyor ve sunucuda YETİM bir veritabanı bırakıyordu: kiracı onu listede
-        // göremiyor, kotasına sayılmıyor, silmeye kalkınca "size ait değil" hatası alıyordu.
-        // Artık kısmi başarı temizleniyor.
-        await databaseService.CreateDatabaseAsync(request, cancellationToken);
-        try
-        {
-            await dbOwnership.RecordAsync(request.Engine, request.Name, subscriptionId, null, cancellationToken);
-        }
-        catch
-        {
-            try
-            {
-                await databaseService.DeleteDatabaseAsync(request.Engine, request.Name, CancellationToken.None);
-            }
-            catch (Exception cleanupException)
-            {
-                logger.LogError(
-                    cleanupException,
-                    "Sahiplik kaydı yazılamadı ve veritabanı geri alınamadı; YETİM kalmış olabilir: [{Engine}] {Name}",
-                    request.Engine,
-                    request.Name);
-            }
-
-            throw;
+            await authority.RevalidateAsync(dbContext, customerScopes, User, cancellationToken);
+            await databaseService.CreateDatabaseAsync(request, async token =>
+                {
+                    // A second wait may occur on the database resource lease. Recheck at the
+                    // provider boundary, using the original tenant rather than resolving a new target.
+                    await authority.RevalidateAsync(dbContext, customerScopes, User, token);
+                    if (!User.IsInRole("Administrator"))
+                    {
+                        var scope = await customerScopes.GetScopeAsync(userId, token);
+                        if (scope.MaxDatabases > 0 && await dbOwnership.CountForOwnerAsync(subscriptionId, token) >= scope.MaxDatabases)
+                            throw new AppException("database.quota_exceeded", 403, 403);
+                    }
+                    if (!string.IsNullOrWhiteSpace(request.SiteName))
+                        await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, token);
+                },
+                token => dbOwnership.RecordAsync(request.Engine, request.Name, subscriptionId, null, token),
+                cancellationToken);
         }
         // KONU = ABONELİK, aktör ise oturumdaki kullanıcı. İkisi self-serviste bile AYRILIR:
         // aboneliğin alt kullanıcısı (Plesk "additional user") veritabanını kendi adına açar ama
@@ -113,24 +92,24 @@ public sealed class ResellerDatabasesController(
         [FromQuery] string engine,
         CancellationToken cancellationToken)
     {
-        var userId = User.GetRequiredUserId();
+        var authority = await DatabaseActorAuthority.CaptureAsync(dbContext, customerScopes, User, cancellationToken);
+        var userId = authority.UserId;
 
-        // KRİTİK: admin değilse YALNIZ kendi aboneliğinin sahip olduğu DB'yi silebilir (başkasınınkini değil).
-        if (!User.IsInRole("Administrator"))
+        Guid? sahip = null;
+        using (await DatabaseLifecycle.EnterSubscriptionAsync(authority.SubscriptionId, cancellationToken))
         {
-            var owner = await dbOwnership.GetOwnerAsync(engine, name, cancellationToken);
-            if (owner != await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken))
-            {
-                throw new AppException("database.not_owned", 403, 403);
-            }
+            await authority.RevalidateAsync(dbContext, customerScopes, User, cancellationToken);
+            await databaseService.DeleteDatabaseAsync(engine, name, async token =>
+                {
+                    // Both the actor and the original tenant must still be authorized after
+                    // resource/account waits. A valid old cookie alone cannot authorize DROP.
+                    await authority.RevalidateAsync(dbContext, customerScopes, User, token);
+                    sahip = await dbOwnership.GetOwnerAsync(engine, name, token);
+                    if (!User.IsInRole("Administrator") && sahip != authority.SubscriptionId)
+                        throw new AppException("database.not_owned", 403, 403);
+                },
+                token => dbOwnership.RemoveAsync(engine, name, token), cancellationToken);
         }
-
-        // SAHİP, SAHİPLİK KAYDI SİLİNMEDEN ÖNCE OKUNUR: sıra tersine dönerse kaydın konusu kalıcı
-        // olarak boş kalır ve veritabanını kaybeden abonelik, kaybın izini kendi ekranında bulamaz.
-        var sahip = await AuditSubject.DatabaseOwnerAsync(dbOwnership, engine, name, cancellationToken);
-
-        await databaseService.DeleteDatabaseAsync(engine, name, cancellationToken);
-        await dbOwnership.RemoveAsync(engine, name, cancellationToken);
         await auditService.WriteForSubscriptionAsync(
             "database.delete.completed",
             $"database:{name}",

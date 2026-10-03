@@ -34,6 +34,7 @@ public sealed class LocalBackupFolderCleanupTests
         var old = Create(area, "old", "2026-09-01", "sites/shop");
         old.CreatedAtUtc = DateTime.UtcNow.AddDays(-10);
         var current = Create(area, "new", "2026-09-17", "sites/shop");
+        old.Status = current.Status = "created";
         await area.KayitlariYazAsync(old, current);
         var result = await area.ServisKur(new SahteBulut()).PruneAsync(5, cancellationToken: area.Iptal);
         Assert.Equal(1, result.Removed);

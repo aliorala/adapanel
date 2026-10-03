@@ -25,6 +25,8 @@ export type FtpUser = {
   homeLinkPath?: string;
   homeLinkExists?: boolean | null;
   homeTargetExists?: boolean | null;
+  /** Oluşturmada ölçülür: true = süre dolumu kapalı, false = açık, null = doğrulanamadı. */
+  passwordNeverExpires?: boolean | null;
   isEnabled: boolean;
   createdAtUtc: string;
 };
@@ -71,9 +73,9 @@ export async function getFtpUsers() {
   return response.data.data;
 }
 
-export async function createFtpUser(payload: { userName: string; password: string; siteName: string; homePath: string; }) {
+export async function createFtpUser(payload: { userName: string; password: string; siteName: string; homePath: string; }): Promise<FtpUser & { message?: string }> {
   const response = await apiClient.post<ApiEnvelope<FtpUser>>("/ftp/users", payload);
-  return response.data.data;
+  return { ...response.data.data, message: response.data.message };
 }
 
 export async function setFtpPassword(userName: string, password: string) {

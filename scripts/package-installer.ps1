@@ -8,26 +8,30 @@
 # ayni paketi indirip kurar (sonsuz dongu). Bkz. scripts\version-guard.ps1.
 param(
     [string]$Version,
-    [switch]$SkipComponentAudit
+    [switch]$SkipComponentAudit,
+    [string]$IsccPath
 )
 $ErrorActionPreference = "Stop"
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 . (Join-Path $PSScriptRoot "version-guard.ps1")
+. (Join-Path $PSScriptRoot "lib\workspace-path.ps1")
 $Version = Resolve-AdaReleaseVersion -RepoRoot $repo -RequestedVersion $Version
 Write-Host "Surum (Directory.Build.props): $Version"
-$publishDir = Join-Path $repo "artifacts\publish\win-x64"
+$publishDir = Assert-AdaWorkspaceChildPath -RepoRoot $repo -Path (Join-Path $repo "artifacts\publish\win-x64")
 $dotnet = Join-Path $repo ".tools\dotnet\dotnet.exe"
 if (-not (Test-Path $dotnet)) { $dotnet = (Get-Command dotnet).Source }
 
 & (Join-Path $repo "scripts\sync-frontend.ps1") | Out-Null
 
-if (Test-Path $publishDir) { Get-ChildItem $publishDir -Force | Remove-Item -Recurse -Force }
+if (Test-Path -LiteralPath $publishDir) {
+    Get-ChildItem -LiteralPath $publishDir -Force | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
+}
 New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
 
 & $dotnet publish (Join-Path $repo "src\AdaPanel.Api\AdaPanel.Api.csproj") `
-    -c Release -r win-x64 --self-contained true -o $publishDir `
+    -c Release -r win-x64 --self-contained true -o $publishDir -m:1 /nodeReuse:false `
     "/p:Version=$Version" "/p:InformationalVersion=$Version" /p:IncludeSourceRevisionInInformationalVersion=false `
     /p:PublishSingleFile=true /p:EnableCompressionInSingleFile=true /p:DebugType=None /p:DebugSymbols=false
 if ($LASTEXITCODE -ne 0) { throw "Publish basarisiz." }
@@ -43,9 +47,9 @@ Copy-Item (Join-Path $repo "components.json") (Join-Path $publishDir "components
 # betik calistiriyordu; ozellik 0.7.0-0.7.2'de olu olarak yayinlandi. Yesil test, teslim edilmis
 # demek DEGILDIR -- teslim yolunun kendisi de olculmeliydi.
 $moduleProject = Join-Path $repo "src\AdaPanel.HtaccessModule\AdaPanel.HtaccessModule.csproj"
-$moduleOut = Join-Path $repo "artifacts\htaccess-module"
-if (Test-Path $moduleOut) { Remove-Item $moduleOut -Recurse -Force }
-& $dotnet build $moduleProject -c Release -o $moduleOut "/p:Version=$Version" --nologo
+$moduleOut = Assert-AdaWorkspaceChildPath -RepoRoot $repo -Path (Join-Path $repo "artifacts\htaccess-module")
+if (Test-Path -LiteralPath $moduleOut) { Remove-Item -LiteralPath $moduleOut -Recurse -Force }
+& $dotnet build $moduleProject -c Release -o $moduleOut "/p:Version=$Version" --nologo -m:1 /nodeReuse:false
 if ($LASTEXITCODE -ne 0) { throw ".htaccess modulu derlenemedi." }
 
 $moduleDll = Join-Path $moduleOut "AdaPanel.HtaccessModule.dll"
@@ -73,7 +77,11 @@ $isccCandidates = @(
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
     "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
 )
-$iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+$iscc = if ($IsccPath) {
+    (Resolve-Path -LiteralPath $IsccPath -ErrorAction Stop).Path
+} else {
+    $isccCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+}
 if (-not $iscc) { throw "Inno Setup (ISCC.exe) bulunamadi." }
 
 & $iscc "/DMyAppVersion=$Version" (Join-Path $repo "installer\AdaPanel.iss")

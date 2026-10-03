@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Security.Claims;
+using System.Reflection;
 using AdaPanel.Api.Controllers;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Backup;
@@ -7,6 +8,12 @@ using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Dtos.Store;
 using AdaPanel.Core.Enums;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Core.Entities;
+using AdaPanel.Data.Persistence;
+using AdaPanel.Infrastructure.Services;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using AdaPanel.Infrastructure.AppStore;
 using AdaPanel.Infrastructure.Backup;
 using AdaPanel.Infrastructure.Options;
@@ -128,8 +135,10 @@ public sealed class SunucuSahipligiYazmaSiniriTests
         var kayit = await servis.RestoreAsync(new RestoreBackupRequest { BackupId = "b1" });
 
         Assert.Equal("restored", kayit.Status);
-        Assert.StartsWith(alan.Kok, kayit.Path, StringComparison.OrdinalIgnoreCase);
-        Assert.True(File.Exists(Path.Combine(kayit.Path, "site", "index.html")));
+        Assert.Equal(zip, kayit.Path);
+        Assert.True(File.Exists(kayit.Path));
+        Assert.StartsWith(alan.Kok, kayit.RestoredPath, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(kayit.RestoredPath, "site", "index.html")));
     }
 
     /// <summary>
@@ -390,6 +399,7 @@ public sealed class SunucuSahipligiYazmaSiniriTests
             null!,
             null!,
             null!,
+            null!,
             CancellationToken.None));
 
         Assert.Equal("sites.physical_path_forbidden", hata.MessageKey);
@@ -407,6 +417,7 @@ public sealed class SunucuSahipligiYazmaSiniriTests
 
         var hata = await Record.ExceptionAsync(() => denetleyici.CreateSiteAsync(
             new CreateSiteRequest { Name = "iyi", HostName = "iyi.test", PhysicalPath = string.Empty },
+            null!,
             null!,
             null!,
             null!,
@@ -437,6 +448,7 @@ public sealed class SunucuSahipligiYazmaSiniriTests
 
     private sealed class Alan : IDisposable
     {
+        private readonly List<IDisposable> contexts = [];
         public Alan()
         {
             Kok = Path.Combine(Path.GetTempPath(), $"adapanel-sahiplik-{Guid.NewGuid():N}");
@@ -508,8 +520,20 @@ public sealed class SunucuSahipligiYazmaSiniriTests
 
         public SitesController SiteDenetleyicisi(ISiteProvisioningService saglayici)
         {
+            var http = YoneticiBaglami();
+            var connection = new SqliteConnection("Data Source=:memory:");
+            connection.Open();
+            var db = new AdaPanelDbContext(new DbContextOptionsBuilder<AdaPanelDbContext>().UseSqlite(connection).Options);
+            db.Database.EnsureCreated();
+            db.Users.Add(new PanelUser { Id = Guid.Parse(http.User.FindFirst(ClaimTypes.NameIdentifier)!.Value),
+                UserName = "owner", Email = "owner@example.test", PasswordHash = "hash", IsActive = true, Role = UserRole.Administrator });
+            db.SaveChanges();
+            var services = new ServiceCollection().AddSingleton(db).BuildServiceProvider();
+            contexts.Add(services); contexts.Add(db); contexts.Add(connection);
+            http.RequestServices = services;
+            var siteReader = DispatchProxy.Create<IIisSiteService, SettingsSiteReader>();
             var denetleyici = new SitesController(
-                null!,
+                siteReader,
                 saglayici,
                 null!,
                 null!,
@@ -519,11 +543,11 @@ public sealed class SunucuSahipligiYazmaSiniriTests
                 null!,
                 null!,
                 new RecordingAuditService(),
-                null!,
+                new ConcurrencyLock(),
                 Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = Kok }),
                 NullLogger<SitesController>.Instance)
             {
-                ControllerContext = new ControllerContext { HttpContext = YoneticiBaglami() }
+                ControllerContext = new ControllerContext { HttpContext = http }
             };
 
             return denetleyici;
@@ -541,6 +565,7 @@ public sealed class SunucuSahipligiYazmaSiniriTests
 
         public void Dispose()
         {
+            foreach (var context in contexts) context.Dispose();
             // HİÇBİR ŞEY SİLİNMEZ (bu takımın kuralı): özyinelemeli silme bir kavşağı takip edip
             // testin kendisini yıkıcı hâle getirmişti. Geçici alan %TEMP% altında BIRAKILIR.
         }
@@ -556,6 +581,17 @@ public sealed class SunucuSahipligiYazmaSiniriTests
             return Task.FromResult(new SiteDto { Name = siteName, PhysicalPath = physicalPath });
         }
 
+        public async Task<SiteDto> SetDocumentRootAsync(string siteName, string physicalPath,
+            Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default)
+        {
+            await beforeMutation(SettingsSiteReader.Site(siteName), cancellationToken);
+            return await SetDocumentRootAsync(siteName, physicalPath, cancellationToken);
+        }
+        public Task<SiteDto> EnableFrameworkRewriteAsync(string siteName,
+            Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<SitePermissionRepairResultDto> RepairPermissionsAsync(string siteName,
+            Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
         public Task<SiteDto> CreateAndProvisionAsync(
             CreateSiteRequest request,
             Guid? actorUserId,
@@ -567,6 +603,14 @@ public sealed class SunucuSahipligiYazmaSiniriTests
 
         public Task<SitePermissionRepairResultDto> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+    }
+
+    public class SettingsSiteReader : DispatchProxy
+    {
+        public static SiteDto Site(string name) => new() { Id = 42, Name = name,
+            PhysicalPath = @"D:\sites\shop", ApplicationRootPath = @"D:\sites\shop", ApplicationPoolName = "shop-pool" };
+        protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name == "GetSiteAsync"
+            ? Task.FromResult(Site((string)args![0]!)) : throw new NotSupportedException(method.Name);
     }
 
 

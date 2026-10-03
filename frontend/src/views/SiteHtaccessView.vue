@@ -5,7 +5,7 @@
         <h4>{{ t("panel.htaccess.title") }}</h4>
         <p class="meta">{{ t("panel.htaccess.subtitle") }}</p>
       </div>
-      <button class="secondary compact" :disabled="!siteName || busy" @click="load">
+      <button class="secondary compact" :disabled="!siteName || busy || saving" @click="load">
         {{ t("panel.htaccess.refresh") }}
       </button>
     </div>
@@ -384,18 +384,18 @@
 
         <label class="setting-row align-start">
           <span>{{ t("panel.htaccess.validate.content") }}</span>
-          <textarea v-model="draft" rows="10" spellcheck="false" :placeholder="validatePlaceholder"></textarea>
+          <textarea v-model="draft" :disabled="saving" rows="10" spellcheck="false" :placeholder="validatePlaceholder"></textarea>
           <small>{{ t("panel.htaccess.validate.contentHelp") }}</small>
         </label>
 
         <label class="setting-row">
           <span>{{ t("panel.htaccess.validate.virtualPath") }}</span>
-          <input v-model="draftPath" spellcheck="false" placeholder="/" />
+          <input v-model="draftPath" :disabled="saving" spellcheck="false" placeholder="/" />
           <small>{{ t("panel.htaccess.validate.virtualPathHelp") }}</small>
         </label>
 
         <div class="action-row">
-          <button class="secondary" :disabled="validating || draft.trim().length === 0" @click="runValidate">
+          <button class="secondary" :disabled="saving || validating || draft.trim().length === 0" @click="runValidate">
             {{ validating ? t("panel.htaccess.validate.running") : t("panel.htaccess.validate.run") }}
           </button>
           <!-- KAYDETME buraya konuldu: kullanıcı metni ZATEN burada yazıp denetliyordu, ama
@@ -463,7 +463,7 @@
  * icinde aramaktan alikoymazdi ve WebsiteWorkspaceView (baska bir is kolunun dosyasi)
  * degistirilmek zorunda kalirdi.
  */
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   diagnosticLevelName,
@@ -485,7 +485,9 @@ import {
 } from "../api/htaccess";
 import { getFileWorkspace, saveFile } from "../api/files";
 import { useConfirm } from "../components/ConfirmDialog.vue";
-import { extractApiMessage, useAuthStore } from "../stores/auth";
+import { useAuthStore } from "../stores/auth";
+import { getSessionEpoch } from "../api/client";
+import { useNotice } from "../composables/useNotice";
 import { useSitesStore } from "../stores/sites";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 import { formatBytes } from "../utils/bytes";
@@ -496,6 +498,7 @@ const { t } = useI18n();
 // Okuma dugmeleri (incele, denetle, benzet) kapiya girmez.
 const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
+const { resolveApiMessage } = useNotice();
 const sitesStore = useSitesStore();
 const authStore = useAuthStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
@@ -552,6 +555,13 @@ const draftPath = ref("/");
 const simulatePath = ref("/");
 const simulateMethod = ref("GET");
 const simulateHttps = ref(false);
+let siteGeneration = 0, reportRequest = 0;
+let disposed = false;
+onBeforeUnmount(() => { disposed = true; });
+function siteContext() {
+  const site = siteName.value, generation = siteGeneration, epoch = getSessionEpoch();
+  return { site, current: () => !disposed && siteName.value === site && generation === siteGeneration && getSessionEpoch() === epoch };
+}
 
 const methods = ["GET", "POST", "HEAD", "PUT", "DELETE"];
 
@@ -632,7 +642,7 @@ function boyutMetni(value: number): string {
 }
 
 function fail(error: unknown, fallbackKey: string) {
-  notice.value = extractApiMessage(error) || t(fallbackKey);
+  notice.value = resolveApiMessage(error) || t(fallbackKey);
   noticeError.value = true;
 }
 
@@ -654,7 +664,7 @@ async function loadServerSwitch() {
     // Okunamadıysa DURUM UYDURULMAZ: `null` kalır ve arayüz "bilinmiyor" der. "off" varsaymak,
     // açık bir sunucuyu kapalı göstermek olurdu.
     serverSwitch.value = null;
-    serverNotice.value = extractApiMessage(error) || t("panel.htaccess.server.loadFailed");
+    serverNotice.value = resolveApiMessage(error) || t("panel.htaccess.server.loadFailed");
     serverNoticeError.value = true;
   }
 }
@@ -677,7 +687,7 @@ async function repairModule() {
     moduleNotice.value = t("htaccess.module_registered");
     await load();
   } catch (error) {
-    moduleNotice.value = extractApiMessage(error) || t("panel.htaccess.module.repairFailed");
+    moduleNotice.value = resolveApiMessage(error) || t("panel.htaccess.module.repairFailed");
     moduleNoticeError.value = true;
   } finally {
     moduleBusy.value = false;
@@ -698,7 +708,7 @@ async function saveServerMode(mode: HtaccessMode) {
     // açtığı hâlde ekranda hâlâ "sunucu geneli KAPALI" yazardı.
     await load();
   } catch (error) {
-    serverNotice.value = extractApiMessage(error) || t("panel.htaccess.server.saveFailed");
+    serverNotice.value = resolveApiMessage(error) || t("panel.htaccess.server.saveFailed");
     serverNoticeError.value = true;
   } finally {
     serverBusy.value = false;
@@ -706,76 +716,90 @@ async function saveServerMode(mode: HtaccessMode) {
 }
 
 async function load() {
+  if (disposed) return;
+  const target = siteContext(), request = ++reportRequest;
   if (!siteName.value) {
     report.value = null;
+    busy.value = false;
     return;
   }
 
   busy.value = true;
   notice.value = "";
+  noticeError.value = false;
   try {
-    const loaded = await getHtaccessReport(siteName.value);
+    const loaded = await getHtaccessReport(target.site);
+    if (!target.current() || request !== reportRequest) return;
     report.value = loaded;
     selectedMode.value = loaded.mode;
     inspection.value = loaded.inspection;
     // Taslak, KOK dosyanin sanal yoluyla baslar: kullanicinin en sik duzenledigi dosya odur.
     draftPath.value = "/";
   } catch (error) {
+    if (!target.current() || request !== reportRequest) return;
     report.value = null;
     fail(error, "panel.htaccess.loadFailed");
   } finally {
-    busy.value = false;
+    if (target.current() && request === reportRequest) busy.value = false;
   }
 }
 
 async function saveMode() {
-  if (!siteName.value || !report.value) return;
+  if (disposed || busy.value || saving.value || !siteName.value || !report.value) return;
+  const target = siteContext(), previousMode = report.value.mode;
 
   busy.value = true;
   notice.value = "";
   try {
-    const saved = await setHtaccessMode(siteName.value, selectedMode.value, note.value.trim());
+    const saved = await setHtaccessMode(target.site, selectedMode.value, note.value.trim());
+    if (!target.current()) return;
     report.value = saved;
     selectedMode.value = saved.mode;
     inspection.value = saved.inspection;
     notice.value = t("panel.htaccess.mode.saved", { mode: modeLabel(saved.mode) });
     noticeError.value = false;
   } catch (error) {
+    if (!target.current()) return;
     // Kaydedilemedi -> secim SUNUCUDAKI degere geri alinir. Aksi halde ekranda "enforce"
     // gorunur, sunucuda "off" olurdu: panelin soyleyebilecegi en pahali yalan.
-    selectedMode.value = report.value.mode;
+    selectedMode.value = previousMode;
     fail(error, "panel.htaccess.saveFailed");
   } finally {
-    busy.value = false;
+    if (target.current()) busy.value = false;
   }
 }
 
 async function inspect(directory: string) {
-  if (!siteName.value) return;
+  if (disposed || busy.value || inspecting.value || !siteName.value) return;
+  const target = siteContext();
 
   inspecting.value = true;
   notice.value = "";
   try {
-    inspection.value = await inspectHtaccess(siteName.value, directory);
+    const result = await inspectHtaccess(target.site, directory);
+    if (target.current()) inspection.value = result;
   } catch (error) {
-    fail(error, "panel.htaccess.inspectFailed");
+    if (target.current()) fail(error, "panel.htaccess.inspectFailed");
   } finally {
-    inspecting.value = false;
+    if (target.current()) inspecting.value = false;
   }
 }
 
 async function runValidate() {
-  if (!siteName.value) return;
+  if (disposed || busy.value || saving.value || validating.value || !siteName.value) return;
+  const target = siteContext(), content = draft.value, path = draftPath.value.trim() || "/";
 
   validating.value = true;
   notice.value = "";
   try {
-    validation.value = await validateHtaccess(siteName.value, draft.value, draftPath.value.trim() || "/");
+    const result = await validateHtaccess(target.site, content, path);
+    if (target.current() && draft.value === content && (draftPath.value.trim() || "/") === path) validation.value = result;
   } catch (error) {
+    if (!target.current()) return;
     validation.value = null;
     fail(error, "panel.htaccess.validate.failed");
   } finally {
-    validating.value = false;
+    if (target.current()) validating.value = false;
   }
 }
 
@@ -795,7 +819,8 @@ async function runValidate() {
  *     durumu göstermeye devam eder.
  */
 async function saveDraft() {
-  if (!siteName.value || saving.value) return;
+  if (disposed || busy.value || validating.value || !siteName.value || !report.value || saving.value) return;
+  const target = siteContext(), content = draft.value, documentRoot = report.value.documentRoot;
 
   const sanalYol = draftPath.value.trim() || "/";
   const goreli = goreliDizin(sanalYol);
@@ -807,8 +832,10 @@ async function saveDraft() {
 
   saving.value = true;
   notice.value = "";
+  noticeError.value = false;
   try {
-    const sonuc = await validateHtaccess(siteName.value, draft.value, sanalYol);
+    const sonuc = await validateHtaccess(target.site, content, sanalYol);
+    if (!target.current()) return;
     validation.value = sonuc;
 
     if (!sonuc.usable) {
@@ -821,6 +848,7 @@ async function saveDraft() {
         tone: "neutral",
         confirmLabel: t("panel.htaccess.save.anyway")
       });
+      if (!target.current()) return;
 
       if (!onay) {
         notice.value = t("panel.htaccess.save.cancelled");
@@ -829,20 +857,24 @@ async function saveDraft() {
       }
     }
 
-    const hedef = await hedefYolAsync(goreli);
+    const hedef = await hedefYolAsync(target.site, documentRoot, goreli);
+    if (!target.current()) return;
     if (hedef === null) {
       notice.value = t("panel.htaccess.save.rootMismatch");
       noticeError.value = true;
       return;
     }
 
-    await saveFile(hedef, draft.value);
+    await saveFile(hedef, content);
+    if (!target.current()) return;
 
     await load();
+    if (!target.current()) return;
     // `load` taslak yolunu köke çeker; kullanıcının çalıştığı dizin geri konur, sonra o dizin
     // yeniden incelenir — aksi halde ekran az önce yazılan dosyayı hiç göstermezdi.
     draftPath.value = sanalYol;
     await inspect(goreli);
+    if (!target.current()) return;
 
     // Başarı mesajı, TAZELEMENİN hatasının ÜSTÜNE yazılmaz: dosya yazıldı ama rapor okunamadıysa
     // kullanıcı ekrandaki bilginin bayat olduğunu bilmeli.
@@ -851,7 +883,7 @@ async function saveDraft() {
       noticeError.value = false;
     }
   } catch (error) {
-    fail(error, "panel.htaccess.save.failed");
+    if (target.current()) fail(error, "panel.htaccess.save.failed");
   } finally {
     saving.value = false;
   }
@@ -883,10 +915,10 @@ function goreliDizin(virtualPath: string): string | null {
  * Belge kökü dosya yöneticisinin sanal alanının İÇİNDE değilse `null` döner: yolu tahmin edip
  * rastgele bir yere yazmaktansa kaydetmemek doğrudur.
  */
-async function hedefYolAsync(goreliDizinYolu: string): Promise<string | null> {
-  const siteKoku = `sites/${siteName.value}`;
+async function hedefYolAsync(site: string, documentRoot: string, goreliDizinYolu: string): Promise<string | null> {
+  const siteKoku = `sites/${site}`;
   const calismaAlani = await getFileWorkspace(siteKoku);
-  const onEk = belgeKokuOneki(calismaAlani.physicalPath, report.value?.documentRoot ?? "");
+  const onEk = belgeKokuOneki(calismaAlani.physicalPath, documentRoot);
   if (onEk === null) {
     return null;
   }
@@ -911,25 +943,34 @@ function belgeKokuOneki(dosyaKoku: string, belgeKoku: string): string | null {
 }
 
 async function runSimulate() {
-  if (!siteName.value) return;
+  if (disposed || busy.value || simulating.value || !siteName.value) return;
+  const target = siteContext();
 
   simulating.value = true;
   notice.value = "";
   try {
-    simulation.value = await simulateHtaccess(siteName.value, {
+    const result = await simulateHtaccess(target.site, {
       requestPath: simulatePath.value.trim(),
       method: simulateMethod.value,
       https: simulateHttps.value
     });
+    if (target.current()) simulation.value = result;
   } catch (error) {
+    if (!target.current()) return;
     simulation.value = null;
     fail(error, "panel.htaccess.simulate.failed");
   } finally {
-    simulating.value = false;
+    if (target.current()) simulating.value = false;
   }
 }
 
-watch(siteName, load, { immediate: true });
+watch(siteName, () => {
+  ++siteGeneration;
+  report.value = null; inspection.value = null; validation.value = null; simulation.value = null;
+  draft.value = ""; draftPath.value = "/"; note.value = "";
+  inspecting.value = false; validating.value = false; simulating.value = false;
+  void load();
+}, { immediate: true });
 
 // Sunucu anahtarı SİTEYE bağlı değildir; site değiştikçe yeniden okumak gereksiz istek olurdu.
 // Oturumun rolü belirlendiği anda bir kez okunur (rol başta `undefined` olabilir: oturum

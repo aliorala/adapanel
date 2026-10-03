@@ -16,7 +16,21 @@ public interface IAutomationService
 
     Task<AutomationStatusDto> RunBackupNowAsync(CancellationToken cancellationToken = default);
 
+    async Task<AutomationStatusDto> RunBackupNowAsync(Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken = default)
+    {
+        await beforeMutation(cancellationToken);
+        return await RunBackupNowAsync(cancellationToken);
+    }
+
     Task<AutomationStatusDto> RunSslRenewNowAsync(CancellationToken cancellationToken = default);
+
+    async Task<AutomationStatusDto> RunSslRenewNowAsync(Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken = default)
+    {
+        await beforeMutation(cancellationToken);
+        return await RunSslRenewNowAsync(cancellationToken);
+    }
 
     /// <summary>Zamanı gelmiş job'ları çalıştırır (worker tarafından çağrılır).</summary>
     Task RunDueJobsAsync(CancellationToken cancellationToken = default);

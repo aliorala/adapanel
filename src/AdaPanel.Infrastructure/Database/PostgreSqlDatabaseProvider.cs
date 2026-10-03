@@ -73,13 +73,9 @@ internal sealed class PostgreSqlDatabaseProvider : IDatabaseEngineProvider
             dropCommand.CommandText = $"DROP DATABASE {QuoteIdentifier(databaseName)};";
             await dropCommand.ExecuteNonQueryAsync(cancellationToken);
         }
-        catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.InvalidCatalogName)
-        {
-            throw new AppException("database.database_not_found", 404, 404);
-        }
         catch (PostgresException exception)
         {
-            throw MapUnexpectedPostgresException(exception);
+            throw MapDeleteDatabaseException(exception);
         }
     }
 
@@ -143,13 +139,9 @@ internal sealed class PostgreSqlDatabaseProvider : IDatabaseEngineProvider
             command.CommandText = $"DROP ROLE {QuoteIdentifier(userName)};";
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
-        catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.UndefinedObject)
-        {
-            throw new AppException("database.user_not_found", 404, 404);
-        }
         catch (PostgresException exception)
         {
-            throw MapUnexpectedPostgresException(exception);
+            throw MapDeleteUserException(exception);
         }
     }
 
@@ -404,7 +396,7 @@ internal sealed class PostgreSqlDatabaseProvider : IDatabaseEngineProvider
             var warning = await DetectListenWarningAsync(connection, cancellationToken);
             var databases = await ReadAllGrantedDatabasesAsync(connection, cancellationToken);
 
-            var result = new Dictionary<string, RemoteAccessFacts>(StringComparer.OrdinalIgnoreCase);
+            var result = new Dictionary<string, RemoteAccessFacts>(StringComparer.Ordinal);
             foreach (var userName in userNames)
             {
                 result[userName] = new RemoteAccessFacts(
@@ -564,7 +556,7 @@ internal sealed class PostgreSqlDatabaseProvider : IDatabaseEngineProvider
             ORDER BY r.rolname, d.datname;
             """;
 
-        var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
 
@@ -716,6 +708,16 @@ internal sealed class PostgreSqlDatabaseProvider : IDatabaseEngineProvider
         return string.Join(", ", privileges.Select(value =>
             string.Equals(value, "TEMP", StringComparison.OrdinalIgnoreCase) ? "TEMPORARY" : value));
     }
+
+    internal static AppException MapDeleteDatabaseException(PostgresException exception) =>
+        exception.SqlState == PostgresErrorCodes.InvalidCatalogName
+            ? AppException.Gone("database.database_not_found")
+            : MapUnexpectedPostgresException(exception);
+
+    internal static AppException MapDeleteUserException(PostgresException exception) =>
+        exception.SqlState == PostgresErrorCodes.UndefinedObject
+            ? AppException.Gone("database.user_not_found")
+            : MapUnexpectedPostgresException(exception);
 
     private static AppException MapUnexpectedPostgresException(PostgresException exception)
     {

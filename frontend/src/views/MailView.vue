@@ -1004,6 +1004,7 @@ import {
 } from "../api/autodiscover";
 import { webmailPage } from "../utils/webmailPage";
 import { toReachableUrl } from "../utils/url";
+import { UserFacingError } from "../utils/apiError";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import MailQueueCard from "../components/MailQueueCard.vue";
 import MailRelayCard from "../components/MailRelayCard.vue";
@@ -1328,6 +1329,8 @@ const visibleAccountAddresses = computed(() => accountPager.items.value.map((acc
  * toplu ucu yoktur: adresler tek tek denenir, biri patlarsa döngü durmaz ve özet dürüst kalır.
  */
 async function removeSelectedAccounts() {
+  const targetDomain = selectedDomain.value;
+  const isCurrent = () => selectedDomain.value === targetDomain;
   const targets = mailAccounts.value.filter((account) => accountSelection.isSelected(account.address));
   if (targets.length === 0) {
     return;
@@ -1339,7 +1342,7 @@ async function removeSelectedAccounts() {
     impact: bulk.impactList(targets.map((account) => account.address)),
     requireText: String(targets.length)
   });
-  if (!onay) {
+  if (!onay || !isCurrent()) {
     return;
   }
 
@@ -1347,9 +1350,11 @@ async function removeSelectedAccounts() {
     targets,
     (account) => account.address,
     async (account) => {
-      apply(await deleteMailAccount(account.address));
-    }
+      const result = await deleteMailAccount(account.address);
+      if (isCurrent()) apply(result);
+    }, isCurrent
   );
+  if (!isCurrent()) return;
   accountSelection.keepOnly((workspace.value?.accounts ?? []).map((account) => account.address));
   showNotice(bulk.deleteSummary(outcome), outcome.failures.length > 0);
 }
@@ -1539,8 +1544,14 @@ async function issueCert() {
 // Tek tık webmail (profesyonel paneller gibi): Roundcube kurulu/yayında değilse panel otomatik kurar,
 // sonra yeni sekmede açar. Kullanıcı tam e-posta adresi + şifresiyle giriş yapar.
 async function openWebmail() {
+  if (webmailOpening.value) return;
   // Pop-up engelleyiciye takılmamak için sekmeyi tıklama anında aç, URL gelince yönlendir.
   const tab = window.open("", "_blank");
+  if (!tab) {
+    showNotice(t("panel.common.popupBlocked"), true);
+    return;
+  }
+  tab.opener = null;
   // Sekmeyi boş bırakma: hazırlık sürerken (ilk açılış birkaç saniye + olası kurulum) "hazırlanıyor" göster,
   // yoksa kullanıcı boş sayfa görüp "açılmadı" sanıyor. URL gelince oraya yönlendiririz; hata olursa sekmede yazarız.
   // Aşağıdaki renkler BİLEREK sabit: bu HTML yepyeni ve BOŞ bir sekmeye yazılıyor, panelin
@@ -1560,16 +1571,13 @@ async function openWebmail() {
       // yani `window.location` dalında yönetici panelin kendisini tazeler ve "açılmadı"
       // sanır. Boş adres bir adres değildir; aşağıdaki catch'e düşsün, sekmede neden yazılsın.
       if (!url) {
-        throw new Error("webmail.unsafe_url");
+        throw new UserFacingError("panel.common.invalidLink");
       }
-      if (tab) {
-        tab.location.href = url;
-      } else {
-        window.location.href = url;
-      }
+      if (tab.closed) throw new UserFacingError("panel.common.popupClosed");
+      tab.location.replace(url);
     } catch (error) {
       // Sekmeyi sessizce kapatma → kullanıcı ne olduğunu anlamaz. Nedeni sekmede göster.
-      if (tab && tab.document?.body) {
+      if (!tab.closed && tab.document?.body) {
         tab.document.open();
         tab.document.write(webmailPage(locale.value, t("panel.mail.webmailFailedTitle"), t("panel.mail.webmailFailedHint"), true));
         tab.document.close();

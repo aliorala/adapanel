@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import { UserFacingError } from "../utils/apiError";
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -32,6 +33,20 @@ export type HostNodeAppPayload = {
 };
 
 export type HostPythonAppPayload = HostNodeAppPayload;
+
+export type AppRuntimeInventoryItem = { componentId: string; isInstalled: boolean };
+
+export async function getSiteAppRuntimeInventory(siteName: string): Promise<AppRuntimeInventoryItem[]> {
+  const response = await apiClient.get<ApiEnvelope<AppRuntimeInventoryItem[]>>(`/sites/${encodeURIComponent(siteName)}/apps/runtimes`);
+  const items = response.data?.data;
+  // A successful scoped measurement covers both runtimes. Missing/malformed
+  // rows must not turn an unknown server state into an installation decision.
+  if (response.data?.success !== true || !Array.isArray(items) || items.length !== 2 ||
+    !["nodejs-lts", "python-3"].every(id => items.filter(item => item?.componentId === id && typeof item.isInstalled === "boolean").length === 1)) {
+    throw new UserFacingError("appruntime.inventory_unavailable");
+  }
+  return items;
+}
 
 export async function getSiteAppRuntimeConfiguration(siteName: string) {
   const response = await apiClient.get<ApiEnvelope<AppRuntimeSiteConfiguration>>(`/sites/${encodeURIComponent(siteName)}/apps`);

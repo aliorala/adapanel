@@ -285,6 +285,7 @@ import {
 } from "../api/cluster";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { formatDateTime } from "../utils/datetime";
+import { openAsyncReachable } from "../utils/externalTab";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -422,10 +423,10 @@ async function probe(row: ClusterNodeStatus) {
  * çerezine dönüşebilmesi, panelin kurduğu yetenek modelini anlamsızlaştırırdı.
  */
 async function open(row: ClusterNodeStatus) {
+  if (busyId.value) return;
   busyId.value = row.node.id;
   try {
-    const link = await getClusterNodeLink(row.node.id);
-    window.open(link.url, "_blank", "noopener,noreferrer");
+    await openAsyncReachable(async () => (await getClusterNodeLink(row.node.id)).url);
     showNotice(t("panel.cluster.openedHint", { label: row.node.label }), false);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);

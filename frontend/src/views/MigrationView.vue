@@ -186,7 +186,7 @@
                yapilandirma kartinda biten TEKIL gocdur; toplu goc onun KISAYOLUDUR. Iki birincil
                dugme, hangisinin sayfanin cevabi oldugunu goze soylemez. -->
           <div class="row-actions">
-            <button class="secondary compact" :disabled="bulkBusy || selectedDomains.length === 0 || !discoverHost" @click="runBulk">
+            <button class="secondary compact" :disabled="busy || bulkBusy || serverMigration.running.value || selectedDomains.length === 0 || !discoverHost" @click="runBulk">
               {{ bulkBusy ? t("panel.migration.bulkRunning") : t("panel.migration.bulkStart", { count: selectedDomains.length }) }}
             </button>
           </div>
@@ -355,7 +355,7 @@
       <button class="secondary compact" :disabled="validating || !form.siteName.trim()" @click="validate">
         {{ validating ? t("panel.migration.validating") : t("panel.migration.validate") }}
       </button>
-      <button class="compact" :disabled="busy || !form.siteName.trim()" @click="run">
+      <button class="compact" :disabled="busy || bulkBusy || serverMigration.running.value || !form.siteName.trim()" @click="run">
         {{ busy ? t("panel.migration.running") : t("panel.migration.start") }}
       </button>
     </div>
@@ -415,7 +415,8 @@
 
 <script setup lang="ts">
 import { getFormattingLocale } from '../utils/locale';
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import axios from "axios";
 import { useI18n } from "vue-i18n";
 import CodeSample from "../components/CodeSample.vue";
 import PasswordField from "../components/PasswordField.vue";
@@ -519,7 +520,7 @@ const form = reactive({
 });
 
 const busy = ref(false);
-type LiveStepStatus = "pending" | "running" | "ok" | "fail";
+type LiveStepStatus = "pending" | "running" | "ok" | "fail" | "unknown";
 type LiveStep = { step: string; status: LiveStepStatus; message?: string; detail?: string | null };
 const liveSteps = ref<LiveStep[]>([]);
 const notice = ref("");
@@ -552,6 +553,9 @@ const canDiscover = computed(() => {
 // Toplu göç + canlı günlük
 const selectedDomains = ref<string[]>([]);
 const bulkBusy = ref(false);
+let disposed = false;
+let streamController: AbortController | undefined;
+onBeforeUnmount(() => { disposed = true; streamController?.abort(); });
 const bulkPathTemplate = ref("/var/www/vhosts/{domain}/httpdocs");
 const bulkLog = ref<{ domain: string; overallSuccess: boolean; steps: MigrationStep[] }[]>([]);
 
@@ -737,25 +741,29 @@ async function validate() {
 // DB toplu modda atlanır (hesap başına kimlik farklı → DB'yi tek tek sihirbazdan yap). Dosya kaynağı
 // kimlik bilgileri (protokol/kullanıcı/parola) aşağıdaki "Dosya kaynağı" alanından alınır.
 async function runBulk() {
-  if (selectedDomains.value.length === 0 || !discoverHost.value) return;
+  if (busy.value || bulkBusy.value || serverMigration.running.value || selectedDomains.value.length === 0 || !discoverHost.value) return;
   bulkBusy.value = true;
   notice.value = "";
   bulkLog.value = [];
-  for (const name of selectedDomains.value) {
-    const domain = discoveredDomains.value.find((item) => item.name === name);
+  // Seçim veya kaynak formu beklerken değişse de sıradaki siteler aynı planı izler.
+  const source = { ...form, fileHost: discoverHost.value };
+  const pathTemplate = bulkPathTemplate.value;
+  const domains = selectedDomains.value.map(name => ({ name, accountUser: discoveredDomains.value.find(item => item.name === name)?.accountUser ?? "" }));
+  for (const { name, accountUser } of domains) {
+    if (disposed) break;
     try {
       const result = await migrateSite({
-        ...form,
+        ...source,
         siteName: name,
         createSite: true,
         physicalPath: `C:\\inetpub\\wwwroot\\${name}`,
         pullFiles: true,
-        fileHost: discoverHost.value,
-        remotePath: expandTemplate(bulkPathTemplate.value, name, domain?.accountUser ?? ""),
+        remotePath: expandTemplate(pathTemplate, name, accountUser),
         transferDatabase: false
       });
       bulkLog.value = [...bulkLog.value, { domain: name, overallSuccess: result.overallSuccess, steps: result.steps }];
     } catch (error) {
+      if (axios.isCancel(error)) break;
       bulkLog.value = [
         ...bulkLog.value,
         { domain: name, overallSuccess: false, steps: [{ step: "site", success: false, message: extractApiMessage(error) }] }
@@ -787,13 +795,14 @@ async function runBulk() {
 // Canlı göç: her aşama (plan/başla/sonuç/bitti) SSE ile gelir → checklist anlık güncellenir, kullanıcı
 // "hangi adımda ne yapılıyor"u görür. Başarısız adımda gerçek teknik neden (detail) satırın altında çıkar.
 async function run() {
-  if (!form.siteName.trim()) return;
+  if (busy.value || bulkBusy.value || serverMigration.running.value || !form.siteName.trim()) return;
   busy.value = true;
   notice.value = "";
   liveSteps.value = [];
   // Adım listesi "hangi adımda"yı söyler ama GEÇEN SÜREYİ söylemez; büyük bir göçte tek bir adım
   // yarım saat sürebilir ve ekran donmuş görünür.
   localMigration.begin(t("panel.runningJob.migration", { title: form.siteName.trim() }));
+  streamController = new AbortController();
   try {
     await migrateSiteStream({ ...form, siteName: form.siteName.trim() }, (event) => {
       if (event.phase === "plan") {
@@ -803,14 +812,24 @@ async function run() {
       } else if (event.phase === "result" && event.step) {
         upsertStep(event.step, event.success ? "ok" : "fail", event.message, event.detail);
       } else if (event.phase === "done") {
+        // Sunucu beklenmeyen hatada adım sonucu göndermeden done(false) yazabilir.
+        // Bitmiş işlemin satırlarını sonsuza kadar "çalışıyor" bırakma.
+        for (const step of liveSteps.value) {
+          if (step.status === "pending" || step.status === "running") step.status = "unknown";
+        }
         notice.value = t(event.overallSuccess ? "panel.migration.overallOk" : "panel.migration.overallPartial");
         noticeError.value = !event.overallSuccess;
       }
-    });
+    }, streamController.signal);
   } catch (error) {
-    notice.value = t("panel.migration.streamFailed");
+    if (disposed || axios.isCancel(error)) return;
+    for (const step of liveSteps.value) {
+      if (step.status === "pending" || step.status === "running") step.status = "unknown";
+    }
+    notice.value = axios.isAxiosError(error) ? apiErrorText(error) : t("panel.migration.streamFailed");
     noticeError.value = true;
   } finally {
+    streamController = undefined;
     busy.value = false;
     localMigration.end();
   }
@@ -832,14 +851,15 @@ function upsertStep(step: string, status: LiveStepStatus, message?: string, deta
 // `--text-muted` metin) zaten tam olarak "henuz olmadi" demek. Yerel `.idle` kurali o varsayilani
 // elde yazilmis rgba(125,133,144,.14) ile TEKRARLIYORDU ve o deger temayla degismiyordu.
 function stepPillClass(status: LiveStepStatus): string {
-  return status === "ok" ? "ok" : status === "fail" ? "danger" : status === "running" ? "run" : "";
+  return status === "ok" ? "ok" : status === "fail" ? "danger" : status === "running" ? "run" : status === "unknown" ? "warn" : "";
 }
 
 function stepPillIcon(status: LiveStepStatus): string {
-  return status === "ok" ? "✓" : status === "fail" ? "✗" : status === "running" ? "⟳" : "•";
+  return status === "ok" ? "✓" : status === "fail" ? "✗" : status === "running" ? "⟳" : status === "unknown" ? "?" : "•";
 }
 
 function stepStatusText(item: LiveStep): string {
+  if (item.status === "unknown") return t("panel.migration.statusUnknown");
   if (item.status === "running") return t("panel.migration.statusRunning");
   if (item.status === "pending") return t("panel.migration.statusPending");
   return item.message ? t(item.message) : "";

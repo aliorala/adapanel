@@ -54,10 +54,28 @@ public sealed class BackupRecordDto
     public List<BackupRestoreWarningDto> Warnings { get; set; } = [];
 
     /// <summary>
+    /// Oluşturma sırasında arşive gerçekten eklenen, boş olmayan veritabanı dökümleri.
+    /// Null = eski kayıt veya ölçülmedi; boş liste = ölçüldü ve hiçbir döküm eklenmedi.
+    /// Bu liste tek başına arşivin kullanılabilirliğini veya uzak kopyanın başarısını kanıtlamaz.
+    /// </summary>
+    public List<BackupDatabaseRef>? IncludedDatabases { get; set; }
+
+    /// <summary>
+    /// Measured non-database coverage of this snapshot (files, configuration, mail or FTP).
+    /// Null means legacy/unmeasured; an empty list means measured without these components.
+    /// In an incremental link, files describe the sources scanned at this link's time,
+    /// including unchanged or empty sources, rather than just the changed ZIP entries.
+    /// </summary>
+    public List<BackupComponentRef>? IncludedComponents { get; set; }
+
+    /// <summary>
     /// Geri yükleme üzerine yazmadan önce sitenin O ANKİ içeriğinin taşındığı kardeş klasör.
     /// Kullanıcının "geri yükleme yanlış yedekti" dediğinde döneceği tek yer burasıdır.
     /// </summary>
     public string PreservedPath { get; set; } = string.Empty;
+
+    /// <summary>Last generic ZIP extraction destination. Path continues to identify the backup archive.</summary>
+    public string RestoredPath { get; set; } = string.Empty;
 
     // =================================================================================
     // UZLAŞTIRMA (yedek GERÇEKTEN duruyor mu?)

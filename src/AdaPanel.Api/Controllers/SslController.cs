@@ -1,8 +1,13 @@
 ﻿using AdaPanel.Api.Security;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Ssl;
+using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Audit;
+using AdaPanel.Infrastructure.Database;
+using AdaPanel.Infrastructure.Iis;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -35,8 +40,22 @@ public sealed class SslController(
     [HttpGet("{siteName}")]
     public async Task<ActionResult<ApiResponse<SslWorkspaceDto>>> GetWorkspaceAsync(string siteName, CancellationToken cancellationToken)
     {
+        var services = HttpContext.RequestServices;
+        using var target = await SiteMutationGuard.CaptureAsync(
+            services.GetRequiredService<IIisSiteService>(), services.GetRequiredService<IConcurrencyLock>(),
+            siteName, cancellationToken);
+        var db = services.GetRequiredService<AdaPanelDbContext>();
+        var authority = await SiteActorAuthority.CaptureAsync(db, customerScopes, User, cancellationToken);
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
-        var workspace = await sslService.GetSiteWorkspaceAsync(siteName, cancellationToken);
+        using var subscription = await DatabaseLifecycle.EnterSubscriptionAsync(authority.SubscriptionId, cancellationToken);
+        await authority.RevalidateAsync(db, customerScopes, User, cancellationToken);
+        var workspace = await sslService.GetSiteWorkspaceAsync(siteName, async (current, token) =>
+        {
+            target.ValidateSnapshot(current);
+            await authority.RevalidateAsync(db, customerScopes, User, token);
+            await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, token);
+        }, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         return Ok(ApiResponse<SslWorkspaceDto>.Ok(workspace));
     }
 
@@ -96,13 +115,36 @@ public sealed class SslController(
         [FromServices] ILogger<SslController> logger,
         CancellationToken cancellationToken)
     {
-        await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
-
-        // İçe aktarma da bağlama ekler (EnsureHttpsBindingAsync) — gerekçe yukarıda.
-        await CustomerAccess.EnsureDomainClaimAsync(
-            customerScopes, iisSiteService, mailService, User, request.HostName, request.SiteName, logger, cancellationToken);
-
-        var certificate = await sslService.ImportCertificateAsync(request, cancellationToken);
+        var input = new ImportCertificateRequest
+        {
+            SiteName = request.SiteName, HostName = request.HostName, Port = request.Port,
+            Base64Content = request.Base64Content, Password = request.Password, FileName = request.FileName
+        };
+        var services = HttpContext.RequestServices;
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService,
+            services.GetRequiredService<IConcurrencyLock>(), input.SiteName, cancellationToken);
+        if (string.IsNullOrWhiteSpace(input.HostName))
+            input.HostName = target.Site.Bindings.FirstOrDefault(binding => !string.IsNullOrWhiteSpace(binding.HostName))?.HostName ?? string.Empty;
+        var db = services.GetRequiredService<AdaPanelDbContext>();
+        var authority = await SiteActorAuthority.CaptureAsync(db, customerScopes, User, cancellationToken);
+        using var subscription = await DatabaseLifecycle.EnterSubscriptionAsync(authority.SubscriptionId, cancellationToken);
+        async Task ApproveAsync(SiteDto current, CancellationToken token)
+        {
+            target.ValidateSnapshot(current);
+            await authority.RevalidateAsync(db, customerScopes, User, token);
+            await CustomerAccess.EnsureSiteAsync(customerScopes, User, input.SiteName, token);
+            await CustomerAccess.EnsureDomainClaimAsync(customerScopes, iisSiteService, mailService,
+                User, input.HostName, input.SiteName, logger, token);
+            // Both scope and domain inventory may have awaited a stale read.
+            await authority.RevalidateAsync(db, customerScopes, User, token);
+            await CustomerAccess.EnsureSiteAsync(customerScopes, User, input.SiteName, token);
+            target.ValidateSnapshot(current);
+            token.ThrowIfCancellationRequested();
+        }
+        await ApproveAsync(target.Site, cancellationToken);
+        var certificate = await sslService.ImportCertificateAsync(input, ApproveAsync, cancellationToken);
+        var owner = await SiteSahibiAsync(certificate.SiteName, cancellationToken);
+        await target.RunAsync(current => ApproveAsync(current, cancellationToken), cancellationToken);
 
         // DENETİM KAYDI BURADA EN ÇOK GEREKİYOR: bu uç sunucuya DIŞARIDAN gelen bir sertifikayı
         // ÖZEL ANAHTARIYLA birlikte LocalMachine deposuna yazar ve siteye bağlar. Olay sonrası
@@ -119,8 +161,9 @@ public sealed class SslController(
             $"(parmak izi={certificate.Thumbprint}, konu={certificate.Subject}, " +
             $"kaynak={certificate.Source}, bitis={certificate.NotAfterUtc:yyyy-MM-dd})."
             + BaglamaNotu(certificate),
-            await SiteSahibiAsync(certificate.SiteName, cancellationToken));
+            owner);
 
+        await target.RunAsync(current => ApproveAsync(current, cancellationToken), cancellationToken);
         await TrySecureWebmailAsync(certificate.HostName, string.Empty, cancellationToken);
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.imported"));
     }
@@ -164,7 +207,14 @@ public sealed class SslController(
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<RenewAllResultDto>>> RenewAllAsync(CancellationToken cancellationToken)
     {
-        var result = await sslService.RenewAllAsync(cancellationToken);
+        if (!User.IsInRole("Administrator")) throw new AppException("auth.forbidden", 403, 403);
+        var db = HttpContext.RequestServices.GetRequiredService<AdaPanelDbContext>();
+        var authority = await SiteActorAuthority.CaptureAsync(db, customerScopes, User, cancellationToken);
+        if (authority.Role != "Administrator") throw new AppException("auth.forbidden", 403, 403);
+        using var actorLease = await DatabaseLifecycle.EnterSubscriptionAsync(authority.SubscriptionId, cancellationToken);
+        await authority.RevalidateAsync(db, customerScopes, User, cancellationToken);
+        var result = await sslService.RenewAllAsync(
+            token => authority.RevalidateAsync(db, customerScopes, User, token), cancellationToken);
 
         // SUNUCU GENELİ bir işlem: tek çağrıda her sitenin sertifikası yenilenmeye çalışılır ve
         // Let's Encrypt hız limitleri tüketilir. Kayıt, sonucu OLDUĞU GİBİ yazar — "ölçülemedi"
@@ -184,8 +234,23 @@ public sealed class SslController(
     [HttpPost("https-redirect")]
     public async Task<ActionResult<ApiResponse<SslWorkspaceDto>>> SetHttpsRedirectAsync([FromBody] SetHttpsRedirectRequest request, CancellationToken cancellationToken)
     {
+        var services = HttpContext.RequestServices;
+        using var target = await SiteMutationGuard.CaptureAsync(
+            services.GetRequiredService<IIisSiteService>(), services.GetRequiredService<IConcurrencyLock>(),
+            request.SiteName, cancellationToken);
+        var db = services.GetRequiredService<AdaPanelDbContext>();
+        var authority = await SiteActorAuthority.CaptureAsync(db, customerScopes, User, cancellationToken);
+        using var subscription = await DatabaseLifecycle.EnterSubscriptionAsync(authority.SubscriptionId, cancellationToken);
+        await authority.RevalidateAsync(db, customerScopes, User, cancellationToken);
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
-        var workspace = await sslService.SetHttpsRedirectAsync(request, cancellationToken);
+        var workspace = await sslService.SetHttpsRedirectAsync(request, async (current, token) =>
+        {
+            target.ValidateSnapshot(current);
+            await authority.RevalidateAsync(db, customerScopes, User, token);
+            await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, token);
+        }, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        await authority.RevalidateAsync(db, customerScopes, User, cancellationToken);
 
         // Yönlendirmenin KAPATILMASI bir güvenlik gerilemesidir (site düz HTTP'den servis edilmeye
         // başlar) ve dışarıdan bakan biri için sessizdir. AÇILMASI da erişilebilirliği etkiler:
@@ -221,10 +286,24 @@ public sealed class SslController(
         [FromBody] RemoveSslCertificateRequest request,
         CancellationToken cancellationToken)
     {
-        // Kapsam denetimi diğer uçlarla AYNI: müşteri yalnızca kendi sitesinin bağlamasını kaldırabilir.
+        var services = HttpContext.RequestServices;
+        using var target = await SiteMutationGuard.CaptureAsync(
+            services.GetRequiredService<IIisSiteService>(), services.GetRequiredService<IConcurrencyLock>(),
+            request.SiteName, cancellationToken);
+        // Capture before the first scope wait; a same-name replacement is not this request's target.
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
-
-        var result = await sslService.RemoveCertificateAsync(request, cancellationToken);
+        var db = services.GetRequiredService<AdaPanelDbContext>();
+        var authority = await SiteActorAuthority.CaptureAsync(db, customerScopes, User, cancellationToken);
+        using var subscription = await DatabaseLifecycle.EnterSubscriptionAsync(authority.SubscriptionId, cancellationToken);
+        await authority.RevalidateAsync(db, customerScopes, User, cancellationToken);
+        var result = await sslService.RemoveCertificateAsync(request, async (current, token) =>
+        {
+            target.ValidateSnapshot(current);
+            await authority.RevalidateAsync(db, customerScopes, User, token);
+            await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, token);
+        }, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        await authority.RevalidateAsync(db, customerScopes, User, cancellationToken);
 
         await auditService.AuditAsync(
             HttpContext,

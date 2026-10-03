@@ -5,10 +5,12 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Ssl;
+using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Enums;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Support;
+using AdaPanel.Infrastructure.Iis;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -28,13 +30,68 @@ public sealed class WinAcmeSslService(
     // olculemezdi -- ve tam bu sinif hata ("koruma yazildi ama kardes yol cagirmiyor") bu
     // depoda defalarca yakalandi. Ayni kalip SiteHostingSettingsService (outboundResolver) ve
     // MailEnableMailService (KomutKosucusu) icinde de var.
-    Func<CancellationToken, Task<IReadOnlyCollection<IisHttpsBinding>?>>? bindingReader = null) : ISslService
+    Func<CancellationToken, Task<IReadOnlyCollection<IisHttpsBinding>?>>? bindingReader = null,
+    IConcurrencyLock? concurrencyLock = null) : ISslService
 {
     private const string StatePath = "config/ssl.json";
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
     private const string ServerManagerTypeName = "Microsoft.Web.Administration.ServerManager";
+    private readonly IConcurrencyLock siteGates = concurrencyLock ?? new AdaPanel.Infrastructure.Services.ConcurrencyLock();
 
-    public async Task<SslWorkspaceDto> GetSiteWorkspaceAsync(string siteName, CancellationToken cancellationToken = default)
+    internal Func<string, string, CancellationToken, Task<CommandResult>> RenewalCommand { get; init; } =
+        (executable, arguments, token) => ProcessRunner.RunAsync(executable, arguments, cancellationToken: token);
+
+    internal Func<string, CancellationToken, Task<CommandResult>> RedirectCommand { get; init; } =
+        ProcessRunner.RunPowerShellAsync;
+
+    internal Func<string, CancellationToken, Task<CommandResult>> RemoveBindingCommand { get; init; } =
+        ProcessRunner.RunPowerShellAsync;
+
+    internal Func<SslCertificateDto, CancellationToken, Task<SslStoreProbe>> CertificateProbeAsync { get; init; } =
+        (record, _) => Task.FromResult(ProbeCertificate(record));
+
+    internal Func<string, CancellationToken, Task<CommandResult>> RemoveCertificateCommand { get; init; } =
+        ProcessRunner.RunPowerShellAsync;
+
+    internal Func<byte[], string, X509KeyStorageFlags, X509Certificate2> ImportCertificateLoader { get; init; } =
+        (raw, password, flags) => new X509Certificate2(raw, password, flags);
+
+    internal Action<X509Certificate2> PersistImportedCertificate { get; init; } = PersistCertificate;
+
+    internal Func<string, CancellationToken, Task<CommandResult>> HttpsBindingCommand { get; init; } =
+        ProcessRunner.RunPowerShellAsync;
+
+    public Task<SslWorkspaceDto> GetSiteWorkspaceAsync(string siteName, CancellationToken cancellationToken = default) =>
+        GetSiteWorkspaceCoreAsync(siteName, null, cancellationToken);
+
+    public async Task<SslWorkspaceDto> GetSiteWorkspaceAsync(string siteName,
+        Func<SiteDto, CancellationToken, Task> beforePublication, CancellationToken cancellationToken = default)
+    {
+        using var generation = await SiteMutationGuard.CaptureAsync(iisSiteService, siteGates, siteName, cancellationToken);
+        Task ValidateAsync(CancellationToken token) => ValidateWorkspaceAuthorityAsync(generation, beforePublication, token);
+        await generation.RunAsync(_ => ValidateAsync(cancellationToken), cancellationToken);
+        var workspace = await GetSiteWorkspaceCoreAsync(siteName, ValidateAsync, cancellationToken,
+            publish => generation.RunAsync(async _ =>
+            {
+                await ValidateAsync(cancellationToken);
+                await publish();
+            }, cancellationToken));
+        // Even when reconciliation did not need to write, do not return a stale-authority read.
+        await generation.RunAsync(_ => ValidateAsync(cancellationToken), cancellationToken);
+        return workspace;
+    }
+
+    private static async Task ValidateWorkspaceAuthorityAsync(SiteMutationGuard.Target generation,
+        Func<SiteDto, CancellationToken, Task> beforePublication, CancellationToken token)
+    {
+        var current = await generation.ValidateAsync(token);
+        await beforePublication(current, token);
+        token.ThrowIfCancellationRequested();
+    }
+
+    private async Task<SslWorkspaceDto> GetSiteWorkspaceCoreAsync(string siteName,
+        Func<CancellationToken, Task>? beforePublication, CancellationToken cancellationToken,
+        Func<Func<Task>, Task>? publish = null)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
 
@@ -43,16 +100,20 @@ public sealed class WinAcmeSslService(
         // sanıyordu. Listeleme artık kaydı sertifika deposuyla uzlaştırır (bkz. SslStateReconciler).
         var states = await ReconcileStateAsync(
             record => string.Equals(record.SiteName, site.Name, StringComparison.OrdinalIgnoreCase),
-            cancellationToken);
+            cancellationToken, beforePublication, publish);
 
         IReadOnlyCollection<IisHttpsBinding>? bindings = null;
-        try { bindings = await ReadHttpsBindingsAsync(cancellationToken); }
+        try { bindings = bindingReader is null
+            ? await ReadHttpsBindingsAsync(cancellationToken)
+            : await bindingReader(cancellationToken); }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogWarning(exception, "HTTPS binding inventory could not be read for {SiteName}.", site.Name);
         }
         SslBindingVerification.Refresh(states.Where(record =>
             string.Equals(record.SiteName, site.Name, StringComparison.OrdinalIgnoreCase)), bindings);
+
+        var redirect = await ReadHttpsRedirectAsync(site.Name, cancellationToken);
 
         return new SslWorkspaceDto
         {
@@ -68,7 +129,8 @@ public sealed class WinAcmeSslService(
                 .Where(item => !IsPreviewHost(item.HostName))
                 .OrderByDescending(item => item.NotAfterUtc)
                 .ToArray(),
-            HttpsRedirectEnabled = await IsHttpsRedirectEnabledAsync(site.Name, cancellationToken)
+            HttpsRedirectEnabled = redirect ?? false,
+            HttpsRedirectMeasured = redirect.HasValue
         };
     }
 
@@ -166,42 +228,132 @@ public sealed class WinAcmeSslService(
         await EnsureHttpsBindingAsync(site.Name, hostName, 443, certificate, cancellationToken);
     }
 
-    public async Task<SslCertificateDto> ImportCertificateAsync(ImportCertificateRequest request, CancellationToken cancellationToken = default)
+    public Task<SslCertificateDto> ImportCertificateAsync(ImportCertificateRequest request, CancellationToken cancellationToken = default) =>
+        ImportCertificateCoreAsync(request, null, cancellationToken);
+
+    public Task<SslCertificateDto> ImportCertificateAsync(ImportCertificateRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) =>
+        ImportCertificateCoreAsync(request, beforeMutation, cancellationToken);
+
+    private async Task<SslCertificateDto> ImportCertificateCoreAsync(ImportCertificateRequest request,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
-        var site = await iisSiteService.GetSiteAsync(request.SiteName, cancellationToken);
-        var hostName = ResolveHostName(site, request.HostName);
-        if (string.IsNullOrWhiteSpace(request.Base64Content))
+        var siteName = request.SiteName;
+        var requestedHost = request.HostName;
+        var payload = request.Base64Content;
+        var password = request.Password;
+        var port = request.Port <= 0 ? 443 : request.Port;
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService, siteGates, siteName, cancellationToken);
+        var site = target.Site;
+        var hostName = ResolveHostName(site, requestedHost);
+        if (port > 65535 || string.IsNullOrWhiteSpace(payload))
+            throw new AppException("ssl.invalid_certificate_payload", 400, 400);
+
+        byte[] raw;
+        X509Certificate2 inspected;
+        try
+        {
+            raw = Convert.FromBase64String(payload);
+            // PersistKeySet creates a key during the constructor, before store.Add.
+            // Inspect untrusted input entirely in memory before that first permanent effect.
+            inspected = ImportCertificateLoader(raw, password,
+                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+        }
+        catch (Exception error) when (error is FormatException or CryptographicException or ArgumentException)
         {
             throw new AppException("ssl.invalid_certificate_payload", 400, 400);
         }
+        using var certificate = inspected;
+        ValidateImportedCertificate(certificate, hostName);
 
-        var raw = Convert.FromBase64String(request.Base64Content);
-        var certificate = new X509Certificate2(
-            raw,
-            request.Password,
-            X509KeyStorageFlags.Exportable | X509KeyStorageFlags.PersistKeySet | X509KeyStorageFlags.MachineKeySet);
-
-        PersistCertificate(certificate);
-        await EnsureHttpsBindingAsync(site.Name, hostName, request.Port <= 0 ? 443 : request.Port, certificate, cancellationToken);
-        await ApplyHttpsRedirectAsync(site.Name, true, cancellationToken);
-
-        // Elle içe aktarılan sertifikada da kaynak ÖLÇÜLÜR: kullanıcı kendinden imzalı bir dosya
-        // yüklediyse panel ona "manual" deyip güvenilir sanmamalı.
-        // Bağlama az önce kuruldu → ölçüm TAZE siteden (eldeki anlık görüntü onu göremez).
-        var dto = await OlcVeIsleAsync(
-            ToDto(site.Name, hostName, certificate, ResolveCertificateSource(certificate), null),
-            site.Name,
-            hostName,
-            request.Port <= 0 ? 443 : request.Port,
-            certificate.Thumbprint ?? string.Empty,
-            cancellationToken);
-        await UpsertAsync(dto, cancellationToken);
+        async Task ApproveAsync(SiteDto current, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            if (beforeMutation is not null) await beforeMutation(current, token);
+            target.ValidateSnapshot(current);
+            token.ThrowIfCancellationRequested();
+        }
+        Task ReapproveAsync(CancellationToken token) => target.RunAsync(current => ApproveAsync(current, token), token);
+        using var reservation = await target.ReserveAsync(ApproveAsync, cancellationToken);
+        await target.RunAsync(async current =>
+        {
+            await ApproveAsync(current, cancellationToken);
+            // Re-import the validated PFX with persistent machine keys; adding an ephemeral
+            // certificate to the store would lose its private key when this request ends.
+            using var persistent = ImportCertificateLoader(raw, password,
+                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.PersistKeySet | X509KeyStorageFlags.MachineKeySet);
+            cancellationToken.ThrowIfCancellationRequested();
+            PersistImportedCertificate(persistent);
+        }, cancellationToken);
+        await target.RunAsync(async current =>
+        {
+            await ApproveAsync(current, cancellationToken);
+            await EnsureHttpsBindingAsync(site.Name, hostName, port, certificate, cancellationToken);
+        }, cancellationToken);
+        async Task<CommandResult> RunRedirectAsync(string script, CancellationToken token)
+        {
+            CommandResult result = null!;
+            await target.RunAsync(async current =>
+            {
+                await ApproveAsync(current, token);
+                result = await RedirectCommand(script, token);
+            }, token);
+            return result;
+        }
+        // Dependency installation must not retain the global IIS gate. The site pin stays live.
+        await ApplyHttpsRedirectCoreAsync(site.Name, true, cancellationToken, ReapproveAsync, RunRedirectAsync);
+        await ReapproveAsync(cancellationToken);
+        var dto = ToDto(site.Name, hostName, certificate, ResolveCertificateSource(certificate), null);
+        dto.Port = port;
+        await OlcVeIsleAsync(dto, site.Name, hostName, port, certificate.Thumbprint ?? string.Empty, cancellationToken);
+        await target.RunAsync(async current =>
+        {
+            await ApproveAsync(current, cancellationToken);
+            await UpsertAsync(dto, cancellationToken, async token =>
+            {
+                var fresh = await target.ValidateAsync(token);
+                await ApproveAsync(fresh, token);
+            });
+        }, cancellationToken);
         return dto;
     }
 
-    public async Task<RenewAllResultDto> RenewAllAsync(CancellationToken cancellationToken = default)
+    private static void ValidateImportedCertificate(X509Certificate2 certificate, string hostName)
+    {
+        if (!certificate.HasPrivateKey)
+            throw new AppException("ssl.certificate_private_key_required", 400, 400);
+        var now = DateTime.UtcNow;
+        if (certificate.NotAfter.ToUniversalTime() <= now)
+            throw new AppException("ssl.certificate_expired", 400, 400);
+        if (certificate.NotBefore.ToUniversalTime() > now)
+            throw new AppException("ssl.certificate_not_yet_valid", 400, 400);
+        bool matches;
+        try
+        {
+            var host = hostName.TrimEnd('.');
+            if (!System.Net.IPAddress.TryParse(host, out _)) host = new System.Globalization.IdnMapping().GetAscii(host);
+            matches = certificate.MatchesHostname(host, allowWildcards: true, allowCommonName: true);
+        }
+        catch (Exception error) when (error is CryptographicException or ArgumentException)
+        {
+            throw new AppException("ssl.invalid_certificate_payload", 400, 400);
+        }
+        if (!matches) throw new AppException("ssl.certificate_host_mismatch", 400, 400);
+    }
+
+    public Task<RenewAllResultDto> RenewAllAsync(CancellationToken cancellationToken = default) =>
+        RenewAllCoreAsync(null, cancellationToken);
+
+    public Task<RenewAllResultDto> RenewAllAsync(Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken = default) => RenewAllCoreAsync(beforeMutation, cancellationToken);
+
+    private async Task<RenewAllResultDto> RenewAllCoreAsync(
+        Func<CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
         var wacs = await ResolveWinAcmeExecutableAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        // Executable discovery may await storage after the caller passed the automation gate.
+        if (beforeMutation is not null) await beforeMutation(cancellationToken);
         if (string.IsNullOrWhiteSpace(wacs))
         {
             // OLCUM YAPILAMADI. "0 sertifika yenilendi" DEMEK DEGIL -- yenileme hic denenemedi.
@@ -229,7 +381,7 @@ public sealed class WinAcmeSslService(
             };
         }
 
-        var result = await ProcessRunner.RunAsync(wacs, "--renew --baseuri https://acme-v02.api.letsencrypt.org/", cancellationToken: cancellationToken);
+        var result = await RenewalCommand(wacs, "--renew --baseuri https://acme-v02.api.letsencrypt.org/", cancellationToken);
         var cikti = string.IsNullOrWhiteSpace(result.StandardOutput) ? result.StandardError : result.StandardOutput;
 
         // SAYIM CIKTIDAN OKUNUR, cikis kodundan DEGIL.
@@ -363,15 +515,19 @@ public sealed class WinAcmeSslService(
     /// </remarks>
     private async Task<SslCertificateDto[]> ReconcileStateAsync(
         Func<SslCertificateDto, bool> kapsam,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforePublication = null,
+        Func<Func<Task>, Task>? publish = null)
     {
-        var (kayitlar, _) = await ReconcileStateInternalAsync(kapsam, cancellationToken);
+        var (kayitlar, _) = await ReconcileStateInternalAsync(kapsam, cancellationToken, beforePublication, publish);
         return kayitlar;
     }
 
     private async Task<(SslCertificateDto[] Kayitlar, SslReconcileResult Sonuc)> ReconcileStateInternalAsync(
         Func<SslCertificateDto, bool> kapsam,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforePublication = null,
+        Func<Func<Task>, Task>? publish = null)
     {
         var mevcut = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
         var hedefler = mevcut.Where(kapsam).ToArray();
@@ -380,16 +536,18 @@ public sealed class WinAcmeSslService(
             return (mevcut, new SslReconcileResult(false, 0, 0, 0));
         }
 
-        var olcumler = new Dictionary<string, SslStoreProbe>(StringComparer.Ordinal);
+        var olcumler = new Dictionary<CertificateProbeIdentity, SslStoreProbe>();
         foreach (var hedef in hedefler)
         {
-            olcumler[SslStateReconciler.Key(hedef)] = ProbeCertificate(hedef);
+            var identity = CertificateProbeIdentity.Capture(hedef);
+            olcumler[identity] = await CertificateProbeAsync(hedef, cancellationToken);
         }
 
         SslStoreProbe Olc(SslCertificateDto kayit) =>
-            olcumler.TryGetValue(SslStateReconciler.Key(kayit), out var olcum)
+            olcumler.TryGetValue(CertificateProbeIdentity.Capture(kayit), out var olcum)
                 ? olcum
-                // Kapsam DIŞINDAKİ kayıt bu turda ölçülmedi; "yok" demek yerine dokunmuyoruz.
+                // A concurrently renewed/imported record is a different certificate even
+                // when site/host/port match. Its old probe is not evidence about the new one.
                 : SslStoreProbe.Unmeasured();
 
         var now = DateTime.UtcNow;
@@ -401,19 +559,34 @@ public sealed class WinAcmeSslService(
             return (mevcut, sonuc);
         }
 
-        var yazilan = await fileStore.UpdateAsync(
+        var yazilan = mevcut;
+        async Task PublishAsync() => yazilan = await fileStore.UpdateAsync(
             StatePath,
             Array.Empty<SslCertificateDto>(),
             existing =>
             {
                 // Kilit ALTINDA taze içerik üzerinde tekrar uygulanır: ölçüm sırasında başka bir
                 // akış (sertifika alma) yeni kayıt eklediyse onu EZMEYELİM.
-                SslStateReconciler.Reconcile(existing, Olc, now);
+                sonuc = SslStateReconciler.Reconcile(existing, Olc, now);
                 return existing;
             },
+            beforePublication,
             cancellationToken);
 
+        // Acquire any site publication gate before the JSON path lock, never from inside it.
+        // Certificate probing above remains outside the IIS gate.
+        if (publish is null) await PublishAsync();
+        else await publish(PublishAsync);
+
         return (yazilan, sonuc);
+    }
+
+    private sealed record CertificateProbeIdentity(string Key, string Thumbprint, DateTime NotAfterUtc,
+        string? Source, string? Subject, string? FriendlyName)
+    {
+        internal static CertificateProbeIdentity Capture(SslCertificateDto record) => new(
+            SslStateReconciler.Key(record), (record.Thumbprint ?? string.Empty).ToUpperInvariant(),
+            record.NotAfterUtc, record.Source, record.Subject, record.FriendlyName);
     }
 
     /// <summary>
@@ -461,17 +634,69 @@ public sealed class WinAcmeSslService(
                 ResolveCertificateSource(certificate));
     }
 
-    public async Task<SslWorkspaceDto> SetHttpsRedirectAsync(SetHttpsRedirectRequest request, CancellationToken cancellationToken = default)
+    public Task<SslWorkspaceDto> SetHttpsRedirectAsync(SetHttpsRedirectRequest request, CancellationToken cancellationToken = default) =>
+        SetHttpsRedirectCoreAsync(request, null, cancellationToken);
+
+    public Task<SslWorkspaceDto> SetHttpsRedirectAsync(SetHttpsRedirectRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) =>
+        SetHttpsRedirectCoreAsync(request, beforeMutation, cancellationToken);
+
+    private async Task<SslWorkspaceDto> SetHttpsRedirectCoreAsync(SetHttpsRedirectRequest request,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
-        var site = await iisSiteService.GetSiteAsync(request.SiteName, cancellationToken);
-        await ApplyHttpsRedirectAsync(site.Name, request.Enabled, cancellationToken);
-        return await GetSiteWorkspaceAsync(site.Name, cancellationToken);
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService, siteGates, request.SiteName, cancellationToken);
+        using var reservation = await target.ReserveAsync(beforeMutation, cancellationToken);
+        var site = target.Site;
+        async Task ValidateAsync(CancellationToken token)
+        {
+            var current = await target.ValidateAsync(token);
+            if (beforeMutation is not null) await beforeMutation(current, token);
+            token.ThrowIfCancellationRequested();
+        }
+        Task ApproveAsync(CancellationToken token) => target.RunAsync(_ => ValidateAsync(token), token);
+        async Task<CommandResult> RunCommandAsync(string script, CancellationToken token)
+        {
+            CommandResult? result = null;
+            await target.RunAsync(async _ =>
+            {
+                await ValidateAsync(token);
+                result = await RedirectCommand(script, token);
+            }, token);
+            return result!;
+        }
+        Task PublishAsync(Func<Task> publication) => target.RunAsync(async _ =>
+        {
+            await ValidateAsync(cancellationToken);
+            await publication();
+        }, cancellationToken);
+        try
+        {
+            if (!await ApplyHttpsRedirectCoreAsync(site.Name, request.Enabled, cancellationToken, ApproveAsync, RunCommandAsync))
+                throw new AppException("ssl.https_redirect_failed", 502, 502);
+            var workspace = await GetSiteWorkspaceCoreAsync(site.Name, ValidateAsync, cancellationToken, PublishAsync);
+            await ApproveAsync(cancellationToken);
+            if (!workspace.HttpsRedirectMeasured || workspace.HttpsRedirectEnabled != request.Enabled)
+                throw new AppException("ssl.https_redirect_failed", 502, 502);
+            return workspace;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (AppException) { throw; }
+        catch (Exception exception)
+        {
+            throw new AppException("ssl.https_redirect_failed", 502, 502, exception.Message);
+        }
     }
 
     // HTTP→HTTPS kalıcı (301) yönlendirme kuralını (URL Rewrite) ekler/kaldırır. ACME HTTP-01
     // challenge yolu (/.well-known/acme-challenge/) HARİÇ tutulur ki Let's Encrypt yenilemesi
-    // bozulmasın. URL Rewrite modülü yoksa sessizce atlanır (SSL yine çalışır). Best-effort.
-    private async Task ApplyHttpsRedirectAsync(string siteName, bool enabled, CancellationToken cancellationToken)
+    // bozulmasın. Sertifika alma yolları best-effort sonucunu yok sayabilir; açık ayar değişikliği
+    // ise bu sonucu ve geri okumayı birlikte doğrulamadan başarı bildirmez.
+    private Task<bool> ApplyHttpsRedirectAsync(string siteName, bool enabled, CancellationToken cancellationToken) =>
+        ApplyHttpsRedirectCoreAsync(siteName, enabled, cancellationToken, null);
+
+    private async Task<bool> ApplyHttpsRedirectCoreAsync(string siteName, bool enabled, CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeMutation,
+        Func<string, CancellationToken, Task<CommandResult>>? commandRunner = null)
     {
         var site = siteName.Replace("'", "''");
         /*
@@ -519,60 +744,110 @@ public sealed class WinAcmeSslService(
                 'OK'
                 """
             : $$"""
+                $ErrorActionPreference = 'Stop'
                 Import-Module WebAdministration -ErrorAction Stop
+                if (-not (Get-WebGlobalModule | Where-Object { $_.Name -eq 'RewriteModule' })) { 'OK'; return }
                 $site = '{{site}}'
-                Clear-WebConfiguration -pspath "IIS:\Sites\$site" -filter "system.webServer/rewrite/rules/rule[@name='AdaPanel-ForceHTTPS']" -ErrorAction SilentlyContinue
+                $rules = Get-WebConfiguration -pspath "IIS:\Sites\$site" -filter 'system.webServer/rewrite/rules' -ErrorAction Stop
+                if (@($rules.Collection | Where-Object { $_.name -eq 'AdaPanel-ForceHTTPS' }).Count -gt 0) {
+                    Clear-WebConfiguration -pspath "IIS:\Sites\$site" -filter "system.webServer/rewrite/rules/rule[@name='AdaPanel-ForceHTTPS']" -ErrorAction Stop
+                }
                 'OK'
                 """;
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        async Task ApproveAsync()
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (beforeMutation is not null) await beforeMutation(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        async Task<CommandResult> RunAsync()
+        {
+            await ApproveAsync();
+            var outcome = await (commandRunner ?? RedirectCommand)(script, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return outcome;
+        }
+        var result = await RunAsync();
 
         // URL Rewrite modülü yoksa panel bileşeni olarak OTOMATİK kur, sonra kuralı tekrar uygula.
         // (url-rewrite components.json'da default:true; ama kullanıcı ilk kurulumda önerilenleri
         // atlamışsa bile yönlendirme çalışsın.)
-        if (enabled && result.Success && result.StandardOutput.Contains("NOREWRITE", StringComparison.Ordinal))
+        if (enabled && result.Success && result.StandardOutput.Trim() == "NOREWRITE")
         {
             logger.LogInformation("URL Rewrite modülü kurulu değil; {Site} için otomatik kuruluyor (url-rewrite).", siteName);
+            await ApproveAsync();
+            var installationSucceeded = false;
             try
             {
-                await componentBootstrapper.InstallAsync("url-rewrite", null, null, force: false, cancellationToken: cancellationToken);
-                result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+                var installed = await componentBootstrapper.InstallAsync("url-rewrite", null, null, force: false, cancellationToken: cancellationToken);
+                installationSucceeded = string.Equals(installed.Status, "Installed", StringComparison.OrdinalIgnoreCase);
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception exception)
             {
-                logger.LogWarning(exception, "url-rewrite otomatik kurulumu başarısız ({Site}).", siteName);
+                logger.LogWarning("url-rewrite otomatik kurulumu başarısız ({Site}): {Error}",
+                    siteName, SecretRedactor.Redact(exception.Message));
             }
+            // Installer failure is best-effort; authority rejection is not. Keep the
+            // approval outside that catch and release IIS during component installation.
+            await ApproveAsync();
+            if (!installationSucceeded) return false;
+            result = await RunAsync();
         }
 
         if (!result.Success)
         {
             logger.LogWarning("HTTP->HTTPS yönlendirme {State} ayarlanamadı (site {Site}): {Error}",
-                enabled ? "açma" : "kapatma", siteName, result.StandardError);
+                enabled ? "açma" : "kapatma", siteName, SecretRedactor.Redact(result.StandardError));
         }
         else if (result.StandardOutput.Contains("NOREWRITE", StringComparison.Ordinal))
         {
             logger.LogWarning("URL Rewrite modülü kurulu değil ve otomatik kurulamadı; {Site} için HTTP->HTTPS yönlendirme uygulanamadı.", siteName);
         }
+        cancellationToken.ThrowIfCancellationRequested();
+        return result.Success && result.StandardOutput.Trim() == "OK";
     }
 
-    private async Task<bool> IsHttpsRedirectEnabledAsync(string siteName, CancellationToken cancellationToken)
+    private async Task<bool> IsHttpsRedirectEnabledAsync(string siteName, CancellationToken cancellationToken) =>
+        await ReadHttpsRedirectAsync(siteName, cancellationToken)
+            ?? throw new AppException("ssl.https_redirect_failed", 502, 502);
+
+    private async Task<bool?> ReadHttpsRedirectAsync(string siteName, CancellationToken cancellationToken)
     {
         var site = siteName.Replace("'", "''");
         var script = $$"""
-            Import-Module WebAdministration -ErrorAction SilentlyContinue
+            $ErrorActionPreference = 'Stop'
+            Import-Module WebAdministration -ErrorAction Stop
+            if (-not (Get-WebGlobalModule | Where-Object { $_.Name -eq 'RewriteModule' })) { 'NO'; return }
             $site = '{{site}}'
             $r = "system.webServer/rewrite/rules/rule[@name='AdaPanel-ForceHTTPS']"
-            $rule = Get-WebConfiguration -pspath "IIS:\Sites\$site" -filter $r -ErrorAction SilentlyContinue
+            $rules = Get-WebConfiguration -pspath "IIS:\Sites\$site" -filter 'system.webServer/rewrite/rules' -ErrorAction Stop
+            $rule = @($rules.Collection | Where-Object { $_.name -eq 'AdaPanel-ForceHTTPS' })
+            if ($rule.Count -eq 0) { 'NO'; return }
             # KURALIN VARLIGI YETMEZ, TAM OLMASI GEREKIR.
             # Eski hal yalnizca "bu ADDA bir kural var mi" diye soruyordu. Yarim yazilmis bir kural
             # (ad eklenmis, action hic yazilmamis) da bu soruya EVET der -- yani panel hicbir istegi
             # yonlendirmeyen bir yapilandirmayi "yonlendirme acik" diye gosterirdi. Yazma yolundaki
             # kosulsuz 'OK' ile birlikte, iki taraf birbirinin yalanini dogruluyordu.
-            $eylem = Get-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'type' -ErrorAction SilentlyContinue
-            if ($rule -and "$($eylem.Value)" -eq 'Redirect') { 'YES' } else { 'NO' }
+            $eylem = Get-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'type' -ErrorAction Stop
+            $enabled = Get-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter $r -name 'enabled' -ErrorAction Stop
+            if ("$($enabled.Value)" -eq 'True' -and "$($eylem.Value)" -eq 'Redirect') { 'YES' } else { 'NO' }
             """;
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
-        return result.Success && result.StandardOutput.Contains("YES", StringComparison.Ordinal);
+        try
+        {
+            var result = await RedirectCommand(script, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!result.Success) return null;
+            return result.StandardOutput.Trim() switch { "YES" => true, "NO" => false, _ => null };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception)
+        {
+            logger.LogWarning("HTTP->HTTPS yönlendirme durumu okunamadı (site {Site}): {Error}",
+                siteName, SecretRedactor.Redact(exception.Message));
+            return null;
+        }
     }
 
     public async Task<bool> TrySecureHostAsync(string siteName, string hostName, string contactEmail, CancellationToken cancellationToken = default)
@@ -1339,7 +1614,7 @@ public sealed class WinAcmeSslService(
             'OK'
             """;
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        var result = await HttpsBindingCommand(script, cancellationToken);
         if (!result.Success)
         {
             throw new AppException(
@@ -1366,23 +1641,64 @@ public sealed class WinAcmeSslService(
     //      yanıtlanır; okunamıyorsa silinmez.
     // =====================================================================================
 
-    public async Task<RemoveSslCertificateResultDto> RemoveCertificateAsync(
+    public Task<RemoveSslCertificateResultDto> RemoveCertificateAsync(
         RemoveSslCertificateRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        RemoveCertificateCoreAsync(request, null, cancellationToken);
+
+    public Task<RemoveSslCertificateResultDto> RemoveCertificateAsync(
+        RemoveSslCertificateRequest request, Func<SiteDto, CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken = default) =>
+        RemoveCertificateCoreAsync(request, beforeMutation, cancellationToken);
+
+    private async Task<RemoveSslCertificateResultDto> RemoveCertificateCoreAsync(
+        RemoveSslCertificateRequest request, Func<SiteDto, CancellationToken, Task>? beforeMutation,
+        CancellationToken cancellationToken)
     {
-        var site = await iisSiteService.GetSiteAsync(request.SiteName, cancellationToken);
+        var siteName = request.SiteName;
+        var hostName = request.HostName;
         var port = request.Port <= 0 ? 443 : request.Port;
+        var removeFromStore = request.RemoveCertificateFromStore;
+        using var generation = await SiteMutationGuard.CaptureAsync(iisSiteService, siteGates, siteName, cancellationToken);
+        var site = generation.Site;
+        var originalState = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
 
         var allBindings = await ReadHttpsBindingsAsync(cancellationToken);
         var siteBindings = allBindings
             .Where(binding => string.Equals(binding.SiteName, site.Name, StringComparison.OrdinalIgnoreCase))
             .ToArray();
 
-        var (target, errorKey) = SslRemovalPlan.SelectTarget(siteBindings, request.HostName, port);
+        var (target, errorKey) = SslRemovalPlan.SelectTarget(siteBindings, hostName, port);
         if (target is null)
         {
             throw new AppException(errorKey, 404, errorKey == SslRemovalPlan.HostNameRequiredKey ? 400 : 404);
         }
+        var expectedState = originalState.Where(item => IsRemovalRecord(item, target)).ToArray();
+
+        // Keep this generation alive through native changes, metadata and final measurement.
+        // Long reads do not hold IIS; every subsequent write revalidates under that gate.
+        using var reservation = await generation.ReserveAsync(beforeMutation, cancellationToken);
+        Task MutateAsync(Func<Task> operation, bool verifyBinding = false) => generation.RunAsync(async current =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (verifyBinding)
+            {
+                var measured = await ReadHttpsBindingsAsync(cancellationToken);
+                var candidates = measured.Where(binding => string.Equals(binding.SiteName, site.Name, StringComparison.OrdinalIgnoreCase)).ToArray();
+                var (freshTarget, _) = SslRemovalPlan.SelectTarget(candidates, target.HostName, target.Port);
+                if (freshTarget is null || !SameRemovalBinding(target, freshTarget)) throw RemovalTargetChanged();
+                if (!SslRemovalPlan.IsLastHttpsBindingOfSite(siteBindings, target) &&
+                    SslRemovalPlan.IsLastHttpsBindingOfSite(candidates, freshTarget))
+                    throw RemovalTargetChanged();
+                var state = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
+                EnsureRemovalStateUnchanged(state, target, expectedState);
+                // The extra measurement is another wait: authority follows it, before mutation.
+                current = await generation.ValidateAsync(cancellationToken);
+            }
+            if (beforeMutation is not null) await beforeMutation(current, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            await operation();
+        }, cancellationToken);
 
         var result = new RemoveSslCertificateResultDto
         {
@@ -1398,10 +1714,10 @@ public sealed class WinAcmeSslService(
         var sonBaglama = SslRemovalPlan.IsLastHttpsBindingOfSite(siteBindings, target);
         if (sonBaglama && await IsHttpsRedirectEnabledAsync(site.Name, cancellationToken))
         {
-            await ApplyHttpsRedirectAsync(site.Name, false, cancellationToken);
+            await MutateAsync(async () => { await ApplyHttpsRedirectAsync(site.Name, false, cancellationToken); }, verifyBinding: true);
 
-            // ApplyHttpsRedirectAsync best-effort'tur (URL Rewrite yoksa sessizce geçer): kapandığını
-            // VARSAYMAYIZ, ÖLÇERİZ. Hâlâ açıksa bağlamaya dokunmayız.
+            // Sertifika alma yolları yönlendirmeyi best-effort uygular; son HTTPS bağlamasını
+            // silerken ise kapandığını VARSAYMAYIZ. Okuma belirsizse de bağlamaya dokunmayız.
             if (await IsHttpsRedirectEnabledAsync(site.Name, cancellationToken))
             {
                 throw new AppException(
@@ -1415,7 +1731,7 @@ public sealed class WinAcmeSslService(
         }
 
         // (2) Bağlamayı kaldır ve KALKTIĞINI DOĞRULA.
-        await RemoveHttpsBindingAsync(site.Name, target, cancellationToken);
+        await MutateAsync(() => RemoveHttpsBindingAsync(site.Name, target, cancellationToken), verifyBinding: true);
 
         var afterBindings = await ReadHttpsBindingsAsync(cancellationToken);
         var halaVar = afterBindings.Any(binding =>
@@ -1429,31 +1745,57 @@ public sealed class WinAcmeSslService(
         result.BindingRemoved = true;
 
         // (3) Panel kaydı (ssl.json) temizlenir; yoksa liste öksüz bir sertifika göstermeye devam ederdi.
-        await RemoveCertificateStateAsync(site.Name, target.HostName, target.Port, cancellationToken);
+        await MutateAsync(() => RemoveCertificateStateAsync(target, expectedState, async token =>
+        {
+            var current = await generation.ValidateAsync(token);
+            if (beforeMutation is not null) await beforeMutation(current, token);
+        }, cancellationToken));
 
         // (4) Sertifika deposu kararı — ÖLÇÜMLE.
         var digerKullananlar = SslRemovalPlan.FindOtherUsersOfCertificate(afterBindings, target);
         result.CertificateUsedBy = digerKullananlar;
 
-        if (!request.RemoveCertificateFromStore)
+        if (!removeFromStore)
         {
             result.CertificateAction = "kept";
         }
-        else if (digerKullananlar.Length > 0)
-        {
-            // İSTENDİ AMA YAPILMADI ve bu SÖYLENİR. Sessizce silmek başka siteleri anında bozardı;
-            // sessizce atlamak da kullanıcıya sildiğimizi düşündürürdü.
-            result.CertificateAction = "kept_in_use";
-            result.Detail = string.Join(", ", digerKullananlar);
-        }
         else
         {
-            var (silindi, detay) = await TryDeleteCertificateAsync(target.Thumbprint, cancellationToken);
-            result.CertificateAction = silindi ? "removed" : "remove_failed";
-            result.Detail = detay;
+            await MutateAsync(async () =>
+            {
+                // JSON cleanup and approval may both wait. A new user, including a
+                // recreation of the removed binding itself, must protect this certificate.
+                var freshBindings = await ReadHttpsBindingsAsync(cancellationToken);
+                var current = await generation.ValidateAsync(cancellationToken);
+                if (beforeMutation is not null) await beforeMutation(current, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                var users = SslRemovalPlan.FindCertificateUsers(freshBindings, target.Thumbprint);
+                result.CertificateUsedBy = users;
+                if (users.Length > 0)
+                {
+                    result.CertificateAction = "kept_in_use";
+                    result.Detail = string.Join(", ", users);
+                    return;
+                }
+
+                var deletion = await TryDeleteCertificateAsync(target.Thumbprint, cancellationToken);
+                result.CertificateAction = deletion.Action;
+                result.Detail = deletion.Detail;
+                result.CertificateUsedBy = deletion.UsedBy;
+            });
         }
 
-        result.Workspace = await GetSiteWorkspaceAsync(site.Name, cancellationToken);
+        // Workspace reconciliation can write ssl.json, so it shares the same authority boundary.
+        await MutateAsync(async () =>
+        {
+            result.Workspace = await GetSiteWorkspaceCoreAsync(site.Name, async token =>
+            {
+                // The probe and JSON path lock may both await after MutateAsync checked us.
+                // Its IIS gate is already held, so validate without acquiring it again.
+                var current = await generation.ValidateAsync(token);
+                if (beforeMutation is not null) await beforeMutation(current, token);
+            }, cancellationToken);
+        });
         return result;
     }
 
@@ -1504,6 +1846,9 @@ public sealed class WinAcmeSslService(
 
     private async Task<IReadOnlyCollection<IisHttpsBinding>> ReadHttpsBindingsAsync(CancellationToken cancellationToken)
     {
+        if (bindingReader is not null)
+            return await bindingReader(cancellationToken)
+                ?? throw new AppException("ssl.bindings_unreadable", 503, 503);
         var result = await ProcessRunner.RunPowerShellStrictAsync(HttpsBindingsScript, cancellationToken);
         if (!result.Success)
         {
@@ -1538,19 +1883,34 @@ public sealed class WinAcmeSslService(
     {
         var site = siteName.Replace("'", "''");
         var dn = target.HostName.Replace("'", "''");
+        var bindingInformation = target.BindingInformation.Replace("'", "''");
+        var thumbprint = target.Thumbprint.Replace("'", "''");
+        var storeName = target.StoreName.Replace("'", "''");
 
         var script = $$"""
             Import-Module WebAdministration -ErrorAction Stop
             $ErrorActionPreference = 'Stop'
             $site = '{{site}}'; $dn = '{{dn}}'; $port = {{target.Port}}
-            $b = Get-WebBinding -Name $site -Protocol https -Port $port -HostHeader $dn -ErrorAction SilentlyContinue
-            if (-not $b) { 'NOTFOUND'; return }
-            $b | Remove-WebBinding
+            $bindings = @(Get-WebBinding -Name $site -Protocol https -Port $port -HostHeader $dn -ErrorAction Stop)
+            if ($bindings.Count -ne 1) { 'BINDING_CHANGED'; return }
+            $b = $bindings[0]
+            $hash = $b.certificateHash
+            $thumb = ''
+            if ($hash -is [string]) { $thumb = $hash.Trim() }
+            elseif ($hash -is [byte[]]) { $thumb = [BitConverter]::ToString($hash).Replace('-', '') }
+            elseif ($null -ne $hash) { 'BINDING_CHANGED'; return }
+            if ([string]$b.bindingInformation -ine '{{bindingInformation}}' -or
+                $thumb -ine '{{thumbprint}}' -or [string]$b.certificateStoreName -ine '{{storeName}}') {
+              'BINDING_CHANGED'; return
+            }
+            $b | Remove-WebBinding -ErrorAction Stop
             'OK'
             """;
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
-        if (!result.Success)
+        var result = await RemoveBindingCommand(script, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (result.Success && result.StandardOutput.Trim() == "BINDING_CHANGED") throw RemovalTargetChanged();
+        if (!result.Success || result.StandardOutput.Trim() != "OK")
         {
             throw new AppException(
                 "ssl.remove_binding_failed",
@@ -1564,46 +1924,146 @@ public sealed class WinAcmeSslService(
     /// Sertifikayı LocalMachine depolarından siler. Çağrılmadan ÖNCE başka kullanan olmadığı
     /// ölçülmüş olmalıdır (bkz. <see cref="SslRemovalPlan.FindOtherUsersOfCertificate"/>).
     /// </summary>
-    private async Task<(bool Removed, string Detail)> TryDeleteCertificateAsync(string thumbprint, CancellationToken cancellationToken)
+    private async Task<(string Action, string Detail, string[] UsedBy)> TryDeleteCertificateAsync(string thumbprint, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(thumbprint))
         {
-            return (false, "Sertifika parmak izi okunamadi.");
+            return ("remove_failed", "Sertifika parmak izi okunamadi.", []);
         }
 
         var thumb = thumbprint.Replace("'", "''");
         var script = $$"""
+            Import-Module WebAdministration -ErrorAction Stop
             $ErrorActionPreference = 'Stop'
             $thumb = '{{thumb}}'
+            $users = @()
+            $bindingsMeasured = $true
+            # The managed inventory may predate process startup. Recheck ALL sites here;
+            # a recreated target binding is a current user too.
+            foreach ($site in @(Get-Website -ErrorAction Stop)) {
+              foreach ($binding in @($site.Bindings.Collection)) {
+                if ($binding.protocol -ne 'https') { continue }
+                $used = $false
+                try {
+                  $hash = $binding.certificateHash
+                  $current = ''
+                  if ($hash -is [string]) {
+                    $current = $hash.Trim()
+                    if ($current -and $current -notmatch '^(?:[0-9a-fA-F]{2})+$') { throw 'Invalid certificate hash' }
+                  } elseif ($hash -is [byte[]]) {
+                    $current = [BitConverter]::ToString($hash).Replace('-', '')
+                  } elseif ($null -ne $hash) { throw 'Unsupported certificate hash type' }
+                  $used = $current -ieq $thumb
+                } catch { $used = $true; $bindingsMeasured = $false }
+                if ($used) { $users += ([string]$site.Name + ' (' + [string]$binding.bindingInformation + ')') }
+              }
+            }
+            if ($users.Count -gt 0) {
+              ConvertTo-Json -InputObject ([pscustomobject]@{
+                status = 'in_use'; bindingsMeasured = $bindingsMeasured; storesMeasured = $false
+                stores = @(); usedBy = @($users)
+              }) -Compress -Depth 3
+              return
+            }
             $silinen = @()
             foreach ($store in 'My','WebHosting') {
               $yol = "Cert:\LocalMachine\$store\$thumb"
-              if (Test-Path $yol) { Remove-Item $yol -Force; $silinen += $store }
+              if (Test-Path -LiteralPath $yol -ErrorAction Stop) {
+                Remove-Item -LiteralPath $yol -Force -ErrorAction Stop
+                if (Test-Path -LiteralPath $yol -ErrorAction Stop) { throw 'Certificate deletion could not be verified.' }
+                $silinen += $store
+              }
             }
-            if ($silinen.Count -eq 0) { 'NONE' } else { ($silinen -join ',') }
+            $status = if ($silinen.Count -eq 0) { 'not_found' } else { 'removed' }
+            ConvertTo-Json -InputObject ([pscustomobject]@{
+              status = $status; bindingsMeasured = $true; storesMeasured = $true
+              stores = @($silinen); usedBy = @()
+            }) -Compress -Depth 3
             """;
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        var result = await RemoveCertificateCommand(script, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!result.Success)
         {
-            logger.LogWarning("Sertifika {Thumbprint} depodan silinemedi: {Error}", thumbprint, result.StandardError);
-            return (false, Kirp(string.IsNullOrWhiteSpace(result.StandardError) ? result.StandardOutput : result.StandardError));
+            var detail = Kirp(SecretRedactor.Redact(string.IsNullOrWhiteSpace(result.StandardError)
+                ? result.StandardOutput : result.StandardError));
+            logger.LogWarning("Sertifika {Thumbprint} depodan silinemedi: {Error}", thumbprint, detail);
+            return ("remove_failed", detail, []);
         }
 
-        var cikti = (result.StandardOutput ?? string.Empty).Trim();
-        return cikti.Contains("NONE", StringComparison.Ordinal)
-            ? (false, "Sertifika depoda bulunamadi (zaten yok).")
-            : (true, cikti);
+        CertificateDeletionMeasurement? measurement = null;
+        try
+        {
+            measurement = System.Text.Json.JsonSerializer.Deserialize<CertificateDeletionMeasurement>(
+                result.StandardOutput, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        }
+        catch (System.Text.Json.JsonException) { }
+
+        if (measurement is { Status: "in_use", Stores.Length: 0, UsedBy.Length: > 0 } &&
+            measurement.UsedBy.All(user => !string.IsNullOrWhiteSpace(user)))
+            return ("kept_in_use", string.Join(", ", measurement.UsedBy), measurement.UsedBy);
+        if (measurement is { Status: "removed", BindingsMeasured: true, StoresMeasured: true,
+                Stores.Length: > 0, UsedBy.Length: 0 } &&
+            measurement.Stores.All(store => store is "My" or "WebHosting") &&
+            measurement.Stores.Distinct(StringComparer.Ordinal).Count() == measurement.Stores.Length)
+            return ("removed", string.Join(",", measurement.Stores), []);
+        if (measurement is { Status: "not_found", BindingsMeasured: true, StoresMeasured: true,
+                Stores.Length: 0, UsedBy.Length: 0 })
+            return ("remove_failed", "Sertifika depoda bulunamadi (zaten yok).", []);
+        return ("remove_failed", "Sertifika silme sonucu dogrulanamadi.", []);
     }
 
-    /// <summary>Panelin ssl.json kaydından tek bir bağlamayı siler (öksüz sertifika satırı kalmasın).</summary>
-    private async Task RemoveCertificateStateAsync(string siteName, string hostName, int port, CancellationToken cancellationToken)
+    private sealed class CertificateDeletionMeasurement
     {
-        await fileStore.UpdateAsync(StatePath, Array.Empty<SslCertificateDto>(), existing => existing
-            .Where(item => !(string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase) &&
-                             string.Equals(item.HostName, hostName, StringComparison.OrdinalIgnoreCase) &&
-                             (item.Port == port || item.Port == 0)))
-            .ToArray(), cancellationToken);
+        public CertificateDeletionMeasurement() { }
+        public string Status { get; set; } = string.Empty;
+        public bool BindingsMeasured { get; set; }
+        public bool StoresMeasured { get; set; }
+        public string[]? Stores { get; set; }
+        public string[]? UsedBy { get; set; }
+    }
+
+    private static AppException RemovalTargetChanged() => new("ssl.binding_changed", 409, 409);
+
+    private static bool SameRemovalBinding(IisHttpsBinding expected, IisHttpsBinding current) =>
+        expected.CertificateReadable && current.CertificateReadable &&
+        string.Equals(expected.SiteName, current.SiteName, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(expected.BindingInformation, current.BindingInformation, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(expected.Thumbprint, current.Thumbprint, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(expected.StoreName, current.StoreName, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsRemovalRecord(SslCertificateDto item, IisHttpsBinding target) =>
+        string.Equals(item.SiteName, target.SiteName, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(item.HostName, target.HostName, StringComparison.OrdinalIgnoreCase) &&
+        (item.Port == target.Port || item.Port == 0);
+
+    private static void EnsureRemovalStateUnchanged(SslCertificateDto[] records, IisHttpsBinding target,
+        SslCertificateDto[] expected)
+    {
+        var current = records.Where(item => IsRemovalRecord(item, target)).ToList();
+        if (current.Count != expected.Length) throw RemovalTargetChanged();
+        foreach (var original in expected)
+        {
+            // Verification timestamps are refreshed by normal reads. Certificate identity
+            // and material must still match; a renewed/imported replacement is foreign.
+            var index = current.FindIndex(item =>
+                string.Equals(item.Thumbprint, original.Thumbprint, StringComparison.OrdinalIgnoreCase) &&
+                item.NotAfterUtc == original.NotAfterUtc && item.Source == original.Source &&
+                item.Subject == original.Subject && item.FriendlyName == original.FriendlyName);
+            if (index < 0) throw RemovalTargetChanged();
+            current.RemoveAt(index);
+        }
+    }
+
+    /// <summary>Only remove the captured certificate record, under the JSON update lock.</summary>
+    private async Task RemoveCertificateStateAsync(IisHttpsBinding target, SslCertificateDto[] expected,
+        Func<CancellationToken, Task> beforePublication, CancellationToken cancellationToken)
+    {
+        await fileStore.UpdateAsync(StatePath, Array.Empty<SslCertificateDto>(), existing =>
+        {
+            EnsureRemovalStateUnchanged(existing, target, expected);
+            return existing.Where(item => !IsRemovalRecord(item, target)).ToArray();
+        }, beforePublication, cancellationToken);
     }
 
     public async Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default)
@@ -1613,7 +2073,8 @@ public sealed class WinAcmeSslService(
             .ToArray(), cancellationToken);
     }
 
-    private async Task UpsertAsync(SslCertificateDto dto, CancellationToken cancellationToken)
+    private async Task UpsertAsync(SslCertificateDto dto, CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforePublication = null)
     {
         // Atomik oku-değiştir-yaz (eşzamanlı SSL işlemlerinde kayıp güncelleme olmasın).
         await fileStore.UpdateAsync(StatePath, Array.Empty<SslCertificateDto>(), existing =>
@@ -1634,7 +2095,7 @@ public sealed class WinAcmeSslService(
             }
 
             return states.ToArray();
-        }, cancellationToken);
+        }, beforePublication, cancellationToken);
     }
 
     private static SslCertificateDto ToDto(

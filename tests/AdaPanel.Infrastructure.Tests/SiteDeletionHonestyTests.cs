@@ -445,11 +445,10 @@ public sealed class SiteDeletionHonestyTests
         //
         // İddia adımın TAM ARGÜMAN LİSTESİNE bağlanmıyor: `StepAsync` sonradan kalıntı tipi/adı
         // da alıyor ve o eklemeyi "kırılma" saymak, testi gerçekliğin değil metnin bekçisi yapardı.
-        // Korunan davranış şu: DROP çağrısının dönüşü BİR KOŞULDA kullanılıyor ve sahiplik kaydı
-        // ancak o koşulun içinde siliniyor.
+        // Provider callback keeps the authority check and post-DROP ownership removal in one lease.
         Assert.Contains("if (await StepAsync(", kaynak, StringComparison.Ordinal);
-        Assert.Contains("databaseService.DeleteDatabaseAsync(engine, name, cancellationToken)", kaynak, StringComparison.Ordinal);
-        Assert.Contains("await TryRemoveOwnershipAsync(result, engine, name, cancellationToken);", kaynak, StringComparison.Ordinal);
+        Assert.Contains("DeleteSiteDatabaseAsync(siteName, engine, name, cancellationToken)", kaynak, StringComparison.Ordinal);
+        Assert.Contains("token => databaseOwnership.RemoveAsync(engine, databaseName, token)", kaynak, StringComparison.Ordinal);
 
         // Hayatta kalan veritabanının sahipliği KORUNUYOR, yalnız ölü site adı koparılıyor.
         Assert.Contains("DetachSurvivingDatabasesAsync", kaynak, StringComparison.Ordinal);

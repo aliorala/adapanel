@@ -1,5 +1,16 @@
+using System.Reflection;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Databases;
+using AdaPanel.Core.Dtos.Ftp;
+using AdaPanel.Core.Dtos.Mail;
+using AdaPanel.Core.Dtos.Proxy;
+using AdaPanel.Core.Dtos.Sites;
+using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Iis;
+using AdaPanel.Infrastructure.Options;
+using AdaPanel.Infrastructure.Services;
+using AdaPanel.Infrastructure.Support;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace AdaPanel.Infrastructure.Tests;
@@ -111,18 +122,107 @@ public sealed class SiteCascadeDatabaseOwnershipTests
     /// KABLOLAMA: silme dongusu otorite kumesini kullanmali. Saf islev dogru olsa da cagrilmiyorsa
     /// hicbir sey degismezdi.
     /// </summary>
-    [Fact]
-    public void Silme_dongusu_otorite_kumesini_kullanir()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Silme_dongusu_otorite_kumesini_kullanir(bool explicitLink)
     {
-        var kaynak = OkuKaynak("src", "AdaPanel.Infrastructure", "Iis", "SiteCascadeDeletionService.cs");
+        const string engine = "postgresql";
+        const string owned = "explicit_database";
+        var owner = Guid.NewGuid();
+        var databases = new HashSet<string>(StringComparer.Ordinal) { owned, Site };
+        var deleted = new List<string>();
+        var ownershipExists = true;
+        var links = new List<SiteDatabaseLinkDto>();
+        if (explicitLink) links.Add(new SiteDatabaseLinkDto { Engine = engine, DatabaseName = owned, SiteName = Site });
 
-        Assert.Contains("var sahipli = await ResolveOwnedDatabasesAsync(siteName, cancellationToken);", kaynak, StringComparison.Ordinal);
-        Assert.Contains("foreach (var db in sahipli)", kaynak, StringComparison.Ordinal);
+        var ownership = Fake<IDatabaseOwnershipService>((method, args) => method.Name switch
+        {
+            "GetAllAsync" => Task.FromResult<IReadOnlyCollection<(string, string, Guid, string)>>(ownershipExists
+                ? [(engine, owned, owner, explicitLink ? "" : Site)] : []),
+            "GetOwnerAsync" => Task.FromResult<Guid?>(ownershipExists && (string)args[1]! == owned ? owner : null),
+            "RemoveAsync" => RemoveOwnership(),
+            _ => throw new NotSupportedException(method.Name)
+        });
+        Task RemoveOwnership() { ownershipExists = false; return Task.CompletedTask; }
 
-        // Ad tahmini artik yalnizca UYARI uretir; DeleteDatabaseAsync ile ayni dongude olamaz.
-        var muhtemelIndex = kaynak.IndexOf("ResolveProbableDatabasesAsync(siteName, sahipli", StringComparison.Ordinal);
-        var silmeIndex = kaynak.IndexOf("databaseService.DeleteDatabaseAsync", StringComparison.Ordinal);
-        Assert.True(muhtemelIndex > silmeIndex, "Muhtemel liste, silme dongusunden ONCE hesaplanip silmeye karisiyor olabilir.");
+        var databaseService = Fake<IDatabaseService>((method, args) => method.Name switch
+        {
+            "GetWorkspaceAsync" => Task.FromResult(new DatabaseWorkspaceDto
+            {
+                Engine = (string)args[0]!,
+                Databases = (string)args[0]! == engine ? databases.Select(name => new DatabaseRecordDto { Name = name }).ToArray() : []
+            }),
+            "DeleteDatabaseAsync" => Drop(args),
+            _ => throw new NotSupportedException(method.Name)
+        });
+        async Task Drop(object?[] args)
+        {
+            if (args.Length == 5) await ((Func<CancellationToken, Task>)args[2]!)(default);
+            var name = (string)args[1]!;
+            deleted.Add(name);
+            databases.Remove(name);
+            if (args.Length == 5) await ((Func<CancellationToken, Task>)args[3]!)(default);
+        }
+
+        var linkService = Fake<ISiteDatabaseLinkService>((method, args) => method.Name switch
+        {
+            "GetForSiteAsync" => Task.FromResult<IReadOnlyList<SiteDatabaseLinkDto>>(links.Where(link => link.SiteName == (string)args[0]!).ToArray()),
+            "UnlinkAsync" => Unlink((string)args[0]!, (string)args[1]!),
+            _ => throw new NotSupportedException(method.Name)
+        });
+        Task Unlink(string requestedEngine, string name)
+        {
+            links.RemoveAll(link => DatabaseResourceIdentity.Same(link.Engine, link.DatabaseName, requestedEngine, name));
+            return Task.CompletedTask;
+        }
+
+        // The root is unique and absent; cascade only reads fallback JSON and never deletes real files.
+        var options = Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions
+        {
+            DataRoot = Path.Combine(Path.GetTempPath(), "AdaPanel-cascade-authority-" + Guid.NewGuid().ToString("N"))
+        });
+        var service = new SiteCascadeDeletionService(
+            Fake<IIisSiteService>((method, _) => method.Name switch
+            {
+                "GetSiteAsync" => Task.FromResult(new SiteDto { Name = Site }),
+                "DeleteSiteAsync" => Task.CompletedTask,
+                _ => throw new NotSupportedException(method.Name)
+            }), null!,
+            Fake<IFtpService>((_, _) => Task.FromResult<IReadOnlyCollection<FtpUserDto>>([])),
+            Fake<IMailService>((_, _) => Task.FromResult(new MailWorkspaceDto())),
+            databaseService, linkService, ownership,
+            Fake<IReverseProxyService>((_, _) => Task.FromResult(new ReverseProxySiteConfigurationDto())),
+            Fake<IDiskQuotaService>((_, _) => Task.FromResult(new SiteDiskQuotaDto())),
+            Fake<ICustomerScopeService>((_, _) => Task.CompletedTask),
+            Fake<ISslService>((_, _) => Task.CompletedTask),
+            Fake<ISiteHostingSettingsService>((_, _) => Task.CompletedTask),
+            Fake<IWafService>((_, _) => Task.CompletedTask),
+            Fake<IDirectoryProtectionService>((_, _) => Task.CompletedTask),
+            null!, null!, options, new JsonFileStore(options), NullLogger<SiteCascadeDeletionService>.Instance, new ConcurrencyLock());
+
+        var result = await service.DeleteAsync(Site, deleteFiles: false, deleteDatabases: true);
+
+        Assert.Equal([owned], deleted);
+        Assert.Equal([Site], databases);
+        Assert.False(ownershipExists);
+        var leftover = Assert.Single(result.Leftovers, item => item.Kind == SiteLeftoverKinds.Database);
+        Assert.Equal($"{engine}:{Site}", leftover.Name);
+        Assert.True(leftover.Deliberate);
+        Assert.Contains(result.Warnings, warning => warning.Contains($"{engine}:{Site}", StringComparison.Ordinal));
+    }
+
+    private static T Fake<T>(Func<MethodInfo, object?[], object?> handler) where T : class
+    {
+        var proxy = DispatchProxy.Create<T, StrictProxy>();
+        ((StrictProxy)(object)proxy).Handler = handler;
+        return proxy;
+    }
+
+    public class StrictProxy : DispatchProxy
+    {
+        public Func<MethodInfo, object?[], object?> Handler { get; set; } = null!;
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args) => Handler(targetMethod!, args ?? []);
     }
 
     /// <summary>Yikici sorgu parametreleri OPT-IN olmali: gondermeyen bir istemci veri kaybetmemeli.</summary>

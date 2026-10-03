@@ -6,7 +6,7 @@ import { useSitesStore } from "../stores/sites";
 import { createDatabase } from "../api/databases";
 
 vi.mock("../api/sites", () => ({ getSiteDatabases: vi.fn(), linkSiteDatabase: vi.fn(), unlinkSiteDatabase: vi.fn() }));
-vi.mock("../api/databases", () => ({ createDatabase: vi.fn(), deleteDatabase: vi.fn(), openPhpMyAdmin: vi.fn() }));
+vi.mock("../api/databases", () => ({ createDatabase: vi.fn(), deleteDatabase: vi.fn(), openPhpMyAdmin: vi.fn(), openAdminer: vi.fn() }));
 vi.mock("../stores/sites", () => ({ useSitesStore: vi.fn() }));
 vi.mock("../stores/auth", () => ({ useAuthStore: () => ({ session: { user: { role: "Administrator" } } }), extractApiMessage: () => "failed" }));
 vi.mock("../components/ConfirmDialog.vue", () => ({ useConfirm: () => ({ confirm: vi.fn() }) }));
@@ -14,7 +14,7 @@ vi.mock("../composables/useSubscriptionGate", () => ({ useSubscriptionGate: () =
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 
 let app: App | undefined;
-type State = { databases: SiteDatabases["linked"]; loading: boolean; notice: string; form: { name: string; password: string }; load: () => Promise<void>; createDb: () => Promise<void> };
+type State = { databases: SiteDatabases["linked"]; loading: boolean; notice: string; showForm: boolean; form: { name: string; password: string }; load: () => Promise<void>; createDb: () => Promise<void> };
 function mount() {
   const store = reactive({ selectedSiteName: "first.example" });
   vi.mocked(useSitesStore).mockReturnValue(store as ReturnType<typeof useSitesStore>);
@@ -62,6 +62,7 @@ it("keeps the new site's draft when creation for the previous site completes", a
   vi.mocked(createDatabase).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(undefined as never); }));
   const { store, state } = mount();
   await nextTick();
+  state.showForm = true;
   const operation = state.createDb();
   await state.createDb();
   expect(createDatabase).toHaveBeenCalledTimes(1);

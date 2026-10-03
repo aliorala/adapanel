@@ -339,7 +339,7 @@ import SectionLoadError from "../components/SectionLoadError.vue";
 import { useNotice, useSectionError } from "../composables/useNotice";
 import { useSitesStore } from "../stores/sites";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
-import { toReachableUrl } from "../utils/url";
+import { openAsyncReachable } from "../utils/externalTab";
 
 type ToolkitTab = "composer" | "artisan" | "node" | "wpcli" | "wordpress" | "queue";
 
@@ -432,31 +432,15 @@ async function runWp(command: string): Promise<boolean> {
 
 // panel "Giriş yap": tek kullanımlık sihirli bağlantı alır, yeni sekmede açar (doğrudan wp-admin).
 async function wpLogin() {
-  if (!siteName.value) {
+  if (!siteName.value || wpBusy.value) {
     return;
   }
-  // Sekmeyi TIK anında aç (kullanıcı hareketi içinde); URL'yi await sonrası ata. Aksi halde tarayıcı popup'ı engeller.
-  const tab = window.open("", "_blank");
   wpBusy.value = "login";
   wpNotice.value = "";
   try {
-    const link = await createWordPressLoginLink(siteName.value);
-    // Sihirli bağlantı HAM atanıyordu. `about:blank` sekmesi AÇANIN kökenini miras aldığı
-    // için oraya yazılan `javascript:` panelin kökeninde — yöneticinin oturumunda — çalışır.
-    // `toReachableUrl` http(s) dışını eler; ayrıca adres `127.0.0.1` ile gelirse uzaktan
-    // yöneten yöneticinin kendi makinesine gitmesini de engeller.
-    const url = toReachableUrl(link.url);
-    if (!url) {
-      throw new Error("wpkit.unsafe_url");
-    }
-    if (tab) {
-      tab.location.href = url;
-    }
+    await openAsyncReachable(async () => (await createWordPressLoginLink(siteName.value)).url);
     showWpNotice(t("panel.wpkit.loginOpened"), false);
   } catch (error) {
-    if (tab) {
-      tab.close();
-    }
     showWpNotice(resolveApiMessage(error), true);
   } finally {
     wpBusy.value = "";

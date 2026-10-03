@@ -11,6 +11,8 @@ let sessionEpoch = 0;
 const requestEpochs = new WeakMap<object, number>();
 let csrfToken = "";
 let csrfPromise: Promise<string> | null = null;
+let csrfGeneration = 0;
+let csrfController: AbortController | null = null;
 
 function resolveSecureEntryPath(): string {
   const segments = window.location.pathname.split("/").filter(Boolean);
@@ -26,17 +28,20 @@ function resolveSecureEntryPath(): string {
   return first;
 }
 
-async function fetchCsrfToken(force = false): Promise<string> {
-  if (!force && csrfToken) {
+async function fetchCsrfToken(): Promise<string> {
+  if (csrfToken) {
     return csrfToken;
   }
 
-  if (!force && csrfPromise) {
+  if (csrfPromise) {
     return csrfPromise;
   }
 
-  const epoch = sessionEpoch;
+  const generation = csrfGeneration;
+  const controller = new AbortController();
+  csrfController = controller;
   csrfPromise = (async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const headers: Record<string, string> = {};
       const secureEntryPath = resolveSecureEntryPath();
@@ -45,21 +50,42 @@ async function fetchCsrfToken(force = false): Promise<string> {
         headers["X-AdaPanel-Entry-Path"] = secureEntryPath;
       }
 
-      const response = await fetch("/api/v1/auth/csrf", {
-        credentials: "include",
-        headers
+      const request = async () => {
+        const response = await fetch("/api/v1/auth/csrf", {
+          credentials: "include",
+          signal: controller.signal,
+          headers
+        });
+        const payload = await response.json().catch(() => null) as ApiEnvelope<{ requestToken: string }> | null;
+        if (!response.ok) {
+          const config: InternalAxiosRequestConfig = { url: "/auth/csrf", method: "get", headers: new axios.AxiosHeaders(headers) };
+          throw new AxiosError("CSRF request failed", "ERR_BAD_RESPONSE", config, null,
+            { data: payload, status: response.status, statusText: response.statusText, headers: {}, config });
+        }
+        const token = payload?.data?.requestToken;
+        if (typeof token !== "string" || !token.trim()) throw new AxiosError("Invalid CSRF response", "ERR_BAD_RESPONSE");
+        return token;
+      };
+      // Axios'un istek zaman aşımı interceptor öncesindeki bu beklemeyi kapsamaz.
+      // Süre sınırı gövdenin okunmasını da kapsar; takılmış bir yanıt bütün yazmaları kilitlemesin.
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new AxiosError("CSRF request timeout", "ETIMEDOUT"));
+          controller.abort();
+        }, 15_000);
       });
-
-      const payload = (await response.json()) as ApiEnvelope<{ requestToken: string }>;
-      if (epoch !== sessionEpoch) return "";
-      csrfToken = payload?.data?.requestToken ?? "";
+      const token = await Promise.race([request(), timeout]);
+      if (generation !== csrfGeneration) throw new axios.CanceledError("CSRF context changed");
+      csrfToken = token;
       return csrfToken;
-    } catch {
-      // Ağ hatası ("Failed to fetch") / boş yanıt → ÇÖKME yerine boş token (çağıran tarafta temiz hata).
-      if (epoch === sessionEpoch) csrfToken = "";
-      return "";
+    } catch (error) {
+      if (generation !== csrfGeneration || axios.isCancel(error)) throw new axios.CanceledError("CSRF context changed");
+      csrfToken = "";
+      if (axios.isAxiosError(error)) throw error;
+      throw new AxiosError("CSRF network request failed", "ERR_NETWORK");
     } finally {
-      if (epoch === sessionEpoch) csrfPromise = null;
+      if (timer !== undefined) clearTimeout(timer);
+      if (generation === csrfGeneration) { csrfPromise = null; csrfController = null; }
     }
   })();
 
@@ -67,6 +93,9 @@ async function fetchCsrfToken(force = false): Promise<string> {
 }
 
 export function clearCsrfToken(): void {
+  csrfGeneration++;
+  csrfController?.abort();
+  csrfController = null;
   csrfPromise = null;
   csrfToken = "";
 }
@@ -158,6 +187,18 @@ export const apiClient = axios.create({
   }
 });
 
+// Bir isteğin iptali, aynı CSRF isteğini bekleyen diğer kullanıcı işlemlerini iptal etmez.
+function waitForCsrf(pending: Promise<string>, signal: InternalAxiosRequestConfig["signal"]): Promise<string> {
+  if (!signal) return pending;
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener?.("abort", abort);
+    const abort = () => { cleanup(); reject(new axios.CanceledError("Request cancelled")); };
+    pending.then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
+    if (signal.aborted) abort();
+    else signal.addEventListener?.("abort", abort, { once: true });
+  });
+}
+
 apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
   requestEpochs.set(config, sessionEpoch);
   const headers = config.headers as Record<string, string>;
@@ -173,7 +214,8 @@ apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) =>
       throw readOnlyRejection(config);
     }
 
-    const token = await fetchCsrfToken();
+    const token = await waitForCsrf(fetchCsrfToken(), config.signal);
+    if (isReadOnlyMode() && !isAuthPath(config.url)) throw readOnlyRejection(config);
     headers["X-CSRF-TOKEN"] = token;
   }
 

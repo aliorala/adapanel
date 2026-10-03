@@ -6,6 +6,7 @@ using AdaPanel.Core.Dtos.WebDb;
 using AdaPanel.Core.Enums;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
+using AdaPanel.Infrastructure.Database;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -77,6 +78,7 @@ public sealed class WebDbClientService(
         string? databaseName,
         CancellationToken cancellationToken = default)
     {
+        var connection = await ResolveSignonConnectionAsync(engine, databaseName, true, cancellationToken);
         var states = await fileStore.ReadAsync(StatePath, Array.Empty<WebDbState>(), cancellationToken);
         var state = states.FirstOrDefault(item => item.Provider == "phpmyadmin");
         if (state is null || string.IsNullOrWhiteSpace(state.EntryFilePath))
@@ -91,28 +93,6 @@ public sealed class WebDbClientService(
         await EnsurePhpMyAdminConfigAsync(entryRoot, cancellationToken);
         // Var olan dağıtımda da paket/metadata dosyalarını HTTP'den engelle (yeniden dağıtım beklemeden).
         HardenWebDbWebConfig(entryRoot);
-        var engineKey = (engine ?? string.Empty).Trim().ToLowerInvariant();
-        var (port, rootComponentId) = engineKey == "mysql"
-            ? (3307, "mysql-8")
-            : (3306, "mariadb-11");
-
-        var user = "root";
-        var password = await ResolveRootPasswordAsync(rootComponentId, cancellationToken);
-        string? onlyDb = null;
-
-        if (!string.IsNullOrWhiteSpace(databaseName))
-        {
-            onlyDb = databaseName.Trim();
-            var cred = await credentialStore.FindForDatabaseAsync(engineKey, onlyDb, cancellationToken);
-            if (cred is not null && !string.IsNullOrWhiteSpace(cred.Value.Password))
-            {
-                // Gerçek izolasyon: domainin kendi DB kullanıcısı olarak gir (yalnız o DB'yi görür).
-                user = cred.Value.UserName;
-                password = cred.Value.Password;
-            }
-            // Kullanıcı bulunamazsa root + only_db (en azından yalnız o DB listelenir).
-        }
-
         var token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
         var tokensDir = Path.Combine(entryRoot, "adapanel-tokens");
         Directory.CreateDirectory(tokensDir);
@@ -132,7 +112,7 @@ public sealed class WebDbClientService(
                 "Belirtec dizini diger uygulama havuzlarina kapatilamadi: {Directory}. Root parolasi bu dizine yazilmayacak.",
                 tokensDir);
 
-            if (string.Equals(user, "root", StringComparison.OrdinalIgnoreCase))
+            if (connection.UsesAdminCredential)
             {
                 throw new AppException("webdb.token_dir_unprotected", 500, 500);
             }
@@ -140,14 +120,7 @@ public sealed class WebDbClientService(
 
         CleanupOldTokens(tokensDir);
 
-        var payload = System.Text.Json.JsonSerializer.Serialize(new
-        {
-            user,
-            password,
-            host = "127.0.0.1",
-            port = port.ToString(),
-            only_db = onlyDb ?? string.Empty
-        });
+        var payload = SerializeSignonPayload(connection);
         await File.WriteAllTextAsync(
             Path.Combine(tokensDir, token + ".json"),
             payload,
@@ -165,15 +138,13 @@ public sealed class WebDbClientService(
     /// <summary>
     /// Adminer'i TEK TIKLA acacak baglantiyi uretir.
     /// <para>
-    /// Adminer'in phpMyAdmin gibi bir "signon" kipi YOKTUR. Bunun yerine belgelenmis eklenti
-    /// mekanizmasi kullanilir: adminer_object() ile dondurulen sinifta credentials() ve login()
-    /// gecersiz kilinirsa Adminer o kimlikle oturum acar. Sarmalayici PHP asagida yaziliyor.
+    /// Adminer'in phpMyAdmin gibi bir "signon" kipi yoktur. Sarmalayici, tek kullanimlik
+    /// belirtecten Adminer'in surucu/sunucu/kullanici oturumunu doldurur ve kendi adresine gider.
     /// </para>
     /// <para>
     /// Kimlik secimi phpMyAdmin ile AYNI: veritabaninin kendi kullanicisinin parolasi panelde
-    /// kayitliysa onunla girilir (gercek izolasyon), degilse root'a dusulur. Root'a dusuldugunde
-    /// bile sarmalayicidaki databases() filtresi listeyi TEK veritabaniyla sinirlar -- yoksa
-    /// yonetici yetkisiyle acilan bir oturum diger musterilerin veritabanlarini goz onune sererdi.
+    /// kayitliysa onunla girilir (gercek izolasyon), degilse motorun kayitli yoneticisi kullanilir.
+    /// Veritabani secimi bir yetki siniri degildir; gercek erisim veritabani kullanicisinin yetkileridir.
     /// </para>
     /// </summary>
     public async Task<WebDbSignonDto> CreateAdminerSignonAsync(
@@ -181,6 +152,7 @@ public sealed class WebDbClientService(
         string? databaseName,
         CancellationToken cancellationToken = default)
     {
+        var connection = await ResolveSignonConnectionAsync(engine, databaseName, false, cancellationToken);
         var states = await fileStore.ReadAsync(StatePath, Array.Empty<WebDbState>(), cancellationToken);
         var state = states.FirstOrDefault(item => item.Provider == "adminer");
         if (state is null || string.IsNullOrWhiteSpace(state.EntryFilePath))
@@ -191,26 +163,6 @@ public sealed class WebDbClientService(
         var entryRoot = Path.GetDirectoryName(state.EntryFilePath)!;
         await EnsureAdminerSignonAsync(entryRoot, cancellationToken);
         HardenWebDbWebConfig(entryRoot);
-
-        var engineKey = (engine ?? string.Empty).Trim().ToLowerInvariant();
-        var (port, rootComponentId) = engineKey == "mysql"
-            ? (3307, "mysql-8")
-            : (3306, "mariadb-11");
-
-        var user = "root";
-        var password = await ResolveRootPasswordAsync(rootComponentId, cancellationToken);
-        string? onlyDb = null;
-
-        if (!string.IsNullOrWhiteSpace(databaseName))
-        {
-            onlyDb = databaseName.Trim();
-            var cred = await credentialStore.FindForDatabaseAsync(engineKey, onlyDb, cancellationToken);
-            if (cred is not null && !string.IsNullOrWhiteSpace(cred.Value.Password))
-            {
-                user = cred.Value.UserName;
-                password = cred.Value.Password;
-            }
-        }
 
         var token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
         var tokensDir = Path.Combine(entryRoot, "adapanel-tokens");
@@ -226,14 +178,7 @@ public sealed class WebDbClientService(
 
         CleanupOldTokens(tokensDir);
 
-        var payload = System.Text.Json.JsonSerializer.Serialize(new
-        {
-            user,
-            password,
-            host = "127.0.0.1",
-            port = port.ToString(),
-            only_db = onlyDb ?? string.Empty
-        });
+        var payload = SerializeSignonPayload(connection);
         await File.WriteAllTextAsync(
             Path.Combine(tokensDir, token + ".json"),
             payload,
@@ -244,6 +189,52 @@ public sealed class WebDbClientService(
         // gider. Ham port loopback'e bagli oldugu icin disaridan zaten 400 donerdi.
         return new WebDbSignonDto { Url = $"/api/v1/dbtools/adminer/adapanel-signon.php?token={token}" };
     }
+
+    internal sealed record SignonConnection(string User, string Password, string Host, int Port, string Database, string Driver, bool UsesAdminCredential);
+
+    internal async Task<SignonConnection> ResolveSignonConnectionAsync(
+        string engine, string? databaseName, bool phpMyAdmin, CancellationToken cancellationToken = default)
+    {
+        var parsedEngine = DatabaseProfiles.ParseEngine(engine);
+        // SQL Server panelde salt-okunur bir profildir; web araci icin sakli kimligi yoktur.
+        // Arac/motor uyumu dosya, IIS veya belirtec islemlerinden ONCE dogrulanir.
+        if (parsedEngine == DbEngine.MsSql || (phpMyAdmin && parsedEngine == DbEngine.PostgreSql))
+        {
+            throw new AppException("database.engine_not_supported", 400, 400);
+        }
+        var profile = await DatabaseProfiles.ResolveAsync(dbContext, secretProtector, parsedEngine, cancellationToken, allowEmptyPassword: true);
+        var user = profile.AdminUserName;
+        var password = profile.AdminPassword;
+        var usesAdminCredential = true;
+        var onlyDb = databaseName?.Trim() ?? string.Empty;
+        if (onlyDb.Length > 0)
+        {
+            var credential = await credentialStore.FindForDatabaseAsync(profile.EngineKey, onlyDb, cancellationToken);
+            if (credential is not null && !string.IsNullOrWhiteSpace(credential.Value.Password))
+            {
+                user = credential.Value.UserName;
+                password = credential.Value.Password;
+                usesAdminCredential = string.Equals(user, profile.AdminUserName, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(user, parsedEngine == DbEngine.PostgreSql ? "postgres" : "root", StringComparison.OrdinalIgnoreCase);
+            }
+        }
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            throw new AppException("database.admin_password_missing", 409, 409);
+        }
+        return new SignonConnection(user, password, profile.Host, profile.Port, onlyDb,
+            parsedEngine == DbEngine.PostgreSql ? "pgsql" : "server", usesAdminCredential);
+    }
+
+    internal static string SerializeSignonPayload(SignonConnection connection) => System.Text.Json.JsonSerializer.Serialize(new
+    {
+        user = connection.User,
+        password = connection.Password,
+        host = connection.Host,
+        port = connection.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        only_db = connection.Database,
+        driver = connection.Driver
+    });
 
     /// <summary>
     /// Adminer sarmalayicisini diske yazar. Her acilista tazelenir ki panel guncellemesiyle gelen
@@ -324,6 +315,14 @@ $adaSunucu = $adaData['host'] . ':' . $adaData['port'];
 $adaKullanici = (string) $adaData['user'];
 $adaParola = isset($adaData['password']) ? (string) $adaData['password'] : '';
 $adaDb = isset($adaData['only_db']) ? (string) $adaData['only_db'] : '';
+// Adminer 5.4.2: drivers/pgsql.inc.php "pgsql" GET anahtarini DRIVER olarak kullanir;
+// include/bootstrap.inc.php ve functions.inc.php ayni anahtari oturumda da arar.
+// Eski MySQL/MariaDB belirteclerinde driver alani yoktur; onlar "server" olarak kalir.
+$adaSurucu = isset($adaData['driver']) ? (string) $adaData['driver'] : 'server';
+if (!in_array($adaSurucu, array('server', 'pgsql'), true)) {
+    http_response_code(400);
+    exit('Veritabani surucusu desteklenmiyor. Panelden yeniden acin.');
+}
 
 /*
  * Oturum, Adminer'ın kendi adıyla ve KÖK yola bağlı açılır.
@@ -339,9 +338,6 @@ if (session_status() !== PHP_SESSION_ACTIVE) {
         exit('Oturum baslatilamadi. PHP oturum klasoru yazilabilir olmali (session.save_path).');
     }
 }
-
-// MySQL/MariaDB icin Adminer'in surucu anahtari "server"dir.
-$adaSurucu = 'server';
 
 if (!isset($_SESSION['pwds']) || !is_array($_SESSION['pwds'])) {
     $_SESSION['pwds'] = array();
@@ -367,7 +363,7 @@ session_write_close();
 
 // Adminer'ın KENDİ adresi (aynı klasördeki index.php). Bundan sonra bu dosyaya bir daha uğranmaz.
 $adaHedef = './?' . http_build_query(array_filter(array(
-    'server' => $adaSunucu,
+    $adaSurucu => $adaSunucu,
     'username' => $adaKullanici,
     'db' => $adaDb
 ), static function ($deger) {
@@ -406,13 +402,6 @@ exit;
         var states = await fileStore.ReadAsync(StatePath, Array.Empty<WebDbState>(), cancellationToken);
         var state = states.FirstOrDefault(item => string.Equals(item.Provider, provider, StringComparison.OrdinalIgnoreCase));
         return state?.Port ?? 0;
-    }
-
-    private async Task<string> ResolveRootPasswordAsync(string componentId, CancellationToken cancellationToken)
-    {
-        var component = await dbContext.InstalledComponents
-            .FirstOrDefaultAsync(item => item.ComponentId == componentId && item.Status == ComponentInstallStatus.Installed, cancellationToken);
-        return component is null ? string.Empty : ReadRootPassword(component);
     }
 
     // GÜVENLİK: DB aracı portunu (phpMyAdmin/Adminer) Windows Güvenlik Duvarı'nda KAPALI tutar —

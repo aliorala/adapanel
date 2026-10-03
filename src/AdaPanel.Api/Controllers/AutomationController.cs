@@ -1,4 +1,8 @@
 using AdaPanel.Core.Dtos.Automation;
+using AdaPanel.Api.Security;
+using AdaPanel.Core.Common;
+using AdaPanel.Data.Persistence;
+using AdaPanel.Infrastructure.Database;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Interfaces;
@@ -21,7 +25,9 @@ namespace AdaPanel.Api.Controllers;
 [Route("api/v1/automation")]
 public sealed class AutomationController(
     IAutomationService automationService,
-    IAuditService auditService) : ControllerBase
+    IAuditService auditService,
+    AdaPanelDbContext dbContext,
+    ICustomerScopeService customerScopes) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<ApiResponse<AutomationStatusDto>>> GetAsync(CancellationToken cancellationToken)
@@ -53,7 +59,12 @@ public sealed class AutomationController(
     [HttpPost("backup/run")]
     public async Task<ActionResult<ApiResponse<AutomationStatusDto>>> RunBackupAsync(CancellationToken cancellationToken)
     {
-        var status = await automationService.RunBackupNowAsync(cancellationToken);
+        var authority = await BackupActorAuthority.CaptureAsync(dbContext, customerScopes, User, cancellationToken);
+        if (authority.Role != "Administrator") throw new AppException("auth.forbidden", 403, 403);
+        using var actorLease = await DatabaseLifecycle.EnterSubscriptionAsync(authority.SubscriptionId, cancellationToken);
+        await authority.RevalidateAsync(dbContext, customerScopes, User, cancellationToken);
+        var status = await automationService.RunBackupNowAsync(
+            token => authority.RevalidateAsync(dbContext, customerScopes, User, token), cancellationToken);
 
         // Elle tetiklenen yedek turu, zamanlanmış turla AYNI budamayı yapar: saklama süresini aşan
         // eski yedekleri siler. Yani "yedek al" düğmesi aynı zamanda bir SİLME işlemidir.
@@ -69,7 +80,12 @@ public sealed class AutomationController(
     [HttpPost("ssl/run")]
     public async Task<ActionResult<ApiResponse<AutomationStatusDto>>> RunSslAsync(CancellationToken cancellationToken)
     {
-        var status = await automationService.RunSslRenewNowAsync(cancellationToken);
+        var authority = await BackupActorAuthority.CaptureAsync(dbContext, customerScopes, User, cancellationToken);
+        if (authority.Role != "Administrator") throw new AppException("auth.forbidden", 403, 403);
+        using var actorLease = await DatabaseLifecycle.EnterSubscriptionAsync(authority.SubscriptionId, cancellationToken);
+        await authority.RevalidateAsync(dbContext, customerScopes, User, cancellationToken);
+        var status = await automationService.RunSslRenewNowAsync(
+            token => authority.RevalidateAsync(dbContext, customerScopes, User, token), cancellationToken);
 
         // Let's Encrypt hız sınırı vardır: elle tetiklenen yenileme turları sunucuyu sınıra
         // çarptırıp GERÇEK yenilemeleri günlerce engelleyebilir. Kimin kaç kez tetiklediği ancak

@@ -5,7 +5,7 @@
         <h3>{{ t("panel.siteDb.title") }}</h3>
         <p class="meta">{{ t("panel.siteDb.subtitle") }}</p>
       </div>
-      <button class="secondary compact" :disabled="loading || !siteName" @click="load">{{ t("panel.siteDb.refresh") }}</button>
+      <button class="secondary compact" :disabled="loading || mutationBusy || !siteName" @click="load">{{ t("panel.siteDb.refresh") }}</button>
     </div>
 
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
@@ -13,14 +13,14 @@
 
     <template v-else>
       <div v-if="isAdmin" class="db-create">
-        <button class="secondary compact" type="button" v-bind="writeGate()" @click="showForm = !showForm">
+        <button class="secondary compact" type="button" v-bind="writeGate(!showForm && !canWrite)" @click="showForm = !showForm">
           {{ showForm ? t("panel.common.cancel") : t("panel.siteDb.create") }}
         </button>
         <form v-if="showForm" class="db-create-form" @submit.prevent="createDb">
           <input v-model.trim="form.name" :placeholder="t('panel.siteDb.dbName')" :disabled="creating" />
           <input v-model.trim="form.userName" :placeholder="t('panel.siteDb.userName')" :disabled="creating" />
           <PasswordField v-model="form.password" autocomplete="off" :placeholder="t('panel.siteDb.password')" :disabled="creating" />
-          <button type="submit" v-bind="writeGate(creating || !form.name.trim())">
+          <button type="submit" v-bind="writeGate(!canWrite || !form.name.trim())">
             {{ creating ? t("panel.siteDb.creating") : t("panel.siteDb.create") }}
           </button>
         </form>
@@ -29,13 +29,13 @@
       <div v-if="isAdmin && candidates.length" class="db-link">
         <span class="db-link-label">{{ t("panel.siteDb.linkTitle") }}</span>
         <div class="db-link-row">
-          <select v-model="selectedCandidate" :disabled="linking">
+          <select v-model="selectedCandidate" :disabled="!canWrite">
             <option value="">{{ t("panel.siteDb.linkSelect") }}</option>
             <option v-for="db in candidates" :key="db.engine + ':' + db.name" :value="db.engine + ':' + db.name">
               {{ db.name }} ({{ db.engine }})
             </option>
           </select>
-          <button class="secondary compact" type="button" v-bind="writeGate(linking || !selectedCandidate)" @click="linkDb">
+          <button class="secondary compact" type="button" v-bind="writeGate(!canWrite || !selectedCandidate)" @click="linkDb">
             {{ linking ? t("panel.siteDb.linking") : t("panel.siteDb.link") }}
           </button>
         </div>
@@ -53,21 +53,21 @@
             </div>
           </div>
           <span class="db-actions">
-            <button class="secondary compact" :disabled="opening" @click="openPma(db)">phpMyAdmin ↗</button>
+            <button v-if="isAdmin" class="secondary compact" :disabled="opening || !canWrite" @click="openDatabaseTool(db)">{{ isMysqlEngine(db) ? "phpMyAdmin" : "Adminer" }} ↗</button>
             <!-- BAĞLANTIYI KALDIR: veritabanını SİLMEZ. Bu düğme yoktu ve yanlış veritabanını
                  siteye bağlayan kullanıcının tek seçeneği onu SİLMEKTİ — üstelik site silinince
                  cascade o veritabanını zaten DROP ediyordu, yani geri dönüşü olmayan veri kaybı.
                  Uç ve çevirileri hazırdı, yalnız arayüzü eksikti. -->
             <button
               class="secondary compact"
-              v-bind="writeGate(unlinkingKey === db.engine + ':' + db.name)"
+              v-bind="writeGate(!canWrite)"
               @click="unlinkDb(db)">
               {{ unlinkingKey === db.engine + ':' + db.name ? t("panel.siteDb.unlinking") : t("panel.siteDb.unlink") }}
             </button>
             <button
               v-if="isAdmin"
               class="danger compact"
-              v-bind="writeGate(deletingKey === db.engine + ':' + db.name)"
+              v-bind="writeGate(!canWrite)"
               @click="deleteDb(db)">
               {{ deletingKey === db.engine + ':' + db.name ? t("panel.siteDb.deleting") : t("panel.siteDb.delete") }}
             </button>
@@ -84,15 +84,17 @@
 
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, watch } from "vue";
+import { CanceledError } from "axios";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import { getSiteDatabases, linkSiteDatabase, unlinkSiteDatabase, type SiteDatabaseRef } from "../api/sites";
-import { createDatabase, deleteDatabase, openPhpMyAdmin } from "../api/databases";
+import { createDatabase, deleteDatabase, openPhpMyAdmin, openAdminer } from "../api/databases";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
-import { toReachableUrl } from "../utils/url";
+import { openAsyncReachable } from "../utils/externalTab";
+import { getSessionEpoch } from "../api/client";
 
 type LinkedDb = SiteDatabaseRef;
 
@@ -102,7 +104,8 @@ const { t } = useI18n();
 const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
-const isAdmin = computed(() => useAuthStore().session?.user?.role === "Administrator");
+const authStore = useAuthStore();
+const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const siteName = computed(() => sitesStore.selectedSiteName);
 const databases = ref<LinkedDb[]>([]);
 const candidates = ref<SiteDatabaseRef[]>([]);
@@ -113,6 +116,9 @@ const loaded = ref(false);
 const opening = ref(false);
 const creating = ref(false);
 const deletingKey = ref("");
+const unlinkingKey = ref("");
+const mutationBusy = computed(() => creating.value || linking.value || Boolean(deletingKey.value || unlinkingKey.value));
+const canWrite = computed(() => Boolean(siteName.value) && loaded.value && !loading.value && !mutationBusy.value);
 const showForm = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
@@ -125,10 +131,29 @@ function dbNameFromSite(value: string): string {
 }
 
 let loadVersion = 0;
+let scopeVersion = 0;
+let formVersion = 0;
 let active = true;
-onUnmounted(() => { active = false; loadVersion++; });
-const stillOnSite = (name: string) => active && name === siteName.value;
-watch(siteName, (value) => {
+onUnmounted(() => { active = false; scopeVersion++; loadVersion++; });
+function databaseContext() {
+  const site = siteName.value, version = scopeVersion, epoch = getSessionEpoch();
+  return { site, current: () => active && version === scopeVersion && siteName.value === site && epoch === getSessionEpoch() };
+}
+function containsDatabase(db: LinkedDb) {
+  return databases.value.some(item => item.engine === db.engine && item.name === db.name);
+}
+watch(showForm, open => {
+  formVersion++;
+  creating.value = false;
+  if (!open) form.password = "";
+}, { flush: "sync" });
+watch([siteName, () => authStore.session?.user?.id, () => authStore.session?.user?.role], ([value]) => {
+  scopeVersion++;
+  creating.value = false;
+  linking.value = false;
+  opening.value = false;
+  deletingKey.value = "";
+  unlinkingKey.value = "";
   form.name = dbNameFromSite(value);
   form.userName = "";
   form.password = "";
@@ -137,22 +162,30 @@ watch(siteName, (value) => {
   selectedCandidate.value = "";
   showForm.value = false;
   loaded.value = false;
-  void load();
-}, { immediate: true });
+  showNotice("", false);
+  void readWorkspace(databaseContext());
+}, { immediate: true, flush: "sync" });
 
 async function load() {
+  if (!active || mutationBusy.value) return;
+  showNotice("", false);
+  await readWorkspace(databaseContext());
+}
+
+async function readWorkspace(context: ReturnType<typeof databaseContext>) {
+  if (!context.current()) return false;
   const version = ++loadVersion;
-  const requestedSite = siteName.value;
-  notice.value = "";
-  if (!requestedSite) {
+  loaded.value = false;
+  databases.value = [];
+  candidates.value = [];
+  if (!context.site) {
     loading.value = false;
-    return;
+    return false;
   }
   loading.value = true;
-  notice.value = "";
   try {
-    const data = await getSiteDatabases(requestedSite);
-    if (version !== loadVersion || requestedSite !== siteName.value) return;
+    const data = await getSiteDatabases(context.site);
+    if (version !== loadVersion || !context.current()) return false;
     databases.value = data.linked;
     candidates.value = data.candidates;
     // Seçili aday artık listede yoksa seçimi temizle.
@@ -160,122 +193,113 @@ async function load() {
       selectedCandidate.value = "";
     }
     loaded.value = true;
+    return true;
   } catch (error) {
-    if (version !== loadVersion || requestedSite !== siteName.value) return;
-    showNotice(resolveApiMessage(error), true);
+    if (version === loadVersion && context.current()) showNotice(resolveApiMessage(error), true);
+    return false;
   } finally {
-    if (version === loadVersion) loading.value = false;
+    if (version === loadVersion && context.current()) loading.value = false;
   }
 }
 
 // Seçilen mevcut veritabanını bu siteye bağla (Plesk gibi: isim eşleşmesi gerekmez).
 async function linkDb() {
-  if (linking.value) return;
-  const requestedSite = siteName.value;
+  if (!active || !canWrite.value || !isAdmin.value) return;
+  const context = databaseContext();
   const choice = candidates.value.find((db) => db.engine + ":" + db.name === selectedCandidate.value);
-  if (!choice || !siteName.value) {
-    return;
-  }
+  if (!choice) return;
+  const target = { ...choice };
   linking.value = true;
-  notice.value = "";
+  showNotice("", false);
   try {
-    await linkSiteDatabase(requestedSite, choice.engine, choice.name);
-    if (!stillOnSite(requestedSite)) return;
-    showNotice(t("panel.siteDb.linked"), false);
+    await linkSiteDatabase(context.site, target.engine, target.name);
+    if (!context.current()) return;
     selectedCandidate.value = "";
-    await load();
+    const refreshed = await readWorkspace(context);
+    if (context.current() && refreshed) showNotice(t("panel.siteDb.linked"), false);
   } catch (error) {
-    if (!stillOnSite(requestedSite)) return;
-    showNotice(resolveApiMessage(error), true);
+    if (context.current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    linking.value = false;
+    if (context.current()) linking.value = false;
   }
 }
 
-async function openPma(db: LinkedDb) {
-  // Sekmeyi TIK anında aç (kullanıcı hareketi içinde); URL'yi await sonrası ata (popup engeli olmasın).
-  const tab = window.open("", "_blank");
+function isMysqlEngine(db: LinkedDb) {
+  return db.engine.toLowerCase() === "mariadb" || db.engine.toLowerCase() === "mysql";
+}
+
+async function openDatabaseTool(db: LinkedDb) {
+  if (!active || !isAdmin.value || opening.value || !canWrite.value || !containsDatabase(db)) return;
+  const context = databaseContext(), target = { ...db };
   opening.value = true;
   try {
-    const result = await openPhpMyAdmin(db.engine, db.name);
-    // `result.url` HAM atanıyordu. İki ayrı sorun vardı ve ikisi de aynı çağrıyla kapanıyor:
-    // (1) arka uç bu adresi `127.0.0.1` ile döndürebilir — UZAKTAN yöneten yönetici KENDİ
-    //     makinesini açardı (DatabasesView aynı işi `openReachable` ile yapıyor, burası
-    //     o düzeltmeyi almamıştı);
-    // (2) `about:blank` sekmesi AÇANIN kökenini miras alır, oraya yazılan `javascript:`
-    //     panelin kökeninde çalışırdı. `toReachableUrl` artık http(s) dışını elemektedir.
-    const url = toReachableUrl(result.url);
-    if (!url) {
-      throw new Error("dbtools.unsafe_url");
-    }
-    if (tab) {
-      tab.location.href = url;
-    }
+    await openAsyncReachable(async () => {
+      const result = await (isMysqlEngine(target) ? openPhpMyAdmin : openAdminer)(target.engine, target.name);
+      if (!context.current()) throw new CanceledError("Database scope changed");
+      return result.url;
+    });
   } catch (error) {
-    if (tab) {
-      tab.close();
-    }
-    showNotice(resolveApiMessage(error), true);
+    if (context.current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    opening.value = false;
+    if (context.current()) opening.value = false;
   }
 }
 
-const unlinkingKey = ref("");
-
 async function unlinkDb(db: LinkedDb) {
-  if (unlinkingKey.value) return;
-  const requestedSite = siteName.value;
-  unlinkingKey.value = db.engine + ":" + db.name;
-  notice.value = "";
+  if (!active || !canWrite.value || !containsDatabase(db)) return;
+  const context = databaseContext(), target = { ...db };
+  unlinkingKey.value = target.engine + ":" + target.name;
+  showNotice("", false);
   try {
-    await unlinkSiteDatabase(requestedSite, db.engine, db.name);
-    if (!stillOnSite(requestedSite)) return;
-    showNotice(t("panel.siteDb.unlinked"), false);
-    await load();
+    await unlinkSiteDatabase(context.site, target.engine, target.name);
+    if (!context.current()) return;
+    const refreshed = await readWorkspace(context);
+    if (context.current() && refreshed) showNotice(t("panel.siteDb.unlinked"), false);
   } catch (error) {
-    if (!stillOnSite(requestedSite)) return;
-    showNotice(resolveApiMessage(error), true);
+    if (context.current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    unlinkingKey.value = "";
+    if (context.current()) unlinkingKey.value = "";
   }
 }
 
 async function deleteDb(db: LinkedDb) {
-  const requestedSite = siteName.value;
+  if (!active || !canWrite.value || !isAdmin.value || !containsDatabase(db)) return;
+  const context = databaseContext(), target = { ...db };
+  deletingKey.value = target.engine + ":" + target.name;
   // Yüksek riskli onay: veritabanı adı yazılmadan silinemez.
-  await confirm({
-    title: t("panel.confirm.deleteDatabaseTitle", { name: db.name }),
-    message: t("panel.siteDb.confirmDelete", { name: db.name }),
-    impact: [`${t("panel.siteDb.dbName")}: ${db.name} (${db.engine})`, t("panel.confirm.impactDbUser")],
-    requireText: db.name,
-    action: async () => {
-      if (!stillOnSite(requestedSite) || deletingKey.value) return;
-      deletingKey.value = db.engine + ":" + db.name;
-      notice.value = "";
-      try {
-        // DeleteDatabaseAsync DB'yi + (başka yerde kullanılmıyorsa) kullanıcısını da düşürür + site bağını temizler.
-        await deleteDatabase(db.engine, db.name);
-        if (!stillOnSite(requestedSite)) return;
-        showNotice(t("panel.siteDb.deleted"), false);
-        await load();
-      } catch (error) {
-        if (!stillOnSite(requestedSite)) return;
-        showNotice(resolveApiMessage(error), true);
-      } finally {
-        deletingKey.value = "";
-      }
-    },
-  });
+  try {
+    await confirm({
+      title: t("panel.confirm.deleteDatabaseTitle", { name: target.name }),
+      message: t("panel.siteDb.confirmDelete", { name: target.name }),
+      impact: [`${t("panel.siteDb.dbName")}: ${target.name} (${target.engine})`, t("panel.confirm.impactDbUser")],
+      requireText: target.name,
+      action: async () => {
+        if (!context.current()) return;
+        showNotice("", false);
+        try {
+          // DeleteDatabaseAsync DB'yi + (başka yerde kullanılmıyorsa) kullanıcısını da düşürür + site bağını temizler.
+          await deleteDatabase(target.engine, target.name);
+          if (!context.current()) return;
+          const refreshed = await readWorkspace(context);
+          if (context.current() && refreshed) showNotice(t("panel.siteDb.deleted"), false);
+        } catch (error) {
+          if (context.current()) showNotice(resolveApiMessage(error), true);
+        }
+      },
+    });
+  } finally {
+    if (context.current()) deletingKey.value = "";
+  }
 }
 
 async function createDb() {
-  if (creating.value || !siteName.value || !form.name.trim()) {
+  if (!active || !canWrite.value || !isAdmin.value || !showForm.value || !form.name.trim()) {
     return;
   }
   creating.value = true;
-  const requestedSite = siteName.value;
-  notice.value = "";
+  const context = databaseContext(), version = formVersion;
+  const current = () => context.current() && version === formVersion;
+  showNotice("", false);
   try {
     await createDatabase({
       engine: "mariadb",
@@ -283,19 +307,19 @@ async function createDb() {
       userName: form.userName.trim() || undefined,
       password: form.password || undefined,
       // Bu site iş alanından oluşturulan DB doğrudan siteye BAĞLANIR → site silinince cascade gider.
-      siteName: requestedSite
+      siteName: context.site
     });
-    if (!stillOnSite(requestedSite)) return;
-    showNotice(t("panel.siteDb.created"), false);
+    if (!current()) return;
     form.userName = "";
     form.password = "";
     showForm.value = false;
-    await load();
+    const completedVersion = formVersion;
+    const refreshed = await readWorkspace(context);
+    if (context.current() && formVersion === completedVersion && refreshed) showNotice(t("panel.siteDb.created"), false);
   } catch (error) {
-    if (!stillOnSite(requestedSite)) return;
-    showNotice(resolveApiMessage(error), true);
+    if (current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    creating.value = false;
+    if (current()) creating.value = false;
   }
 }
 

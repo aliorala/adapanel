@@ -2547,6 +2547,10 @@ public sealed class MailService(
     /// </summary>
     public async Task<MailCertificateDto> IssueCertificateAsync(IssueMailCertificateRequest request, CancellationToken cancellationToken = default)
     {
+        using var operation = await MailCertificateLifecycle.EnterAsync(
+            fileStore.ResolvePath(CertificateStatePath), cancellationToken);
+        // Cancellation can arrive after acquisition while this caller's continuation is queued.
+        cancellationToken.ThrowIfCancellationRequested();
         var domain = request.Domain.Trim().ToLowerInvariant();
         var hostName = string.IsNullOrWhiteSpace(request.HostName)
             ? $"mail.{domain}"
@@ -2606,9 +2610,25 @@ public sealed class MailService(
         };
     }
 
-    public async Task<MailCertificateDto?> SyncCertificateAsync(CancellationToken cancellationToken = default)
+    public Task<MailCertificateDto?> SyncCertificateAsync(CancellationToken cancellationToken = default) =>
+        SyncCertificateCoreAsync(null, cancellationToken);
+
+    public Task<MailCertificateDto?> SyncCertificateAsync(Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken = default) =>
+        SyncCertificateCoreAsync(beforeMutation, cancellationToken);
+
+    private async Task<MailCertificateDto?> SyncCertificateCoreAsync(Func<CancellationToken, Task>? beforeMutation,
+        CancellationToken cancellationToken)
     {
+        using var operation = await MailCertificateLifecycle.EnterAsync(
+            fileStore.ResolvePath(CertificateStatePath), cancellationToken);
         var state = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (beforeMutation is not null)
+        {
+            await beforeMutation(cancellationToken);
+        }
+
         if (state is null
             || !string.Equals(state.Source, "letsencrypt", StringComparison.OrdinalIgnoreCase)
             || !Directory.Exists(state.PemDirectory))
@@ -2624,7 +2644,7 @@ public sealed class MailService(
         }
 
         // win-acme zamanlanmış görevi sertifikayı yenilemiş; Stalwart'a yeniden bas.
-        await PushCertificateToStalwartAsync(state.HostName, certificatePem, privateKeyPem, cancellationToken);
+        await PushCertificateToStalwartAsync(state.HostName, certificatePem, privateKeyPem, cancellationToken, beforeMutation);
         state.ContentHash = hash;
         state.NotAfterUtc = TryGetNotAfterUtc(certificatePem);
         await fileStore.WriteAsync(CertificateStatePath, state, cancellationToken);
@@ -3043,7 +3063,20 @@ public sealed class MailService(
         return blocks;
     }
 
-    private async Task PushCertificateToStalwartAsync(string hostName, string certificatePem, string privateKeyPem, CancellationToken cancellationToken)
+    // Certificate-only command seam. Public DI and all other CLI operations keep their existing runner.
+    internal Func<string, string, string?, IReadOnlyDictionary<string, string>, CancellationToken, Task<CommandResult>>?
+        CertificateCommandRunner { get; init; }
+
+    private Task<CommandResult> RunCertificateCommandAsync(string cli, string command, string? json,
+        IReadOnlyDictionary<string, string> env, CancellationToken cancellationToken) =>
+        CertificateCommandRunner is { } runner
+            ? runner(cli, command, json, env, cancellationToken)
+            : json is null
+                ? RunCliAsync(cli, command, env, cancellationToken)
+                : RunCliJsonAsync(cli, command, json, env, cancellationToken);
+
+    private async Task PushCertificateToStalwartAsync(string hostName, string certificatePem, string privateKeyPem,
+        CancellationToken cancellationToken, Func<CancellationToken, Task>? beforeMutation = null)
     {
         var (cli, env) = await RequireCliAsync(cancellationToken);
 
@@ -3056,7 +3089,8 @@ public sealed class MailService(
         // SORULAMADIYSA "yok" SAYILMAZ: "yok" saymak, var olanin UZERINE YAZMAK yerine ayni ad
         // icin IKINCI bir sertifika nesnesi olusturmak demektir. Stalwart hangisini sunacagini
         // sectiginde eski/suresi dolmus olani secebilir ve panel "sertifika yuklendi" der.
-        var sertifikaSorgusu = await QueryAsync(cli, "Certificate", env, cancellationToken);
+        var sertifikaSorgusu = MailQueryResult.Olc(await RunCertificateCommandAsync(
+            cli, "query Certificate --json", null, env, cancellationToken));
         if (!sertifikaSorgusu.Measured)
         {
             throw new AppException("mail.certificate_push_failed", 500, 500, $"certificate list unreadable: {hostName}");
@@ -3074,11 +3108,18 @@ public sealed class MailService(
             }
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+        if (beforeMutation is not null)
+        {
+            await beforeMutation(cancellationToken);
+        }
+
+        // The approved certificate write and reload form one operation; do not recheck authority between them.
         // Sertifika PEM'i çok satırlı; inline --json argümanı Windows'ta bozulur. JSON --file
         // ile geçirilir (account create ile aynı sağlam yol).
         var result = existingId is null
-            ? await RunCliJsonAsync(cli, "create Certificate", payload, env, cancellationToken)
-            : await RunCliJsonAsync(cli, $"update Certificate {Arg(existingId)}", payload, env, cancellationToken);
+            ? await RunCertificateCommandAsync(cli, "create Certificate", payload, env, cancellationToken)
+            : await RunCertificateCommandAsync(cli, $"update Certificate {Arg(existingId)}", payload, env, cancellationToken);
         if (!result.Success)
         {
             throw new AppException("mail.certificate_push_failed", 500, 500, CombineError(result));
@@ -4520,12 +4561,12 @@ public sealed class MailService(
     /// <summary>
     /// TLS sertifikalarını yeniden başlatma olmadan canlı yükler; sonucu döndürür.
     /// </summary>
-    private static async Task<MailReloadOutcome> ReloadMailCertificatesAsync(
+    private async Task<MailReloadOutcome> ReloadMailCertificatesAsync(
         string cli,
         IReadOnlyDictionary<string, string> env,
         CancellationToken cancellationToken)
     {
-        var result = await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadTlsCertificates\"}", env, cancellationToken);
+        var result = await RunCertificateCommandAsync(cli, "create Action", "{\"@type\":\"ReloadTlsCertificates\"}", env, cancellationToken);
         return OkumaSonucu(result);
     }
 

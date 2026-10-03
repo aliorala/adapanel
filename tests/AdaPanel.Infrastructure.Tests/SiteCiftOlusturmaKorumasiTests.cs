@@ -49,7 +49,7 @@ public sealed class SiteCiftOlusturmaKorumasiTests
         var denetleyici = Kur(new[] { Ad }, saglama);
 
         var hata = await Assert.ThrowsAsync<AppException>(() =>
-            denetleyici.CreateSiteAsync(Istek(Ad, degistir: false), null!, null!, null!, null!, null!, CancellationToken.None));
+            denetleyici.CreateSiteAsync(Istek(Ad, degistir: false), null!, null!, null!, null!, null!, null!, CancellationToken.None));
 
         Assert.Equal("sites.name_exists", hata.MessageKey);
         Assert.Equal(409, hata.HttpStatusCode);
@@ -74,7 +74,7 @@ public sealed class SiteCiftOlusturmaKorumasiTests
         var denetleyici = Kur(new[] { Ad }, saglama);
 
         var hata = await Assert.ThrowsAsync<AppException>(() =>
-            denetleyici.CreateSiteAsync(Istek(yazilan, degistir: false), null!, null!, null!, null!, null!, CancellationToken.None));
+            denetleyici.CreateSiteAsync(Istek(yazilan, degistir: false), null!, null!, null!, null!, null!, null!, CancellationToken.None));
 
         Assert.Equal("sites.name_exists", hata.MessageKey);
         Assert.Equal(0, saglama.CagriSayisi);
@@ -96,7 +96,7 @@ public sealed class SiteCiftOlusturmaKorumasiTests
         // Sağlama, kendi çağrıldığını kanıtlayan bir nişan fırlatır: boru hattının kalanını
         // (denetim kaydı, DNS, bileşen kataloğu) kurmadan "buraya GİRİLDİ" ölçülebilsin.
         await Assert.ThrowsAsync<SaglamaCagrildi>(() =>
-            denetleyici.CreateSiteAsync(Istek(Ad, degistir: true), null!, null!, null!, null!, null!, CancellationToken.None));
+            denetleyici.CreateSiteAsync(Istek(Ad, degistir: true), null!, null!, null!, null!, null!, null!, CancellationToken.None));
 
         Assert.Equal(1, saglama.CagriSayisi);
     }
@@ -111,7 +111,7 @@ public sealed class SiteCiftOlusturmaKorumasiTests
         var denetleyici = Kur(new[] { "baska-site.example" }, saglama);
 
         await Assert.ThrowsAsync<SaglamaCagrildi>(() =>
-            denetleyici.CreateSiteAsync(Istek(Ad, degistir: false), null!, null!, null!, null!, null!, CancellationToken.None));
+            denetleyici.CreateSiteAsync(Istek(Ad, degistir: false), null!, null!, null!, null!, null!, null!, CancellationToken.None));
 
         Assert.Equal(1, saglama.CagriSayisi);
     }
@@ -169,6 +169,10 @@ public sealed class SiteCiftOlusturmaKorumasiTests
 
     private sealed class SahteSaglama : ISiteProvisioningService
     {
+        public Task<AdaPanel.Core.Dtos.Sites.SiteDto> SetDocumentRootAsync(string siteName, string physicalPath, Func<AdaPanel.Core.Dtos.Sites.SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<AdaPanel.Core.Dtos.Sites.SiteDto> EnableFrameworkRewriteAsync(string siteName, Func<AdaPanel.Core.Dtos.Sites.SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<AdaPanel.Core.Dtos.Sites.SitePermissionRepairResultDto> RepairPermissionsAsync(string siteName, Func<AdaPanel.Core.Dtos.Sites.SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
         public int CagriSayisi { get; private set; }
 
         public Task<SiteDto> CreateAndProvisionAsync(

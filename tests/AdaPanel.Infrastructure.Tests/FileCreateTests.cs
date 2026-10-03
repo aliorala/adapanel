@@ -58,6 +58,83 @@ public class FileCreateTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public async Task Kesilen_yukleme_eski_dosyayi_korur_ve_yarim_dosya_birakmaz(bool existed, bool cancelled)
+    {
+        var path = Path.Combine(siteKoku, "güncel rapor.txt");
+        if (existed) await File.WriteAllTextAsync(path, "ORIGINAL");
+        using var stream = new InterruptedUpload(cancelled);
+        var failure = await Record.ExceptionAsync(() => servis.SaveUploadAsync("sites/a.test/güncel rapor.txt", stream));
+        Assert.NotNull(failure);
+        if (cancelled) Assert.IsAssignableFrom<OperationCanceledException>(failure);
+        else Assert.IsType<IOException>(failure);
+        if (existed) Assert.Equal("ORIGINAL", await File.ReadAllTextAsync(path));
+        else Assert.False(File.Exists(path));
+        Assert.Equal(existed ? 1 : 0, Directory.GetFiles(siteKoku).Length);
+    }
+
+    [Fact]
+    public async Task Yukleme_tamamlanana_kadar_eski_dosya_okunabilir_kalir()
+    {
+        var path = Path.Combine(siteKoku, "sayfa.html");
+        await File.WriteAllTextAsync(path, "ORIGINAL");
+        using var stream = new ObservedUpload(() => Assert.Equal("ORIGINAL", File.ReadAllText(path)));
+        await servis.SaveUploadAsync("sites/a.test/sayfa.html", stream);
+        Assert.Equal("COMPLETE", await File.ReadAllTextAsync(path));
+        Assert.Single(Directory.GetFiles(siteKoku));
+    }
+
+    [Fact]
+    public async Task Kilitli_hedefe_yukleme_eski_icerigi_korur_ve_gecici_dosyayi_temizler()
+    {
+        var path = Path.Combine(siteKoku, "sayfa.html");
+        await File.WriteAllTextAsync(path, "ORIGINAL");
+        using (var locked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (var stream = new MemoryStream("COMPLETE"u8.ToArray()))
+            await Assert.ThrowsAnyAsync<IOException>(() => servis.SaveUploadAsync("sites/a.test/sayfa.html", stream));
+        Assert.Equal("ORIGINAL", await File.ReadAllTextAsync(path));
+        Assert.Single(Directory.GetFiles(siteKoku));
+    }
+
+    [Theory]
+    [InlineData(true, "<?php echo 'Türkçe';")]
+    [InlineData(false, "<?php echo 'Türkçe';")]
+    [InlineData(true, "")]
+    [InlineData(false, "")]
+    public async Task Metin_kaydi_gorunmez_BOM_eklemez(bool create, string content)
+    {
+        var path = Path.Combine(siteKoku, "index.php");
+        if (!create) await File.WriteAllTextAsync(path, "<?php echo 'eski';");
+        await servis.WriteAsync(new WriteFileRequest
+        {
+            Path = "sites/a.test/index.php", Content = content, FailIfExists = create
+        });
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes(content), await File.ReadAllBytesAsync(path));
+    }
+
+    private sealed class InterruptedUpload(bool cancelled) : MemoryStream
+    {
+        public override async Task CopyToAsync(Stream destination, int bufferSize, CancellationToken cancellationToken)
+        {
+            await destination.WriteAsync("PARTIAL"u8.ToArray(), cancellationToken);
+            if (cancelled) throw new OperationCanceledException();
+            throw new IOException("Simulated upload interruption");
+        }
+    }
+
+    private sealed class ObservedUpload(Action observe) : MemoryStream
+    {
+        public override async Task CopyToAsync(Stream destination, int bufferSize, CancellationToken cancellationToken)
+        {
+            await destination.WriteAsync("COMPLETE"u8.ToArray(), cancellationToken);
+            observe();
+        }
+    }
+
     /// <summary>Asıl işlev: olmayan dosya yaratılır — <c>.htaccess</c> gibi nokta dosyası dahil.</summary>
     [Fact]
     public async Task Olmayan_dosya_YARATILIR()

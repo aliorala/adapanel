@@ -6,6 +6,7 @@ using AdaPanel.Core.Enums;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Security;
+using AdaPanel.Infrastructure.Database;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -257,6 +258,8 @@ public sealed class UserManagementService(
 
     public async Task<UserSummaryDto> UpdateUserAsync(Guid userId, UpdateUserRequest request, Guid actorUserId, string? ipAddress, CancellationToken cancellationToken = default)
     {
+        using var subscriptionLease = await EnterUserSubscriptionAsync(userId, cancellationToken);
+        await ReloadTrackedUserAsync(actorUserId, cancellationToken);
         // Kapsam denetimi TEK kaynaktan (ManagedUserGuard): bayi yalnız KENDI müşterisini güncelleyebilir.
         var erisim = await ManagedUserGuard.EnsureManagedAsync(
             dbContext, customerScopeService, actorUserId, userId, cancellationToken);
@@ -534,6 +537,11 @@ public sealed class UserManagementService(
             throw new InvalidOperationException("users.cannot_delete_self");
         }
 
+        // Database create/quota commits for this subscription finish before ownership cleanup.
+        // Resource leases below are always acquired after this subscription lease.
+        using var subscriptionLease = await EnterUserSubscriptionAsync(userId, cancellationToken);
+        await ReloadTrackedUserAsync(actorUserId, cancellationToken);
+
         // Bayi yalnız KENDİ müşterisini silebilir (tek kaynak: ManagedUserGuard); yıkıcı mod
         // (site silme) admin'e özeldir.
         var erisim = await ManagedUserGuard.EnsureManagedAsync(
@@ -687,6 +695,9 @@ public sealed class UserManagementService(
         {
             foreach (var owned in await databaseOwnership.GetOwnedAsync(userId, cancellationToken))
             {
+                using var resourceLease = await DatabaseLifecycle.EnterResourceAsync(owned.Engine, owned.DatabaseName, cancellationToken);
+                if (await databaseOwnership.GetOwnerAsync(owned.Engine, owned.DatabaseName, cancellationToken) != userId)
+                    continue;
                 rapor.Leftovers.Add(new UserDeletionLeftoverDto
                 {
                     Kind = SiteLeftoverKinds.Database,
@@ -820,6 +831,37 @@ public sealed class UserManagementService(
     // --- Abonelik altı ek kullanıcılar (Plesk "additional user"): top-level müşteri kendi altındaki
     // login'leri yönetir. Alt-kullanıcının kendi kaynağı yoktur; site/kota/cron/DB parent'tan miras. ---
 
+    // Account changes share the actual subscription gate with authorized database creates.
+    // In particular, changing/deleting an additional login must not lock only its own GUID.
+    private async Task<IDisposable> EnterUserSubscriptionAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        async Task<Guid> ReadSubscriptionAsync()
+        {
+            var user = await dbContext.Users.AsNoTracking().SingleOrDefaultAsync(item => item.Id == userId, cancellationToken)
+                ?? throw new InvalidOperationException("users.not_found");
+            return user.Role == UserRole.Customer
+                ? await customerScopeService.GetParentSubscriptionAsync(userId, cancellationToken) ?? userId
+                : userId;
+        }
+
+        var subscription = await ReadSubscriptionAsync();
+        var lease = await DatabaseLifecycle.EnterSubscriptionAsync(subscription, cancellationToken);
+        try
+        {
+            if (await ReadSubscriptionAsync() != subscription)
+                throw new AppException("users.forbidden", 403, 403);
+            await ReloadTrackedUserAsync(userId, cancellationToken);
+            return lease;
+        }
+        catch { lease.Dispose(); throw; }
+    }
+
+    private async Task ReloadTrackedUserAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        var entry = dbContext.ChangeTracker.Entries<PanelUser>().FirstOrDefault(item => item.Entity.Id == userId);
+        if (entry is not null) await entry.ReloadAsync(cancellationToken);
+    }
+
     /// <summary>Aktörün top-level (alt-kullanıcı olmayan) bir Customer olduğunu doğrular ve kaydını döner.</summary>
     private async Task<PanelUser> EnsureTopLevelCustomerAsync(Guid parentUserId, CancellationToken cancellationToken)
     {
@@ -922,6 +964,9 @@ public sealed class UserManagementService(
 
     public async Task<SubUserDto> UpdateSubUserAsync(Guid parentUserId, Guid subUserId, UpdateSubUserRequest request, string? ipAddress, CancellationToken cancellationToken = default)
     {
+        using var subscriptionLease = await DatabaseLifecycle.EnterSubscriptionAsync(parentUserId, cancellationToken);
+        await ReloadTrackedUserAsync(parentUserId, cancellationToken);
+        await ReloadTrackedUserAsync(subUserId, cancellationToken);
         var parent = await EnsureTopLevelCustomerAsync(parentUserId, cancellationToken);
         var user = await GetOwnedSubUserAsync(parentUserId, subUserId, cancellationToken);
 
@@ -965,6 +1010,9 @@ public sealed class UserManagementService(
 
     public async Task DeleteSubUserAsync(Guid parentUserId, Guid subUserId, string? ipAddress, CancellationToken cancellationToken = default)
     {
+        using var subscriptionLease = await DatabaseLifecycle.EnterSubscriptionAsync(parentUserId, cancellationToken);
+        await ReloadTrackedUserAsync(parentUserId, cancellationToken);
+        await ReloadTrackedUserAsync(subUserId, cancellationToken);
         var parent = await EnsureTopLevelCustomerAsync(parentUserId, cancellationToken);
         var user = await GetOwnedSubUserAsync(parentUserId, subUserId, cancellationToken);
 

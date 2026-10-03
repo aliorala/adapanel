@@ -12,10 +12,36 @@ public interface IDatabaseService
 
     Task<DatabaseWorkspaceDto> CreateDatabaseAsync(CreateDatabaseRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>Runs ownership/quota callbacks within the provider's database mutation lease.</summary>
+    async Task<DatabaseWorkspaceDto> CreateDatabaseAsync(
+        CreateDatabaseRequest request,
+        Func<CancellationToken, Task> beforeCreate,
+        Func<CancellationToken, Task> afterCreate,
+        CancellationToken cancellationToken = default)
+    {
+        await beforeCreate(cancellationToken);
+        var result = await CreateDatabaseAsync(request, cancellationToken);
+        await afterCreate(cancellationToken);
+        return result;
+    }
+
     /// <summary>Var olan DB+kullanıcıyı panel yönetimine tanıtır: GRANT ALL (eksikse) + kullanıcı parolasını saklar.</summary>
     Task<DatabaseWorkspaceDto> ImportDatabaseAsync(ImportDatabaseRequest request, CancellationToken cancellationToken = default);
 
     Task DeleteDatabaseAsync(string engine, string name, CancellationToken cancellationToken = default);
+
+    /// <summary>Runs the final authority check and ownership cleanup within the mutation lease.</summary>
+    async Task DeleteDatabaseAsync(
+        string engine,
+        string name,
+        Func<CancellationToken, Task> beforeDelete,
+        Func<CancellationToken, Task> afterDelete,
+        CancellationToken cancellationToken = default)
+    {
+        await beforeDelete(cancellationToken);
+        await DeleteDatabaseAsync(engine, name, cancellationToken);
+        await afterDelete(cancellationToken);
+    }
 
     Task<DatabaseWorkspaceDto> CreateUserAsync(CreateDatabaseUserRequest request, CancellationToken cancellationToken = default);
 

@@ -3,6 +3,7 @@ using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Files;
+using AdaPanel.Infrastructure.Database;
 using AdaPanel.Infrastructure.Options;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
@@ -37,7 +38,8 @@ public sealed class SiteCascadeDeletionService(
     // Panel veri kökü (yedekler + veritabanı + anahtarlar) taşınmış olabilir; yasak listesi ÖLÇÜLEN yoldan kurulur.
     IOptions<PanelRuntimeOptions> runtimeOptions,
     JsonFileStore fileStore,
-    ILogger<SiteCascadeDeletionService> logger) : ISiteCascadeDeletionService
+    ILogger<SiteCascadeDeletionService> logger,
+    IConcurrencyLock concurrencyLock) : ISiteCascadeDeletionService
 {
     private static readonly string[] DatabaseEngines = ["mysql", "mariadb", "postgresql", "mssql"];
 
@@ -70,6 +72,9 @@ public sealed class SiteCascadeDeletionService(
         bool deleteDatabases,
         CancellationToken cancellationToken = default)
     {
+        // Reserve this generation before reading or cleaning any resource. The marker prevents
+        // new metadata links/recreation, without holding the IIS gate across database work.
+        using var deletion = await SiteMutationGuard.BeginDeletionAsync(concurrencyLock, siteName, cancellationToken);
         var result = new SiteDeletionResultDto { SiteName = siteName };
 
         SiteDto? site = null;
@@ -103,7 +108,7 @@ public sealed class SiteCascadeDeletionService(
         // SAHİPLİK KAYITLARI SİLMEDEN ÖNCE OKUNUR (Y1): hangi veritabanının GERÇEKTEN silindiğini
         // ancak silme denemesinden sonra biliriz, ama kaydın sahibini o noktada okumak için geç kalırız.
         var sahiplikKayitlari = await ReadOwnershipAsync(siteName, cancellationToken);
-        var silinenVeritabanlari = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var silinenVeritabanlari = new HashSet<string>(StringComparer.Ordinal);
 
         // 2) SAHİPLİK KAYDI OLAN veritabanları (istenirse). Ad tahminiyle bulunanlar SİLİNMEZ;
         //    yalnızca uyarı olarak bildirilir — bkz. ResolveOwnedDatabasesAsync.
@@ -118,13 +123,12 @@ public sealed class SiteCascadeDeletionService(
                 if (await StepAsync(
                         result,
                         $"Veritabanı ({db})",
-                        () => databaseService.DeleteDatabaseAsync(engine, name, cancellationToken),
+                        () => DeleteSiteDatabaseAsync(siteName, engine, name, cancellationToken),
                         SiteLeftoverKinds.Database,
                         db))
                 {
                     // Y1: sahiplik kaydı YALNIZCA veritabanı gerçekten düştüğünde silinir.
                     silinenVeritabanlari.Add(db);
-                    await TryRemoveOwnershipAsync(result, engine, name, cancellationToken);
                 }
             }
 
@@ -201,7 +205,7 @@ public sealed class SiteCascadeDeletionService(
         await StepAsync(result, "Müşteri atamaları", () => customerScopeService.RemoveSiteFromAllScopesAsync(siteName, cancellationToken));
 
         // 8b) Site↔DB bağ kayıtları (site gidince öksüz bağ kalmasın; bağlı DB'ler yukarıda 2. adımda zaten silindi).
-        await StepAsync(result, "Veritabanı bağları", () => siteDatabaseLinks.RemoveSiteAsync(siteName, cancellationToken));
+        await StepAsync(result, "Veritabanı bağları", () => RemoveSiteDatabaseLinksAsync(siteName, cancellationToken));
 
         // 8) Git dağıtım yapılandırması.
         TryDeleteFile(result, "Git dağıtım yapılandırması", fileStore.ResolvePath(GitConfigRelativePath(siteName)));
@@ -417,13 +421,14 @@ public sealed class SiteCascadeDeletionService(
         IEnumerable<(string Engine, string DatabaseName, Guid OwnerUserId, string SiteName)> ownership)
     {
         var matches = new List<string>();
+        var identities = new HashSet<string>(StringComparer.Ordinal);
 
         void Ekle(string? engine, string? databaseName)
         {
-            var entry = $"{(engine ?? string.Empty).Trim()}:{(databaseName ?? string.Empty).Trim()}";
-            if (entry.Length > 1 && !matches.Contains(entry, StringComparer.OrdinalIgnoreCase))
+            if (!string.IsNullOrWhiteSpace(engine) && !string.IsNullOrWhiteSpace(databaseName) &&
+                identities.Add(DatabaseResourceIdentity.Key(engine, databaseName)))
             {
-                matches.Add(entry);
+                matches.Add($"{DatabaseResourceIdentity.NormalizeEngine(engine)}:{databaseName.Trim()}");
             }
         }
 
@@ -454,18 +459,25 @@ public sealed class SiteCascadeDeletionService(
         IEnumerable<(string Engine, string DatabaseName)> allDatabases,
         IReadOnlyCollection<string> owned)
     {
-        var wanted = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        string[] wanted =
         {
             siteName.Trim(),
             AdaPanel.Core.Common.ResourceNaming.DatabaseNameFromSite(siteName)
         };
 
+        var ownedKeys = owned.Select(DatabaseReferenceKey).ToHashSet(StringComparer.Ordinal);
         return allDatabases
-            .Where(item => wanted.Contains(item.DatabaseName.Trim()))
-            .Select(item => $"{item.Engine}:{item.DatabaseName}")
-            .Where(entry => !owned.Contains(entry, StringComparer.OrdinalIgnoreCase))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(item => wanted.Any(name => DatabaseResourceIdentity.Same(item.Engine, item.DatabaseName, item.Engine, name)))
+            .Where(item => !ownedKeys.Contains(DatabaseResourceIdentity.Key(item.Engine, item.DatabaseName)))
+            .DistinctBy(item => DatabaseResourceIdentity.Key(item.Engine, item.DatabaseName), StringComparer.Ordinal)
+            .Select(item => $"{DatabaseResourceIdentity.NormalizeEngine(item.Engine)}:{item.DatabaseName.Trim()}")
             .ToList();
+    }
+
+    private static string DatabaseReferenceKey(string reference)
+    {
+        var separator = reference.IndexOf(':');
+        return separator < 0 ? reference : DatabaseResourceIdentity.Key(reference[..separator], reference[(separator + 1)..]);
     }
 
     /// <summary>
@@ -1153,20 +1165,32 @@ public sealed class SiteCascadeDeletionService(
         }
     }
 
-    private async Task TryRemoveOwnershipAsync(
-        SiteDeletionResultDto result,
-        string engine,
-        string databaseName,
-        CancellationToken cancellationToken)
+    internal async Task DeleteSiteDatabaseAsync(
+        string siteName, string engine, string databaseName, CancellationToken cancellationToken)
     {
-        try
+        var expectedOwner = await databaseOwnership.GetOwnerAsync(engine, databaseName, cancellationToken);
+        await databaseService.DeleteDatabaseAsync(engine, databaseName, async token =>
         {
-            await databaseOwnership.RemoveAsync(engine, databaseName, cancellationToken);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+            // A queued deletion cannot rely on the earlier cascade plan: move/recreate may
+            // have changed either the owner or the site's authority while it was waiting.
+            if (await databaseOwnership.GetOwnerAsync(engine, databaseName, token) != expectedOwner)
+                throw new AppException("database.not_owned", 403, 403);
+            var links = await siteDatabaseLinks.GetForSiteAsync(siteName, token);
+            var ownership = await databaseOwnership.GetAllAsync(token);
+            var stillAttached = SelectDeletableDatabases(siteName, links, ownership)
+                .Any(reference => DatabaseReferenceKey(reference) == DatabaseResourceIdentity.Key(engine, databaseName));
+            if (!stillAttached) throw new AppException("sites.database_forbidden", 403, 403);
+        }, token => databaseOwnership.RemoveAsync(engine, databaseName, token), cancellationToken);
+    }
+
+    internal async Task RemoveSiteDatabaseLinksAsync(string siteName, CancellationToken cancellationToken)
+    {
+        foreach (var link in await siteDatabaseLinks.GetForSiteAsync(siteName, cancellationToken))
         {
-            logger.LogWarning(exception, "Veritabani sahiplik kaydi silinemedi: {Engine}:{Name}", engine, databaseName);
-            result.Warnings.Add($"Veritabanı sahiplik kaydı ({engine}:{databaseName}): silinemedi — {exception.Message}");
+            using var lease = await DatabaseLifecycle.EnterResourceAsync(link.Engine, link.DatabaseName, cancellationToken);
+            if ((await siteDatabaseLinks.GetForSiteAsync(siteName, cancellationToken))
+                .Any(current => DatabaseResourceIdentity.Same(current.Engine, current.DatabaseName, link.Engine, link.DatabaseName)))
+                await siteDatabaseLinks.UnlinkAsync(link.Engine, link.DatabaseName, cancellationToken);
         }
     }
 
@@ -1181,15 +1205,22 @@ public sealed class SiteCascadeDeletionService(
         bool deleteDatabases,
         CancellationToken cancellationToken)
     {
+        var deletedKeys = deletedDatabases.Select(DatabaseReferenceKey).ToHashSet(StringComparer.Ordinal);
         foreach (var (engine, databaseName, ownerUserId) in ownership)
         {
-            if (deletedDatabases.Contains($"{engine}:{databaseName}", StringComparer.OrdinalIgnoreCase))
+            if (deletedKeys.Contains(DatabaseResourceIdentity.Key(engine, databaseName)))
             {
                 continue;
             }
 
             try
             {
+                using var lease = await DatabaseLifecycle.EnterResourceAsync(engine, databaseName, cancellationToken);
+                var current = (await databaseOwnership.GetAllAsync(cancellationToken))
+                    .FirstOrDefault(row => DatabaseResourceIdentity.Same(row.Engine, row.DatabaseName, engine, databaseName));
+                if (current.OwnerUserId != ownerUserId ||
+                    !string.Equals(current.SiteName?.Trim(), siteName.Trim(), StringComparison.OrdinalIgnoreCase))
+                    continue;
                 // RecordAsync idempotenttir ve kaydı SAHİBİYLE birlikte yeniden yazar; site adı boşalır.
                 await databaseOwnership.RecordAsync(engine, databaseName, ownerUserId, siteName: null, cancellationToken);
                 result.Warnings.Add(

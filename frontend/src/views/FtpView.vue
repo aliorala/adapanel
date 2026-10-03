@@ -31,7 +31,7 @@
           <strong>{{ ftpAddress }}</strong>
         </span>
         <span class="status-pill">{{ filteredUsers.length }} / {{ users.length }}</span>
-        <span :class="['status-pill', serverStatus?.isConfigured ? 'ok' : 'warn']">
+        <span v-if="isAdmin" :class="['status-pill', serverStatus?.isConfigured ? 'ok' : 'warn']">
           {{ serverStateLabel }}
         </span>
       </div>
@@ -116,15 +116,15 @@
       <div class="form-grid ftp-form-grid">
         <label>
           <span>{{ t("panel.database.userName") }}</span>
-          <input v-model="form.userName" />
+          <input v-model="form.userName" :disabled="creating" />
         </label>
         <label>
           <span>{{ t("panel.form.password") }}</span>
-          <PasswordField v-model="form.password" />
+          <PasswordField v-model="form.password" :disabled="creating" />
         </label>
         <label v-if="!siteName">
           <span>{{ t("panel.php.targetSite") }}</span>
-          <select v-model="form.siteName">
+          <select v-model="form.siteName" :disabled="creating">
             <option value="">{{ t("panel.php.selectSite") }}</option>
             <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">
               {{ site.name }}
@@ -133,7 +133,7 @@
         </label>
         <label>
           <span>{{ t("panel.ftp.homePath") }}</span>
-          <input v-model="form.homePath" />
+          <input v-model="form.homePath" :disabled="creating" />
         </label>
       </div>
 
@@ -189,10 +189,10 @@
             {{ user.isEnabled && user.existsOnSystem ? t("panel.status.active") : t("panel.status.inactive") }}
           </span>
           <span class="row-actions">
-            <button class="secondary compact" v-bind="writeGate(changingPassword === user.userName)" @click="changeFtpPassword(user.userName)">
+            <button class="secondary compact" v-bind="writeGate(accountBusy)" @click="changeFtpPassword(user.userName)">
               {{ changingPassword === user.userName ? t("panel.database.saving") : t("panel.database.changePassword") }}
             </button>
-            <button class="danger compact" v-bind="writeGate(deletingUser === user.userName)" @click="removeUser(user.userName)">
+            <button class="danger compact" v-bind="writeGate(accountBusy)" @click="removeUser(user.userName)">
               {{ deletingUser === user.userName ? t("panel.database.removing") : t("panel.sites.delete") }}
             </button>
           </span>
@@ -202,7 +202,7 @@
       <!-- Liste sunucudan gelmeden "kullanıcı yok" yazıyordu; var olan FTP hesapları
            silinmiş/yok sanılabiliyordu. -->
       <p v-else-if="!usersLoaded" class="empty-state" role="status" aria-live="polite">
-        {{ t("panel.common.loading") }}
+        {{ t(usersLoading ? "panel.common.loading" : "panel.common.loadFailed") }}
       </p>
 
       <p v-else class="empty-state">
@@ -215,7 +215,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import { createFtpUser, deleteFtpUser, ensureFtpServer, getFtpStatus, getFtpTls, getFtpUsers, setFtpPassword, setFtpTls, type FtpServerStatus, type FtpUser } from "../api/ftp";
@@ -228,6 +228,7 @@ import { useSectionError } from "../composables/useNotice";
 import TablePager from "../components/TablePager.vue";
 import { usePagination } from "../composables/usePagination";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { getSessionEpoch } from "../api/client";
 
 // siteName verilince (web sitesi çalışma alanı sekmesi) FTP yalnızca o siteye
 // göre filtrelenir ve yeni kullanıcı o siteye sabitlenir (profesyonel paneller gibi site-bağlamı).
@@ -246,6 +247,7 @@ const isAdmin = computed(() => authStore.session?.user?.role === "Administrator"
 const users = ref<FtpUser[]>([]);
 // Yüklenmemiş durumu "kayıt yok" / "kapalı" göstermek yanıltıcıydı.
 const usersLoaded = ref(false);
+const usersLoading = ref(false);
 const tlsLoaded = ref(false);
 // FTPS ayarı OKUNAMADI durumu — anahtarın kapalı olmasından AYRI tutulur.
 const tlsLoad = useSectionError();
@@ -254,6 +256,7 @@ const serverCheckCompleted = ref(false);
 const creating = ref(false);
 const deletingUser = ref("");
 const changingPassword = ref("");
+const accountBusy = computed(() => Boolean(deletingUser.value || changingPassword.value));
 const notice = ref("");
 const noticeDetails = ref("");
 const noticeError = ref(false);
@@ -262,6 +265,24 @@ const showCreateForm = ref(false);
 // M5: FTPS zorunlu mu (yalnız admin + standalone FTP sayfasında gösterilir).
 const requireSsl = ref(false);
 const tlsSaving = ref(false);
+let disposed = false;
+let mountedReady = false;
+let scopeVersion = 0;
+let usersRequest = 0;
+let statusRequest = 0;
+let tlsRequest = 0;
+let createVersion = 0;
+onBeforeUnmount(() => { disposed = true; scopeVersion++; });
+
+function ftpContext() {
+  const site = props.siteName, version = scopeVersion, epoch = getSessionEpoch();
+  return { current: () => !disposed && props.siteName === site && scopeVersion === version && getSessionEpoch() === epoch };
+}
+
+function canManageUser(userName: string) {
+  return !disposed && usersLoaded.value && !accountBusy.value && users.value.some(user =>
+    user.userName === userName && (!props.siteName || (user.siteName ?? "").toLowerCase() === props.siteName.toLowerCase()));
+}
 
 const form = reactive({
   userName: "",
@@ -322,32 +343,62 @@ const pager = usePagination(filteredUsers);
 watch(search, () => pager.reset());
 
 watch(
-  () => props.siteName,
-  (value) => {
-    if (value) {
-      form.siteName = value;
+  [() => props.siteName, () => authStore.session?.user?.id, () => authStore.session?.user?.role],
+  ([value]) => {
+    scopeVersion++;
+    creating.value = false;
+    changingPassword.value = "";
+    deletingUser.value = "";
+    users.value = [];
+    usersLoaded.value = false;
+    usersLoading.value = false;
+    showCreateForm.value = false;
+    Object.assign(form, { siteName: value || "", userName: "", password: "", homePath: "" });
+    showNotice("", false);
+    tlsLoaded.value = false;
+    tlsSaving.value = false;
+    requireSsl.value = false;
+    tlsLoad.clear();
+    serverStatus.value = null;
+    serverCheckCompleted.value = false;
+    pager.reset();
+    if (mountedReady) {
+      void Promise.allSettled([refresh(), loadStatus(), loadTls()]);
     }
   },
-  { immediate: true },
+  { immediate: true, flush: "sync" },
 );
 
+watch([() => form.siteName, showCreateForm], ([target, open], [previousTarget]) => {
+  createVersion++;
+  creating.value = false;
+  if (target !== previousTarget) form.homePath = "";
+  if (!open) form.password = "";
+}, { flush: "sync" });
+
 onMounted(async () => {
+  const epoch = getSessionEpoch();
   if (sitesStore.sites.length === 0 && !sitesStore.loading) {
     await sitesStore.fetchSites().catch(() => undefined);
   }
-
+  if (disposed || epoch !== getSessionEpoch()) return;
+  mountedReady = true;
   await Promise.allSettled([prepareServer(), refresh(), loadTls()]);
 });
 
 async function loadTls() {
-  if (!isAdmin.value || props.siteName) {
+  if (!isAdmin.value || props.siteName || disposed || tlsSaving.value) {
     return;
   }
+  const context = ftpContext(), request = ++tlsRequest;
   try {
-    requireSsl.value = (await getFtpTls()).requireSsl;
+    const result = await getFtpTls();
+    if (!context.current() || request !== tlsRequest) return;
+    requireSsl.value = result.requireSsl;
     tlsLoaded.value = true;
     tlsLoad.clear();
   } catch (error) {
+    if (!context.current() || request !== tlsRequest) return;
     // Eskiden hata sessizce yutuluyordu ve anahtar HİÇ görünmüyordu. Artık sebebi yazılır.
     tlsLoaded.value = false;
     tlsLoad.capture(error);
@@ -355,9 +406,13 @@ async function loadTls() {
 }
 
 async function toggleTls(value: boolean) {
+  if (disposed || !isAdmin.value || props.siteName || !tlsLoaded.value || tlsSaving.value) return;
+  const context = ftpContext();
+  tlsRequest++;
   tlsSaving.value = true;
   try {
     const sonuc = await setFtpTls(value);
+    if (!context.current()) return;
     requireSsl.value = sonuc.requireSsl;
 
     // "FTPS artık zorunlu; düz FTP bağlantıları reddedilecek" bir GÜVENLİK İDDİASIDIR ve eskiden
@@ -371,28 +426,40 @@ async function toggleTls(value: boolean) {
       showNotice(t("panel.ftp.tlsUnverified"), true);
     }
   } catch (error) {
-    showApiError(error);
+    if (context.current()) showApiError(error);
   } finally {
-    tlsSaving.value = false;
+    if (context.current()) tlsSaving.value = false;
   }
 }
 
 async function prepareServer() {
+  if (disposed || !isAdmin.value) return;
+  const context = ftpContext(), request = ++statusRequest;
   try {
-    serverStatus.value = await ensureFtpServer();
+    const result = await ensureFtpServer();
+    if (context.current() && request === statusRequest) serverStatus.value = result;
   } catch (error) {
-    showApiError(error);
+    if (context.current() && request === statusRequest) showApiError(error);
   } finally {
-    serverCheckCompleted.value = true;
+    if (context.current() && request === statusRequest) serverCheckCompleted.value = true;
   }
 }
 
 async function refresh() {
+  if (disposed) return false;
+  const context = ftpContext(), request = ++usersRequest;
+  usersLoading.value = true;
   try {
-    users.value = await getFtpUsers();
+    const result = await getFtpUsers();
+    if (!context.current() || request !== usersRequest) return false;
+    users.value = result;
     usersLoaded.value = true;
+    return true;
   } catch (error) {
-    showApiError(error);
+    if (context.current() && request === usersRequest) showApiError(error);
+    return false;
+  } finally {
+    if (context.current() && request === usersRequest) usersLoading.value = false;
   }
 }
 
@@ -413,69 +480,85 @@ async function refreshAll() {
  * bilgi GIZLENMIYOR, hic olculmemis oluyor.
  */
 async function loadStatus() {
-  if (!isAdmin.value) {
+  if (!isAdmin.value || disposed) {
     return;
   }
-
+  const context = ftpContext(), request = ++statusRequest;
   try {
-    serverStatus.value = await getFtpStatus();
-  } catch {
-    // Sessizce yutulmuyor: olcum basarisizsa var olan `serverStatus` (ve serit) OLDUGU GIBI kalir;
-    // yenisiyle degistirilmez. Kullanicinin gordugu son OLCULMUS durum, olculememis bir bosluktan
-    // daha dogrudur. Hata metni zaten kullanici listesinin kendi bildiriminde gorunur.
+    const result = await getFtpStatus();
+    if (context.current() && request === statusRequest) serverStatus.value = result;
+  } catch (error) {
+    if (context.current() && request === statusRequest) showApiError(error);
   } finally {
-    serverCheckCompleted.value = true;
+    if (context.current() && request === statusRequest) serverCheckCompleted.value = true;
   }
 }
 
 async function createUser() {
+  if (disposed || creating.value || !showCreateForm.value) return;
+  const context = ftpContext(), version = createVersion;
+  const current = () => context.current() && version === createVersion;
+  const payload = { ...form, siteName: props.siteName || form.siteName };
   creating.value = true;
 
   try {
-    await createFtpUser({
-      userName: form.userName,
-      password: form.password,
-      siteName: form.siteName,
-      homePath: form.homePath
-    });
+    const result = await createFtpUser({ ...payload });
+    if (!current()) return;
+    const expiryWarning = result.message === "ftp.user_created_password_expires" || result.message === "ftp.user_created_expiry_unverified"
+      ? result.message
+      : result.passwordNeverExpires === false ? "ftp.user_created_password_expires"
+      : result.passwordNeverExpires === null ? "ftp.user_created_expiry_unverified" : "";
     form.userName = "";
     form.password = "";
     form.homePath = "";
     showCreateForm.value = false;
-    await refresh();
-    showNotice(t("panel.ftp.created"), false);
+    const completedVersion = createVersion;
+    const refreshed = await refresh();
+    if (!context.current() || createVersion !== completedVersion) return;
+    if (expiryWarning) {
+      // Hesap açıldı; süre dolumu uyarısı sonraki liste okumasında kaybolmamalı.
+      const refreshError = refreshed ? "" : notice.value;
+      const refreshDetails = refreshed ? "" : noticeDetails.value;
+      showNotice([t(expiryWarning), refreshError].filter(Boolean).join("\n\n"), true);
+      noticeDetails.value = refreshDetails;
+    } else if (refreshed) {
+      showNotice(t("panel.ftp.created"), false);
+    }
   } catch (error) {
-    showApiError(error);
+    if (current()) showApiError(error);
   } finally {
-    creating.value = false;
+    payload.password = "";
+    if (current()) creating.value = false;
   }
 }
 
 async function changeFtpPassword(userName: string) {
-  // window.prompt DEĞİL: parola açıkta görünüyordu ve diyaloglar engellenirse akış ölüyordu.
-  const password = await prompt({
-    title: t("panel.ftp.newPasswordPrompt", { user: userName }),
-    label: t("panel.form.password"),
-    password: true,
-    minLength: 8,
-    confirmLabel: t("panel.ftp.changePassword")
-  });
-
-  if (password === null) {
-    return;
-  }
-  if (password.length < 8) {
-    showNotice(t("panel.ftp.passwordTooShort"), true);
-    return;
-  }
+  if (!canManageUser(userName)) return;
+  const context = ftpContext();
   changingPassword.value = userName;
+  let password: string | null = null;
   try {
+    // window.prompt DEĞİL: parola açıkta görünüyordu ve diyaloglar engellenirse akış ölüyordu.
+    password = await prompt({
+      title: t("panel.ftp.newPasswordPrompt", { user: userName }),
+      label: t("panel.form.password"),
+      password: true,
+      minLength: 8,
+      confirmLabel: t("panel.ftp.changePassword")
+    });
+
+    if (!context.current() || password === null) return;
+    if (password.length < 8) {
+      showNotice(t("panel.ftp.passwordTooShort"), true);
+      return;
+    }
     await setFtpPassword(userName, password);
-    showNotice(t("panel.ftp.passwordChanged"), false);
+    if (context.current()) showNotice(t("panel.ftp.passwordChanged"), false);
   } catch (error) {
-    showApiError(error);
+    if (context.current()) showApiError(error);
   } finally {
-    changingPassword.value = "";
+    password = null;
+    if (context.current()) changingPassword.value = "";
   }
 }
 
@@ -484,24 +567,30 @@ async function changeFtpPassword(userName: string) {
  * (Parola değiştirmede zaten PromptDialog kullanılıyordu; silmede onay atlanmıştı.)
  */
 async function removeUser(userName: string) {
-  await confirm({
-    title: t("panel.ftp.confirmDeleteTitle"),
-    message: t("panel.ftp.confirmDeleteMessage", { name: userName }),
-    impact: [userName],
-    requireText: userName,
-    action: async () => {
-      deletingUser.value = userName;
-      try {
-        await deleteFtpUser(userName);
-        await refresh();
-        showNotice(t("panel.ftp.deleted"), false);
-      } catch (error) {
-        showApiError(error);
-      } finally {
-        deletingUser.value = "";
+  if (!canManageUser(userName)) return;
+  const context = ftpContext();
+  deletingUser.value = userName;
+  try {
+    await confirm({
+      title: t("panel.ftp.confirmDeleteTitle"),
+      message: t("panel.ftp.confirmDeleteMessage", { name: userName }),
+      impact: [userName],
+      requireText: userName,
+      action: async () => {
+        if (!context.current()) return;
+        try {
+          await deleteFtpUser(userName);
+          if (!context.current()) return;
+          const refreshed = await refresh();
+          if (context.current() && refreshed) showNotice(t("panel.ftp.deleted"), false);
+        } catch (error) {
+          if (context.current()) showApiError(error);
+        }
       }
-    }
-  });
+    });
+  } finally {
+    if (context.current()) deletingUser.value = "";
+  }
 }
 
 function showNotice(message: string, isError: boolean) {

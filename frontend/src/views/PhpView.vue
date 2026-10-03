@@ -129,6 +129,7 @@
       </div>
       <!-- Okunamadıysa FORM GÖSTERİLMEZ: aksi halde ekrandaki değerler bu siteye ait sanılır. -->
       <p v-if="settingsError" class="notice error" role="alert">{{ settingsError }}</p>
+      <p v-else-if="!settingsLoaded" class="empty-state" role="status">{{ t("panel.common.loading") }}</p>
       <template v-if="settingsLoaded">
       <div class="form-grid">
         <label class="stacked-field">
@@ -168,7 +169,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { enableRedisExtension, getSitePhpSettings, updateSitePhpSettings } from "../api/php";
 import { useConfirm } from "../components/ConfirmDialog.vue";
@@ -177,6 +178,7 @@ import { usePhpStore } from "../stores/php";
 import { useSitesStore } from "../stores/sites";
 import { useSoftwareStore } from "../stores/software";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { getSessionEpoch } from "../api/client";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
@@ -208,8 +210,18 @@ const savingSettings = ref(false);
 // ekranda hâlâ 512M yazar, hiçbir uyarı yoktur → Kaydet'e basılır → A'nın limitleri B'ye gider.
 const settingsLoaded = ref(false);
 const settingsError = ref("");
+let settingsRequest = 0;
+let disposed = false;
+onBeforeUnmount(() => { disposed = true; });
+
+function settingsContext(site = sitesStore.selectedSiteName) {
+  const request = settingsRequest, epoch = getSessionEpoch();
+  return { site, current: () => !disposed && sitesStore.selectedSiteName === site && settingsRequest === request && getSessionEpoch() === epoch };
+}
 
 async function loadSettings(siteName: string) {
+  ++settingsRequest;
+  const context = settingsContext(siteName);
   settingsLoaded.value = false;
   settingsError.value = "";
   if (!siteName) {
@@ -217,6 +229,7 @@ async function loadSettings(siteName: string) {
   }
   try {
     const data = await getSitePhpSettings(siteName);
+    if (!context.current()) return;
     settings.memoryLimit = data.memoryLimit;
     settings.maxExecutionTime = data.maxExecutionTime;
     settings.uploadMaxFilesize = data.uploadMaxFilesize;
@@ -225,6 +238,7 @@ async function loadSettings(siteName: string) {
     settings.openBasedirEnabled = data.openBasedirEnabled ?? false;
     settingsLoaded.value = true;
   } catch (error) {
+    if (!context.current()) return;
     // ÖNCEKİ SİTENİN DEĞERLERİ EKRANDA KALMAZ. Okuyamadığımızı da söylüyoruz: sessizce
     // varsayılan göstermek, ölçülmemiş değerleri ölçülmüş gibi sunmaktı.
     settingsError.value = resolveApiMessage(error);
@@ -232,12 +246,13 @@ async function loadSettings(siteName: string) {
 }
 
 async function saveSettings() {
-  if (!selectedSiteName.value || !settingsLoaded.value) {
+  if (disposed || savingSettings.value || !selectedSiteName.value || !settingsLoaded.value) {
     return;
   }
   savingSettings.value = true;
+  const context = settingsContext();
   try {
-    const data = await updateSitePhpSettings(selectedSiteName.value, {
+    const data = await updateSitePhpSettings(context.site, {
       memoryLimit: settings.memoryLimit,
       maxExecutionTime: settings.maxExecutionTime,
       uploadMaxFilesize: settings.uploadMaxFilesize,
@@ -245,6 +260,7 @@ async function saveSettings() {
       displayErrors: settings.displayErrors,
       openBasedirEnabled: settings.openBasedirEnabled
     });
+    if (!context.current()) return;
     settings.memoryLimit = data.memoryLimit;
     // İzolasyon durumunu SUNUCUNUN döndürdüğü GERÇEK değerle tazele: kutucuk, kaydedilmiş sanılan
     // ama uygulanmamış bir durumu göstermesin (yanıt php.ini'den taze okunur).
@@ -253,13 +269,16 @@ async function saveSettings() {
   } catch (error) {
     // `extractApiMessage` HAM anahtar döndürür (ör. `php.settings_locked`); çevirmeden basmak
     // kullanıcıya anlamsız bir dizge gösteriyordu. Aynı dosyanın diğer 5 noktası zaten doğruydu.
-    showNotice(resolveApiMessage(error), true);
+    if (context.current()) showNotice(resolveApiMessage(error), true);
   } finally {
     savingSettings.value = false;
   }
 }
 
-watch(() => sitesStore.selectedSiteName, (siteName) => loadSettings(siteName), { immediate: true });
+watch(() => sitesStore.selectedSiteName, (siteName) => {
+  notice.value = "";
+  void loadSettings(siteName);
+}, { immediate: true });
 const selectedSiteName = computed({
   get: () => sitesStore.selectedSiteName,
   set: (value: string) => sitesStore.selectSite(value)

@@ -5,13 +5,16 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Audit;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Enums;
+using AdaPanel.Core.Entities;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Options;
 using AdaPanel.Infrastructure.RunningJobs;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace AdaPanel.Infrastructure.Tests;
@@ -35,8 +38,10 @@ namespace AdaPanel.Infrastructure.Tests;
 /// AYNI kaynagi kullaniyor; iki kopya olsaydi biri duzelir, oteki sessizce acik kalirdi.
 /// </para>
 /// </remarks>
-public sealed class TenantDatabaseScopeTests
+public sealed class TenantDatabaseScopeTests : IDisposable
 {
+    private readonly List<AdaPanelDbContext> actorContexts = [];
+    public void Dispose() { foreach (var context in actorContexts) context.Dispose(); }
     private static readonly Guid Kiraci = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000001");
     private static readonly Guid Kurban = Guid.Parse("bbbbbbbb-0000-0000-0000-000000000002");
 
@@ -185,20 +190,28 @@ public sealed class TenantDatabaseScopeTests
         nameType: ClaimTypes.Name,
         roleType: ClaimTypes.Role));
 
-    private static BackupController Denetleyici(IBackupService yedekServisi, string rol)
+    private BackupController Denetleyici(IBackupService yedekServisi, string rol)
     {
         var isKoku = Path.Combine(Path.GetTempPath(), $"adapanel-dbscope-{Guid.NewGuid():N}");
         var calisanIsler = new RunningJobService(
             new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = isKoku })),
             NullLogger<RunningJobService>.Instance);
 
+        var actorDb = new AdaPanelDbContext(new DbContextOptionsBuilder<AdaPanelDbContext>().UseSqlite("Data Source=:memory:").Options);
+        actorContexts.Add(actorDb);
+        actorDb.Database.OpenConnection();
+        actorDb.Database.EnsureCreated();
+        actorDb.Users.Add(new PanelUser { Id = Kiraci, UserName = "scope-actor", Email = "scope@example.test",
+            Role = Enum.Parse<UserRole>(rol), PasswordHash = "fixture", IsActive = true });
+        actorDb.SaveChanges();
         return new BackupController(
             yedekServisi,
             new SahteKapsam(),
             new SahteSahiplik(),
             new KullanilmayanProgram(),
             calisanIsler,
-            new SessizDenetim())
+            new SessizDenetim(),
+            actorDb)
         {
             ControllerContext = new ControllerContext
             {
@@ -303,7 +316,10 @@ public sealed class TenantDatabaseScopeTests
         public Task RemoveBySiteAsync(string siteName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<int> CountForOwnerAsync(Guid ownerUserId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Guid?> GetOwnerAsync(string engine, string databaseName, CancellationToken cancellationToken = default) => Task.FromResult<Guid?>(null);
-        public Task<IReadOnlyCollection<(string Engine, string DatabaseName, Guid OwnerUserId, string SiteName)>> GetAllAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<IReadOnlyCollection<(string Engine, string DatabaseName, Guid OwnerUserId, string SiteName)>> GetAllAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyCollection<(string, string, Guid, string)>>([
+                ("mariadb", "benim_wp", Kiraci, "benim-site"),
+                ("mariadb", "kurban_wp", Kurban, "kurban-site")]);
     }
 
     private sealed class KullanilmayanProgram : ISubscriptionBackupScheduleService

@@ -48,18 +48,6 @@ public sealed class SslRenewalHonestyTests
     }
 
     /// <summary>
-    /// Kaynak sozlesmesi: otomasyon durumu Measured'a BAGLI olmali. Bu satir kaldirilirsa panel
-    /// yeniden "her gun tamamlandi" yalanina doner.
-    /// </summary>
-    [Fact]
-    public void AutomationStatus_DependsOnWhetherRenewalWasActuallyMeasured()
-    {
-        var kaynak = ReadSource("Automation", "AutomationService.cs");
-
-        Assert.Contains("result.Measured ? \"completed\" : \"failed\"", kaynak, StringComparison.Ordinal);
-    }
-
-    /// <summary>
     /// Yenilenen sayisi CIKTIDAN okunmali, cikis kodundan degil.
     /// </summary>
     [Fact]

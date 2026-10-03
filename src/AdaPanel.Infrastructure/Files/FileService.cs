@@ -176,7 +176,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             {
                 await using (akis)
                 {
-                    await using var yazici = new StreamWriter(akis, Encoding.UTF8);
+                    await using var yazici = new StreamWriter(akis, new UTF8Encoding(false));
                     await yazici.WriteAsync((request.Content ?? string.Empty).AsMemory(), cancellationToken);
                 }
             }
@@ -206,7 +206,14 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         }
         else
         {
-            await File.WriteAllTextAsync(target.PhysicalPath, request.Content ?? string.Empty, Encoding.UTF8, cancellationToken);
+            await WriteAtomicallyAsync(target, async (stream, token) =>
+            {
+                // PHP ve benzeri kaynak dosyalarına içerikte olmayan bir BOM ekleme.
+                // Kota hesabı da yalnız içeriğin UTF-8 baytlarını ölçer.
+                await using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true);
+                await writer.WriteAsync((request.Content ?? string.Empty).AsMemory(), token);
+                await writer.FlushAsync(token);
+            }, cancellationToken);
         }
 
         return await GetWorkspaceAsync(normalizedPath, cancellationToken);
@@ -893,9 +900,44 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         EnsureSiteTarget(target);
         EnsureNotSiteRoot(target);
         Directory.CreateDirectory(Path.GetDirectoryName(target.PhysicalPath) ?? target.SandboxRoot);
-        await using var destination = File.Create(target.PhysicalPath);
-        await stream.CopyToAsync(destination, cancellationToken);
+        await WriteAtomicallyAsync(target, (destination, token) => stream.CopyToAsync(destination, token), cancellationToken);
         return normalizedPath;
+    }
+
+    private static async Task WriteAtomicallyAsync(
+        ResolvedTarget target, Func<Stream, CancellationToken, Task> write, CancellationToken cancellationToken)
+    {
+        // Aynı birimdeki geçici dosya tamamlanmadan mevcut site dosyasına dokunma.
+        // Doğrudan File.Create, aktarımın ilk baytından önce eski içeriği siliyordu.
+        var temporary = Path.Combine(Path.GetDirectoryName(target.PhysicalPath)!, $".adapanel-write-{Guid.NewGuid():N}.tmp");
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                81920, FileOptions.Asynchronous))
+            {
+                await write(output, cancellationToken);
+                await output.FlushAsync(cancellationToken);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureNoReparsePoints(target.SandboxRoot, target.PhysicalPath);
+            if (File.Exists(target.PhysicalPath))
+            {
+                // Windows ReplaceFile hedefin özel ACL'lerini korur; yeni dosyanın
+                // klasörden devraldığı izinlerle kullanıcının izinlerini ezme.
+                File.Replace(temporary, target.PhysicalPath, null);
+            }
+            else
+            {
+                File.Move(temporary, target.PhysicalPath);
+            }
+        }
+        finally
+        {
+            try { File.Delete(temporary); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            { /* Temizleme hatası asıl yazma hatasını gizlemesin. */ }
+        }
     }
 
     public async Task<(string FileName, string ContentType, string PhysicalPath)> DownloadAsync(string path, CancellationToken cancellationToken = default)

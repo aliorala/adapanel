@@ -42,6 +42,8 @@ export type DatabaseEngineStatus = {
   displayName: string;
   installed: boolean;
   ready: boolean;
+  /** A stored administrator-password change still requires fresh verification. No secret is exposed. */
+  adminPasswordPending?: boolean;
   systemDetected: boolean;
   host: string;
   port: number;

@@ -26,6 +26,13 @@ public interface IMailService
     /// <summary>win-acme yenilemesi sonrası PEM dosyaları değiştiyse sertifikayı Stalwart'a yeniden yükler.</summary>
     Task<MailCertificateDto?> SyncCertificateAsync(CancellationToken cancellationToken = default);
 
+    async Task<MailCertificateDto?> SyncCertificateAsync(Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken = default)
+    {
+        await beforeMutation(cancellationToken);
+        return await SyncCertificateAsync(cancellationToken);
+    }
+
     /// <summary>
     /// Posta sunucusunun SMTP karşılamasında kullandığı ana adı, sertifikanın adıyla AYNI değere
     /// getirir. Bir değişiklik yapıldıysa true döner.

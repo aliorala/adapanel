@@ -1,4 +1,5 @@
 using AdaPanel.Core.Dtos.Backup;
+using AdaPanel.Core.Common;
 
 namespace AdaPanel.Infrastructure.Backup;
 
@@ -45,10 +46,10 @@ internal static class SubscriptionBackupPlanner
     /// <b>Veritabanı kuralı (kiracı izolasyonu):</b> otorite SAHİPLİK KAYDIDIR, ad benzerliği değil.
     /// </para>
     /// <list type="bullet">
-    /// <item>Kayıtta site VARSA: site aboneliğin sitelerinden biri olmalı. Sahibi bu abonelik
-    /// görünse bile başka bir aboneliğin sitesine bağlı veritabanı ALINMAZ — site, sahiplikten
-    /// daha yeni ve daha kesin bilgidir (veritabanı devredilmiş olabilir).</item>
-    /// <item>Kayıtta site YOKSA: sahibi bu abonelik olmalı. Sahipsiz/başkasının veritabanı ALINMAZ.</item>
+    /// <item>Kaydın sahibi bu abonelik olmalı. Site ataması değişse bile bu, veritabanı
+    /// sahipliğini devretmez; başkasının açık sahiplik kaydı site kapsamıyla aşılamaz.</item>
+    /// <item>Kayıtta site VARSA ayrıca aboneliğin sitelerinden biri olmalı. Sahiplik ile
+    /// site kapsamı çelişiyorsa veritabanı arşive ALINMAZ.</item>
     /// </list>
     /// <para>
     /// <b>Posta kuralı:</b> yalnızca aboneliğin izinli alan adları
@@ -77,14 +78,13 @@ internal static class SubscriptionBackupPlanner
 
         var veritabanlari = ownership
             .Where(kayit => !string.IsNullOrWhiteSpace(kayit.Engine) && !string.IsNullOrWhiteSpace(kayit.DatabaseName))
-            .Where(kayit => string.IsNullOrWhiteSpace(kayit.SiteName)
-                ? kayit.OwnerUserId == userId
-                : siteKumesi.Contains(kayit.SiteName.Trim()))
+            .Where(kayit => kayit.OwnerUserId == userId)
+            .Where(kayit => string.IsNullOrWhiteSpace(kayit.SiteName) || siteKumesi.Contains(kayit.SiteName.Trim()))
             .Select(kayit => new PlannedDatabase(
-                kayit.Engine.Trim(),
+                DatabaseResourceIdentity.NormalizeEngine(kayit.Engine),
                 kayit.DatabaseName.Trim(),
                 kayit.SiteName?.Trim() ?? string.Empty))
-            .DistinctBy(db => $"{db.Engine}|{db.DatabaseName}", StringComparer.OrdinalIgnoreCase)
+            .DistinctBy(db => DatabaseResourceIdentity.Key(db.Engine, db.DatabaseName), StringComparer.Ordinal)
             .OrderBy(db => db.Engine, StringComparer.OrdinalIgnoreCase)
             .ThenBy(db => db.DatabaseName, StringComparer.OrdinalIgnoreCase)
             .ToArray();

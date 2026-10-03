@@ -61,13 +61,9 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
             command.CommandText = $"DROP DATABASE {QuoteIdentifier(databaseName)};";
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
-        catch (MySqlException exception) when (exception.Number is 1008 or 1049)
-        {
-            throw new AppException("database.database_not_found", 404, 404);
-        }
         catch (MySqlException exception)
         {
-            throw MapUnexpectedMySqlException(exception);
+            throw MapDeleteDatabaseException(exception);
         }
     }
 
@@ -121,8 +117,7 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
 
     // K2 (atomik akışın "uygula" adımı): yerel root hesaplarına (localhost/127.0.0.1/::1) güçlü parola koyar.
     // Her host için YOKSA oluştur + parolayı set et + tam yetki ver → uzak root@'%' kaldırılınca panelin
-    // 127.0.0.1 bağlantısı kopmaz. Sonra yeni parolayla YENİ bağlantı açıp DOĞRULAR; başarısızsa servis
-    // katmanı saklı parolayı geri alır (panel eski parolayla çalışmaya devam eder).
+    // 127.0.0.1 bağlantısı kopmaz. Sonra yeni parolayla havuz DIŞINDA bağlantı açıp DOĞRULAR.
     public async Task SetRootPasswordAsync(DatabaseConnectionProfile profile, string newPassword, CancellationToken cancellationToken)
     {
         try
@@ -160,15 +155,34 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
 
             // DOĞRULA: panelin kullanacağı yeni parolayla YENİ bağlantı (mevcut bağlantı zaten kimlik doğruluydu).
             var verifyProfile = profile with { AdminPassword = newPassword };
-            await using var verifyConnection = await OpenConnectionAsync(verifyProfile, cancellationToken);
-            await using var ping = verifyConnection.CreateCommand();
-            ping.CommandText = "SELECT 1;";
-            await ping.ExecuteScalarAsync(cancellationToken);
+            if (!await VerifyAdminPasswordAsync(verifyProfile, cancellationToken))
+                throw new AppException("database.credentials_invalid", 400, 400);
         }
         catch (MySqlException exception)
         {
             throw MapUnexpectedMySqlException(exception);
         }
+    }
+
+    internal static string PasswordVerificationConnectionString(DatabaseConnectionProfile profile) => new MySqlConnectionStringBuilder
+    {
+        Server = profile.Host, Port = Convert.ToUInt32(profile.Port), UserID = profile.AdminUserName,
+        Password = profile.AdminPassword, Database = "mysql", SslMode = MySqlSslMode.None,
+        ConnectionTimeout = 5, DefaultCommandTimeout = 5, Pooling = false
+    }.ConnectionString;
+
+    public async Task<bool> VerifyAdminPasswordAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
+    {
+        await using var connection = new MySqlConnection(PasswordVerificationConnectionString(profile));
+        try
+        {
+            await connection.OpenAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT 1;";
+            await command.ExecuteScalarAsync(cancellationToken);
+            return true;
+        }
+        catch (MySqlException exception) when (exception.Number == 1045) { return false; }
     }
 
     public async Task DeleteUserAsync(DatabaseConnectionProfile profile, string userName, string host, CancellationToken cancellationToken)
@@ -182,13 +196,9 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
             command.CommandText = $"DROP USER '{userName.Replace("'", "''")}'@'{allowedHost.Replace("'", "''")}'; FLUSH PRIVILEGES;";
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
-        catch (MySqlException exception) when (exception.Number is 1396)
-        {
-            throw new AppException("database.user_not_found", 404, 404);
-        }
         catch (MySqlException exception)
         {
-            throw MapUnexpectedMySqlException(exception);
+            throw MapDeleteUserException(exception);
         }
     }
 
@@ -492,7 +502,7 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
             var hosts = await ReadAllHostsAsync(connection, cancellationToken);
             var databases = await ReadAllGrantedDatabasesAsync(connection, cancellationToken);
 
-            var result = new Dictionary<string, RemoteAccessFacts>(StringComparer.OrdinalIgnoreCase);
+            var result = new Dictionary<string, RemoteAccessFacts>(StringComparer.Ordinal);
             foreach (var userName in userNames)
             {
                 result[userName] = new RemoteAccessFacts(
@@ -640,7 +650,7 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         MySqlConnection connection,
         CancellationToken cancellationToken)
     {
-        var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT User, Host FROM mysql.user WHERE User <> '' AND Host <> '' ORDER BY User, Host;";
 
@@ -664,7 +674,7 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         MySqlConnection connection,
         CancellationToken cancellationToken)
     {
-        var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT DISTINCT User, Db FROM mysql.db WHERE User <> '' ORDER BY User, Db;";
 
@@ -916,6 +926,16 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
             ? "ALL PRIVILEGES"
             : string.Join(", ", privileges);
     }
+
+    internal static AppException MapDeleteDatabaseException(MySqlException exception) =>
+        exception.Number is 1008 or 1049
+            ? AppException.Gone("database.database_not_found")
+            : MapUnexpectedMySqlException(exception);
+
+    internal static AppException MapDeleteUserException(MySqlException exception) =>
+        exception.Number == 1396
+            ? AppException.Gone("database.user_not_found")
+            : MapUnexpectedMySqlException(exception);
 
     private static AppException MapUnexpectedMySqlException(MySqlException exception)
     {

@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.AppRuntimes;
+using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Entities;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
@@ -13,6 +14,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using AdaPanel.Infrastructure.Support;
 using AdaPanel.Infrastructure.SiteBuilder;
+using AdaPanel.Infrastructure.Iis;
+using AdaPanel.Infrastructure.Files;
 
 namespace AdaPanel.Infrastructure.AppRuntimes;
 
@@ -27,6 +30,8 @@ public sealed partial class AppRuntimeService(
     private const string ServerManagerTypeName = "Microsoft.Web.Administration.ServerManager";
     private const string HandlerName = "AdaPanel.HttpPlatform";
     private static readonly string LogsDirectoryName = Path.Combine("App_Data", "AdaPanel", "logs");
+    internal Func<IDisposable> ManagerFactory { get; init; } = CreateServerManager;
+    internal Func<Stream, Stream>? ConfigurationStream { get; init; }
 
     public async Task<AppRuntimeSiteConfigurationDto> GetSiteConfigurationAsync(
         string siteName,
@@ -36,50 +41,68 @@ public sealed partial class AppRuntimeService(
         return ReadConfiguration(site);
     }
 
-    public async Task<AppRuntimeSiteConfigurationDto> HostNodeAppAsync(
-        string siteName,
-        HostNodeAppRequest request,
-        CancellationToken cancellationToken = default)
+    public Task<AppRuntimeSiteConfigurationDto> HostNodeAppAsync(string siteName, HostNodeAppRequest request,
+        CancellationToken cancellationToken = default) =>
+        HostNodeAppAsync(siteName, request, (_, _) => Task.CompletedTask, cancellationToken);
+
+    public Task<AppRuntimeSiteConfigurationDto> HostNodeAppAsync(string siteName, HostNodeAppRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) =>
+        HostRuntimeAsync(siteName, "node", request.ComponentId, request.StartupFile, request.WorkingDirectory,
+            request.Arguments, request.EnvironmentVariables, beforeMutation, null, cancellationToken);
+
+    internal Task<AppRuntimeSiteConfigurationDto> HostNodeAppAsync(SiteMutationGuard.Target owner, HostNodeAppRequest request,
+        CancellationToken cancellationToken) =>
+        HostRuntimeAsync(owner.Site.Name, "node", request.ComponentId, request.StartupFile, request.WorkingDirectory,
+            request.Arguments, request.EnvironmentVariables, (_, _) => Task.CompletedTask, owner, cancellationToken);
+
+    public Task<AppRuntimeSiteConfigurationDto> HostPythonAppAsync(string siteName, HostPythonAppRequest request,
+        CancellationToken cancellationToken = default) =>
+        HostPythonAppAsync(siteName, request, (_, _) => Task.CompletedTask, cancellationToken);
+
+    public Task<AppRuntimeSiteConfigurationDto> HostPythonAppAsync(string siteName, HostPythonAppRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) =>
+        HostRuntimeAsync(siteName, "python", request.ComponentId, request.StartupFile, request.WorkingDirectory,
+            request.Arguments, request.EnvironmentVariables, beforeMutation, null, cancellationToken);
+
+    internal Task<AppRuntimeSiteConfigurationDto> HostPythonAppAsync(SiteMutationGuard.Target owner, HostPythonAppRequest request,
+        CancellationToken cancellationToken) =>
+        HostRuntimeAsync(owner.Site.Name, "python", request.ComponentId, request.StartupFile, request.WorkingDirectory,
+            request.Arguments, request.EnvironmentVariables, (_, _) => Task.CompletedTask, owner, cancellationToken);
+
+    private async Task<AppRuntimeSiteConfigurationDto> HostRuntimeAsync(string siteName, string runtimeType,
+        string componentId, string startupFile, string workingDirectory, string additionalArguments,
+        IReadOnlyCollection<string> environmentVariables, Func<SiteDto, CancellationToken, Task> beforeMutation,
+        SiteMutationGuard.Target? owner, CancellationToken cancellationToken)
     {
-        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-        await EnsureHttpPlatformHandlerAsync(cancellationToken);
-        var executablePath = await ResolveNodeExecutableAsync(request.ComponentId, cancellationToken);
-
-        return await ApplyRuntimeConfigurationAsync(
-            site,
-            "node",
-            request.ComponentId,
-            executablePath,
-            request.StartupFile,
-            request.WorkingDirectory,
-            request.Arguments,
-            request.EnvironmentVariables,
-            cancellationToken);
-    }
-
-    public async Task<AppRuntimeSiteConfigurationDto> HostPythonAppAsync(
-        string siteName,
-        HostPythonAppRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-        await EnsureHttpPlatformHandlerAsync(cancellationToken);
-        var executablePath = await ResolvePythonExecutableAsync(request.ComponentId, cancellationToken);
-
-        return await ApplyRuntimeConfigurationAsync(
-            site,
-            "python",
-            request.ComponentId,
-            executablePath,
-            request.StartupFile,
-            request.WorkingDirectory,
-            request.Arguments,
-            request.EnvironmentVariables,
-            cancellationToken);
+        // Provisioning passes its own creator target; a new public capture must not bypass
+        // that unfinished generation's private creation intent.
+        using var captured = owner is null
+            ? await SiteMutationGuard.CaptureAsync(iisSiteService, concurrencyLock, siteName, cancellationToken) : null;
+        var target = owner ?? captured!;
+        var submittedEnvironment = environmentVariables.ToArray();
+        await target.RunAsync(site => beforeMutation(site, cancellationToken), cancellationToken);
+        var catalog = await componentBootstrapper.GetCatalogAsync(cancellationToken);
+        using var reservation = await target.ReserveAsync(beforeMutation, cancellationToken);
+        var installed = catalog.Installed.Any(component =>
+            string.Equals(component.ComponentId, "http-platform-handler", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(component.Status, "Installed", StringComparison.OrdinalIgnoreCase));
+        if (!installed)
+        {
+            var installation = await componentBootstrapper.InstallAsync("http-platform-handler", null, null,
+                force: false, cancellationToken: cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!string.Equals(installation.Status, "Installed", StringComparison.OrdinalIgnoreCase))
+                throw new AppException("appruntime.configuration_failed", 500, 500);
+        }
+        var executablePath = runtimeType == "node"
+            ? await ResolveNodeExecutableAsync(componentId, cancellationToken)
+            : await ResolvePythonExecutableAsync(componentId, cancellationToken);
+        return await ApplyRuntimeConfigurationAsync(target, runtimeType, componentId, executablePath,
+            startupFile, workingDirectory, additionalArguments, submittedEnvironment, beforeMutation, cancellationToken);
     }
 
     private async Task<AppRuntimeSiteConfigurationDto> ApplyRuntimeConfigurationAsync(
-        AdaPanel.Core.Dtos.Sites.SiteDto site,
+        SiteMutationGuard.Target target,
         string runtimeType,
         string componentId,
         string processPath,
@@ -87,10 +110,11 @@ public sealed partial class AppRuntimeService(
         string workingDirectory,
         string additionalArguments,
         IReadOnlyCollection<string> environmentVariables,
+        Func<SiteDto, CancellationToken, Task> beforeMutation,
         CancellationToken cancellationToken)
     {
+        var site = target.Site;
         var siteRoot = ResolveSiteRoot(site.PhysicalPath);
-        Directory.CreateDirectory(siteRoot);
 
         var normalizedWorkingDirectory = ResolveSiteManagedPath(siteRoot, workingDirectory, allowCurrentDirectory: true);
 
@@ -101,12 +125,19 @@ public sealed partial class AppRuntimeService(
         var webConfigPath = ResolveSiteManagedPath(siteRoot, "web.config", allowCurrentDirectory: false);
         var logsDirectory = ResolveSiteManagedPath(siteRoot, LogsDirectoryName, allowCurrentDirectory: true);
 
-        return await concurrencyLock.RunExclusiveAsync(() =>
+        AppRuntimeSiteConfigurationDto? result = null;
+        await target.RunAsync(async current =>
         {
+            await beforeMutation(current, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
+            Action? restorePool = null;
             try
             {
+                // A failed or unmeasured pool commit must not replace the working web.config.
+                EnsureApplicationPoolUsesNoManagedCode(current.ApplicationPoolName, out restorePool);
+                cancellationToken.ThrowIfCancellationRequested();
+                Directory.CreateDirectory(siteRoot);
                 Directory.CreateDirectory(normalizedWorkingDirectory);
                 Directory.CreateDirectory(logsDirectory);
                 UpdateWebConfig(
@@ -115,11 +146,11 @@ public sealed partial class AppRuntimeService(
                     startupArguments,
                     normalizedWorkingDirectory,
                     logsDirectory,
-                    mergedEnvironmentVariables);
+                    mergedEnvironmentVariables,
+                    cancellationToken);
+                restorePool = null;
 
-                EnsureApplicationPoolUsesNoManagedCode(site.ApplicationPoolName);
-
-                return Task.FromResult(new AppRuntimeSiteConfigurationDto
+                result = new AppRuntimeSiteConfigurationDto
                 {
                     SiteName = site.Name,
                     RuntimeType = runtimeType,
@@ -134,19 +165,31 @@ public sealed partial class AppRuntimeService(
                     HasHttpPlatformHandler = true,
                     ManagedRuntimeDisabled = true,
                     EnvironmentVariables = mergedEnvironmentVariables.ToArray()
-                });
-            }
-            catch (AppException)
-            {
-                throw;
+                };
             }
             catch (Exception exception)
             {
+                if (restorePool is not null)
+                {
+                    try
+                    {
+                        // Compensation keeps this same IIS lease, ignores request cancellation,
+                        // and never follows a replacement site's new application pool.
+                        await target.ValidateAsync(CancellationToken.None);
+                        restorePool();
+                    }
+                    catch (Exception recoveryError)
+                    {
+                        logger.LogError(recoveryError, "Unable to restore the previous application pool setting for site {SiteName}.", site.Name);
+                    }
+                }
+                if (exception is AppException or OperationCanceledException) throw;
                 var mappedException = MapAppRuntimeException(exception, "appruntime.configuration_failed");
                 logger.LogError(exception, "Application runtime configuration failed for site {SiteName}.", site.Name);
                 throw mappedException;
             }
         }, cancellationToken);
+        return result!;
     }
 
     private AppRuntimeSiteConfigurationDto ReadConfiguration(AdaPanel.Core.Dtos.Sites.SiteDto site)
@@ -239,139 +282,22 @@ public sealed partial class AppRuntimeService(
         }
     }
 
-    private async Task<string> ResolveNodeExecutableAsync(string componentId, CancellationToken cancellationToken)
-    {
-        return await ResolveRuntimeExecutableAsync(
-            componentId,
-            "nodejs-lts",
-            "node",
-            new[]
-            {
-                "%ProgramFiles%\\nodejs\\node.exe",
-                "%ProgramFiles(x86)%\\nodejs\\node.exe"
-            },
-            cancellationToken);
-    }
+    private async Task<string> ResolveNodeExecutableAsync(string componentId, CancellationToken cancellationToken) =>
+        await AppRuntimeExecutableResolver.ResolveAsync(dbContext, componentId, "node", cancellationToken)
+            ?? throw new AppException("appruntime.runtime_not_installed", 404, 404);
 
-    private async Task EnsureHttpPlatformHandlerAsync(CancellationToken cancellationToken)
-    {
-        const string componentId = "http-platform-handler";
-        var catalog = await componentBootstrapper.GetCatalogAsync(cancellationToken);
-        var installed = catalog.Installed.Any(component =>
-            string.Equals(component.ComponentId, componentId, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(component.Status, "Installed", StringComparison.OrdinalIgnoreCase));
+    private async Task<string> ResolvePythonExecutableAsync(string componentId, CancellationToken cancellationToken) =>
+        await AppRuntimeExecutableResolver.ResolveAsync(dbContext, componentId, "python", cancellationToken)
+            ?? throw new AppException("appruntime.runtime_not_installed", 404, 404);
 
-        if (!installed)
-        {
-            await componentBootstrapper.InstallAsync(componentId, null, null, force: false, cancellationToken: cancellationToken);
-        }
-    }
-
-    private async Task<string> ResolvePythonExecutableAsync(string componentId, CancellationToken cancellationToken)
-    {
-        return await ResolveRuntimeExecutableAsync(
-            componentId,
-            "python-3",
-            "python",
-            new[]
-            {
-                "%ProgramFiles%\\Python312\\python.exe",
-                "%ProgramFiles%\\Python311\\python.exe",
-                "%LocalAppData%\\Programs\\Python\\Python312\\python.exe",
-                "%LocalAppData%\\Programs\\Python\\Python311\\python.exe"
-            },
-            cancellationToken);
-    }
-
-    private async Task<string> ResolveRuntimeExecutableAsync(
-        string requestedComponentId,
-        string fallbackComponentId,
-        string executableNameWithoutExtension,
-        IReadOnlyCollection<string> fallbackCandidates,
-        CancellationToken cancellationToken)
-    {
-        var normalizedComponentId = string.IsNullOrWhiteSpace(requestedComponentId)
-            ? fallbackComponentId
-            : requestedComponentId.Trim();
-
-        InstalledComponent? installedComponent = null;
-        if (!string.IsNullOrWhiteSpace(normalizedComponentId))
-        {
-            installedComponent = await dbContext.InstalledComponents
-                .FirstOrDefaultAsync(
-                    item => item.ComponentId == normalizedComponentId &&
-                            item.Status == AdaPanel.Core.Enums.ComponentInstallStatus.Installed,
-                    cancellationToken);
-        }
-
-        if (installedComponent is not null)
-        {
-            var directCandidate = Path.Combine(installedComponent.InstallDir, executableNameWithoutExtension + ".exe");
-            if (File.Exists(directCandidate))
-            {
-                return directCandidate;
-            }
-        }
-
-        foreach (var candidate in fallbackCandidates)
-        {
-            var expanded = Environment.ExpandEnvironmentVariables(candidate);
-            if (File.Exists(expanded))
-            {
-                return expanded;
-            }
-        }
-
-        var resolvedFromPath = await TryResolveFromPathAsync(executableNameWithoutExtension, cancellationToken);
-        if (!string.IsNullOrWhiteSpace(resolvedFromPath))
-        {
-            return resolvedFromPath;
-        }
-
-        throw new AppException("appruntime.runtime_not_installed", 404, 404);
-    }
-
-    private static async Task<string> TryResolveFromPathAsync(string executableNameWithoutExtension, CancellationToken cancellationToken)
-    {
-        var startInfo = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "where.exe",
-            Arguments = executableNameWithoutExtension,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        using var process = System.Diagnostics.Process.Start(startInfo);
-        if (process is null)
-        {
-            return string.Empty;
-        }
-
-        await process.WaitForExitAsync(cancellationToken);
-        if (process.ExitCode != 0)
-        {
-            return string.Empty;
-        }
-
-        // TAVANLI OKUMA: cikti tamamen bellege alinmamali. Kural ProcessRunner'da tek kaynakta;
-        // bu yol kendi surecini kurdugu icin oradan GECMIYORDU.
-        var output = await ProcessRunner.TavanliOkuAsync(
-            process.StandardOutput, ProcessRunner.DefaultOutputCharLimit, cancellationToken);
-        return output
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .FirstOrDefault(path => path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-            ?? string.Empty;
-    }
-
-    private static void UpdateWebConfig(
+    private void UpdateWebConfig(
         string webConfigPath,
         string processPath,
         string arguments,
         string workingDirectory,
         string logsDirectory,
-        IReadOnlyCollection<string> environmentVariables)
+        IReadOnlyCollection<string> environmentVariables,
+        CancellationToken cancellationToken)
     {
         var document = File.Exists(webConfigPath)
             ? XDocument.Load(webConfigPath, LoadOptions.PreserveWhitespace)
@@ -445,36 +371,47 @@ public sealed partial class AppRuntimeService(
         }
 
         systemWebServer.Add(httpPlatform);
-        document.Save(webConfigPath);
+        WebConfigurationFile.Save(webConfigPath, document, ConfigurationStream, cancellationToken);
     }
 
-    private void EnsureApplicationPoolUsesNoManagedCode(string applicationPoolName)
+    private void EnsureApplicationPoolUsesNoManagedCode(string applicationPoolName, out Action? restorePool)
     {
+        restorePool = null;
         if (string.IsNullOrWhiteSpace(applicationPoolName))
+            throw new AppException("appruntime.configuration_failed", 500, 500);
+        using (var serverManager = ManagerFactory())
         {
-            return;
-        }
-
-        try
-        {
-            using var serverManager = CreateServerManager();
             var applicationPools = GetPropertyObject(serverManager, "ApplicationPools");
             var applicationPool = Enumerate(applicationPools)
                 .FirstOrDefault(item =>
                     string.Equals(GetStringProperty(item, "Name"), applicationPoolName, StringComparison.OrdinalIgnoreCase));
 
             if (applicationPool is null)
-            {
-                return;
-            }
+                throw new AppException("appruntime.configuration_failed", 500, 500);
 
+            var previousRuntime = GetStringProperty(applicationPool, "ManagedRuntimeVersion");
+            restorePool = () => RestoreApplicationPoolRuntime(applicationPoolName, previousRuntime);
             SetPropertyValue(applicationPool, "ManagedRuntimeVersion", string.Empty);
             InvokeMethod(serverManager, "CommitChanges");
         }
-        catch (Exception exception)
-        {
-            logger.LogWarning(exception, "Unable to switch application pool {AppPoolName} to No Managed Code.", applicationPoolName);
-        }
+        using var verification = ManagerFactory();
+        var committedPool = Enumerate(GetPropertyObject(verification, "ApplicationPools"))
+            .FirstOrDefault(item => string.Equals(GetStringProperty(item, "Name"), applicationPoolName, StringComparison.OrdinalIgnoreCase));
+        if (committedPool is null || !string.IsNullOrWhiteSpace(GetStringProperty(committedPool, "ManagedRuntimeVersion")))
+            throw new AppException("appruntime.configuration_failed", 500, 500);
+    }
+
+    private void RestoreApplicationPoolRuntime(string applicationPoolName, string previousRuntime)
+    {
+        if (previousRuntime.Length == 0) return;
+        using var manager = ManagerFactory();
+        var pool = Enumerate(GetPropertyObject(manager, "ApplicationPools"))
+            .FirstOrDefault(item => string.Equals(GetStringProperty(item, "Name"), applicationPoolName, StringComparison.OrdinalIgnoreCase));
+        // Restore only our own empty CLR setting. A removed pool or a subsequently changed
+        // value is not ours to recreate or replace, even while recovering a failed request.
+        if (pool is null || GetStringProperty(pool, "ManagedRuntimeVersion") != string.Empty) return;
+        SetPropertyValue(pool, "ManagedRuntimeVersion", previousRuntime);
+        InvokeMethod(manager, "CommitChanges");
     }
 
     private bool ReadManagedRuntimeDisabled(string applicationPoolName)
@@ -486,7 +423,7 @@ public sealed partial class AppRuntimeService(
 
         try
         {
-            using var serverManager = CreateServerManager();
+            using var serverManager = ManagerFactory();
             var applicationPools = GetPropertyObject(serverManager, "ApplicationPools");
             var applicationPool = Enumerate(applicationPools)
                 .FirstOrDefault(item =>

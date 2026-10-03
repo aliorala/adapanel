@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { AxiosError } from "axios";
 import { apiClient, clearCsrfToken } from "../api/client";
 import { deleteUser as deleteUserRequest } from "../api/users";
-import { resolveFailureDetail, resolveFailureKey, type TransportFailure } from "../utils/apiError";
+import { resolveFailureDetail, resolveFailureKey, UserFacingError, type TransportFailure } from "../utils/apiError";
 import { resetAllStores } from "./resetAll";
 
 type ApiEnvelope<T> = {
@@ -328,6 +328,7 @@ function toTransportFailure(error: unknown): TransportFailure {
  *    (`common.network_error`, `common.timeout`, …) — Türkçe panelde İngilizce metin kalmasın.
  */
 export function extractApiMessage(error: unknown): string {
+  if (error instanceof UserFacingError) return error.messageKey;
   return resolveFailureKey(toTransportFailure(error));
 }
 

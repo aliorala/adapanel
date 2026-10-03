@@ -34,6 +34,7 @@
         v-if="databasesLoad.message.value"
         :message="databasesLoad.message.value"
         @retry="loadDatabases" />
+      <p v-if="databasesLoading" class="empty-state" role="status">{{ t("panel.common.loading") }}</p>
 
       <div v-if="availableDatabases.length > 0" class="db-block">
         <span class="field-label">{{ t("panel.backup.scopeDatabases") }}</span>
@@ -107,7 +108,7 @@
            kartin TAM GENISLIGINE geriliyordu: sayfayi bastan sona kesen mavi bir bant, panelin
            baska hicbir yerinde olmayan bir agirlik. -->
       <div class="form-actions">
-        <button class="compact" v-bind="writeGate(busy)" @click="createBackup">
+        <button class="compact" v-bind="writeGate(busy || databasesLoading)" @click="createBackup">
           {{ busy ? t("panel.backup.creating") : t("panel.backup.createButton") }}
         </button>
       </div>
@@ -216,7 +217,7 @@
                   <div class="location-line">
                     <span class="field-label">{{ t("panel.backup.location.local") }}</span>
                     <code v-if="record.path" class="path-box">{{ record.path }}</code>
-                    <span v-else class="meta">{{ t("panel.backup.location.unknown") }}</span>
+                    <span v-else class="meta">{{ t(isAdmin ? "panel.backup.location.unknown" : "panel.backup.location.scopedHidden") }}</span>
                     <button
                       v-if="record.path"
                       type="button"
@@ -272,7 +273,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import { useBackupRestore, restoreResult } from "../composables/useBackupRestore";
@@ -298,6 +299,7 @@ import { copyToClipboard } from "../utils/clipboard";
 import { maskSecretsInUri } from "../utils/url";
 import { formatBytes } from "../utils/bytes";
 import { formatDateTime } from "../utils/datetime";
+import { getSessionEpoch } from "../api/client";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -325,6 +327,10 @@ const availableDatabases = ref<{ engine: string; name: string }[]>([]);
 // kullanıcı veritabanı seçmeden yedek alıp yedeğini eksik sanmadan taşırdı.
 const databasesLoad = useSectionError();
 const selectedDbKeys = ref<string[]>([]);
+const databasesLoading = ref(false);
+let disposed = false, siteGeneration = 0, listRequest = 0;
+const session = getSessionEpoch();
+const isCurrent = () => !disposed && session === getSessionEpoch();
 
 /**
  * Yedek kapsamı + ARTIMSAL seçimi.
@@ -342,6 +348,7 @@ const scope = reactive({
 });
 // Bu yedeğe özel şifreleme parolası (boş = panelde kayıtlı parola, o da yoksa şifresiz).
 const encryptionPassword = ref("");
+onBeforeUnmount(() => { disposed = true; encryptionPassword.value = ""; });
 
 // Süren yedek GÖRÜNÜR: uç işi arka plana almadığı için istek uçuştayken yedek gerçekten sürüyor.
 const runningBackup = useRunningTask();
@@ -401,6 +408,15 @@ function dayBytes(records: BackupRecord[]) {
  */
 const collapsedDays = ref(new Set<string>());
 const dayDefaultsApplied = ref(false);
+watch(siteName, () => {
+  ++siteGeneration;
+  encryptionPassword.value = "";
+  selectedDbKeys.value = [];
+  notice.value = "";
+  expandedLocation.value = "";
+  dayDefaultsApplied.value = false;
+  collapsedDays.value = new Set();
+});
 
 function isDayOpen(key: string) {
   return !collapsedDays.value.has(key);
@@ -450,10 +466,9 @@ async function copyPath(value: string) {
 }
 
 onMounted(async () => {
-  await refresh();
-  await loadDatabases();
+  await Promise.all([refresh(), loadDatabases()]);
   // Sunucuda süren iş varsa şerit ekran açılır açılmaz dolar (yenilenmiş sayfa dahil).
-  await serverBackup.start();
+  if (isCurrent()) await serverBackup.start();
 });
 
 /*
@@ -471,51 +486,67 @@ watch(
   });
 
 async function refresh() {
+  if (!isCurrent()) return;
+  const request = ++listRequest;
   loading.value = true;
   try {
-    backups.value = await getBackups();
+    const result = await getBackups();
+    if (!isCurrent() || request !== listRequest) return;
+    backups.value = result;
     listLoaded.value = true;
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent() && request === listRequest) showNotice(resolveApiMessage(error), true);
   } finally {
-    loading.value = false;
+    if (request === listRequest) loading.value = false;
   }
 }
 
 async function loadDatabases() {
+  if (!isCurrent() || databasesLoading.value) return;
+  databasesLoading.value = true;
   try {
     const engines = await getDatabaseEngines();
+    if (!isCurrent()) return;
     const list: { engine: string; name: string }[] = [];
+    const failed: string[] = [];
     for (const engine of engines.filter((item) => item.installed)) {
+      if (!isCurrent()) return;
       try {
         const workspace = await getDatabaseWorkspace(engine.engine);
         for (const db of workspace.databases ?? []) {
           list.push({ engine: engine.engine, name: db.name });
         }
       } catch {
-        // motor erişilemezse atla
+        failed.push(engine.displayName || engine.engine);
       }
     }
+    if (!isCurrent()) return;
     availableDatabases.value = list;
-    databasesLoad.clear();
+    if (failed.length) databasesLoad.message.value = t("panel.backup.databasesPartial", { engines: failed.join(", ") });
+    else databasesLoad.clear();
   } catch (error) {
+    if (!isCurrent()) return;
     availableDatabases.value = [];
     databasesLoad.capture(error);
+  } finally {
+    databasesLoading.value = false;
   }
 }
 
 async function createBackup() {
-  if (!siteName.value) {
+  if (!isCurrent() || busy.value || databasesLoading.value || !siteName.value) {
     return;
   }
   busy.value = true;
+  const site = siteName.value, generation = siteGeneration;
+  const current = () => isCurrent() && siteName.value === site && generation === siteGeneration;
   runningBackup.begin(`${t("panel.backup.running.creating")}: ${siteName.value}`);
   try {
     const databases = selectedDbKeys.value.map((key) => {
       const [engine, ...rest] = key.split(":");
       return { engine, databaseName: rest.join(":") };
     });
-    await backupSite(siteName.value, {
+    await backupSite(site, {
       includeFiles: scope.includeFiles,
       includeConfig: scope.includeConfig,
       includeMail: scope.includeMail,
@@ -525,12 +556,13 @@ async function createBackup() {
       incremental: scope.incremental,
       fullBackupEveryDays: scope.fullBackupEveryDays
     }, { encryptionPassword: encryptionPassword.value });
+    if (!current()) return;
     // Parola tek seferliktir; formda asılı kalıp bir sonraki yedeğe sessizce taşınmaz.
     encryptionPassword.value = "";
     showNotice(t("panel.backup.created"), false);
     await refresh();
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) showNotice(resolveApiMessage(error), true);
   } finally {
     busy.value = false;
     runningBackup.end();

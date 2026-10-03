@@ -5,12 +5,15 @@
         <h3>{{ t("panel.automation.title") }}</h3>
         <p class="meta">{{ t("panel.automation.subtitle") }}</p>
       </div>
-      <button class="secondary compact" :disabled="loading" @click="refresh">
+      <button class="secondary compact" :disabled="loading || busy || testingRemote" @click="refresh">
         {{ t("panel.automation.refresh") }}
       </button>
     </div>
 
-    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
+    <div v-if="notice" :class="['notice', 'page-notice', 'automation-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
+      <p>{{ notice }}</p>
+      <button type="button" class="secondary compact notice-close" :aria-label="t('panel.common.dismissNotice')" @click="notice = ''">×</button>
+    </div>
     <RunningTaskBanner
       :running="backupRunning"
       :label="localBackup.running.value ? localBackup.label.value : serverBackup.label.value"
@@ -117,7 +120,7 @@
       </div>
 
       <div v-if="form.backupTargetType !== 'local'" class="row-actions remote-test">
-        <button class="secondary compact" type="button" :disabled="testingRemote" @click="testRemote">
+        <button class="secondary compact" type="button" :disabled="testingRemote || busy" @click="testRemote">
           {{ testingRemote ? t("panel.automation.remoteTesting") : t("panel.automation.remoteTest") }}
         </button>
         <span v-if="remoteTestResult" :class="['status-pill', remoteTestResult.success ? 'ok' : 'warn']">
@@ -267,11 +270,11 @@
     </div>
 
     <div class="row-actions">
-      <button class="compact" :disabled="busy" @click="save">{{ t("panel.common.save") }}</button>
-      <button class="secondary compact" :disabled="busy || backupRunning" @click="runBackupNow">
+      <button class="compact" :disabled="busy || testingRemote" @click="save">{{ t("panel.common.save") }}</button>
+      <button class="secondary compact" :disabled="busy || testingRemote || backupRunning" @click="runBackupNow">
         {{ t("panel.automation.runBackupNow") }}
       </button>
-      <button class="secondary compact" :disabled="busy" @click="runSslNow">
+      <button class="secondary compact" :disabled="busy || testingRemote" @click="runSslNow">
         {{ t("panel.automation.runSslNow") }}
       </button>
     </div>
@@ -280,7 +283,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import BackupScheduleFields from "../components/BackupScheduleFields.vue";
@@ -301,8 +304,14 @@ import {
 import { extractApiMessage } from "../stores/auth";
 import { formatDateTime } from "../utils/datetime";
 import { automationDetails } from "../utils/automationDetails";
+import { getSessionEpoch } from "../api/client";
 
 const { t, locale } = useI18n();
+const session = getSessionEpoch();
+let disposed = false;
+let statusRequest = 0;
+const isActive = () => !disposed && session === getSessionEpoch();
+onBeforeUnmount(() => { disposed = true; statusRequest++; });
 const status = ref<AutomationStatus | null>(null);
 const loading = ref(false);
 // "Henüz bilmiyorum" ile "kapalı" ekranda ayırt edilemiyordu; ayarlar gelene kadar kartları gizle.
@@ -311,7 +320,12 @@ const busy = ref(false);
 const localBackup = useRunningTask();
 const serverBackup = useServerRunningTask({
   fetchStatus: async () => {
+    if (!isActive()) {
+      serverBackup.stop();
+      throw new Error("Automation view is inactive");
+    }
     const result = await getBackupRunningJobs();
+    if (!isActive()) serverBackup.stop();
     const isAutomation = (job: { kind: string; title: string }) => job.kind === "backup" && job.title === "automation";
     return { ...result, running: result.running.filter(isAutomation), interrupted: result.interrupted.filter(isAutomation) };
   },
@@ -321,9 +335,12 @@ const serverBackup = useServerRunningTask({
 const backupRunning = computed(() => localBackup.running.value || serverBackup.running.value);
 const notice = ref("");
 const noticeError = ref(false);
+let noticeRevision = 0;
+let refreshErrorNotice: number | undefined;
 const remotePassword = ref("");
 const testingRemote = ref(false);
 const remoteTestResult = ref<BackupRemoteTestResult | null>(null);
+const mayStart = () => isActive() && settingsLoaded.value && !busy.value && !testingRemote.value;
 /**
  * Program alanları ORTAK biçimde tutulur (bkz. api/schedule.ts): alan bileşeni iki ekranda da
  * aynı nesneyle çalışsın diye. Yükleme ve kaydetme sırasında `form` ile eşlenir.
@@ -370,6 +387,17 @@ const form = reactive<AutomationSettings>({
   autoApplyComponentUpdates: false
 });
 
+// Requests may report their measured result without replacing a draft edited in the meantime.
+let draftRevision = 0;
+watch([form, schedulePlan, remotePassword], () => { draftRevision++; }, { deep: true, flush: "sync" });
+
+let remoteRevision = 0;
+watch(() => [form.backupTargetType, form.backupRemoteUrl, form.backupRemoteUserName,
+  form.backupRemoteRegion, form.backupRemotePasswordSet, remotePassword.value], () => {
+  remoteRevision++;
+  remoteTestResult.value = null;
+}, { flush: "sync" });
+
 const remoteUrlPlaceholder = computed(() => {
   switch (form.backupTargetType) {
     case "ftp":
@@ -386,92 +414,135 @@ const remoteUrlPlaceholder = computed(() => {
 onMounted(refresh);
 
 async function refresh() {
+  if (!isActive() || busy.value || testingRemote.value) return;
+  const request = ++statusRequest;
+  const draft = draftRevision;
+  const isCurrent = () => isActive() && request === statusRequest;
   loading.value = true;
   try {
     await serverBackup.start();
-    applyStatus(await getAutomation());
+    if (!isCurrent()) return;
+    const result = await getAutomation();
+    if (!isCurrent()) return;
+    applyStatus(result, draft);
+    if (refreshErrorNotice === noticeRevision) showNotice("", false);
+    refreshErrorNotice = undefined;
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) {
+      showNotice(resolveApiMessage(error), true);
+      refreshErrorNotice = noticeRevision;
+    }
   } finally {
-    loading.value = false;
+    if (isCurrent()) loading.value = false;
   }
 }
 
 async function save() {
   await run(async () => {
-    applyStatus(
-      await updateAutomation({
-        ...form,
-        // Ortak program biçimi burada API alan adlarına çevrilir.
-        backupScheduleMode: schedulePlan.mode,
-        backupIntervalHours: schedulePlan.intervalHours,
-        backupScheduleHour: schedulePlan.hour,
-        backupScheduleMinute: schedulePlan.minute,
-        backupScheduleDayOfWeek: schedulePlan.dayOfWeek,
-        backupScheduleDayOfMonth: schedulePlan.dayOfMonth,
-        backupScheduleSecondHour: schedulePlan.secondHour ?? null,
-        backupScheduleSecondMinute: schedulePlan.secondMinute ?? 0,
-        backupRemotePassword: remotePassword.value
-      })
-    );
-    remotePassword.value = "";
+    const draft = draftRevision;
+    const remoteContext = remoteRevision;
+    const submittedPassword = remotePassword.value;
+    const result = await updateAutomation({
+      ...form,
+      backupDatabaseEngines: [...form.backupDatabaseEngines],
+      // Ortak program biçimi burada API alan adlarına çevrilir.
+      backupScheduleMode: schedulePlan.mode,
+      backupIntervalHours: schedulePlan.intervalHours,
+      backupScheduleHour: schedulePlan.hour,
+      backupScheduleMinute: schedulePlan.minute,
+      backupScheduleDayOfWeek: schedulePlan.dayOfWeek,
+      backupScheduleDayOfMonth: schedulePlan.dayOfMonth,
+      backupScheduleSecondHour: schedulePlan.secondHour ?? null,
+      backupScheduleSecondMinute: schedulePlan.secondMinute ?? 0,
+      backupRemotePassword: submittedPassword
+    });
+    if (!isActive()) return;
+    const clearPassword = remoteRevision === remoteContext && remotePassword.value === submittedPassword;
+    applyStatus(result, draft);
+    if (clearPassword) remotePassword.value = "";
     showNotice(t("panel.automation.saved"), false);
   });
 }
 
 async function testRemote() {
+  if (!mayStart()) return;
+  const context = remoteRevision;
+  const isCurrent = () => isActive() && context === remoteRevision;
   testingRemote.value = true;
   remoteTestResult.value = null;
   try {
-    remoteTestResult.value = await testRemoteBackup({
+    const result = await testRemoteBackup({
       targetType: form.backupTargetType,
       remoteUrl: form.backupRemoteUrl,
       remoteUserName: form.backupRemoteUserName,
       remotePassword: remotePassword.value,
       remoteRegion: form.backupRemoteRegion
     });
+    if (isCurrent()) remoteTestResult.value = result;
   } catch (error) {
-    remoteTestResult.value = { success: false, message: extractApiMessage(error), details: "" };
+    if (isCurrent()) remoteTestResult.value = { success: false, message: extractApiMessage(error), details: "" };
   } finally {
-    testingRemote.value = false;
+    if (isActive()) testingRemote.value = false;
   }
 }
 
 async function runBackupNow() {
-  if (busy.value || backupRunning.value) return;
+  if (!mayStart() || backupRunning.value) return;
   localBackup.begin(t("panel.automation.backupSection"));
   try {
     await run(async () => {
-      applyStatus(await runAutomationBackup());
-      showNotice(t("panel.automation.backupStarted"), false);
+      const result = await runAutomationBackup();
+      if (!isActive()) return;
+      applyStatus(result);
+      reportRunResult(result.lastBackupStatus, result.lastBackupDetails, "panel.automation.backupStarted");
     });
   } finally {
     localBackup.end();
-    await serverBackup.start();
+    if (isActive()) await serverBackup.start();
   }
 }
 
 async function runSslNow() {
   await run(async () => {
-    applyStatus(await runAutomationSsl());
-    showNotice(t("panel.automation.sslStarted"), false);
+    const result = await runAutomationSsl();
+    if (!isActive()) return;
+    applyStatus(result);
+    reportRunResult(result.lastSslStatus, result.lastSslDetails, "panel.automation.sslStarted");
   });
 }
 
+function reportRunResult(outcome: string | undefined, details: string | undefined, successKey: string) {
+  const measured = outcome?.trim().toLowerCase();
+  const completed = measured === "completed";
+  const heading = completed
+    ? t(successKey)
+    : measured === "failed" || measured === "completed_with_errors"
+      ? t(`panel.automation.statusValue.${measured}`)
+      : t("panel.automation.resultUnconfirmed");
+  const detail = details?.trim() ? automationDetails(details, t) : "";
+  showNotice([heading, detail].filter(Boolean).join("\n"), !completed);
+}
+
 async function run(operation: () => Promise<void>) {
+  if (!mayStart()) return;
+  statusRequest++;
+  loading.value = false;
   busy.value = true;
   try {
     await operation();
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isActive()) showNotice(resolveApiMessage(error), true);
   } finally {
-    busy.value = false;
+    if (isActive()) busy.value = false;
   }
 }
 
-function applyStatus(next: AutomationStatus) {
+function applyStatus(next: AutomationStatus, draft?: number) {
   status.value = next;
-  Object.assign(form, next.settings);
+  settingsLoaded.value = true;
+  // Running backup/SSL does not save settings. Its response must not reset unsaved input.
+  if (draft === undefined || draft !== draftRevision) return;
+  Object.assign(form, { ...next.settings, backupDatabaseEngines: [...(next.settings.backupDatabaseEngines ?? [])] });
   // Sunucu değerleri NORMALİZE dönüyor (mod/saat/gün sınırları orada uygulanıyor); ekran onları
   // olduğu gibi alır, kendi kuralını uydurmaz.
   Object.assign(schedulePlan, {
@@ -484,7 +555,6 @@ function applyStatus(next: AutomationStatus) {
     secondHour: next.settings.backupScheduleSecondHour ?? null,
     secondMinute: next.settings.backupScheduleSecondMinute ?? 0
   });
-  settingsLoaded.value = true;
 }
 
 /** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
@@ -506,6 +576,7 @@ function resolveApiMessage(error: unknown) {
 }
 
 function showNotice(message: string, isError: boolean) {
+  noticeRevision++;
   notice.value = message;
   noticeError.value = isError;
 }
@@ -521,6 +592,16 @@ function showNotice(message: string, isError: boolean) {
 .details-line {
   white-space: pre-line;
 }
+
+.automation-notice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--sp-8);
+}
+
+.automation-notice p { margin: 0; }
+.notice-close { width: 28px; height: 28px; padding: 0; color: inherit; }
 
 .row-actions button {
   width: auto;

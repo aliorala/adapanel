@@ -1,8 +1,12 @@
 using AdaPanel.Api.Extensions;
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Audit;
+using AdaPanel.Infrastructure.Database;
+using AdaPanel.Infrastructure.Iis;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -17,7 +21,8 @@ public sealed class DatabasesController(
     IDatabaseOwnershipService dbOwnership,
     ISiteDatabaseLinkService siteDatabaseLinks,
     IIisSiteService iisSiteService,
-    IAuditService auditService) : ControllerBase
+    IAuditService auditService,
+    IConcurrencyLock concurrencyLock) : ControllerBase
 {
     [HttpGet("engines")]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<DatabaseEngineStatusDto>>>> GetEnginesAsync(
@@ -121,16 +126,19 @@ public sealed class DatabasesController(
     {
         // HEDEF SITE GERCEKTEN VAR MI: olmayan bir siteye baglamak, veritabanini panelde
         // hicbir yerde gorunmeyen bir kayda hapsederdi.
-        var site = await iisSiteService.GetSiteAsync(request.TargetSiteName, cancellationToken);
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService, concurrencyLock, request.TargetSiteName, cancellationToken);
+        var site = target.Site;
 
-        await siteDatabaseLinks.LinkAsync(engine, name, site.Name, cancellationToken);
-
-        // Sahiplik de tasinir; yoksa veritabani yeni sahibin kotasina sayilmaz ve eski sahip onu
-        // gormeye devam ederdi.
-        var owner = await dbOwnership.GetOwnerAsync(engine, name, cancellationToken);
-        if (owner is { } mevcutSahip)
+        Guid? owner = null;
+        using (await DatabaseLifecycle.EnterResourceAsync(engine, name, cancellationToken))
         {
-            await dbOwnership.RecordAsync(engine, name, mevcutSahip, site.Name, cancellationToken);
+            await target.RunAsync(async current =>
+            {
+                owner = await dbOwnership.GetOwnerAsync(engine, name, cancellationToken);
+                await siteDatabaseLinks.LinkAsync(engine, name, current.Name, cancellationToken);
+                if (owner is { } mevcutSahip)
+                    await dbOwnership.RecordAsync(engine, name, mevcutSahip, current.Name, cancellationToken);
+            }, cancellationToken);
         }
 
         // SAHİP ELDE VAR: yukarıda zaten okundu, ikinci kez sormaya gerek yok. Taşıma sahibi
@@ -210,16 +218,29 @@ public sealed class DatabasesController(
     public async Task<ActionResult<ApiResponse<object>>> DeleteDatabaseAsync(
         string name,
         [FromQuery] string engine,
+        [FromServices] AdaPanelDbContext dbContext,
+        [FromServices] ICustomerScopeService customerScopes,
         CancellationToken cancellationToken)
     {
+        var authority = await DatabaseActorAuthority.CaptureAsync(dbContext, customerScopes, User, cancellationToken);
         // SAHİP, SAHİPLİK KAYDI SİLİNMEDEN ÖNCE ÇÖZÜLÜR. Sıra tersine dönerse kaydın konusu
         // kalıcı olarak boş kalır: veritabanı da sahiplik satırı da yok olduktan sonra o
         // veritabanının kime ait olduğunu söyleyecek hiçbir kaynak kalmaz. Yani panelin EN yıkıcı
         // veritabanı işlemi, tam da sahibinin göremeyeceği tek işlem olurdu.
-        var sahip = await AuditSubject.DatabaseOwnerAsync(dbOwnership, engine, name, cancellationToken);
-
-        await databaseService.DeleteDatabaseAsync(engine, name, cancellationToken);
-        await dbOwnership.RemoveAsync(engine, name, cancellationToken); // M1: sahiplik kaydını temizle (kota over-count olmasın)
+        Guid? sahip = null;
+        using (await DatabaseLifecycle.EnterSubscriptionAsync(authority.SubscriptionId, cancellationToken))
+        {
+            await authority.RevalidateAsync(dbContext, customerScopes, User, cancellationToken);
+            await databaseService.DeleteDatabaseAsync(engine, name,
+                async token =>
+                {
+                    // The resource or cleanup-account lease can wait long after HTTP
+                    // authorization. Confirm this same administrator immediately before DROP.
+                    await authority.RevalidateAsync(dbContext, customerScopes, User, token);
+                    sahip = await dbOwnership.GetOwnerAsync(engine, name, token);
+                },
+                token => dbOwnership.RemoveAsync(engine, name, token), cancellationToken);
+        }
         await WriteDatabaseAuditAsync("database.delete.completed", engine, name, "Database was removed.", cancellationToken, sahip);
         return Ok(ApiResponse<object>.Ok(new { engine, name }, "database.delete.success"));
     }

@@ -35,6 +35,10 @@ public sealed class MailServiceRouter(
     public Task<MailCertificateDto?> SyncCertificateAsync(CancellationToken cancellationToken = default)
         => Active.SyncCertificateAsync(cancellationToken);
 
+    public Task<MailCertificateDto?> SyncCertificateAsync(Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken = default)
+        => Active.SyncCertificateAsync(beforeMutation, cancellationToken);
+
     public Task<bool> EnsureServerHostnameAsync(bool applyChanges = true, CancellationToken cancellationToken = default)
         => Active.EnsureServerHostnameAsync(applyChanges, cancellationToken);
 

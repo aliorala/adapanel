@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Nginx;
+using AdaPanel.Infrastructure.SiteBuilder;
 using AdaPanel.Infrastructure.Support;
 
 namespace AdaPanel.Infrastructure.Nginx;
@@ -19,11 +20,19 @@ internal static partial class NginxInstallationSupport
         WriteIndented = true
     };
 
-    internal static async Task<NginxConfigurationRequest> PrepareAsync(
-        string installDirectory,
-        CancellationToken cancellationToken)
+    internal static bool HasConfigurationToPreserve(string installDirectory)
     {
-        var configuration = new NginxConfigurationRequest
+        if (File.Exists(Path.Combine(installDirectory, "conf", "nginx.conf"))) return true;
+        if (File.Exists(Path.Combine(installDirectory, "conf", "adapanel.json")))
+            throw new AppException("nginx.config_invalid", 400, 400, "The existing Nginx configuration is missing; its metadata was preserved.");
+        return false;
+    }
+
+    internal static Task<NginxConfigurationRequest> PrepareAsync(
+        string installDirectory,
+        CancellationToken cancellationToken,
+        bool preserveExistingConfiguration = false)
+        => PrepareAsync(installDirectory, preserveExistingConfiguration, () => new NginxConfigurationRequest
         {
             ListenAddress = "127.0.0.1",
             ListenPort = FindAvailablePort(DefaultPort),
@@ -31,52 +40,199 @@ internal static partial class NginxInstallationSupport
             UpstreamUrl = "http://127.0.0.1:80",
             CacheEnabled = false,
             CacheSizeMb = 256
-        };
+        }, (path, token) => TestAsync(FindExecutable(installDirectory), installDirectory, path, token),
+            token => RegisterStartupTaskAsync(installDirectory, token),
+            token => StartAsync(installDirectory, token), cancellationToken);
 
-        await WriteConfigurationAsync(installDirectory, configuration, cancellationToken);
-        await RegisterStartupTaskAsync(installDirectory, cancellationToken);
-        await StartAsync(installDirectory, cancellationToken);
+    internal static async Task<NginxConfigurationRequest> PrepareAsync(
+        string installDirectory,
+        bool preserveExistingConfiguration,
+        Func<NginxConfigurationRequest> createConfiguration,
+        Func<string, CancellationToken, Task<CommandResult>> testConfiguration,
+        Func<CancellationToken, Task> registerStartup,
+        Func<CancellationToken, Task> start,
+        CancellationToken cancellationToken)
+    {
+        NginxConfigurationRequest configuration;
+        if (preserveExistingConfiguration)
+        {
+            var configPath = Path.Combine("conf", "nginx.conf");
+            if (!File.Exists(Path.Combine(installDirectory, configPath)))
+                throw new AppException("nginx.config_invalid", 400, 400, "The preserved Nginx configuration is missing.");
+            configuration = await ReadConfigurationAsync(installDirectory, cancellationToken);
+            EnsureRuntimeDirectories(installDirectory);
+            var result = await testConfiguration(configPath, cancellationToken);
+            if (!result.Success) throw new AppException("nginx.config_invalid", 400, 400, FormatResult(result));
+            await registerStartup(cancellationToken);
+            await start(cancellationToken);
+        }
+        else
+        {
+            try
+            {
+                configuration = createConfiguration();
+                await WriteConfigurationAsync(installDirectory, configuration, testConfiguration, async token =>
+                {
+                    await registerStartup(token);
+                    await start(token);
+                }, cancellationToken);
+            }
+            catch (Exception failure)
+            {
+                try { DiscardUninitializedConfiguration(installDirectory); }
+                catch (Exception cleanupFailure)
+                {
+                    throw new AggregateException("Nginx first-install configuration cleanup failed.", failure, cleanupFailure);
+                }
+                throw;
+            }
+        }
         return configuration;
     }
+
+    // Only call when no configuration existed before extraction. A packaged default
+    // must not make a failed first install look like a user-configured installation
+    // on retry. Successfully generated configuration remains recoverable with its metadata.
+    internal static void DiscardUninitializedConfiguration(string installDirectory)
+    {
+        var root = Path.GetFullPath(installDirectory);
+        var configPath = Path.Combine(root, "conf", "nginx.conf");
+        if (File.Exists(Path.Combine(root, "conf", "adapanel.json")) || !File.Exists(configPath)) return;
+        SiteBuilderPathGuard.EnsureNoReparsePointOnPath(Path.GetPathRoot(root)!, configPath);
+        File.Delete(configPath);
+    }
+
+    internal static Task ConfigureAsync(string installDirectory, NginxConfigurationRequest configuration, CancellationToken cancellationToken)
+        => WriteConfigurationAsync(installDirectory, configuration,
+            (path, token) => TestAsync(FindExecutable(installDirectory), installDirectory, path, token), async token =>
+            {
+                await RegisterStartupTaskAsync(installDirectory, token);
+                await ReloadAsync(installDirectory, token);
+            }, cancellationToken);
+
+    internal static Task WriteConfigurationAsync(
+        string installDirectory,
+        NginxConfigurationRequest configuration,
+        CancellationToken cancellationToken)
+        => WriteConfigurationAsync(installDirectory, configuration,
+            (configPath, token) => TestAsync(FindExecutable(installDirectory), installDirectory, configPath, token),
+            cancellationToken);
+
+    internal static Task WriteConfigurationAsync(
+        string installDirectory,
+        NginxConfigurationRequest configuration,
+        Func<string, CancellationToken, Task<CommandResult>> testConfiguration,
+        CancellationToken cancellationToken)
+        => WriteConfigurationAsync(installDirectory, configuration, testConfiguration, _ => Task.CompletedTask, cancellationToken);
 
     internal static async Task WriteConfigurationAsync(
         string installDirectory,
         NginxConfigurationRequest configuration,
+        Func<string, CancellationToken, Task<CommandResult>> testConfiguration,
+        Func<CancellationToken, Task> activate,
         CancellationToken cancellationToken)
     {
         Validate(configuration);
-        var executablePath = FindExecutable(installDirectory);
         var configDirectory = Path.Combine(installDirectory, "conf");
         var configPath = Path.Combine(configDirectory, "nginx.conf");
-        var pendingConfigPath = Path.Combine(configDirectory, "nginx.conf.pending");
         var statePath = Path.Combine(configDirectory, "adapanel.json");
+        var operation = Guid.NewGuid().ToString("N");
+        var pendingConfigPath = configPath + "." + operation + ".pending";
+        var pendingStatePath = statePath + "." + operation + ".pending";
+        var backupConfigPath = configPath + "." + operation + ".backup";
+        var backupStatePath = statePath + "." + operation + ".backup";
 
-        Directory.CreateDirectory(configDirectory);
+        EnsureRuntimeDirectories(installDirectory);
+
+        var hadConfiguration = File.Exists(configPath);
+        var hadState = File.Exists(statePath);
+        var configPublished = false;
+        var statePublished = false;
+        var completed = false;
+        try
+        {
+            // Her iki dosya da hazırlanıp doğrulanmadan canlı yapılandırma değişmez.
+            await File.WriteAllTextAsync(pendingConfigPath, BuildConfiguration(configuration), cancellationToken);
+            await File.WriteAllTextAsync(pendingStatePath, JsonSerializer.Serialize(configuration, JsonOptions), cancellationToken);
+            var testResult = await testConfiguration(Path.Combine("conf", Path.GetFileName(pendingConfigPath)), cancellationToken);
+            if (!testResult.Success)
+            {
+                throw new AppException("nginx.config_invalid", 400, 400, FormatResult(testResult));
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (hadConfiguration)
+                File.Replace(pendingConfigPath, configPath, backupConfigPath);
+            else
+                File.Move(pendingConfigPath, configPath);
+            configPublished = true;
+
+            if (hadState) File.Replace(pendingStatePath, statePath, backupStatePath);
+            else File.Move(pendingStatePath, statePath);
+            statePublished = true;
+
+            // Keep both originals until startup/reload completes. This restores disk
+            // state on failure; it does not claim to undo a delivered runtime signal.
+            await activate(cancellationToken);
+            completed = true;
+        }
+        catch (Exception failure)
+        {
+            // Attempt each restore independently and without the cancelled request token.
+            // A failed restore keeps its backup and must not hide the activation error.
+            var errors = new List<Exception>();
+            RestorePublishedFile(configPublished, hadConfiguration, configPath, backupConfigPath, errors);
+            RestorePublishedFile(statePublished, hadState, statePath, backupStatePath, errors);
+            if (errors.Count > 0)
+                throw new AggregateException("Nginx configuration rollback failed; recovery copies were retained.", new[] { failure }.Concat(errors));
+            throw;
+        }
+        finally
+        {
+            DeletePreparedFile(pendingConfigPath);
+            DeletePreparedFile(pendingStatePath);
+            // Geri alma da başarısızsa kurtarma kopyasını silme.
+            if (completed)
+            {
+                DeletePreparedFile(backupConfigPath);
+                DeletePreparedFile(backupStatePath);
+            }
+        }
+    }
+
+    private static void EnsureRuntimeDirectories(string installDirectory)
+    {
+        Directory.CreateDirectory(Path.Combine(installDirectory, "conf"));
         Directory.CreateDirectory(Path.Combine(installDirectory, "logs"));
         Directory.CreateDirectory(Path.Combine(installDirectory, "temp", "cache"));
         Directory.CreateDirectory(Path.Combine(installDirectory, "temp", "proxy_temp"));
+    }
 
-        await File.WriteAllTextAsync(
-            pendingConfigPath,
-            BuildConfiguration(configuration),
-            cancellationToken);
-
-        var testResult = await TestAsync(
-            executablePath,
-            installDirectory,
-            Path.Combine("conf", "nginx.conf.pending"),
-            cancellationToken);
-        if (!testResult.Success)
+    private static void RestorePublishedFile(bool published, bool existed, string target, string backup, List<Exception> errors)
+    {
+        if (!published) return;
+        try
         {
-            File.Delete(pendingConfigPath);
-            throw new AppException("nginx.config_invalid", 400, 400, FormatResult(testResult));
+            if (existed) ReplacePreparedFile(backup, target);
+            else File.Delete(target);
         }
+        catch (Exception exception)
+        {
+            errors.Add(new IOException($"Nginx configuration could not be restored. Recovery path: {backup}", exception));
+        }
+    }
 
-        File.Move(pendingConfigPath, configPath, overwrite: true);
-        await File.WriteAllTextAsync(
-            statePath,
-            JsonSerializer.Serialize(configuration, JsonOptions),
-            cancellationToken);
+    private static void ReplacePreparedFile(string preparedPath, string targetPath)
+    {
+        if (File.Exists(targetPath)) File.Replace(preparedPath, targetPath, null);
+        else File.Move(preparedPath, targetPath);
+    }
+
+    private static void DeletePreparedFile(string path)
+    {
+        try { File.Delete(path); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     internal static async Task<NginxConfigurationRequest> ReadConfigurationAsync(
@@ -150,6 +306,8 @@ internal static partial class NginxInstallationSupport
     {
         if (!Directory.Exists(installDirectory) || !File.Exists(Path.Combine(installDirectory, "conf", "nginx.conf")))
         {
+            if (IsRunning(installDirectory))
+                throw new AppException("nginx.stop_failed", 500, 500, "Nginx is still running, but its configuration file is missing.");
             return;
         }
 
@@ -162,10 +320,17 @@ internal static partial class NginxInstallationSupport
             }
         }
 
-        for (var attempt = 0; attempt < 20 && IsRunning(installDirectory); attempt++)
+        await WaitForStopAsync(() => IsRunning(installDirectory), () => Task.Delay(250, cancellationToken));
+    }
+
+    internal static async Task WaitForStopAsync(Func<bool> isRunning, Func<Task> wait)
+    {
+        for (var attempt = 0; attempt < 20 && isRunning(); attempt++)
         {
-            await Task.Delay(250, cancellationToken);
+            await wait();
         }
+        if (isRunning())
+            throw new AppException("nginx.stop_failed", 500, 500, "Nginx is still running after the shutdown grace period.");
     }
 
     internal static async Task ReloadAsync(string installDirectory, CancellationToken cancellationToken)
@@ -189,13 +354,20 @@ internal static partial class NginxInstallationSupport
         }
     }
 
+    internal static Task RegisterStartupTaskAsync(
+        string installDirectory,
+        CancellationToken cancellationToken)
+        => RegisterStartupTaskAsync(installDirectory, ProcessRunner.RunPowerShellAsync, cancellationToken);
+
     internal static async Task RegisterStartupTaskAsync(
         string installDirectory,
+        Func<string, CancellationToken, Task<CommandResult>> runPowerShell,
         CancellationToken cancellationToken)
     {
         var executablePath = FindExecutable(installDirectory);
         var arguments = $"-p \"{EnsureTrailingSeparator(installDirectory)}\" -c conf/nginx.conf";
         var script = $$"""
+            $ErrorActionPreference = 'Stop'
             $action = New-ScheduledTaskAction -Execute '{{EscapePowerShell(executablePath)}}' -Argument '{{EscapePowerShell(arguments)}}'
             $trigger = New-ScheduledTaskTrigger -AtStartup
             $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
@@ -203,7 +375,7 @@ internal static partial class NginxInstallationSupport
             Register-ScheduledTask -TaskName '{{StartupTaskName}}' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
             """;
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        var result = await runPowerShell(script, cancellationToken);
         if (!result.Success)
         {
             throw new AppException("nginx.startup_task_failed", 500, 500, FormatResult(result));
@@ -266,8 +438,10 @@ internal static partial class NginxInstallationSupport
 
         try
         {
-            var process = Process.GetProcessById(processId);
-            return !process.HasExited;
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited &&
+                   string.Equals(process.ProcessName, "nginx", StringComparison.OrdinalIgnoreCase) &&
+                   ProcessRunner.IsUnderDirectory(process.MainModule?.FileName, installDirectory);
         }
         catch
         {
@@ -349,7 +523,7 @@ internal static partial class NginxInstallationSupport
                         proxy_set_header X-Forwarded-Proto $scheme;
                         proxy_set_header Upgrade $http_upgrade;
                         proxy_set_header Connection $connection_upgrade;
-                        proxy_pass {{configuration.UpstreamUrl.TrimEnd('/')}};
+                        proxy_pass {{FormatUpstreamUrl(configuration.UpstreamUrl)}};
             {{cacheDirectives}}        }
                 }
             }
@@ -373,7 +547,9 @@ internal static partial class NginxInstallationSupport
             throw new AppException("nginx.server_name_invalid", 400, 400);
         }
 
-        if (!Uri.TryCreate(configuration.UpstreamUrl, UriKind.Absolute, out var upstream) ||
+        if (string.IsNullOrWhiteSpace(configuration.UpstreamUrl) ||
+            configuration.UpstreamUrl.Any(char.IsControl) ||
+            !Uri.TryCreate(configuration.UpstreamUrl, UriKind.Absolute, out var upstream) ||
             (upstream.Scheme != Uri.UriSchemeHttp && upstream.Scheme != Uri.UriSchemeHttps) ||
             !string.IsNullOrEmpty(upstream.UserInfo) ||
             !string.IsNullOrEmpty(upstream.Fragment))
@@ -432,6 +608,28 @@ internal static partial class NginxInstallationSupport
 
     private static string FormatListenAddress(string address)
         => address.Contains(':', StringComparison.Ordinal) ? $"[{address}]" : address;
+
+    private static string FormatUpstreamUrl(string value)
+    {
+        var input = value.Trim();
+        var upstream = new Uri(input, UriKind.Absolute);
+        var escaped = upstream.AbsoluteUri;
+
+        // URI'siz proxy_pass, gelen isteğin özgün URI'sini korur. Uri sınıfının boş
+        // yola eklediği '/' bu davranışı değiştirmesin; açıkça girilmiş yollar ve
+        // sorguların son eğik çizgileri ise yönlendirme için anlamlıdır.
+        var authorityStart = input.IndexOf("://", StringComparison.Ordinal) + 3;
+        if (input.IndexOfAny(['/', '\\', '?'], authorityStart) < 0)
+            escaped = escaped.TrimEnd('/');
+
+        // Nginx URL'deki '$' karakterlerini tırnak içinde de değişken sayar. Burada
+        // kullanıcı bir literal URL girer; dolar URI kodlamasıyla literal kalır.
+        // Tek bir çift tırnaklı argüman, URL içindeki ';' gibi ayırıcıların yeni
+        // nginx yönergelerine dönüşmesini de engeller.
+        return "\"" + escaped.Replace("$", "%24", StringComparison.Ordinal)
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+    }
 
     private static string EnsureTrailingSeparator(string path)
     {

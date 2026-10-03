@@ -1083,7 +1083,7 @@ button:disabled {
     padding: var(--sp-8) var(--sp-12);
   }
 
-  input,
+  input:not([type="checkbox"]):not([type="radio"]),
   select,
   textarea {
     min-height: 40px;
@@ -1224,6 +1224,7 @@ button:disabled {
 
 .toggle-field input {
   width: auto;
+  flex-shrink: 0;
 }
 
 /* TABLO SATIRINDAKI DUGME.
@@ -1378,6 +1379,24 @@ label.checkbox input {
   max-width: min(420px, calc(100vw - 32px));
   margin: 0;
   box-shadow: 0 10px 28px rgb(0 0 0 / 32%);
+}
+
+/* A floating result needs its own opaque surface; inline notice tints otherwise let
+   the form beneath show through. Long diagnostics remain readable by scrolling. */
+.notice.page-notice {
+  --page-notice-tint: color-mix(in srgb, var(--accent-1) 9%, transparent);
+  background: linear-gradient(var(--page-notice-tint), var(--page-notice-tint)), var(--surface-0);
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.notice.page-notice.error {
+  --page-notice-tint: var(--danger-bg);
+}
+
+.notice.page-notice.warn-banner {
+  --page-notice-tint: color-mix(in srgb, var(--warn-1) 12%, transparent);
 }
 
 /* Dar ekranda kose yerine tam genislik: 420px'lik bir kutu telefonda ekranin yarisini kaplardi. */

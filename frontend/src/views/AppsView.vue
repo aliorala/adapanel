@@ -12,15 +12,16 @@
 
       <button
         class="secondary compact"
-        :disabled="!selectedSiteName || appsStore.loadingSiteName === selectedSiteName"
+        :disabled="!selectedSiteName || configurationLoading || inventoryLoading || busy"
         @click="refreshConfiguration">
         {{ t("panel.apps.refresh") }}
       </button>
     </div>
 
-    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
-      {{ notice }}
-    </p>
+    <div v-if="notice" :class="['notice', 'page-notice', 'apps-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
+      <p>{{ notice }}</p>
+      <button type="button" class="secondary compact notice-close" :aria-label="t('panel.common.dismissNotice')" @click="notice = ''">×</button>
+    </div>
 
     <div class="module-toolbar">
       <label class="stacked-field site-select" for="apps-site-select">
@@ -96,19 +97,23 @@
 
             <div class="row-actions">
               <span :class="['status-pill', runtimeInstalled ? 'ok' : 'warn']">
-                {{ runtimeInstalled ? t("panel.php.installedState") : t("panel.apps.notInstalled") }}
+                {{ !runtimeMeasured ? t("panel.apps.runtimeUnknown") : runtimeInstalled ? t("panel.php.installedState") : t("panel.apps.notInstalled") }}
               </span>
               <button
-                v-if="!runtimeInstalled"
+                v-if="runtimeMeasured && !runtimeInstalled && isAdministrator"
                 class="secondary compact"
-                v-bind="writeGate(!activeComponent || softwareStore.installingComponentId === activeComponent.id)"
+                v-bind="writeGate(!canInstall)"
                 @click="installRuntime(activeComponent?.id)">
                 {{ softwareStore.installingComponentId === activeComponent?.id
                   ? t("panel.php.installing")
                   : t("panel.php.install") }}
               </button>
-              <span v-else class="field-hint">{{ t("panel.apps.runtimeReadyHint") }}</span>
+              <span v-if="runtimeInstalled" class="field-hint">{{ t("panel.apps.runtimeReadyHint") }}</span>
+              <span v-else-if="runtimeMeasured && !isAdministrator" class="field-hint">{{ t("panel.apps.installAdministrator") }}</span>
             </div>
+            <p v-if="inventoryLoading" class="field-hint" role="status">{{ t("panel.common.loading") }}</p>
+            <SectionLoadError v-else-if="!runtimeMeasured" :message="inventoryLoad.message.value || t('appruntime.inventory_unavailable')"
+              :busy="busy" @retry="loadRuntimeInventory(selectedSiteName)" />
           </div>
         </li>
 
@@ -192,7 +197,8 @@
                   ? t("panel.apps.saving")
                   : (activeRuntime === "node" ? t("panel.apps.applyNode") : t("panel.apps.applyPython")) }}
               </button>
-              <span v-if="!runtimeInstalled" class="field-hint">{{ t("panel.apps.applyBlockedRuntime") }}</span>
+              <span v-if="!runtimeMeasured" class="field-hint">{{ t("panel.apps.runtimeUnknown") }}</span>
+              <span v-else-if="!runtimeInstalled" class="field-hint">{{ t("panel.apps.applyBlockedRuntime") }}</span>
               <span v-else-if="!startupFile" class="field-hint">{{ t("panel.apps.applyBlockedStartupFile") }}</span>
             </div>
           </div>
@@ -279,13 +285,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { isCancel } from "axios";
 import { useI18n } from "vue-i18n";
 import CodeSample from "../components/CodeSample.vue";
 import FieldHint from "../components/FieldHint.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import { useSectionError } from "../composables/useNotice";
-import { extractApiMessage } from "../stores/auth";
+import { extractApiMessage, useAuthStore } from "../stores/auth";
+import { getSessionEpoch } from "../api/client";
+import type { AppRuntimeSiteConfiguration } from "../api/apps";
 import { useAppsStore } from "../stores/apps";
 import { useSitesStore } from "../stores/sites";
 import { useSoftwareStore } from "../stores/software";
@@ -294,7 +303,8 @@ import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
-const { writeGate } = useSubscriptionGate();
+const { writeGate, locked } = useSubscriptionGate();
+const authStore = useAuthStore();
 const appsStore = useAppsStore();
 const sitesStore = useSitesStore();
 const softwareStore = useSoftwareStore();
@@ -302,6 +312,19 @@ const softwareStore = useSoftwareStore();
 const notice = ref("");
 const noticeError = ref(false);
 const activeRuntime = ref<"node" | "python">("node");
+const isAdministrator = computed(() => authStore.session?.user?.role === "Administrator");
+const isReseller = computed(() => authStore.session?.user?.role === "Reseller");
+const session = getSessionEpoch();
+let disposed = false, generation = 0, readRequest = 0, inventoryRequest = 0, draftRevision = 0, runtimeRevision = 0;
+const actionBusy = ref(false);
+const measured = ref(false);
+const readLoading = ref(false);
+const inventoryLoading = ref(false);
+const inventorySite = ref("");
+const inventoryLoad = useSectionError();
+const isActive = () => !disposed && session === getSessionEpoch();
+const contextCurrent = (context: number) => isActive() && context === generation;
+onBeforeUnmount(() => { disposed = true; generation++; readRequest++; inventoryRequest++; });
 
 // Panel bu değişkenleri web.config'e HER ZAMAN kendisi ekler (AppRuntimeService.BuildEnvironmentVariables).
 // Kullanıcının kutusuna yazmasına gerek yok; kutuda göstermek yerine "otomatik" olarak listeliyoruz.
@@ -350,10 +373,8 @@ const currentConfiguration = computed(() =>
 const hostedByApp = computed(() => Boolean(currentConfiguration.value?.isEnabled));
 // Yapılandırma sunucudan geldi mi? "Gelmedi" ile "barındırma kapalı" ekranda ayrışsın diye gerekli.
 const configurationLoaded = computed(() => currentConfiguration.value !== undefined && currentConfiguration.value !== null);
-// "Yolda" ile "okunamadı" AYRI: ikisi de `configurationLoaded === false` durumundadır ve ekran
-// ikisini de "Yükleniyor…" diye gösteriyordu. Bayrak mağazanın KENDİ alanından okunuyor, bu
-// ekranda ikinci bir kopya tutulmuyor.
-const configurationLoading = computed(() => appsStore.loadingSiteName === selectedSiteName.value);
+// Ekranın geçerli isteğini izler; başka bir siteye ait eski istek yükleme durumunu bitiremez.
+const configurationLoading = computed(() => readLoading.value);
 const configurationLoad = useSectionError();
 
 const hostedRuntimeLabel = computed(() => runtimeLabel(currentConfiguration.value?.runtimeType ?? "none"));
@@ -408,12 +429,16 @@ const installedComponentIds = computed(() => new Set(
     .filter((component) => component.status.toLowerCase() === "installed")
     .map((component) => component.componentId)));
 
-const runtimeInstalled = computed(() =>
-  installedComponentIds.value.has(activeRuntime.value === "node" ? "nodejs-lts" : "python-3"));
+const runtimeMeasured = computed(() => isAdministrator.value ? softwareStore.loaded :
+  isReseller.value && inventorySite.value === selectedSiteName.value && appsStore.runtimeInventoryLoaded[selectedSiteName.value] === true);
+const runtimeInstalled = computed(() => {
+  if (!runtimeMeasured.value) return false;
+  const componentId = activeRuntime.value === "node" ? "nodejs-lts" : "python-3";
+  return isAdministrator.value ? installedComponentIds.value.has(componentId) :
+    appsStore.runtimeInventories[selectedSiteName.value]?.some(item => item.componentId === componentId && item.isInstalled === true) === true;
+});
 
-const busy = computed(() => (activeRuntime.value === "node"
-  ? appsStore.nodeBusySiteName === selectedSiteName.value
-  : appsStore.pythonBusySiteName === selectedSiteName.value));
+const busy = computed(() => actionBusy.value || !!appsStore.nodeBusySiteName || !!appsStore.pythonBusySiteName || !!softwareStore.installingComponentId);
 
 const stepRuntimeDone = computed(() => runtimeInstalled.value);
 const stepAppDone = computed(() => Boolean(startupFile.value.trim()));
@@ -421,7 +446,8 @@ const stepApplyDone = computed(() =>
   hostedByApp.value && currentConfiguration.value?.runtimeType === activeRuntime.value);
 
 const canApply = computed(() =>
-  Boolean(selectedSiteName.value) && runtimeInstalled.value && stepAppDone.value && !busy.value);
+  isActive() && !locked.value && measured.value && runtimeMeasured.value && Boolean(selectedSiteName.value) && runtimeInstalled.value && stepAppDone.value && !busy.value);
+const canInstall = computed(() => isActive() && !locked.value && isAdministrator.value && measured.value && softwareStore.loaded && !!activeComponent.value && !runtimeInstalled.value && !busy.value);
 
 // Sonucu görebilmesi için sitenin adresi: nip.io önizleme bağlamalarını atla, asıl domaini göster.
 const siteUrl = computed(() => {
@@ -440,62 +466,115 @@ const siteUrl = computed(() => {
 
 onMounted(async () => {
   try {
-    if (!softwareStore.catalog && !softwareStore.loading) {
-      await softwareStore.fetchCatalog();
+    if (isAdministrator.value && !softwareStore.loaded && !softwareStore.loading) {
+      await loadRuntimeInventory(selectedSiteName.value);
     }
-
+    if (!isActive()) return;
     if (sitesStore.sites.length === 0 && !sitesStore.loading) {
       await sitesStore.fetchSites();
     }
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isActive()) showNotice(resolveApiMessage(error), true);
   }
 });
 
+watch([nodeForm, pythonForm, nodeEnvironmentText, pythonEnvironmentText, activeRuntime], () => { draftRevision++; }, { deep: true, flush: "sync" });
+watch(activeRuntime, () => { runtimeRevision++; }, { flush: "sync" });
 watch(selectedSiteName, (siteName) => {
+  if (!isActive()) return;
+  generation++;
+  readRequest++;
+  inventoryRequest++;
+  measured.value = false;
+  readLoading.value = false;
+  inventoryLoading.value = false;
+  inventorySite.value = "";
+  inventoryLoad.clear();
+  configurationLoad.clear();
+  notice.value = "";
+  noticeError.value = false;
+  resetDraft();
+  const cached = appsStore.getConfiguration(siteName);
+  if (cached) applyConfiguration(cached);
   void loadConfiguration(siteName);
-}, { immediate: true });
+  if (isReseller.value) void loadRuntimeInventory(siteName);
+}, { immediate: true, flush: "sync" });
+
+async function loadRuntimeInventory(siteName: string): Promise<boolean> {
+  if (!isActive() || siteName !== selectedSiteName.value ||
+    (!isAdministrator.value && (!isReseller.value || !siteName))) return false;
+  const context = generation, request = ++inventoryRequest;
+  const current = () => contextCurrent(context) && inventoryRequest === request;
+  inventoryLoading.value = true;
+  inventorySite.value = "";
+  try {
+    if (isAdministrator.value) await softwareStore.fetchCatalog();
+    else await appsStore.fetchRuntimeInventory(siteName);
+    if (!current()) return false;
+    inventorySite.value = siteName;
+    inventoryLoad.clear();
+    return true;
+  } catch (error) {
+    if (current() && !isCancel(error)) inventoryLoad.capture(error);
+    return false;
+  } finally {
+    if (current()) inventoryLoading.value = false;
+  }
+}
 
 // Tek giriş noktası: site değişimi, "Tekrar dene" ve "Yenile" üçü de buradan geçer, böylece
 // "okunamadı" durumu üç ayrı yerde ayrı ayrı temizlenmez. Önceden "Yenile" kendi try/catch'ini
 // yazıyordu; başarılı bir yenilemeden sonra hata satırı ekranda asılı kalırdı.
 async function loadConfiguration(siteName: string): Promise<boolean> {
-  if (!siteName) {
+  if (!isActive() || !siteName || siteName !== selectedSiteName.value) {
     return false;
   }
-
+  const context = generation, request = ++readRequest, draft = draftRevision;
+  const current = () => contextCurrent(context) && request === readRequest;
+  readLoading.value = true;
   try {
-    await appsStore.fetchConfiguration(siteName);
+    const configuration = await appsStore.fetchConfiguration(siteName);
+    if (!current()) return false;
+    if (draftRevision === draft) applyConfiguration(configuration);
+    measured.value = true;
     configurationLoad.clear();
     return true;
   } catch (error) {
-    configurationLoad.capture(error);
-    showNotice(resolveApiMessage(error), true);
+    if (current() && !isCancel(error)) {
+      measured.value = false;
+      configurationLoad.capture(error);
+      showNotice(resolveApiMessage(error), true);
+    }
     return false;
+  } finally {
+    if (current()) readLoading.value = false;
   }
 }
 
-watch(currentConfiguration, (configuration) => {
-  if (!configuration) {
-    return;
-  }
-
+function resetDraft() {
+  Object.assign(nodeForm, { startupFile: "server.js", workingDirectory: ".", arguments: "", componentId: "nodejs-lts" });
+  Object.assign(pythonForm, { startupFile: "app.py", workingDirectory: ".", arguments: "", componentId: "python-3" });
+  nodeEnvironmentText.value = "";
+  pythonEnvironmentText.value = "";
+}
+function applyConfiguration(configuration: AppRuntimeSiteConfiguration) {
+  resetDraft();
   if (configuration.runtimeType === "node") {
     activeRuntime.value = "node";
-    nodeForm.startupFile = configuration.startupFile || nodeForm.startupFile;
-    nodeForm.workingDirectory = configuration.workingDirectory || nodeForm.workingDirectory;
+    nodeForm.startupFile = configuration.startupFile || "server.js";
+    nodeForm.workingDirectory = configuration.workingDirectory || ".";
     nodeForm.arguments = configuration.arguments || "";
     nodeEnvironmentText.value = userEnvironmentVariables(configuration.environmentVariables, NODE_AUTO_ENVIRONMENT);
   }
 
   if (configuration.runtimeType === "python") {
     activeRuntime.value = "python";
-    pythonForm.startupFile = configuration.startupFile || pythonForm.startupFile;
-    pythonForm.workingDirectory = configuration.workingDirectory || pythonForm.workingDirectory;
+    pythonForm.startupFile = configuration.startupFile || "app.py";
+    pythonForm.workingDirectory = configuration.workingDirectory || ".";
     pythonForm.arguments = configuration.arguments || "";
     pythonEnvironmentText.value = userEnvironmentVariables(configuration.environmentVariables, PYTHON_AUTO_ENVIRONMENT);
   }
-}, { immediate: true });
+}
 
 // Panelin otomatik eklediği satırları kutuda gösterme: kullanıcı yalnız kendi değişkenlerini görsün.
 function userEnvironmentVariables(variables: string[], automatic: string[]): string {
@@ -509,50 +588,71 @@ function runtimeLabel(runtimeType: string): string {
 }
 
 async function refreshConfiguration() {
+  if (!isActive() || busy.value) return;
   if (!selectedSiteName.value) {
     showNotice(t("panel.apps.selectSiteHint"), true);
     return;
   }
 
-  if (await loadConfiguration(selectedSiteName.value)) {
+  const context = generation;
+  const configuration = loadConfiguration(selectedSiteName.value), inventory = loadRuntimeInventory(selectedSiteName.value);
+  const request = readRequest, inventoryRead = inventoryRequest;
+  const results = await Promise.all([configuration, inventory]);
+  if (contextCurrent(context) && request === readRequest && inventoryRead === inventoryRequest && results.every(Boolean)) {
     showNotice(t("panel.apps.refreshed"), false);
   }
 }
 
 async function installRuntime(componentId?: string) {
-  if (!componentId) {
-    return;
-  }
-
+  if (!isActive() || !componentId || !canInstall.value || componentId !== activeComponent.value?.id) return;
+  const context = generation, runtime = runtimeRevision;
+  const current = () => contextCurrent(context) && runtime === runtimeRevision;
+  actionBusy.value = true;
   try {
-    await softwareStore.installComponent(componentId);
+    const result = await softwareStore.installComponent(componentId);
+    if (!current()) return;
+    const installed = softwareStore.catalog?.installed.find(item => item.componentId === componentId);
+    if (!softwareStore.loaded || result.componentId !== componentId || result.status.toLowerCase() !== "installed" ||
+      installed?.status.toLowerCase() !== "installed" || !installed.version || (result.version && installed.version !== result.version)) {
+      showNotice(t(result.status.toLowerCase() === "failed" && result.message ? result.message : "panel.software.resultUnconfirmed"), true);
+      return;
+    }
     showNotice(t("software.install.completed"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current() && !isCancel(error)) showNotice(resolveApiMessage(error), true);
+  } finally {
+    if (isActive()) actionBusy.value = false;
   }
 }
 
 async function applyRuntime() {
-  if (!selectedSiteName.value) {
-    showNotice(t("panel.apps.selectSiteHint"), true);
-    return;
-  }
-
+  if (!isActive() || !canApply.value) return;
+  const context = generation, runtimeContext = runtimeRevision, draft = draftRevision;
+  const siteName = selectedSiteName.value, runtime = activeRuntime.value;
+  const current = () => contextCurrent(context) && runtimeContext === runtimeRevision;
   const payload = {
     ...activeForm.value,
     environmentVariables: parseEnvironmentVariables(environmentText.value)
   };
-
+  actionBusy.value = true;
+  readRequest++;
+  readLoading.value = false;
   try {
-    if (activeRuntime.value === "node") {
-      await appsStore.configureNode(selectedSiteName.value, payload);
-      showNotice(t("appruntime.node_updated"), false);
-    } else {
-      await appsStore.configurePython(selectedSiteName.value, payload);
-      showNotice(t("appruntime.python_updated"), false);
-    }
+    const configuration = runtime === "node"
+      ? await appsStore.configureNode(siteName, payload)
+      : await appsStore.configurePython(siteName, payload);
+    if (!current()) return;
+    if (draftRevision === draft) applyConfiguration(configuration);
+    measured.value = true;
+    configurationLoad.clear();
+    showNotice(t(runtime === "node" ? "appruntime.node_updated" : "appruntime.python_updated"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (contextCurrent(context) && !isCancel(error)) {
+      measured.value = false;
+      showNotice(resolveApiMessage(error), true);
+    }
+  } finally {
+    if (isActive()) actionBusy.value = false;
   }
 }
 
@@ -580,6 +680,16 @@ function showNotice(message: string, isError: boolean) {
   display: grid;
   gap: var(--sp-12);
 }
+
+.apps-notice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--sp-8);
+}
+
+.apps-notice p { margin: 0; }
+.notice-close { width: 28px; height: 28px; padding: 0; color: inherit; }
 
 .site-select {
   width: min(320px, 100%);

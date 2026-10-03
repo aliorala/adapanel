@@ -63,8 +63,9 @@ internal static class BackupArchiveProbe
             return new Result(BackupIntegrity.Unknown, "path=empty; probe=skipped");
         }
 
-        // Geri yüklenmiş kayıt bir DİZİNİ gösterir (RestoreAsync kaydın yolunu çıkarılan klasöre
-        // çevirir). Orada ölçülecek bir arşiv yoktur; "bozuk" demek yanlış olurdu.
+        // Historical restore records may point to an extraction directory instead of
+        // the archive. No archive can be measured here; current restores preserve Path
+        // and publish their destination separately as RestoredPath.
         if (Directory.Exists(path))
         {
             return new Result(BackupIntegrity.Unknown, "target=directory; probe=skipped");

@@ -15,6 +15,11 @@ export type ApiErrorEnvelope = {
   details?: string;
 };
 
+/** İstemcinin kullanıcıya göstermek üzere ürettiği, çevrilebilir işlem hatası. */
+export class UserFacingError extends Error {
+  constructor(public readonly messageKey: string) { super(messageKey); }
+}
+
 /** `extractApiMessage`'ın axios'tan ihtiyaç duyduğu HER ŞEY — test bunu elle kurabilir. */
 export type TransportFailure = {
   /** Yanıt geldiyse HTTP durumu; ağ hatasında undefined. */

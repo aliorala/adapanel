@@ -10,15 +10,23 @@ public sealed partial class BackupService
 
     // Only failed first uploads: completed remote uploads cannot be replayed here.
     // The administrator confirms the CURRENT configured destination, which may have changed.
-    public async Task<BackupRecordDto> RetryRemoteUploadAsync(string backupId, string expectedRemoteUrl,
-        CancellationToken cancellationToken = default)
+    public Task<BackupRecordDto> RetryRemoteUploadAsync(string backupId, string expectedRemoteUrl,
+        CancellationToken cancellationToken = default) => RetryRemoteUploadCoreAsync(backupId, expectedRemoteUrl, null, cancellationToken);
+
+    public Task<BackupRecordDto> RetryRemoteUploadAsync(string backupId, string expectedRemoteUrl,
+        Func<BackupRecordDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) =>
+        RetryRemoteUploadCoreAsync(backupId, expectedRemoteUrl, beforeMutation, cancellationToken);
+
+    private async Task<BackupRecordDto> RetryRemoteUploadCoreAsync(string backupId, string expectedRemoteUrl,
+        Func<BackupRecordDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
         if (!await RemoteRetryGate.WaitAsync(0, cancellationToken))
             throw new AppException("runningjob.backup_in_progress", 409, 409);
         try
         {
-            var record = (await GetBackupsAsync(cancellationToken)).FirstOrDefault(x => x.Id == backupId)
-                ?? throw new AppException("backup.not_found", 404, 404);
+            var snapshot = await EnterRecordAsync(backupId, cancellationToken, beforeMutation);
+            using var sourceLease = snapshot.Lease;
+            var record = snapshot.Record;
             if (record.Status != "created_remote_failed" || record.TargetType != "ftp"
                 || !string.IsNullOrEmpty(record.RemoteUri) || !string.IsNullOrEmpty(record.SubscriptionUserId))
                 throw new AppException("backup.retry_not_available", 409, 409);

@@ -1,4 +1,5 @@
 using AdaPanel.Core.Dtos.Ssl;
+using AdaPanel.Core.Dtos.Sites;
 
 namespace AdaPanel.Core.Interfaces;
 
@@ -6,14 +7,33 @@ public interface ISslService
 {
     Task<SslWorkspaceDto> GetSiteWorkspaceAsync(string siteName, CancellationToken cancellationToken = default);
 
+    Task<SslWorkspaceDto> GetSiteWorkspaceAsync(string siteName,
+        Func<SiteDto, CancellationToken, Task> beforePublication, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This SSL provider does not support authorized workspace reconciliation.");
+
     Task<SslCertificateDto> IssueLetsEncryptAsync(IssueLetsEncryptRequest request, CancellationToken cancellationToken = default);
 
     Task<SslCertificateDto> ImportCertificateAsync(ImportCertificateRequest request, CancellationToken cancellationToken = default);
 
+    Task<SslCertificateDto> ImportCertificateAsync(ImportCertificateRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This SSL provider does not support authorized certificate import.");
+
     Task<RenewAllResultDto> RenewAllAsync(CancellationToken cancellationToken = default);
+
+    async Task<RenewAllResultDto> RenewAllAsync(Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken = default)
+    {
+        await beforeMutation(cancellationToken);
+        return await RenewAllAsync(cancellationToken);
+    }
 
     /// <summary>HTTP→HTTPS kalıcı (301) yönlendirmesini açar/kapatır (panel "Force HTTPS").</summary>
     Task<SslWorkspaceDto> SetHttpsRedirectAsync(SetHttpsRedirectRequest request, CancellationToken cancellationToken = default);
+
+    Task<SslWorkspaceDto> SetHttpsRedirectAsync(SetHttpsRedirectRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This SSL provider does not support authorized HTTPS redirect changes.");
 
     /// <summary>
     /// Bir sitenin HTTPS bağlamasını kaldırır (panel kaydı dahil).
@@ -30,6 +50,10 @@ public interface ISslService
     /// </para>
     /// </summary>
     Task<RemoveSslCertificateResultDto> RemoveCertificateAsync(RemoveSslCertificateRequest request, CancellationToken cancellationToken = default);
+
+    Task<RemoveSslCertificateResultDto> RemoveCertificateAsync(RemoveSslCertificateRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This SSL provider does not support authorized binding removal.");
 
     /// <summary>Site silinince panelin SSL durumundaki o siteye ait kayıtları temizler (öksüz kalmasın).</summary>
     Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default);

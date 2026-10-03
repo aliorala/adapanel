@@ -5,8 +5,10 @@ using AdaPanel.Core.Entities;
 using AdaPanel.Core.Enums;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Cache;
+using AdaPanel.Infrastructure.Support;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace AdaPanel.Infrastructure.Tests;
@@ -82,15 +84,16 @@ public sealed class MemcachedRuntimeTruthTests : IDisposable
         using var sahte = new SahteMemcached(port);
         Assert.True(sahte.Dinliyor, $"sahte memcached {port} portuna baglanamadi.");
 
-        var servis = new CacheService(dbContext) { MemcachedProbePort = port };
+        var servis = OlculmusYokluklaServis(port);
         var durum = await servis.GetStatusAsync();
 
         Assert.True(durum.Memcached.IsInstalled);
         Assert.Equal("Running", durum.Memcached.Status);
+        Assert.False(durum.Memcached.IsServiceRegistered);
     }
 
     /// <summary>
-    /// Port susuyorsa durum "Stopped" olmalı — ama bu, servis kaydına değil ÖLÇÜME dayanmalı.
+    /// Görev sorgusu başarıyla yokluk ölçüyor ve port bağlantıyı reddediyorsa durum "Stopped" olmalı.
     /// </summary>
     [Fact]
     public async Task GetStatus_WhenNothingAnswers_ReportsStopped()
@@ -99,18 +102,22 @@ public sealed class MemcachedRuntimeTruthTests : IDisposable
 
         // Bos port: kimsenin dinlemedigi KESIN olan bir numara. Gercek 11211'e bakmak, makinede
         // memcached kurulu oldugunda bu testi hatali kirmiziya dusururdu.
-        var servis = new CacheService(dbContext) { MemcachedProbePort = BosPortBul() };
+        var gunlukcu = new KayitTutanGunlukcu<CacheService>();
+        var servis = OlculmusYokluklaServis(BosPortBul(), gunlukcu);
         var durum = await servis.GetStatusAsync();
 
         Assert.True(durum.Memcached.IsInstalled);
+        Assert.True(gunlukcu.Icerir(LogLevel.Debug, "baglanti reddetti"),
+            string.Join("\n", gunlukcu.Kayitlar.Select(item => $"{item.Mesaj} {item.Istisna}")));
         Assert.Equal("Stopped", durum.Memcached.Status);
+        Assert.False(durum.Memcached.IsServiceRegistered);
     }
 
     /// <summary>Bileşen hiç kurulu değilse "NotInstalled"; port sondası bunu değiştirmemeli.</summary>
     [Fact]
     public async Task GetStatus_WhenComponentIsMissing_ReportsNotInstalled()
     {
-        var servis = new CacheService(dbContext);
+        var servis = OlculmusYokluklaServis(BosPortBul());
         var durum = await servis.GetStatusAsync();
 
         Assert.False(durum.Memcached.IsInstalled);
@@ -126,11 +133,27 @@ public sealed class MemcachedRuntimeTruthTests : IDisposable
     {
         BilesenKaydet("memcached", "OzelMemcachedGorevi");
 
-        var servis = new CacheService(dbContext);
+        var servis = OlculmusYokluklaServis(BosPortBul());
         var durum = await servis.GetStatusAsync();
 
         Assert.Equal("OzelMemcachedGorevi", durum.Memcached.ServiceName);
     }
+
+    // Bu testler gerçek TCP sondasını sınar; görev/servis sorgusu fixture'da başarılı
+    // yokluk ölçer. PowerShell yetkisi veya kurulu görevler port davranışını değiştirmemeli.
+    private CacheService OlculmusYokluklaServis(int port, ILogger<CacheService>? gunlukcu = null) => new(dbContext, gunlukcu)
+    {
+        MemcachedProbePort = port,
+        InspectPowerShellAsync = (script, _) =>
+        {
+            Assert.True(script.Contains("Get-Service", StringComparison.Ordinal) || script.Contains("Get-ScheduledTask", StringComparison.Ordinal));
+            return Task.FromResult(new CommandResult
+            {
+                ExitCode = 0,
+                StandardOutput = script.Contains("Get-Service", StringComparison.Ordinal) ? "{\"Exists\":false}" : "false"
+            });
+        }
+    };
 
     private void BilesenKaydet(string bilesenId, string birimAdi)
     {

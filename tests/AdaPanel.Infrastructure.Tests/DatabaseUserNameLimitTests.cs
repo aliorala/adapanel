@@ -90,40 +90,8 @@ public sealed class DatabaseUserNameLimitTests
         Assert.Throws<TargetInvocationException>(() => Dogrula(new string('a', 81), DbEngine.MariaDb));
     }
 
-    /// <summary>
-    /// VERITABANI, KULLANICI ADI DOGRULANMADAN OLUSTURULMAZ.
-    /// </summary>
-    /// <remarks>
-    /// Sira meselesi bir uslup tercihi degil: <c>CreateDatabaseAsync</c> once veritabanini
-    /// yaratiyordu ve kullanici adi gecersizse geri alma yoktu. Kaynakta sira olculur cunku
-    /// "hangisi once calisir" sorusunun cevabi tam olarak budur.
-    /// </remarks>
-    [Fact]
-    public void TheUserNameIsValidatedBeforeTheDatabaseIsCreated()
-    {
-        var govde = MetotGovdesi(ServisKaynagi(), "CreateDatabaseAsync");
-
-        var dogrulama = govde.IndexOf("NormalizeUserName(request.UserName, dbEngine)", StringComparison.Ordinal);
-        var olusturma = govde.IndexOf("provider.CreateDatabaseAsync(", StringComparison.Ordinal);
-
-        Assert.True(dogrulama >= 0, "Kullanici adi dogrulamasi CreateDatabaseAsync icinde bulunamadi.");
-        Assert.True(olusturma >= 0, "CreateDatabase cagrisi bulunamadi.");
-        Assert.True(
-            dogrulama < olusturma,
-            "Kullanici adi, veritabani olusturulduktan SONRA dogrulaniyor: gecersiz adda sahipsiz veritabani kalir.");
-    }
-
-    /// <summary>
-    /// Kullanici kurulamazsa BU CAGRIDA olusturulan veritabani GERI ALINIR. Dogrulama uzunlugu
-    /// yakalar ama parola politikasi / yetki gibi baska sebepler de var; geri alma o durumlar icin.
-    /// </summary>
-    [Fact]
-    public void AFailedUserCreationRollsBackTheDatabase()
-    {
-        var govde = MetotGovdesi(ServisKaynagi(), "CreateDatabaseAsync");
-
-        Assert.Contains("provider.DeleteDatabaseAsync(profile, databaseName, cancellationToken)", govde, StringComparison.Ordinal);
-    }
+    // Creation ordering and rollback are exercised through the real service in
+    // DatabaseCreationRollbackTests, including provider effects and cancellation.
 
     /// <summary>MySQL 1470 artik jenerik 500 DEGIL, nedenini soyleyen 400.</summary>
     [Fact]
@@ -204,9 +172,6 @@ public sealed class DatabaseUserNameLimitTests
         return (string)method!.Invoke(null, [ad, engine])!;
     }
 
-    private static string ServisKaynagi() =>
-        Kaynak(Path.Combine("src", "AdaPanel.Infrastructure", "Database", "DatabaseService.cs"));
-
     private static string Kaynak(string goreliYol)
     {
         var klasor = AppContext.BaseDirectory;
@@ -223,35 +188,4 @@ public sealed class DatabaseUserNameLimitTests
         throw new DirectoryNotFoundException("Depo koku bulunamadi.");
     }
 
-    /// <summary>
-    /// Metot govdesini keser. Dosya genelinde arama yapmak, aranan satir BASKA bir metotta
-    /// gectigi icin duzeltme geri alinsa bile yesil kalan "kor" testler uretir.
-    /// </summary>
-    private static string MetotGovdesi(string kaynak, string metotAdi)
-    {
-        var basla = kaynak.IndexOf($"{metotAdi}(", StringComparison.Ordinal);
-        Assert.True(basla >= 0, $"Metot bulunamadi: {metotAdi}");
-
-        var acilis = kaynak.IndexOf('{', basla);
-        Assert.True(acilis >= 0, $"Metot govdesi bulunamadi: {metotAdi}");
-
-        var derinlik = 0;
-        for (var i = acilis; i < kaynak.Length; i++)
-        {
-            if (kaynak[i] == '{')
-            {
-                derinlik++;
-            }
-            else if (kaynak[i] == '}')
-            {
-                derinlik--;
-                if (derinlik == 0)
-                {
-                    return kaynak[acilis..(i + 1)];
-                }
-            }
-        }
-
-        throw new InvalidOperationException($"Metot govdesi kapanmadi: {metotAdi}");
-    }
 }

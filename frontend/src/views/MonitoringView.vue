@@ -8,6 +8,7 @@
         </div>
         <span class="meta">{{ loading ? t("panel.system.loading") : formatUtc(overview?.currentServerTimeUtc ?? null) }}</span>
       </div>
+      <p v-if="historyError" class="notice error" role="alert">{{ historyError }}</p>
       <!-- Ortak kaynak göstergeleri ana sayfayla aynı durum eşiklerini kullanır. -->
       <div v-if="overview" class="resource-grid">
         <ResourceMetric kind="cpu" :label="t('panel.system.cpu')" :value="overview.cpuUsagePercent" :detail="overview.logicalProcessorCount + ' ' + t('panel.system.cores')">
@@ -168,7 +169,7 @@
              kalanıyla aynı (utils/datetime.ts). -->
         <div class="net-axis-x" aria-hidden="true">
           <span>{{ trendStartLabel }}</span>
-          <span>{{ t("panel.monitor.trendNow") }}</span>
+          <span>{{ trendEndLabel }}</span>
         </div>
         <div class="net-legend">
           <span><i class="legend-dot down"></i>{{ t("panel.system.download") }}</span>
@@ -301,6 +302,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import ResourceMetric from "../components/ResourceMetric.vue";
 import { useI18n } from "vue-i18n";
 import { useSystemStore } from "../stores/system";
+import { getSessionEpoch } from "../api/client";
 import { getProcessSnapshot, type ProcessSnapshot } from "../api/processes";
 import QueryHistory from "../components/QueryHistory.vue";
 import ResourceConsumers from "../components/ResourceConsumers.vue";
@@ -362,6 +364,24 @@ const sortedDisks = computed(() => [...(props.overview?.disks ?? [])]
 // bu geçmişi çekip küçük SVG sparkline'larla trend gösterir → sayfa yenilense de DOLU gelir (~24 saatlik pencere).
 const systemStore = useSystemStore();
 let historyTimer: number | null = null;
+const historyError = ref("");
+let historyInFlight = false;
+let disposed = false;
+const sessionEpoch = getSessionEpoch();
+const isActive = () => !disposed && sessionEpoch === getSessionEpoch();
+
+async function pollHistory() {
+  if (!isActive() || document.hidden || historyInFlight) return;
+  historyInFlight = true;
+  try {
+    await systemStore.fetchHistory();
+    if (isActive()) historyError.value = "";
+  } catch {
+    if (isActive()) historyError.value = t("panel.monitor.historyFailed");
+  } finally {
+    historyInFlight = false;
+  }
+}
 
 const cpuSeries = computed(() => systemStore.history.map((sample) => sample.cpuPercent));
 const memSeries = computed(() => systemStore.history.map((sample) => sample.memoryPercent));
@@ -378,6 +398,8 @@ const hasNetTrend = computed(() => systemStore.history.length > 1);
 /** Grafiğin sol ucu: pencereyi UYDURMAK yerine ilk örneğin kendi zaman damgasını yazar. */
 const trendStartLabel = computed(() =>
   formatDateTime(systemStore.history[0]?.timestampUtc ?? null, t("panel.common.notAvailable")));
+const trendEndLabel = computed(() =>
+  formatDateTime(systemStore.history[systemStore.history.length - 1]?.timestampUtc ?? null, t("panel.common.notAvailable")));
 
 // --- "Şu an kim kullanıyor?" kaynak seçimi ---
 const consumerSource = ref<ConsumerSource>("mariadb");
@@ -427,31 +449,44 @@ const processWaitedLong = ref(false);
 let processSlowTimer: number | null = null;
 let processTimer: number | null = null;
 let processInFlight = false;
+let processGeneration = 0;
 
 async function pollProcesses() {
   // Sekme arka plandaysa veya kullanıcı duraklattıysa sunucuyu boşuna yorma.
   // Önceki istek hâlâ sürüyorsa yenisini kuyruğa alma (yavaş sunucuda istek yığılmasın).
-  if (processPaused.value || document.hidden || processInFlight) {
+  if (!isActive() || processPaused.value || document.hidden || processInFlight) {
     return;
   }
 
   processInFlight = true;
+  const generation = processGeneration;
+  const sort = processSort.value;
+  const current = () => isActive() && !processPaused.value && generation === processGeneration && sort === processSort.value;
   try {
-    snapshot.value = await getProcessSnapshot(processSort.value);
+    const result = await getProcessSnapshot(sort);
+    if (!current()) return;
+    snapshot.value = result;
     processError.value = "";
   } catch {
-    processError.value = t("panel.processes.failed");
+    if (current()) processError.value = t("panel.processes.failed");
   } finally {
     processInFlight = false;
+    // A sort/resume change while a request is pending needs one fresh read, after
+    // the old read finishes. Keep the no-overlap guarantee even on a slow server.
+    if (isActive() && generation !== processGeneration) void pollProcesses();
   }
 }
 
 // Sıralama değişince beklemeden yenile.
-watch(processSort, () => void pollProcesses());
+watch([processSort, processPaused], () => {
+  ++processGeneration;
+  processError.value = "";
+  void pollProcesses();
+}, { flush: "sync" });
 
 onMounted(() => {
-  void systemStore.fetchHistory();
-  historyTimer = window.setInterval(() => void systemStore.fetchHistory(), 60000);
+  void pollHistory();
+  historyTimer = window.setInterval(() => void pollHistory(), 60000);
 
   void pollProcesses();
   processTimer = window.setInterval(() => void pollProcesses(), 2000);
@@ -461,6 +496,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  disposed = true;
   if (historyTimer !== null) {
     window.clearInterval(historyTimer);
     historyTimer = null;
@@ -651,6 +687,8 @@ function formatTimeSpan(value: string): string {
 
 .net-axis-x {
   display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-8);
   justify-content: space-between;
   color: var(--text-muted);
   font-size: var(--fs-2xs);

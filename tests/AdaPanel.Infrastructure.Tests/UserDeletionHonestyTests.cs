@@ -41,6 +41,17 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </remarks>
 public sealed class UserDeletionHonestyTests
 {
+    [Fact]
+    public async Task DatabaseOwnershipChangedAfterSnapshotIsNotRemovedWithOldUser()
+    {
+        using var fixture = Duzenek.Kur();
+        fixture.DbSahiplik.Sahipli.Add(("postgresql", "race_database"));
+        fixture.DbSahiplik.ReplacementOwner = Guid.NewGuid();
+        var result = await fixture.Servis.DeleteUserAsync(fixture.MusteriId, YoneticiId, removeSites: false, ipAddress: null);
+        Assert.Empty(fixture.DbSahiplik.Silinenler);
+        Assert.DoesNotContain(result.Leftovers, item => item.Kind == SiteLeftoverKinds.Database);
+    }
+
     private static readonly Guid YoneticiId = Guid.Parse("11111111-1111-1111-1111-111111111111");
 
     // ---- Servis: cascade'in raporu artık yanıt nesnesine giriyor ----
@@ -495,7 +506,7 @@ public sealed class UserDeletionHonestyTests
         => new(
             null!, null!, null!, null!, null!, null!, null!, null!, null!,
             null!, null!, null!, null!, null!, null!, null!, null!, null!,
-            NullLogger<SiteCascadeDeletionService>.Instance);
+            NullLogger<SiteCascadeDeletionService>.Instance, new ConcurrencyLock());
 
     /// <summary>
     /// Ucu GERÇEK denetleyiciyle çalıştırır: yanıtın durum kodu ve zarfı kaynak metninden değil
@@ -674,11 +685,16 @@ public sealed class UserDeletionHonestyTests
 
     private sealed class SahteDbSahiplik : IDatabaseOwnershipService
     {
+        private Guid lastOwner;
+        public Guid? ReplacementOwner { get; set; }
         public List<(string Engine, string DatabaseName)> Sahipli { get; } = [];
         public List<(string Engine, string DatabaseName)> Silinenler { get; } = [];
 
         public Task<IReadOnlyCollection<(string Engine, string DatabaseName)>> GetOwnedAsync(Guid ownerUserId, CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyCollection<(string, string)>>(Sahipli.ToArray());
+        {
+            lastOwner = ownerUserId;
+            return Task.FromResult<IReadOnlyCollection<(string, string)>>(Sahipli.ToArray());
+        }
 
         public Task RemoveAsync(string engine, string databaseName, CancellationToken cancellationToken = default)
         {
@@ -690,7 +706,7 @@ public sealed class UserDeletionHonestyTests
 
         public Task RecordAsync(string engine, string databaseName, Guid ownerUserId, string? siteName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task RemoveBySiteAsync(string siteName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<Guid?> GetOwnerAsync(string engine, string databaseName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<Guid?> GetOwnerAsync(string engine, string databaseName, CancellationToken cancellationToken = default) => Task.FromResult<Guid?>(ReplacementOwner ?? lastOwner);
         public Task<IReadOnlyCollection<(string Engine, string DatabaseName, Guid OwnerUserId, string SiteName)>> GetAllAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 

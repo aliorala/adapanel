@@ -38,6 +38,7 @@ export function useRunningTask() {
   const label = ref("");
   const elapsedSeconds = ref(0);
   let timer: ReturnType<typeof setInterval> | undefined;
+  let disposed = false;
 
   const running = computed(() => label.value !== "");
 
@@ -63,6 +64,7 @@ export function useRunningTask() {
    *   sekmede başlatılan işler için doğru olan budur (bkz. BackupView, SiteBackupView).
    */
   function begin(taskLabel: string, serverStart?: RunningTaskStart) {
+    if (disposed) return;
     stopTimer();
     label.value = taskLabel;
 
@@ -90,7 +92,7 @@ export function useRunningTask() {
 
   // Ekran değişince zamanlayıcı ARKADA KALMAZ (bileşen yok olduktan sonra ref yazan bir
   // interval sızıntıdır).
-  onScopeDispose(stopTimer);
+  onScopeDispose(() => { disposed = true; end(); });
 
   return { running, label, elapsedSeconds, elapsedText, begin, end };
 }
@@ -174,6 +176,8 @@ export function useServerRunningTask(options: {
   /** Kullanıcı "kesildi" uyarısını kapattı mı (yalnız bu sekme için). */
   const interruptedDismissed = ref(false);
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let disposed = false, generation = 0;
+  let pending: Promise<void> | undefined;
 
   // Geçen süre AYNI sayaçtan okunur: sunucudan gelen başlangıç anı `begin()`e verilir, böylece
   // yenilenmiş sayfa "0:05" değil gerçek süreyi ("42:13") yazar.
@@ -183,6 +187,8 @@ export function useServerRunningTask(options: {
     !interruptedDismissed.value && interrupted.value ? options.interruptedLabel(interrupted.value) : "");
 
   function stop() {
+    ++generation;
+    pending = undefined;
     if (timer !== undefined) {
       clearTimeout(timer);
       timer = undefined;
@@ -196,8 +202,19 @@ export function useServerRunningTask(options: {
    * silmek olurdu. Okunamadıysa en son bilinen durum ekranda kalır.
    */
   async function refresh() {
+    if (disposed) return;
+    if (pending) return pending;
+    const requestGeneration = generation;
+    pending = readStatus(requestGeneration).finally(() => {
+      if (generation === requestGeneration) pending = undefined;
+    });
+    return pending;
+  }
+
+  async function readStatus(requestGeneration: number) {
     try {
       const status = await options.fetchStatus();
+      if (disposed || requestGeneration !== generation) return;
       const suren = status.running.length > 0 ? status.running[0] : null;
 
       // Sayaç YALNIZ iş değiştiğinde yeniden kurulur; her yoklamada `begin()` çağırmak sayacı
@@ -232,6 +249,7 @@ export function useServerRunningTask(options: {
 
   /** Yoklamayı işin varlığına göre açıp kapatır — iş yokken sunucu boşuna yorulmaz. */
   function syncPolling() {
+    if (disposed) return;
     if (job.value !== null) {
       if (timer === undefined) {
         timer = setTimeout(tick, pollMs);
@@ -243,19 +261,22 @@ export function useServerRunningTask(options: {
   }
 
   async function tick() {
+    const requestGeneration = generation;
     timer = undefined;
     await refresh();
-    syncPolling();
+    if (requestGeneration === generation) syncPolling();
   }
 
   /** Ekran açılırken bir kez oku; sunucuda iş varsa yoklama kendiliğinden başlar. */
   async function start() {
+    if (disposed) return;
+    const requestGeneration = generation;
     await refresh();
-    syncPolling();
+    if (requestGeneration === generation) syncPolling();
   }
 
   // Bileşen yok olduktan sonra yoklamaya devam eden bir zamanlayıcı sızıntıdır.
-  onScopeDispose(stop);
+  onScopeDispose(() => { disposed = true; stop(); });
 
   return {
     /** Sunucuda GERÇEKTEN süren iş (yoksa null) — ekranlar bittiğini buradan anlar. */

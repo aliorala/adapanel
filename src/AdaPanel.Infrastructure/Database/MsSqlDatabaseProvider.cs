@@ -47,14 +47,21 @@ internal sealed class MsSqlDatabaseProvider : IDatabaseEngineProvider
         await using var connection = await OpenConnectionAsync(profile, "master", cancellationToken);
         await ExecuteAsync(
             connection,
-            $"""
-             IF DB_ID(N'{EscapeLiteral(databaseName)}') IS NULL
-                 THROW 50001, 'Database not found.', 1;
-             ALTER DATABASE {QuoteIdentifier(databaseName)} SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-             DROP DATABASE {QuoteIdentifier(databaseName)};
-             """,
-            cancellationToken);
+            BuildDeleteDatabaseSql(databaseName),
+            cancellationToken,
+            deletingDatabase: true);
     }
+
+    internal static string BuildDeleteDatabaseSql(string databaseName) => $"""
+        IF DB_ID(N'{EscapeLiteral(databaseName)}') IS NULL
+        BEGIN
+            IF COALESCE(HAS_PERMS_BY_NAME(NULL, NULL, 'ALTER ANY DATABASE'), 0) <> 1
+                THROW 50002, 'Database existence could not be verified.', 1;
+            THROW 50001, 'AdaPanel.DatabaseDeletion.AbsenceConfirmed', 173;
+        END;
+        ALTER DATABASE {QuoteIdentifier(databaseName)} SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+        DROP DATABASE {QuoteIdentifier(databaseName)};
+        """;
 
     public async Task CreateUserAsync(
         DatabaseConnectionProfile profile,
@@ -214,30 +221,32 @@ internal sealed class MsSqlDatabaseProvider : IDatabaseEngineProvider
     private static async Task ExecuteAsync(
         SqlConnection connection,
         string sql,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool deletingDatabase = false)
     {
         try
         {
             await using var command = new SqlCommand(sql, connection);
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
-        catch (SqlException exception) when (exception.Number is 1801)
+        catch (SqlException exception)
         {
-            throw new AppException("database.database_already_exists", 409, 409);
-        }
-        catch (SqlException exception) when (exception.Number is 15025)
-        {
-            throw new AppException("database.user_already_exists", 409, 409);
-        }
-        catch (SqlException exception) when (exception.Number is 4060 or 911 or 50001)
-        {
-            throw new AppException("database.database_not_found", 404, 404);
-        }
-        catch (SqlException)
-        {
-            throw new AppException("database.configuration_failed", 500, 500);
+            throw MapCommandException(exception.Number, deletingDatabase, exception.State, exception.Message);
         }
     }
+
+    internal static AppException MapCommandException(int number, bool deletingDatabase = false, byte state = 0, string message = "") => number switch
+    {
+        // DDL triggers can also throw 50001. Only our visibility-checked signal can
+        // complete cleanup; unrelated or combined SQL errors must remain failures.
+        50001 when deletingDatabase && state == 173 &&
+                   string.Equals(message, "AdaPanel.DatabaseDeletion.AbsenceConfirmed", StringComparison.Ordinal)
+            => AppException.Gone("database.database_not_found"),
+        1801 => new AppException("database.database_already_exists", 409, 409),
+        15025 => new AppException("database.user_already_exists", 409, 409),
+        4060 or 911 or 50001 => new AppException("database.database_not_found", 404, 404),
+        _ => new AppException("database.configuration_failed", 500, 500)
+    };
 
     private static string BuildGrant(string privilege, string userIdentifier)
     {

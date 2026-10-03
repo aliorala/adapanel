@@ -1,4 +1,6 @@
-import { apiClient, buildStreamRequestHeaders } from "./client";
+import axios from "axios";
+import { apiClient, getSessionEpoch } from "./client";
+import { UserFacingError } from "../utils/apiError";
 import type { ServerRunningJobs } from "../composables/useRunningTask";
 
 type ApiEnvelope<T> = {
@@ -77,52 +79,69 @@ export async function migrateSiteStream(
   onEvent: (event: MigrationProgress) => void,
   signal?: AbortSignal
 ): Promise<void> {
-  const headers = await buildStreamRequestHeaders();
-  headers["Accept"] = "text/event-stream";
-
-  const response = await fetch("/api/v1/migration/site/stream", {
-    method: "POST",
-    credentials: "include",
-    headers,
-    body: JSON.stringify(payload),
-    signal
+  const epoch = getSessionEpoch();
+  // Akış da normal isteklerin CSRF, salt okunur abonelik ve oturum düşmesi
+  // kapılarından geçer. fetch adaptörü gövdeyi bitmesini beklemeden verir.
+  const response = await apiClient.post<ReadableStream<Uint8Array>>("/migration/site/stream", payload, {
+    adapter: "fetch", responseType: "stream", signal,
+    headers: { Accept: "text/event-stream" }
+  }).catch(async (error: unknown) => {
+    // fetch adaptörü hata gövdesini de akış olarak döndürür. Göç başlamadan gelen
+    // 409/403 gibi JSON yanıtların gerçek açıklamasını ortak hata gösterimine taşı.
+    if (axios.isAxiosError(error) && error.response?.data instanceof ReadableStream) {
+      const reader = error.response.data.getReader();
+      try {
+        const decoder = new TextDecoder();
+        let text = "", bytes = 0;
+        for (;;) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          bytes += chunk.value.byteLength;
+          if (bytes > 65536) throw new Error("Error response too large");
+          text += decoder.decode(chunk.value, { stream: true });
+        }
+        error.response.data = JSON.parse(text + decoder.decode());
+      } catch { /* HTML/bozuk yanıt asıl HTTP hatasını gizlemez. */ }
+      finally {
+        try { await reader.cancel(); } catch { /* Bağlantı kapanmış olabilir. */ }
+        reader.releaseLock();
+      }
+    }
+    throw error;
   });
-
-  if (!response.ok || !response.body) {
-    throw new Error(`migration_stream_failed_${response.status}`);
-  }
-
-  const reader = response.body.getReader();
+  const reader = response.data.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (signal?.aborted || epoch !== getSessionEpoch()) throw new axios.CanceledError("Session changed or stream cancelled");
+      if (done) throw new UserFacingError("panel.migration.streamFailed");
+      // CR ve LF ayrı ağ paketlerinde gelebilir; her paketi ayrı normalize etme.
+      buffer += decoder.decode(value, { stream: true });
+      let separator: RegExpExecArray | null;
+      while ((separator = /\r?\n\r?\n/.exec(buffer)) !== null) {
+        const frame = buffer.slice(0, separator.index);
+        buffer = buffer.slice(separator.index + separator[0].length);
+        const json = frame.split(/\r?\n/).filter(line => line.startsWith("data:"))
+          .map(line => line.slice(5).replace(/^ /, "")).join("\n");
+        if (!json.trim()) continue; // SSE keep-alive/comment
+        let event: MigrationProgress;
+        try { event = JSON.parse(json); }
+        catch { throw new UserFacingError("panel.migration.streamFailed"); }
+        if (!event || !["plan", "start", "result", "done"].includes(event.phase)
+          || (event.phase === "done" && typeof event.overallSuccess !== "boolean")) {
+          throw new UserFacingError("panel.migration.streamFailed");
+        }
+        // Ekran işleyicisinin hatası JSON ayrıştırma hatası gibi yutulmaz.
+        onEvent(event);
+        if (event.phase === "done") return;
+      }
+      if (buffer.length > 1024 * 1024) throw new UserFacingError("panel.migration.streamFailed");
     }
-    // Satır sonlarını normalize et (proxy \r\n yazabilir); SSE çerçeveleri boş satırla ayrılır.
-    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
-
-    let separator: number;
-    while ((separator = buffer.indexOf("\n\n")) !== -1) {
-      const frame = buffer.slice(0, separator);
-      buffer = buffer.slice(separator + 2);
-
-      const dataLine = frame.split("\n").find((line) => line.startsWith("data:"));
-      if (!dataLine) {
-        continue;
-      }
-      const json = dataLine.slice(5).trim();
-      if (!json) {
-        continue;
-      }
-      try {
-        onEvent(JSON.parse(json) as MigrationProgress);
-      } catch {
-        // bozuk/yarım çerçeve → atla
-      }
-    }
+  } finally {
+    try { await reader.cancel(); } catch { /* Bağlantı zaten kapanmış olabilir. */ }
+    reader.releaseLock();
   }
 }
 

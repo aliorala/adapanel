@@ -3,151 +3,92 @@ using AdaPanel.Core.Dtos.Backup;
 namespace AdaPanel.Infrastructure.Backup;
 
 /// <summary>
-/// "Hangi yedek SİLİNEBİLİR" kararının TEK kaynağı.
+/// Chooses whole restore points for pruning. A source's last usable point is retained
+/// until a newer retained point can replace it; chains are never deleted in pieces.
 /// </summary>
-/// <remarks>
-/// <para>
-/// Bu karar panelin verebileceği en pahalı kararlardan biridir: yanlış bir "evet", geri
-/// yüklenecek son noktayı yok eder. Bu yüzden karar dosya sistemine dokunmayan saf bir
-/// fonksiyona alındı; <see cref="BackupService"/> yalnızca sonucu uygular.
-/// </para>
-/// <para>
-/// Üç koruma birlikte çalışır:
-/// </para>
-/// <list type="number">
-/// <item><b>Kaynak bazında koruma:</b> bir kaynağın (site/veritabanı/abonelik/posta/panel)
-/// cutoff'tan sonra alınmış KULLANILABİLİR bir yedeği yoksa, o kaynağın eskilerine dokunulmaz.
-/// Yenisini üretemiyorsak eski olan son savunmadır.</item>
-/// <item><b>Zincir bütünlüğü:</b> artımsal zincir tek parçadır; ancak EN YENİ halkası da süresini
-/// doldurduğunda budanır. Aksi hâlde 30 gün önceki tam yedeği silmek, dün alınmış artımsal
-/// halkayı sessizce çöpe çevirirdi.</item>
-/// <item><b>Sayı limiti (KeepCount):</b> en yeni N geri yükleme noktası her koşulda korunur;
-/// fazlası, süresi dolmamış olsa bile silinebilir (disk yönetimi). Bu dal da
-/// <b>KULLANILABİLİRLİK</b> yüklemine tabidir: "N nokta kaldı" ile "geri yüklenebilir nokta
-/// kaldı" aynı şey değildir.</item>
-/// </list>
-/// </remarks>
 internal static class BackupPrunePlanner
 {
-    /// <summary>Bir geri yükleme noktası: tek bir yedek ya da bir artımsal zincirin tamamı.</summary>
-    private sealed record RestorePoint(string Key, string SourceKey, DateTime NewestUtc, List<BackupRecordDto> Records);
+    private sealed record RestorePoint(
+        string SourceKey,
+        DateTime NewestUtc,
+        List<BackupRecordDto> Records,
+        bool Usable,
+        bool HasAvailableRecord);
 
-    /// <summary>
-    /// Silinebilecek kayıtları seçer. Dönen liste HİÇBİR zincirin ortasını kırmaz: bir zincirden
-    /// ya hepsi seçilir ya hiçbiri.
-    /// </summary>
-    /// <param name="records">Değerlendirilecek kayıtlar (çağıran zaten kapsamı daraltmış olabilir).</param>
-    /// <param name="cutoffUtc">Bu tarihten eski yedekler süresini doldurmuş sayılır.</param>
-    /// <param name="keepCount">
-    /// Kaynak başına korunacak en yeni geri yükleme noktası sayısı (0 = sayı limiti yok).
-    /// Bu bir ÜST SINIR DEĞİL ALT GARANTİDİR: kaynağın son KULLANILABİLİR noktası bu limit
-    /// yüzünden silinemez.
-    /// </param>
-    /// <param name="kullanilabilir">Kayıt GERÇEKTEN geri yüklenebilir mi (dosya yerinde ya da off-site kopya var).</param>
+    /// <param name="records">Records already narrowed to the caller's scope.</param>
+    /// <param name="cutoffUtc">Points older than this may expire; MinValue disables age pruning.</param>
+    /// <param name="keepCount">Minimum newest points to keep per source; zero disables count pruning.</param>
+    /// <param name="kullanilabilir">Whether the record has a usable local or remote archive.</param>
+    /// <param name="canReplace">Optional content/coverage policy, given the old point and its retained replacement.</param>
     public static IReadOnlyList<BackupRecordDto> Select(
         IReadOnlyCollection<BackupRecordDto> records,
         DateTime cutoffUtc,
         int keepCount,
-        Func<BackupRecordDto, bool> kullanilabilir)
+        Func<BackupRecordDto, bool> kullanilabilir,
+        Func<IReadOnlyCollection<BackupRecordDto>, IReadOnlyCollection<BackupRecordDto>, bool>? canReplace = null)
     {
-        if (records.Count == 0)
-        {
-            return [];
-        }
-
-        // 1) KAYNAK BAZINDA KORUMA: cutoff'tan sonra alınmış kullanılabilir yedeği olan kaynaklar.
-        var korunanKaynaklar = records
-            .Where(record => record.CreatedAtUtc >= cutoffUtc && kullanilabilir(record))
-            .Select(SourceKey)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        // 2) Geri yükleme noktalarına grupla (zincir = tek nokta).
-        var noktalar = records
-            .GroupBy(PointKey, StringComparer.OrdinalIgnoreCase)
-            .Select(grup => new RestorePoint(
-                grup.Key,
-                SourceKey(grup.First()),
-                grup.Max(record => record.CreatedAtUtc),
-                grup.ToList()))
+        var points = records
+            // Chain IDs are not authority to combine different sources. Canonical source
+            // keys preserve quoted PostgreSQL case while legacy engine aliases still match.
+            .GroupBy(record => (Source: SourceKey(record), Point: PointKey(record)))
+            .Select(group =>
+            {
+                var members = group.ToList();
+                var availability = members.Select(kullanilabilir).ToArray();
+                var usable = availability.All(available => available) && IsStructurallyComplete(members);
+                return new RestorePoint(group.Key.Source, members.Max(record => record.CreatedAtUtc),
+                    members, usable, availability.Any(available => available));
+            })
             .ToArray();
 
-        var silinecek = new List<BackupRecordDto>();
-
-        // 3) SAYI LİMİTİ: kaynak başına en yeni N nokta korunur, fazlası (yaşı ne olursa olsun) gider.
-        //
-        //    ÖLÇÜLEN HATA: bu dal eskiden `kullanilabilir` yüklemini HİÇ çağırmıyordu; yorumu da
-        //    "elde N nokta kalacağı garanti, hiç yedek kalmama riski yok" diyordu. Yanlıştı —
-        //    "nokta kalması" ile "GERİ YÜKLENEBİLİR nokta kalması" aynı şey değil. Ölçüm:
-        //    b1(10 gün, dosya var) + b2(5 gün, dosya var) + b3(bugün, dosyası YOK), keepCount=1
-        //    → en yeni nokta b3 korunur, b1 ve b2 silinirdi ve geri yüklenebilir yedek sayısı
-        //    SIFIRA düşerdi. Kaydı duran ama dosyası olmayan bir yedek, yedek DEĞİLDİR.
-        //
-        //    Kural: sayı limiti, kaynağın SON KULLANILABİLİR noktasını asla silemez. Limit
-        //    dolmuşsa bile, henüz kullanılabilir bir nokta korunmadıysa ilk kullanılabilir nokta
-        //    fazladan korunur. Her şey sağlamken davranış birebir eskisi gibidir (en yeni nokta
-        //    zaten kullanılabilirdir ve limit ilk turda dolar).
-        var sayiIleSilinen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (keepCount > 0)
+        var selected = new List<BackupRecordDto>();
+        foreach (var source in points.GroupBy(point => point.SourceKey, StringComparer.Ordinal))
         {
-            var limit = Math.Max(1, keepCount);
-            foreach (var kaynak in noktalar.GroupBy(nokta => nokta.SourceKey, StringComparer.OrdinalIgnoreCase))
+            var retained = new List<RestorePoint>();
+            var position = 0;
+            foreach (var point in source.OrderByDescending(point => point.NewestUtc))
             {
-                var korunan = 0;
-                var kullanilabilirKorundu = false;
-
-                foreach (var nokta in kaynak.OrderByDescending(nokta => nokta.NewestUtc))
+                // The minimum count also protects against age pruning. A later pass must
+                // not silently remove points that this guarantee has already protected.
+                var countProtected = keepCount > 0 && position < keepCount;
+                position++;
+                var countExceeded = keepCount > 0 && !countProtected;
+                var expired = point.NewestUtc < cutoffUtc;
+                if (countProtected || (!countExceeded && !expired))
                 {
-                    // NOKTA kullanılabilirliği ZİNCİRİN TAMAMIDIR: bir halkası eksik olan zincir
-                    // geri yüklenemez, dolayısıyla "elimizde duran nokta" sayılamaz.
-                    var noktaKullanilabilir = nokta.Records.All(kullanilabilir);
-
-                    if (korunan < limit || (!kullanilabilirKorundu && noktaKullanilabilir))
-                    {
-                        korunan++;
-                        kullanilabilirKorundu |= noktaKullanilabilir;
-                        continue;
-                    }
-
-                    sayiIleSilinen.Add(nokta.Key);
-                    silinecek.AddRange(nokta.Records);
+                    retained.Add(point);
+                    continue;
                 }
+
+                var replaced = retained.Any(replacement => replacement.Usable &&
+                    replacement.NewestUtc > point.NewestUtc &&
+                    (countExceeded || replacement.NewestUtc >= cutoffUtc) &&
+                    (canReplace?.Invoke(point.Records, replacement.Records) ?? true));
+
+                // When nothing in an old point can be used, count pruning can discard its
+                // stale metadata after retaining N newer points. A partly usable chain
+                // still requires a replacement so its recoverable prefix is not lost.
+                if (replaced || (countExceeded && !point.HasAvailableRecord))
+                    selected.AddRange(point.Records);
+                else
+                    retained.Add(point);
             }
         }
 
-        // 4) SÜRE LİMİTİ: noktanın EN YENİ halkası da süresini doldurmuş olmalı + kaynak korumalı olmalı.
-        foreach (var nokta in noktalar)
-        {
-            if (sayiIleSilinen.Contains(nokta.Key))
-            {
-                continue; // zaten seçildi
-            }
-
-            if (nokta.NewestUtc >= cutoffUtc)
-            {
-                continue; // nokta hâlâ taze (zincirin son halkası dahil)
-            }
-
-            if (!korunanKaynaklar.Contains(nokta.SourceKey))
-            {
-                continue; // bu kaynağın GÜNCEL yedeği yok → eskisine dokunulmaz
-            }
-
-            silinecek.AddRange(nokta.Records);
-        }
-
-        return silinecek;
+        return selected;
     }
 
-    /// <summary>
-    /// Budama korumasının "kaynak" tanımı: aynı siteyi/veritabanını/aboneliği temsil eden yedekler
-    /// tek küme sayılır. Bir sitenin yedeği, BAŞKA bir sitenin eskilerini silmeye yetki vermez.
-    /// </summary>
-    public static string SourceKey(BackupRecordDto record) => $"{record.Type}|{record.Source}";
+    public static string SourceKey(BackupRecordDto record) => BackupSourceIdentity.Key(record);
 
-    /// <summary>
-    /// Geri yükleme noktası anahtarı: zincire aitse ZİNCİR, değilse kaydın kendisi.
-    /// Zinciri tek anahtar altında toplamak, "ya hepsi ya hiçbiri" kuralının uygulandığı yerdir.
-    /// </summary>
     private static string PointKey(BackupRecordDto record) =>
-        string.IsNullOrWhiteSpace(record.ChainId) ? $"id:{record.Id}" : $"chain:{record.ChainId}";
+        (string.IsNullOrWhiteSpace(record.ChainId) ? $"id:{record.Id}" : $"chain:{record.ChainId}").ToUpperInvariant();
+
+    private static bool IsStructurallyComplete(List<BackupRecordDto> records)
+    {
+        if (string.IsNullOrWhiteSpace(records[0].ChainId)) return true;
+        if (records.Any(record => record.ChainIndex < 0) ||
+            records.Select(record => record.ChainIndex).Distinct().Count() != records.Count) return false;
+        var latest = records.MaxBy(record => record.ChainIndex)!;
+        return !BackupChainPlanner.Resolve(records, latest.Id, _ => true).Broken;
+    }
 }

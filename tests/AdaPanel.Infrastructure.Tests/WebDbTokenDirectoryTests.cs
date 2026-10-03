@@ -50,15 +50,16 @@ public sealed class WebDbTokenDirectoryTests
 
     /// <summary>
     /// Dizin kapatilamadiginda arac KOSULSUZ KIRILMAZ; ayrim riskin buyuklugundedir.
-    /// Root parolasi (sunucudaki tum veritabanlarini acar) korumasiz dizine yazilmaz, ama tek bir
+    /// Yonetici parolasi (sunucudaki tum veritabanlarini acar) korumasiz dizine yazilmaz, ama tek bir
     /// veritabaninin kendi kullanicisi yazilabilir -- o parola zaten yalniz o veritabanina erisir.
     /// </summary>
     [Fact]
-    public void WhenTheDirectoryCannotBeLocked_OnlyTheRootPasswordIsWithheld()
+    public void WhenTheDirectoryCannotBeLocked_AdminPasswordsAreWithheldIncludingCustomUsers()
     {
         var kaynak = OkuKaynak();
 
-        Assert.Contains("if (string.Equals(user, \"root\", StringComparison.OrdinalIgnoreCase))", kaynak, StringComparison.Ordinal);
+        // Profildeki ozel yonetici adlari da siniflandirilir; davranisi WebDbSignonEngineTests dogrular.
+        Assert.Contains("if (connection.UsesAdminCredential)", kaynak, StringComparison.Ordinal);
     }
 
     /// <summary>

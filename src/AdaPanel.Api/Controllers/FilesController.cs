@@ -109,12 +109,16 @@ public sealed class FilesController(
     {
         await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, path, allowRoot: false, cancellationToken);
 
-        // Yüklemenin gelen baytı KESİNDİR (istek gövdesinin uzunluğu); ölçmek için diske bakmaya
-        // gerek yok, dolayısıyla kesilme sebebi de boştur.
-        await EnsureDiskQuotaAsync(path, _ => Task.FromResult((file.Length, string.Empty)), cancellationToken);
+        var virtualPath = $"{(path ?? string.Empty).TrimEnd('/', '\\')}/{file.FileName}".TrimStart('/', '\\');
+        // Üzerine yükleme mevcut dosyayı değiştirir: kota yalnız net büyümeyi sayar.
+        // Aksi halde kotası dolmuş müşteri aynı dosyayı küçülterek bile onaramaz.
+        await EnsureDiskQuotaAsync(path, async ct =>
+        {
+            var existing = await fileService.MeasureAsync([virtualPath], ct);
+            return (Math.Max(0, file.Length - existing.TotalBytes), string.Empty);
+        }, cancellationToken);
 
         await using var stream = file.OpenReadStream();
-        var virtualPath = $"{(path ?? string.Empty).TrimEnd('/', '\\')}/{file.FileName}".TrimStart('/', '\\');
         var savedPath = await fileService.SaveUploadAsync(virtualPath, stream, cancellationToken);
         await WriteAuditAsync("files.uploaded", savedPath, $"File uploaded ({file.Length} bytes).", cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { path = savedPath }, "files.uploaded"));

@@ -30,3 +30,31 @@ it('retains unknown diagnostics and partial deletion failures without claiming s
   const unexpected = 'All checkable components are up to date. | Some future warning';
   expect(automationDetails(unexpected, translate(en))).toBe(unexpected);
 });
+
+it('localizes mail activation failures without hiding either the renewal count or the diagnosis', () => {
+  const details = '2 sertifika yenilendi.\nMail certificate synchronization failed: mail.certificate_not_activated: fixture reload refused';
+  expect(automationDetails(details, translate(en))).toBe('Certificates renewed: 2.\nMail certificate synchronization failed: ' + en['mail.certificate_not_activated'] + ': fixture reload refused');
+  expect(automationDetails(details, translate(tr))).toBe('Yenilenen sertifikalar: 2.\nPosta sertifikası eşitlenemedi: ' + tr['mail.certificate_not_activated'] + ': fixture reload refused');
+});
+
+it('localizes a mail failure heading while preserving unknown provider diagnostics', () => {
+  const details = 'Mail certificate synchronization failed: transport unavailable (fixture)';
+  expect(automationDetails(details, translate(tr))).toBe('Posta sertifikası eşitlenemedi: transport unavailable (fixture)');
+});
+
+it('keeps a successful mail sync visible when renewal itself could not be measured', () => {
+  const details = 'fixture win-acme unavailable\nMail sertifikası (mail.example.test) güncellendi.';
+  expect(automationDetails(details, translate(en))).toBe('fixture win-acme unavailable\nMail certificate (mail.example.test) updated.');
+});
+
+it('localizes measured certificate verification counts without hiding a binding problem', () => {
+  const details = '2 sertifika yenilendi.\nCertificate verification: verified=3; missing=1; unverified=2; binding-drift=4; bindings-measured=true.';
+  expect(automationDetails(details, translate(en))).toBe('Certificates renewed: 2.\nCertificates verified: 3; missing from the store: 1; unverified: 2; incorrect HTTPS bindings: 4.');
+  expect(automationDetails(details, translate(tr))).toBe('Yenilenen sertifikalar: 2.\nDoğrulanan sertifikalar: 3; depoda bulunmayan: 1; doğrulanamayan: 2; yanlış HTTPS bağlaması: 4.');
+});
+
+it('keeps unmeasured bindings explicit instead of interpreting zero as healthy', () => {
+  const details = 'Certificate verification: verified=3; missing=0; unverified=0; binding-drift=0; bindings-measured=false.';
+  expect(automationDetails(details, translate(en))).toBe('Certificates verified: 3; missing from the store: 0; unverified: 0; incorrect HTTPS bindings: —. HTTPS bindings could not be measured.');
+  expect(automationDetails(details, translate(tr))).toBe('Doğrulanan sertifikalar: 3; depoda bulunmayan: 0; doğrulanamayan: 0; yanlış HTTPS bağlaması: —. HTTPS bağlamaları ölçülemedi.');
+});

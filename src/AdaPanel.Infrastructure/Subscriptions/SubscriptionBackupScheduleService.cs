@@ -140,14 +140,32 @@ public sealed class SubscriptionBackupScheduleService(
     }
 
     /// <inheritdoc />
-    public async Task<SubscriptionBackupScheduleDto> RunNowAsync(Guid userId, CancellationToken cancellationToken = default)
+    public Task<SubscriptionBackupScheduleDto> RunNowAsync(Guid userId, CancellationToken cancellationToken = default) =>
+        RunNowCoreAsync(userId, null, cancellationToken);
+
+    public Task<SubscriptionBackupScheduleDto> RunNowAsync(Guid userId, Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken = default) => RunNowCoreAsync(userId, beforeMutation, cancellationToken);
+
+    private async Task<SubscriptionBackupScheduleDto> RunNowCoreAsync(Guid userId,
+        Func<CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
         var kayitlar = await LoadAsync(cancellationToken);
         var kayit = Bul(kayitlar, userId) ?? new ScheduleRecord { UserId = userId.ToString("N") };
+        var expectedContext = beforeMutation is null ? null : ScheduleContext(Bul(kayitlar, userId));
+        var approval = beforeMutation is null ? null : new BackupExecutionApproval(async token =>
+        {
+            await beforeMutation(token);
+            if (ScheduleContext(Bul(await LoadAsync(token), userId)) != expectedContext)
+                throw new AppException("backup.schedule_changed", 409, 409);
+        });
 
         await concurrencyLock.RunExclusiveAsync(
             ConcurrencyKeys.SubscriptionBackup,
-            () => CalistirAsync(userId, kayit, cancellationToken),
+            async () =>
+            {
+                if (approval is not null) await approval.CheckAsync(cancellationToken);
+                await CalistirAsync(userId, kayit, cancellationToken, approval, expectedContext);
+            },
             cancellationToken);
 
         return await GetScheduleAsync(userId, cancellationToken);
@@ -198,9 +216,22 @@ public sealed class SubscriptionBackupScheduleService(
                 await using var job = await runningJobs.BeginAsync(
                     RunningJobKinds.Backup, userId.ToString("N"), userId, cancellationToken);
 
+                // The worker's authority is the configured program, not an interactive session.
+                // A queued snapshot must not execute or recreate a removed/changed program.
+                var expectedContext = ScheduleContext(kayit);
+                var approval = new BackupExecutionApproval(async token =>
+                {
+                    var current = Bul(await LoadAsync(token), userId);
+                    if (current is null || !current.Enabled || ScheduleContext(current) != expectedContext)
+                        throw new AppException("backup.schedule_changed", 409, 409);
+                });
                 await concurrencyLock.RunExclusiveAsync(
                     ConcurrencyKeys.SubscriptionBackup,
-                    () => CalistirAsync(userId, kayit, cancellationToken),
+                    async () =>
+                    {
+                        await approval.CheckAsync(cancellationToken);
+                        await CalistirAsync(userId, kayit, cancellationToken, approval, expectedContext);
+                    },
                     cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -246,14 +277,15 @@ public sealed class SubscriptionBackupScheduleService(
     /// sürekli patlayan bir program "hiç çalışmamış" gibi görünür ve <c>LastRunUtc</c>
     /// güncellenmediği için her turda yeniden denenip sunucuyu meşgul ederdi.
     /// </remarks>
-    private async Task CalistirAsync(Guid userId, ScheduleRecord kayit, CancellationToken cancellationToken)
+    private async Task CalistirAsync(Guid userId, ScheduleRecord kayit, CancellationToken cancellationToken,
+        BackupExecutionApproval? approval = null, string? expectedContext = null)
     {
         var ozet = new StringBuilder();
         var durum = "completed";
 
         try
         {
-            var record = await backupService.BackupSubscriptionAsync(new BackupSubscriptionRequest
+            var request = new BackupSubscriptionRequest
             {
                 UserId = userId,
                 IncludeFiles = kayit.IncludeFiles,
@@ -267,7 +299,10 @@ public sealed class SubscriptionBackupScheduleService(
                 RemoteUserName = kayit.RemoteUserName,
                 RemotePassword = UzakParolaCoz(kayit),
                 RemoteRegion = kayit.RemoteRegion
-            }, cancellationToken);
+            };
+            var record = approval is null
+                ? await backupService.BackupSubscriptionAsync(request, cancellationToken)
+                : await backupService.BackupSubscriptionAsync(request, approval.CheckAsync, cancellationToken);
 
             var mod = string.Equals(record.BackupMode, "incremental", StringComparison.OrdinalIgnoreCase)
                 ? $"artimsal (zincir #{record.ChainIndex})"
@@ -300,12 +335,10 @@ public sealed class SubscriptionBackupScheduleService(
 
             // Budama YALNIZCA bu aboneliğin yedeklerini kapsar ve zinciri kırmaz
             // (bkz. BackupPrunePlanner: zincir tek bir geri yükleme noktasıdır).
-            var budanan = await backupService.PruneSubscriptionAsync(
-                userId,
-                kayit.RetentionDays,
-                kayit.KeepCount,
-                uzak,
-                cancellationToken);
+            var budanan = approval is null
+                ? await backupService.PruneSubscriptionAsync(userId, kayit.RetentionDays, kayit.KeepCount, uzak, cancellationToken)
+                : await backupService.PruneSubscriptionAsync(userId, kayit.RetentionDays, kayit.KeepCount, uzak,
+                    approval.CheckAsync, cancellationToken);
             if (budanan.Removed > 0)
             {
                 ozet.Append($" {budanan.Removed} eski yedek silindi.");
@@ -331,7 +364,7 @@ public sealed class SubscriptionBackupScheduleService(
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (approval?.Rejected(exception) != true)
         {
             durum = "failed";
             ozet.Clear();
@@ -340,6 +373,7 @@ public sealed class SubscriptionBackupScheduleService(
         }
 
         var simdi = DateTime.UtcNow;
+        if (approval is not null) await approval.CheckAsync(cancellationToken);
         var detay = ozet.ToString();
         kayit.LastRunUtc = simdi;
         kayit.LastStatus = durum;
@@ -354,6 +388,10 @@ public sealed class SubscriptionBackupScheduleService(
             {
                 var liste = mevcut.ToList();
                 var hedef = liste.FirstOrDefault(item => string.Equals(item.UserId, kimlik, StringComparison.OrdinalIgnoreCase));
+                // Compare inside the JSON update too: a program removed after the last
+                // asynchronous check must not be resurrected by this older execution.
+                if (expectedContext is not null && ScheduleContext(hedef) != expectedContext)
+                    throw new AppException("backup.schedule_changed", 409, 409);
                 if (hedef is null)
                 {
                     // "Şimdi çalıştır" kaydı olmayan bir abonelikte de çalışabilir; sonucu kaybetmeyiz.
@@ -554,6 +592,17 @@ public sealed class SubscriptionBackupScheduleService(
         var kimlik = userId.ToString("N");
         return kayitlar.FirstOrDefault(item => string.Equals(item.UserId, kimlik, StringComparison.OrdinalIgnoreCase));
     }
+
+    private static string ScheduleContext(ScheduleRecord? record) => record is null ? "missing" :
+        System.Text.Json.JsonSerializer.Serialize(new
+        {
+            record.UserId, record.Enabled, record.ScheduleMode, record.IntervalHours, record.ScheduleHour,
+            record.ScheduleMinute, record.ScheduleDayOfWeek, record.ScheduleDayOfMonth,
+            record.ScheduleSecondHour, record.ScheduleSecondMinute, record.RetentionDays, record.KeepCount,
+            record.Incremental, record.FullBackupEveryDays, record.IncludeFiles, record.IncludeDatabases,
+            record.IncludeMail, record.IncludeFtp, record.TargetType, record.RemoteUrl, record.RemoteUserName,
+            record.RemoteRegion, record.RemotePasswordProtected
+        });
 
     /// <summary>Diske serileştirilen program kaydı (ayarlar + son çalışma sonucu).</summary>
     private sealed class ScheduleRecord

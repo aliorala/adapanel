@@ -51,7 +51,6 @@ public sealed class ElleAskiKaydiDurustlukTests : IDisposable
     private readonly SqliteConnection baglanti;
     private readonly AdaPanelDbContext dbContext;
     private readonly ICustomerScopeService kapsamlar;
-    private readonly AskiDenetimKaydiDurustlukTests.YakalayanDenetim denetim = new();
     private readonly AskiDenetimKaydiDurustlukTests.SecilenSiteyiKiranServis siteler = new();
     private readonly UserManagementService servis;
     private readonly Guid yoneticiId;
@@ -105,7 +104,7 @@ public sealed class ElleAskiKaydiDurustlukTests : IDisposable
             new ThrowingPreferencesService(),
             new ThrowingSecurityService(),
             NullLogger<UserManagementService>.Instance,
-            denetim,
+            new AuditService(dbContext, kapsamlar, store),
             siteler,
             new ResellerSiteAssignmentTests.KullanilmayanDbSahiplik(),
             new ResellerSiteAssignmentTests.KullanilmayanZamanlayici(),
@@ -137,6 +136,14 @@ public sealed class ElleAskiKaydiDurustlukTests : IDisposable
             yoneticiId,
             "127.0.0.1");
 
+    // The real audit writer commits the account state as part of a completed update.
+    // A recording-only fake left IsActive dirty in EF and never persisted suspension.
+    private string SonKayit(string action) => dbContext.AuditLogs.AsNoTracking()
+        .Where(entry => entry.Action == action)
+        .OrderByDescending(entry => entry.CreatedAtUtc)
+        .Select(entry => entry.Details)
+        .First();
+
     [Fact]
     public async Task Durdurulamayan_site_varsa_kayit_YAPILAN_sayiyi_ve_ADLARI_yazar()
     {
@@ -144,7 +151,7 @@ public sealed class ElleAskiKaydiDurustlukTests : IDisposable
 
         await AktifligiDegistir(false);
 
-        var kayit = denetim.Son("users.suspended");
+        var kayit = SonKayit("users.suspended");
         Assert.Contains("2 of 3", kayit, StringComparison.Ordinal);
         Assert.Contains("STILL RUNNING", kayit, StringComparison.Ordinal);
         Assert.Contains("b.test", kayit, StringComparison.Ordinal);
@@ -165,7 +172,7 @@ public sealed class ElleAskiKaydiDurustlukTests : IDisposable
 
         await AktifligiDegistir(true);
 
-        var kayit = denetim.Son("users.resumed");
+        var kayit = SonKayit("users.resumed");
         Assert.Contains("2 of 3", kayit, StringComparison.Ordinal);
         Assert.Contains("STILL STOPPED", kayit, StringComparison.Ordinal);
         Assert.Contains("a.test", kayit, StringComparison.Ordinal);
@@ -183,7 +190,7 @@ public sealed class ElleAskiKaydiDurustlukTests : IDisposable
     {
         await AktifligiDegistir(false);
 
-        var kayit = denetim.Son("users.suspended");
+        var kayit = SonKayit("users.suspended");
         Assert.Contains("3 site(s) stopped", kayit, StringComparison.Ordinal);
         Assert.DoesNotContain("STILL RUNNING", kayit, StringComparison.Ordinal);
     }

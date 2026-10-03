@@ -5,7 +5,7 @@
         <h3>{{ t("panel.cache.title") }}</h3>
         <p>{{ t("panel.cache.subtitle") }}</p>
       </div>
-      <button class="secondary compact" :disabled="busyAction === 'refresh'" @click="refresh">
+      <button class="secondary compact" :disabled="!!busyAction" @click="refresh">
         {{ t("panel.cache.refresh") }}
       </button>
     </div>
@@ -15,15 +15,15 @@
     <div class="summary-strip">
       <div class="summary-item">
         <span>{{ t("panel.cache.total") }}</span>
-        <strong>{{ runtimes.length }}</strong>
+        <strong>{{ status ? runtimes.length : "—" }}</strong>
       </div>
       <div class="summary-item">
         <span>{{ t("panel.cache.installed") }}</span>
-        <strong>{{ installedCount }}</strong>
+        <strong>{{ installedCount ?? "—" }}</strong>
       </div>
       <div class="summary-item">
         <span>{{ t("panel.cache.running") }}</span>
-        <strong>{{ runningCount }}</strong>
+        <strong>{{ runningCount ?? "—" }}</strong>
       </div>
       <div class="summary-item">
         <span>{{ t("panel.cache.defaultPorts") }}</span>
@@ -59,91 +59,141 @@
           <button
             v-if="!item.isInstalled"
             class="compact"
-            v-bind="writeGate(isBusy(item.componentId))"
+            v-bind="writeGate(!!busyAction)"
             @click="install(item.componentId)">
             {{ isBusy(item.componentId) ? t("panel.cache.busy") : t("panel.cache.install") }}
           </button>
           <button
-            v-else-if="!isRunning(item)"
+            v-else-if="isStopped(item)"
             class="compact"
-            v-bind="writeGate(isBusy(item.componentId))"
+            v-bind="writeGate(!!busyAction)"
             @click="toggle(item.componentId, true)">
             {{ isBusy(item.componentId) ? t("panel.cache.busy") : t("panel.cache.start") }}
           </button>
           <button
-            v-else
+            v-else-if="isRunning(item)"
             class="secondary compact"
-            v-bind="writeGate(isBusy(item.componentId))"
+            v-bind="writeGate(!!busyAction)"
             @click="toggle(item.componentId, false)">
             {{ isBusy(item.componentId) ? t("panel.cache.busy") : t("panel.cache.stop") }}
           </button>
           <button
-            v-if="item.isInstalled && !isRunning(item)"
+            v-if="item.isInstalled && isStopped(item)"
             class="danger compact"
-            v-bind="writeGate(isBusy(item.componentId))"
+            v-bind="writeGate(!!busyAction)"
             @click="remove(item.componentId)">
             {{ t("panel.cache.remove") }}
           </button>
         </span>
       </div>
-      <p v-if="busyAction === 'refresh' && !status" class="empty-state">{{ t("panel.common.loading") }}</p>
+      <p v-if="!status" class="empty-state" role="status">{{ t(statusError ? "panel.common.loadFailed" : "panel.common.loading") }}</p>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { getCacheStatus, startMemcached, startRedis, stopMemcached, stopRedis, type CacheRuntime, type CacheStatus } from "../api/cache";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage } from "../stores/auth";
 import { useSoftwareStore } from "../stores/software";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { getSessionEpoch } from "../api/client";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
-const { writeGate } = useSubscriptionGate();
+const { writeGate, locked } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const softwareStore = useSoftwareStore();
 const status = ref<CacheStatus | null>(null);
+const statusError = ref(false);
+const sessionEpoch = getSessionEpoch();
+let disposed = false, statusVersion = 0;
+const isActive = () => !disposed && sessionEpoch === getSessionEpoch();
 const busyAction = ref("");
 const notice = ref("");
 const noticeError = ref(false);
 const runtimes = computed(() => status.value ? [status.value.redis, status.value.memcached] : []);
-const installedCount = computed(() => runtimes.value.filter((item) => item.isInstalled).length);
-const runningCount = computed(() => runtimes.value.filter(isRunning).length);
+const installedCount = computed(() => status.value ? runtimes.value.filter((item) => item.isInstalled).length : null);
+const runningCount = computed(() => !status.value || runtimes.value.some(item => item.isInstalled && !isRunning(item) && !isStopped(item))
+  ? null : runtimes.value.filter(isRunning).length);
 
 onMounted(refresh);
+onUnmounted(() => { disposed = true; ++statusVersion; });
 
 async function refresh() {
-  busyAction.value ||= "refresh";
+  if (!isActive() || busyAction.value) return;
+  busyAction.value = "refresh";
   try {
-    status.value = await getCacheStatus();
-    notice.value = "";
+    await readStatus();
+    if (isActive()) showNotice("", false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isActive()) {
+      status.value = null;
+      statusError.value = true;
+      showNotice(resolveApiMessage(error), true);
+    }
   } finally {
-    if (busyAction.value === "refresh") busyAction.value = "";
+    if (isActive()) busyAction.value = "";
+  }
+}
+
+async function readStatus() {
+  const version = ++statusVersion;
+  statusError.value = false;
+  const result = await getCacheStatus();
+  if (!isActive() || version !== statusVersion) return null;
+  status.value = result;
+  return result;
+}
+
+function findRuntime(componentId: string) {
+  return ["redis", "memcached"].includes(componentId)
+    ? runtimes.value.find(item => item.componentId === componentId) : undefined;
+}
+
+function canMutate() {
+  return isActive() && status.value !== null && !busyAction.value && !locked.value;
+}
+
+async function mutate(componentId: string, action: string, worker: () => Promise<unknown>, successKey: string, verified: (item: CacheRuntime) => boolean) {
+  if (!canMutate()) return;
+  ++statusVersion;
+  busyAction.value = `${componentId}:${action}`;
+  let requestCompleted = false;
+  try {
+    await worker();
+    requestCompleted = true;
+    if (!isActive()) return;
+    await readStatus();
+    if (!isActive()) return;
+    const runtime = findRuntime(componentId);
+    const confirmed = !!runtime && verified(runtime);
+    showNotice(t(confirmed ? successKey : "panel.cache.resultUnconfirmed"), !confirmed);
+  } catch (error) {
+    if (!isActive()) return;
+    status.value = null;
+    statusError.value = true;
+    const message = resolveApiMessage(error);
+    showNotice(requestCompleted ? `${t("panel.cache.resultUnconfirmed")}\n\n${message}` : message, true);
+  } finally {
+    if (isActive()) busyAction.value = "";
   }
 }
 
 async function install(componentId: string) {
-  busyAction.value = `${componentId}:install`;
-  try {
-    await softwareStore.installComponent(componentId);
-    await refresh();
-    showNotice(t("panel.cache.installedMessage"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busyAction.value = "";
-  }
+  const runtime = findRuntime(componentId);
+  if (!runtime || runtime.isInstalled) return;
+  await mutate(componentId, "install", () => softwareStore.installComponent(componentId), "panel.cache.installedMessage", item => item.isInstalled);
 }
 
 async function remove(componentId: string) {
-  const runtime = runtimes.value.find((item) => item.componentId === componentId);
-  const displayName = runtime?.displayName || componentId;
+  const runtime = findRuntime(componentId);
+  if (!canMutate() || !runtime?.isInstalled || !isStopped(runtime)) return;
+  const version = statusVersion;
+  const displayName = runtime.displayName || componentId;
   const impact: string[] = [];
   if (runtime?.serviceName) {
     impact.push(`${t("panel.cache.service")}: ${runtime.serviceName}`);
@@ -161,39 +211,29 @@ async function remove(componentId: string) {
     confirmLabel: t("panel.confirm.remove"),
     busyLabel: t("panel.confirm.removing"),
     action: async () => {
-      busyAction.value = `${componentId}:remove`;
-      try {
-        await softwareStore.removeComponent(componentId);
-        await refresh();
-        showNotice(t("panel.cache.removedMessage"), false);
-      } catch (error) {
-        showNotice(resolveApiMessage(error), true);
-      } finally {
-        busyAction.value = "";
-      }
+      if (!canMutate() || version !== statusVersion) return;
+      await mutate(componentId, "remove", () => softwareStore.removeComponent(componentId), "panel.cache.removedMessage", item => !item.isInstalled);
     },
   });
 }
 
 async function toggle(componentId: string, shouldStart: boolean) {
-  busyAction.value = `${componentId}:${shouldStart ? "start" : "stop"}`;
-  try {
-    if (componentId === "memcached") {
-      shouldStart ? await startMemcached() : await stopMemcached();
-    } else {
-      shouldStart ? await startRedis() : await stopRedis();
-    }
-    await refresh();
-    showNotice(t(shouldStart ? "panel.cache.started" : "panel.cache.stopped"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busyAction.value = "";
-  }
+  const runtime = findRuntime(componentId);
+  if (!runtime?.isInstalled || (shouldStart ? !isStopped(runtime) : !isRunning(runtime))) return;
+  const worker = componentId === "memcached"
+    ? (shouldStart ? startMemcached : stopMemcached)
+    : (shouldStart ? startRedis : stopRedis);
+  await mutate(componentId, shouldStart ? "start" : "stop", worker,
+    shouldStart ? "panel.cache.started" : "panel.cache.stopped",
+    item => shouldStart ? item.isInstalled && isRunning(item) : !item.isInstalled || isStopped(item));
 }
 
 function isRunning(item: CacheRuntime) {
-  return ["running", "started"].includes(item.status.toLocaleLowerCase());
+  return ["running", "started"].includes(item.status.trim().toLowerCase());
+}
+
+function isStopped(item: CacheRuntime) {
+  return item.status.trim().toLowerCase() === "stopped";
 }
 
 function hitRate(metrics: { hits: number; misses: number }): string {
@@ -203,7 +243,9 @@ function hitRate(metrics: { hits: number; misses: number }): string {
 
 function statusLabel(item: CacheRuntime) {
   if (!item.isInstalled) return t("panel.database.notInstalled");
-  return isRunning(item) ? t("panel.cache.runningState") : (item.status || t("panel.cache.stoppedState"));
+  if (!item.status.trim() || item.status.trim().toLowerCase() === "unknown") return t("panel.health.statusUnknown");
+  return isRunning(item) ? t("panel.cache.runningState")
+    : isStopped(item) ? t("panel.cache.stoppedState") : item.status;
 }
 
 function statusClass(item: CacheRuntime) {

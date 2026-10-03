@@ -196,7 +196,7 @@ public sealed class BackupSourceFolderTests
         await alan.KayitlariYazAsync(
             alan.UzakKayit("eski", eskiDuzen, gunOnce: 90),
             alan.UzakKayit("yeni", yeniDuzen, gunOnce: 60),
-            alan.TazeKayit("taze"));
+            alan.TazeKayit("taze", "https://bulut.ornek.com/dav/yedek/current/sites/shop.example.com/taze.zip"));
 
         var silinen = await alan.ServisKur(kayitci).PruneAsync(
             retentionDays: 7,
@@ -468,12 +468,15 @@ public sealed class BackupSourceFolderTests
 
         /// <summary>
         /// Budamanin "kaynak korumasi" kurali: bir kaynagin GUNCEL yedegi yoksa eskisine
-        /// dokunulmaz. Eski kayitlarin silinebilmesi icin ayni kaynaktan taze bir yedek gerekir.
+        /// dokunulmaz. Eski uzak kayitlar icin taze yedegin uzak kopyasi da bulunmalidir;
+        /// bu fixture silme adresini sinar, off-site korumasini atlamaz.
         /// </summary>
-        public BackupRecordDto TazeKayit(string id)
+        public BackupRecordDto TazeKayit(string id, string remoteUri)
         {
             var yol = Path.Combine(Kok, $"{id}.zip");
-            File.WriteAllText(yol, "taze yedek");
+            using (var archive = ZipFile.Open(yol, ZipArchiveMode.Create))
+            using (var writer = new StreamWriter(archive.CreateEntry("files/index.txt").Open()))
+                writer.Write("taze yedek");
             return new BackupRecordDto
             {
                 Id = id,
@@ -483,8 +486,12 @@ public sealed class BackupSourceFolderTests
                 Path = yol,
                 Format = "zip",
                 CreatedAtUtc = DateTime.UtcNow,
-                TargetType = "local",
-                Status = "created"
+                TargetType = "webdav",
+                RemoteUri = remoteUri,
+                RemoteState = BackupPresence.Present,
+                IntegrityState = BackupArchiveProbe.Measure(yol, "zip").State,
+                Size = new FileInfo(yol).Length,
+                Status = "created_remote_synced"
             };
         }
 

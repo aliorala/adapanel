@@ -1,5 +1,7 @@
 import { defineStore } from "pinia";
-import { apiClient } from "../api/client";
+import { toRaw } from "vue";
+import { CanceledError } from "axios";
+import { apiClient, getSessionEpoch } from "../api/client";
 import type { OperationProgress } from "./setup";
 
 type ApiEnvelope<T> = {
@@ -63,15 +65,63 @@ export type ComponentInstallResult = {
   message: string;
 };
 
+type BusyKey = "loading" | "checkingUpdates" | "installingComponentId" | "installingDefaults" | "removingComponentId";
+type Requests = {
+  epoch: number;
+  sequence: number;
+  catalogReadId: number;
+  progressReadId: number;
+  writeId: number;
+  revision: number;
+  busy: Map<BusyKey, number>;
+};
+type Request = { id: number; requests: Requests; revision: number };
+const requestsByStore = new WeakMap<object, Requests>();
+
+function beginRequest(store: object, busy?: BusyKey, write = false): Request {
+  const epoch = getSessionEpoch();
+  const key = toRaw(store);
+  let requests = requestsByStore.get(key);
+  if (!requests || requests.epoch !== epoch) {
+    requests = { epoch, sequence: 0, catalogReadId: 0, progressReadId: 0, writeId: 0, revision: 0, busy: new Map() };
+    requestsByStore.set(key, requests);
+  }
+  const id = ++requests.sequence;
+  if (busy) requests.busy.set(busy, id);
+  if (write) {
+    requests.writeId = id;
+    requests.revision++;
+    requests.progressReadId = 0;
+  }
+  return { id, requests, revision: requests.revision };
+}
+
+function assertCurrentSession(request: Request): void {
+  // Also guard the gap between the HTTP response interceptor and the store await.
+  if (request.requests.epoch !== getSessionEpoch()) throw new CanceledError("Session changed");
+}
+
+function ownsBusy(request: Request, busy: BusyKey): boolean {
+  return request.requests.epoch === getSessionEpoch() && request.requests.busy.get(busy) === request.id;
+}
+
+function finishCatalogWrite(request: Request): boolean {
+  assertCurrentSession(request);
+  const unchanged = request.requests.writeId === request.id && request.requests.revision === request.revision &&
+    request.requests.catalogReadId < request.id;
+  // Reads made before or during a mutation cannot overwrite its refreshed catalog.
+  request.requests.revision++;
+  return unchanged;
+}
+
 export const useSoftwareStore = defineStore("software", {
   state: () => ({
     catalog: null as SoftwareCatalog | null,
     loading: false,
     /*
-     * Katalog BİR KEZ başarıyla okundu mu. `loading` istek bitince hata alsa da false olur;
-     * `catalog` null kalır ve ondan türeyen listeler boş görünür — ekran "kurulu bileşen yok"
-     * diyordu. Bayrak yalnız BAŞARIDA true olur; mağazada durur çünkü katalog dokuz ekranda
-     * okunuyor ve hepsinin aynı cevabı vermesi gerekir.
+     * Son katalog ölçümü başarılı mı. Eski katalog gösterim için tutulabilir ama başarısız
+     * yenileme yeni yazmaları açmamalı. Bayrak yalnız güncel başarılı ölçümde true olur;
+     * katalog dokuz ekranda paylaşıldığı için bu bilgi de mağazada kalır.
      */
     loaded: false,
     installingComponentId: "",
@@ -91,76 +141,113 @@ export const useSoftwareStore = defineStore("software", {
   },
   actions: {
     async fetchCatalog() {
+      const request = beginRequest(this, "loading");
+      request.requests.catalogReadId = request.id;
       this.loading = true;
+      this.loaded = false;
 
       try {
         const response = await apiClient.get<ApiEnvelope<SoftwareCatalog>>("/software");
-        this.catalog = response.data.data;
+        assertCurrentSession(request);
         // Yalnız BAŞARIDA: hata fırlarsa bayrak false kalır, ekran "bileşen yok" demez.
-        this.loaded = true;
-        return this.catalog;
+        if (request.requests.catalogReadId === request.id && request.requests.revision === request.revision) {
+          this.catalog = response.data.data;
+          this.loaded = true;
+        }
+        return response.data.data;
       } finally {
-        this.loading = false;
+        if (ownsBusy(request, "loading")) this.loading = false;
       }
     },
     async fetchOperationProgress() {
+      const request = beginRequest(this);
+      request.requests.progressReadId = request.id;
       const response = await apiClient.get<ApiEnvelope<OperationProgress>>("/software/operations/progress");
-      this.liveProgress = response.data.data;
-      return this.liveProgress;
+      assertCurrentSession(request);
+      if (request.requests.progressReadId === request.id && request.requests.revision === request.revision) {
+        this.liveProgress = response.data.data;
+      }
+      return response.data.data;
     },
     async checkForUpdates() {
+      const request = beginRequest(this, "checkingUpdates", true);
       this.checkingUpdates = true;
+      this.loaded = false;
 
       try {
         const response = await apiClient.post<ApiEnvelope<SoftwareCatalog>>("/software/updates/check", {});
-        this.catalog = response.data.data;
-        // Güncelleme denetimi de katalogun TAMAMINI taze döndürür.
-        this.loaded = true;
-        return this.catalog;
+        if (finishCatalogWrite(request)) {
+          this.catalog = response.data.data;
+          this.loaded = true;
+        } else {
+          // Another mutation overlapped this check; its response may predate that mutation.
+          await this.fetchCatalog();
+        }
+        assertCurrentSession(request);
+        return response.data.data;
+      } catch (error) {
+        assertCurrentSession(request);
+        throw error;
       } finally {
-        this.checkingUpdates = false;
+        if (ownsBusy(request, "checkingUpdates")) this.checkingUpdates = false;
       }
     },
     // force: bileşen zaten kurulu ve sağlıklıysa sunucu kurulumu ATLAR. Sürüm yükseltmesi tam
     // olarak bu atlamayı aşmak ister — "Güncelle" düğmesi force=true gönderir, ilk kurulum göndermez.
     async installComponent(componentId: string, force = false) {
+      const request = beginRequest(this, "installingComponentId", true);
       this.installingComponentId = componentId;
 
       try {
-        const response = await apiClient.post<ApiEnvelope<ComponentInstallResult>>("/software/install", { componentId, force });
+        const response = await apiClient.post<ApiEnvelope<ComponentInstallResult>>("/software/install", { componentId, force }).catch(async error => {
+          // Failed attempts can alter server records. Refresh once, only in their
+          // originating session, while preserving the original install failure.
+          finishCatalogWrite(request);
+          await this.fetchCatalog().catch(() => undefined);
+          assertCurrentSession(request);
+          throw error;
+        });
+        finishCatalogWrite(request);
         await this.fetchCatalog();
+        assertCurrentSession(request);
         return response.data.data;
-      } catch (error) {
-        // Failed attempts also change the server record. Keep the original install error
-        // if refreshing fails, but otherwise show the new Failed/retry state immediately.
-        await this.fetchCatalog().catch(() => undefined);
-        throw error;
       } finally {
-        this.installingComponentId = "";
+        if (ownsBusy(request, "installingComponentId")) this.installingComponentId = "";
       }
     },
     async installDefaultStack() {
+      const request = beginRequest(this, "installingDefaults", true);
       this.installingDefaults = true;
 
       try {
-        const response = await apiClient.post<ApiEnvelope<ComponentInstallResult[]>>("/software/install-defaults", {});
+        const response = await apiClient.post<ApiEnvelope<ComponentInstallResult[]>>("/software/install-defaults", {}).catch(async error => {
+          finishCatalogWrite(request);
+          await this.fetchCatalog().catch(() => undefined);
+          assertCurrentSession(request);
+          throw error;
+        });
+        finishCatalogWrite(request);
         await this.fetchCatalog();
+        assertCurrentSession(request);
         return response.data.data;
-      } catch (error) {
-        await this.fetchCatalog().catch(() => undefined);
-        throw error;
       } finally {
-        this.installingDefaults = false;
+        if (ownsBusy(request, "installingDefaults")) this.installingDefaults = false;
       }
     },
     async removeComponent(componentId: string) {
+      const request = beginRequest(this, "removingComponentId", true);
       this.removingComponentId = componentId;
 
       try {
         await apiClient.delete<ApiEnvelope<object>>(`/software/${encodeURIComponent(componentId)}`);
+        finishCatalogWrite(request);
         await this.fetchCatalog();
+        assertCurrentSession(request);
+      } catch (error) {
+        assertCurrentSession(request);
+        throw error;
       } finally {
-        this.removingComponentId = "";
+        if (ownsBusy(request, "removingComponentId")) this.removingComponentId = "";
       }
     }
   }

@@ -10,6 +10,20 @@ export function automationDetails(details: string, t: Translate): string {
     if (match) return t(match[1] === 'mail' ? 'panel.automation.result.mail' : 'panel.automation.result.panel');
     match = /^(\d+) sertifika yenilendi\.(?: Mail sertifikası \(([^\r\n]+)\) güncellendi\.)?$/.exec(line);
     if (match) return t('panel.automation.result.ssl', { count: match[1]! }) + (match[2] ? ' ' + t('panel.automation.result.mailSsl', { host: match[2] }) : '');
+    match = /^Mail sertifikası \(([^\r\n]+)\) güncellendi\.$/.exec(line);
+    if (match) return t('panel.automation.result.mailSsl', { host: match[1]! });
+    match = /^Certificate verification: verified=(\d+); missing=(\d+); unverified=(\d+); binding-drift=(\d+); bindings-measured=(true|false)\.$/.exec(line);
+    if (match) return t('panel.automation.result.sslVerification', {
+      verified: match[1]!, missing: match[2]!, unverified: match[3]!, drift: match[5] === 'false' ? '—' : match[4]!
+    }) + (match[5] === 'false' ? ' ' + t('panel.automation.result.sslBindingsUnknown') : '');
+    match = /^Mail certificate synchronization failed: (.+)$/.exec(line);
+    if (match) {
+      const reason = match[1]!;
+      const known = /^(mail\.(?:certificate_not_activated|certificate_push_failed|certificate_files_missing|not_installed|not_configured))(?:: (.*))?$/.exec(reason);
+      return t('panel.automation.result.mailSslFailed', {
+        reason: known ? t(known[1]!) + (known[2] ? ': ' + known[2] : '') : reason
+      });
+    }
     match = /^Version checks failed: (.+)$/.exec(line);
     if (match) return t('panel.automation.result.failedChecks', { components: match[1]! });
     const [headline, unchecked, ...rest] = line.split(' | ');

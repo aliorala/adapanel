@@ -1,4 +1,5 @@
 ﻿using System.Net.Sockets;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -77,6 +78,13 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
      */
     internal int MemcachedProbePort { get; init; } = MemcachedDefaultPort;
 
+    // Keep OS inspection replaceable per instance; tests exercise the real runtime
+    // decisions without starting PowerShell or touching a Windows service.
+    internal Func<string, CancellationToken, Task<CommandResult>> InspectPowerShellAsync { get; init; }
+        = ProcessRunner.RunPowerShellStrictAsync;
+    internal Func<int, string, CancellationToken, Task<string?>>? InspectCachePortAsync { get; init; }
+    internal Func<int, CancellationToken, Task<Stream>>? OpenRedisInfoStreamAsync { get; init; }
+
     private CacheDescriptor MemcachedDescriptor
         => new("memcached", "Memcached", "AdaMemcached", MemcachedProbePort, "memcached.exe", RunsAsScheduledTask: true);
 
@@ -123,6 +131,8 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
         {
             throw new AppException("cache.component_not_installed", 404, 404);
         }
+
+        EnsureRuntimeMeasured(runtime);
 
         return descriptor.RunsAsScheduledTask
             ? await StartScheduledTaskAsync(descriptor, runtime, cancellationToken)
@@ -235,9 +245,17 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
     private async Task<CacheRuntimeDto> StopAsync(CacheDescriptor descriptor, CancellationToken cancellationToken)
     {
         var runtime = await BuildRuntimeAsync(descriptor, cancellationToken);
+        EnsureRuntimeMeasured(runtime);
         return descriptor.RunsAsScheduledTask
             ? await StopScheduledTaskAsync(descriptor, runtime, cancellationToken)
             : await StopWindowsServiceAsync(descriptor, runtime, cancellationToken);
+    }
+
+    private void EnsureRuntimeMeasured(CacheRuntimeDto runtime)
+    {
+        if (!string.Equals(runtime.Status, "Unknown", StringComparison.OrdinalIgnoreCase)) return;
+        logger?.LogWarning("{Bilesen} servis/gorev durumu GORUNMUYOR: {Birim}. Olcum yapilamadigi icin islem uygulanmadi.", runtime.DisplayName, runtime.ServiceName);
+        throw new AppException("cache.status_unavailable", 503, 503);
     }
 
     private async Task<CacheRuntimeDto> StopWindowsServiceAsync(CacheDescriptor descriptor, CacheRuntimeDto runtime, CancellationToken cancellationToken)
@@ -385,7 +403,7 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
     {
         for (var deneme = 0; deneme < 20; deneme++)
         {
-            if (await IsAliveAsync(descriptor, cancellationToken) == expectedAlive)
+            if (await IsAliveAsync(descriptor, cancellationToken) is bool measuredAlive && measuredAlive == expectedAlive)
             {
                 return true;
             }
@@ -393,7 +411,7 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
             await Task.Delay(250, cancellationToken);
         }
 
-        return await IsAliveAsync(descriptor, cancellationToken) == expectedAlive;
+        return await IsAliveAsync(descriptor, cancellationToken) is bool finalAlive && finalAlive == expectedAlive;
     }
 
     /// <summary>
@@ -401,56 +419,64 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
     /// memcached'de <c>version\r\n</c> komutu <c>VERSION x.y.z</c> döner (kurulum doğrulaması da
     /// aynı sondayı kullanıyor); Redis'te RESP <c>INFO</c> yanıtı yeterlidir.
     /// </summary>
-    private async Task<bool> IsAliveAsync(CacheDescriptor descriptor, CancellationToken cancellationToken)
+    private async Task<bool?> IsAliveAsync(CacheDescriptor descriptor, CancellationToken cancellationToken)
     {
         if (descriptor.ComponentId == "memcached")
         {
-            var response = await ProbeTextAsync(descriptor.DefaultPort, "version\r\n", cancellationToken);
-            return response.StartsWith("VERSION", StringComparison.OrdinalIgnoreCase);
+            var response = await (InspectCachePortAsync ?? ProbeTextAsync)(descriptor.DefaultPort, "version\r\n", cancellationToken);
+            if (response is null) return null;
+            if (response.Length == 0) return false;
+            return response.StartsWith("VERSION ", StringComparison.OrdinalIgnoreCase) ? true : null;
         }
 
-        var info = await ProbeTextAsync(descriptor.DefaultPort, "PING\r\n", cancellationToken);
-        return info.Length > 0;
+        var info = await (InspectCachePortAsync ?? ProbeTextAsync)(descriptor.DefaultPort, "PING\r\n", cancellationToken);
+        return info is null ? null : info.Length > 0;
     }
 
     /// <summary>
-    /// Localhost'ta tek komut gönderip ilk yanıtı okur; erişilemezse boş dizge döner.
+    /// Localhost'ta tek komut gönderip ilk yanıtı okur. Reddedilen bağlantı boş dizge,
+    /// ölçüm hatası veya protokol yanıtı olmadan kapanan bağlantı null döndürür.
     /// </summary>
     /// <remarks>
     /// GÜRÜLTÜ AYRIMI: "bağlantı reddedildi" bileşen dururken BEKLENEN yanıttır ve saniyede
     /// birkaç kez oluşabilir — Debug'a yazılır. Onun DIŞINDAKİ her hata (zaman aşımı, akış hatası,
     /// yetki) ölçümün kendisinin başarısız olduğu anlamına gelir: 127.0.0.1'de bir şey DİNLİYOR ama
-    /// konuşmuyor. Bu durumda panel "Durduruldu" gösterir, oysa doğrusu "ölçemedik"tir — bu yüzden
-    /// uyarı seviyesindedir.
+    /// konuşmuyor. Bu durumda "Durduruldu" sonucuna varılmaz; ölçüm bilinmiyor olarak kalır.
     /// </remarks>
-    private async Task<string> ProbeTextAsync(int port, string command, CancellationToken cancellationToken)
+    private async Task<string?> ProbeTextAsync(int port, string command, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(2000);
+            // Windows can take just over two seconds to report ConnectionRefused
+            // on loopback. Let that measured result arrive before timing out.
+            cts.CancelAfter(4000);
             using var client = new TcpClient();
             await client.ConnectAsync("127.0.0.1", port, cts.Token);
+            cts.CancelAfter(2000);
 
             await using var stream = client.GetStream();
             await stream.WriteAsync(Encoding.ASCII.GetBytes(command), cts.Token);
 
             var buffer = new byte[256];
             var read = await stream.ReadAsync(buffer, cts.Token);
-            return read <= 0 ? string.Empty : Encoding.ASCII.GetString(buffer, 0, read).Trim();
+            if (read <= 0) return null;
+            var response = Encoding.ASCII.GetString(buffer, 0, read).Trim();
+            return response.Length == 0 ? null : response;
         }
         catch (SocketException exception) when (exception.SocketErrorCode == SocketError.ConnectionRefused)
         {
             logger?.LogDebug("127.0.0.1:{Port} baglanti reddetti (bilesen durmus kabul ediliyor).", port);
             return string.Empty;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             logger?.LogWarning(
                 exception,
-                "127.0.0.1:{Port} sondasi OLCUM YAPAMADI; durum 'durduruldu' olarak raporlanacak.",
+                "127.0.0.1:{Port} sondasi OLCUM YAPAMADI; calisma durumu bilinmiyor.",
                 port);
-            return string.Empty;
+            return null;
         }
     }
 
@@ -497,19 +523,19 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
             ? null
             : await ReadServiceStatusAsync(unitName, cancellationToken);
 
-        var registered = descriptor.RunsAsScheduledTask
+        bool? registered = descriptor.RunsAsScheduledTask
             ? await ScheduledTaskExistsAsync(unitName, cancellationToken)
-            : serviceStatus is not null;
+            : serviceStatus == "Unknown" ? null : serviceStatus is not null;
 
         // Zamanlanmış görevde tek dürüst "çalışıyor" kanıtı portun yanıt vermesidir: görev
         // "Running" görünüp sarmalayıcı .cmd'nin altındaki süreç çoktan ölmüş olabilir.
-        var alive = descriptor.RunsAsScheduledTask && installedComponent is not null
+        bool? alive = descriptor.RunsAsScheduledTask && installedComponent is not null
             ? await IsAliveAsync(descriptor, cancellationToken)
             : string.Equals(serviceStatus, "Running", StringComparison.OrdinalIgnoreCase);
 
         // Redis çalışıyorsa canlı metrikleri (RESP INFO) oku — salt-okunur, best-effort.
         CacheMetricsDto? metrics = null;
-        if (descriptor.ComponentId == "redis" && alive)
+        if (descriptor.ComponentId == "redis" && alive == true)
         {
             metrics = await ReadRedisInfoAsync(descriptor.DefaultPort, cancellationToken);
         }
@@ -517,7 +543,7 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
         var status = installedComponent is null
             ? "NotInstalled"
             : descriptor.RunsAsScheduledTask
-                ? alive ? "Running" : "Stopped"
+                ? alive == true ? "Running" : alive == false && registered.HasValue ? "Stopped" : "Unknown"
                 : serviceStatus ?? "Stopped";
 
         return new CacheRuntimeDto
@@ -529,7 +555,7 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
             InstallDir = installDir,
             ExecutablePath = executablePath,
             IsInstalled = installedComponent is not null,
-            IsServiceRegistered = registered,
+            IsServiceRegistered = registered == true,
             Status = status,
             Metrics = metrics
         };
@@ -540,36 +566,27 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
     /// görev olarak kaydeder.)
     /// </summary>
     /// <remarks>
-    /// "ÖLÇEMEDİK" BURADA "YOK"A YUVARLANIYOR: powershell hiç çalışmazsa ya da beklenmedik bir şey
-    /// yazarsa yüklem <c>false</c> döner ve çağıranlar bunu "görev kayıtlı değil" diye okur —
-    /// Durdur hiçbir şey yapmadan döner, Başlat ise kullanıcıya "bileşeni yeniden kur" der.
-    /// İkisi de yanlış olabilir. Yuvarlama korunuyor (güvenli taraf), sebebi ise artık kayıtlı.
+    /// null means the inspection failed; false means the task list was read and the task
+    /// really was absent. A failed query must not become a reinstall recommendation.
     /// </remarks>
-    private async Task<bool> ScheduledTaskExistsAsync(string taskName, CancellationToken cancellationToken)
+    private async Task<bool?> ScheduledTaskExistsAsync(string taskName, CancellationToken cancellationToken)
     {
-        var result = await ProcessRunner.RunPowerShellAsync(
-            $"if (Get-ScheduledTask -TaskName \"{taskName}\" -ErrorAction SilentlyContinue) {{ 'true' }} else {{ 'false' }}",
-            cancellationToken);
-
-        if (!result.Success)
+        try
         {
-            logger?.LogWarning(
-                "Zamanlanmis gorev sorgusu CALISTIRILAMADI: {Gorev} (cikis kodu {CikisKodu}). Gorev 'kayitli degil' varsayilacak. {Detay}",
-                taskName,
-                result.ExitCode,
-                Detay(result));
-            return false;
+            // Enumerate first so a genuinely missing task is a successful empty result,
+            // while permission/module/CIM failures still terminate the inspection.
+            var result = await InspectPowerShellAsync(
+                $"$task = Get-ScheduledTask -ErrorAction Stop | Where-Object {{ $_.TaskName -eq '{taskName.Replace("'", "''")}' }} | Select-Object -First 1\n[bool]($null -ne $task)",
+                cancellationToken);
+            if (!result.Success || !string.IsNullOrWhiteSpace(result.StandardError)) throw new IOException(Detay(result));
+            if (!bool.TryParse(result.StandardOutput.Trim(), out var registered)) throw new InvalidDataException("Task inspection returned no valid boolean result.");
+            return registered;
         }
-
-        if (!bool.TryParse(result.StandardOutput.Trim(), out var registered))
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
-            logger?.LogWarning(
-                "Zamanlanmis gorev sorgusu BEKLENMEDIK cikti verdi: {Gorev}. Gorev 'kayitli degil' varsayilacak.",
-                taskName);
-            return false;
+            logger?.LogWarning(exception, "Zamanlanmis gorev sorgusu OKUNAMADI: {Gorev}. Kayit durumu bilinmiyor.", taskName);
+            return null;
         }
-
-        return registered;
     }
 
     // Redis'e RESP ile bağlanıp INFO komutunu çalıştırır, metrikleri ayrıştırır. Şifre korumalıysa (NOAUTH)
@@ -580,38 +597,29 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
     // ve bağlantı adreslerini içerebilir. Günlüğe yalnız "okunamadı" bilgisi ve port düşer.
     private async Task<CacheMetricsDto?> ReadRedisInfoAsync(int port, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(2500);
             using var client = new TcpClient();
-            await client.ConnectAsync("127.0.0.1", port, cts.Token);
-
-            await using var stream = client.GetStream();
+            Stream connectedStream;
+            if (OpenRedisInfoStreamAsync is { } openStream)
+            {
+                connectedStream = await openStream(port, cts.Token);
+            }
+            else
+            {
+                await client.ConnectAsync("127.0.0.1", port, cts.Token);
+                connectedStream = client.GetStream();
+            }
+            await using var stream = connectedStream;
             var command = "INFO\r\n"u8.ToArray();
             await stream.WriteAsync(command, cts.Token);
 
-            var buffer = new byte[16384];
-            var builder = new StringBuilder();
-            while (builder.Length < 131072)
-            {
-                var read = await stream.ReadAsync(buffer, cts.Token);
-                if (read <= 0)
-                {
-                    break;
-                }
-
-                builder.Append(Encoding.UTF8.GetString(buffer, 0, read));
-                var current = builder.ToString();
-                if (current.Contains("uptime_in_seconds", StringComparison.Ordinal) &&
-                    current.Contains("used_memory_human", StringComparison.Ordinal))
-                {
-                    break;
-                }
-            }
-
-            var text = builder.ToString();
-            if (text.Contains("NOAUTH", StringComparison.OrdinalIgnoreCase))
+            var header = await ReadRedisReplyHeaderAsync(stream, cts.Token);
+            if (header is not null && (header.Equals("-NOAUTH", StringComparison.OrdinalIgnoreCase) ||
+                                      header.StartsWith("-NOAUTH ", StringComparison.OrdinalIgnoreCase)))
             {
                 // Metrik kartı BOŞ görünür ve kullanıcı sebebini hiçbir yerde göremezdi.
                 // Bu bir arıza değil, yapılandırma gerçeği — ama söylenmeyen bir gerçek.
@@ -621,9 +629,26 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
                 return null;
             }
 
+            // INFO is one RESP bulk string. Its size counts bytes, not characters;
+            // a TCP packet boundary says nothing about whether all metrics arrived.
+            if (header is null || !header.StartsWith('$') ||
+                !int.TryParse(header.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out var length) ||
+                length is <= 0 or > 131072)
+            {
+                return null;
+            }
+
+            var body = new byte[length];
+            await stream.ReadExactlyAsync(body, cts.Token);
+            var trailer = new byte[2];
+            await stream.ReadExactlyAsync(trailer, cts.Token);
+            if (trailer[0] != '\r' || trailer[1] != '\n') return null;
+
+            var text = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(body);
+            cancellationToken.ThrowIfCancellationRequested();
             return ParseRedisInfo(text);
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             // Redis CANLI ölçülmüşken INFO'nun patlaması olağan değildir; metrikler sessizce
             // kaybolur ve panel "sorun yok" görüntüsü verir.
@@ -632,47 +657,94 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
         }
     }
 
-    private static CacheMetricsDto ParseRedisInfo(string text)
+    private static async Task<string?> ReadRedisReplyHeaderAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        var buffer = new byte[1];
+        var header = new StringBuilder();
+        // Bound even an error reply without ever logging its potentially private text.
+        while (header.Length < 512)
+        {
+            if (await stream.ReadAsync(buffer, cancellationToken) == 0) return null;
+            if (buffer[0] == '\r')
+            {
+                if (await stream.ReadAsync(buffer, cancellationToken) == 0 || buffer[0] != '\n') return null;
+                return header.ToString();
+            }
+            if (buffer[0] == '\n' || buffer[0] > 127) return null;
+            header.Append((char)buffer[0]);
+        }
+        return null;
+    }
+
+    private static CacheMetricsDto? ParseRedisInfo(string text)
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var metricKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "redis_version", "used_memory_human", "connected_clients", "keyspace_hits", "keyspace_misses", "uptime_in_seconds"
+        };
+        var databases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var inKeyspace = false;
+        var measuredKeyspace = false;
+        long keys = 0;
         foreach (var raw in text.Split('\n'))
         {
             var line = raw.Trim();
-            if (line.Length == 0 || line.StartsWith('#'))
+            if (line.Length == 0) continue;
+            if (line.StartsWith('#'))
             {
+                inKeyspace = line.Equals("# Keyspace", StringComparison.OrdinalIgnoreCase);
+                measuredKeyspace |= inKeyspace;
                 continue;
             }
 
             var separator = line.IndexOf(':');
-            if (separator > 0)
+            if (separator <= 0) continue;
+            var name = line[..separator];
+            var value = line[(separator + 1)..].Trim();
+            if (metricKeys.Contains(name))
             {
-                map[line[..separator]] = line[(separator + 1)..];
+                if (!map.TryAdd(name, value)) return null;
+            }
+            else if (inKeyspace && Regex.IsMatch(name, "^db[0-9]+$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                if (!databases.Add(name)) return null;
+                string? keyCount = null;
+                foreach (var attribute in value.Split(','))
+                {
+                    var pair = attribute.Split('=', 2, StringSplitOptions.TrimEntries);
+                    if (pair.Length != 2 || !pair[0].Equals("keys", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (keyCount is not null) return null;
+                    keyCount = pair[1];
+                }
+                if (!TryCount(keyCount, out var dbKeys) || keys > long.MaxValue - dbKeys) return null;
+                keys += dbKeys;
             }
         }
 
-        long keys = 0;
-        foreach (var pair in map)
-        {
-            if (pair.Key.StartsWith("db", StringComparison.OrdinalIgnoreCase))
-            {
-                var match = Regex.Match(pair.Value, "keys=(\\d+)");
-                if (match.Success && long.TryParse(match.Groups[1].Value, out var dbKeys))
-                {
-                    keys += dbKeys;
-                }
-            }
-        }
+        // An empty, measured Keyspace section means zero keys. A missing section,
+        // missing field or malformed count is not a measured zero.
+        if (!measuredKeyspace ||
+            !map.TryGetValue("redis_version", out var version) || string.IsNullOrWhiteSpace(version) ||
+            !map.TryGetValue("used_memory_human", out var memory) || string.IsNullOrWhiteSpace(memory) ||
+            !int.TryParse(map.GetValueOrDefault("connected_clients"), NumberStyles.None, CultureInfo.InvariantCulture, out var clients) ||
+            !TryCount(map.GetValueOrDefault("keyspace_hits"), out var hits) ||
+            !TryCount(map.GetValueOrDefault("keyspace_misses"), out var misses) ||
+            !TryCount(map.GetValueOrDefault("uptime_in_seconds"), out var uptime)) return null;
 
         return new CacheMetricsDto
         {
-            Version = map.GetValueOrDefault("redis_version", string.Empty),
-            UsedMemory = map.GetValueOrDefault("used_memory_human", string.Empty),
-            ConnectedClients = int.TryParse(map.GetValueOrDefault("connected_clients"), out var clients) ? clients : 0,
-            Hits = long.TryParse(map.GetValueOrDefault("keyspace_hits"), out var hits) ? hits : 0,
-            Misses = long.TryParse(map.GetValueOrDefault("keyspace_misses"), out var misses) ? misses : 0,
-            UptimeSeconds = long.TryParse(map.GetValueOrDefault("uptime_in_seconds"), out var uptime) ? uptime : 0,
+            Version = version,
+            UsedMemory = memory,
+            ConnectedClients = clients,
+            Hits = hits,
+            Misses = misses,
+            UptimeSeconds = uptime,
             Keys = keys
         };
+
+        static bool TryCount(string? value, out long count)
+            => long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out count);
     }
 
     private async Task InstallServiceAsync(CacheDescriptor descriptor, CacheRuntimeDto runtime, CancellationToken cancellationToken)
@@ -735,37 +807,37 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
     }
 
     /// <remarks>
-    /// İKİ AYRI GERÇEK AYNI <c>null</c>'a düşüyor: "böyle bir servis yok" (betik başarıyla çalıştı,
-    /// çıktı boş) ve "servisi SORAMADIK" (betik hiç çalışmadı). İkincisi panelde bileşeni
-    /// "Durduruldu / kayıtlı değil" gösterir; kullanıcı da olmayan bir arızayı kovalar. Dönüş
-    /// değeri aynı kalıyor, ama ölçüm başarısızlığı artık uyarı olarak yazılıyor.
+    /// null means the service was measured absent. Unknown means no trustworthy
+    /// measurement was obtained; empty output alone cannot establish absence.
     /// </remarks>
     private async Task<string?> ReadServiceStatusAsync(string serviceName, CancellationToken cancellationToken)
     {
-        var result = await ProcessRunner.RunPowerShellAsync(
-            $@"$service = Get-Service -Name ""{serviceName}"" -ErrorAction SilentlyContinue
-if ($service) {{ [pscustomobject]@{{ Status = $service.Status.ToString() }} | ConvertTo-Json -Depth 2 }}",
-            cancellationToken);
-
-        if (!result.Success)
+        try
         {
-            logger?.LogWarning(
-                "Servis durumu OKUNAMADI: {Servis} (cikis kodu {CikisKodu}). Servis 'kayitli degil' varsayilacak. {Detay}",
-                serviceName,
-                result.ExitCode,
-                Detay(result));
-            return null;
-        }
+            var result = await InspectPowerShellAsync(
+                $$"""
+                $service = Get-Service -ErrorAction Stop | Where-Object { $_.Name -eq '{{serviceName.Replace("'", "''")}}' } | Select-Object -First 1
+                if ($null -eq $service) { [pscustomobject]@{ Exists = $false } | ConvertTo-Json -Compress }
+                else { [pscustomobject]@{ Status = $service.Status.ToString() } | ConvertTo-Json -Compress }
+                """, cancellationToken);
+            if (!result.Success || !string.IsNullOrWhiteSpace(result.StandardError)) throw new IOException(Detay(result));
 
-        if (string.IsNullOrWhiteSpace(result.StandardOutput))
+            using var document = JsonDocument.Parse(result.StandardOutput);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) throw new InvalidDataException("Service inspection returned no object.");
+            if (root.TryGetProperty("Exists", out var exists) && exists.ValueKind == JsonValueKind.False && !root.TryGetProperty("Status", out _)) return null;
+            if (root.TryGetProperty("Status", out var statusElement) && statusElement.ValueKind == JsonValueKind.String)
+            {
+                var status = statusElement.GetString();
+                if (status is "Running" or "Stopped" or "StartPending" or "StopPending" or "ContinuePending" or "PausePending" or "Paused") return status;
+            }
+            throw new InvalidDataException("Service inspection returned no recognized state.");
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
-            return null;
+            logger?.LogWarning(exception, "Servis durumu OKUNAMADI: {Servis}. Calisma durumu bilinmiyor.", serviceName);
+            return "Unknown";
         }
-
-        using var document = JsonDocument.Parse(result.StandardOutput);
-        return document.RootElement.TryGetProperty("Status", out var statusElement)
-            ? statusElement.GetString()
-            : null;
     }
 
     private sealed record CacheDescriptor(

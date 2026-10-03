@@ -33,7 +33,7 @@ public interface IConcurrencyLock
 /// <summary>Panelin kuyruk adları. Yeni bir alan eklerken buraya da ekle.</summary>
 public static class ConcurrencyKeys
 {
-    /// <summary>applicationHost.config yazanlar: site, PHP, ASP.NET, reverse proxy, nginx, app runtime.</summary>
+    /// <summary>applicationHost.config yazanlar: site, PHP, ASP.NET, reverse proxy, app runtime.</summary>
     public const string Iis = "iis";
 
     /// <summary>Giriş güvenliği durumu (bruteforce.json). Girişin SICAK YOLU — uzun işlerle asla paylaşılmaz.</summary>

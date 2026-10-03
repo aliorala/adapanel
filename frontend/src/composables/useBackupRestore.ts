@@ -1,5 +1,5 @@
 import { getSessionEpoch } from "../api/client";
-import { ref } from "vue";
+import { getCurrentScope, onScopeDispose, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { getBackupChain, restoreBackup, type BackupRecord } from "../api/backup";
 import { useAuthStore } from "../stores/auth";
@@ -16,6 +16,7 @@ export function restoreResult(record: BackupRecord, t: (key: string, values?: Re
     lines.push(warning.target && !message.includes(warning.target) ? `${warning.target}: ${message}` : message);
     if (warning.detail) lines.push(warning.detail);
   }
+  if (record.restoredPath) lines.push(t("panel.backup.restoredPath", { path: record.restoredPath }));
   if (record.preservedPath) lines.push(t("panel.backup.preservedPath", { path: record.preservedPath }));
   return { message: lines.join("\n"), failed };
 }
@@ -27,14 +28,19 @@ export function useBackupRestore() {
   const { confirm } = useConfirm();
   const { prompt } = usePrompt();
   const restoringId = ref("");
+  let disposed = false;
+  if (getCurrentScope()) onScopeDispose(() => { disposed = true; });
   async function restore(record: BackupRecord, onResult: (record: BackupRecord) => void, onError: (error: unknown) => void, refresh?: () => Promise<unknown>) {
-    if (restoringId.value || auth.session?.user?.role !== "Administrator") return;
+    if (disposed || restoringId.value || auth.session?.user?.role !== "Administrator") return;
     const epoch = getSessionEpoch();
+    const isCurrent = () => !disposed && epoch === getSessionEpoch() && auth.session?.user?.role === "Administrator";
+    record = { ...record };
     restoringId.value = record.id;
     let password = "";
     try {
       if (record.chainId) {
         const chain = await getBackupChain(record.id);
+        if (!isCurrent()) return;
         if (chain.broken) throw new Error(`${t("panel.backup.chain.broken")}: ${chain.missingLinks.join(", ")}`);
       }
       if (record.encrypted) {
@@ -42,7 +48,7 @@ export function useBackupRestore() {
         if (entered === null) return;
         password = entered;
       }
-      if (epoch !== getSessionEpoch()) return;
+      if (!isCurrent()) return;
       await confirm({
         title: t("panel.confirm.restoreBackupTitle", { name: record.name }),
         message: t("panel.backup.restoreConfirm"),
@@ -50,16 +56,17 @@ export function useBackupRestore() {
         requireText: record.source || record.name,
         confirmLabel: t("panel.backup.restore"), busyLabel: t("panel.backup.restoring"),
         action: async () => {
-          if (epoch !== getSessionEpoch() || auth.session?.user?.role !== "Administrator") return;
+          if (!isCurrent()) return;
           try {
             const result = await restoreBackup(record.id, "", password);
+            if (!isCurrent()) return;
             // Refresh failure must not hide the restore result or imply the restore failed.
-            if (refresh) await refresh().catch(onError);
-            onResult(result);
-          } catch (error) { onError(error); }
+            if (refresh) await refresh().catch(error => { if (isCurrent()) onError(error); });
+            if (isCurrent()) onResult(result);
+          } catch (error) { if (isCurrent()) onError(error); }
         }
       });
-    } catch (error) { onError(error); }
+    } catch (error) { if (isCurrent()) onError(error); }
     finally { password = ""; restoringId.value = ""; }
   }
   return { restore, restoringId };

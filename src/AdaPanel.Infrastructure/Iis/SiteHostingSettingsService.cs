@@ -35,6 +35,7 @@ public sealed class SiteHostingSettingsService(
     private const string StatePath = "config/site-hosting-settings.json";
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
     private const string HstsHeaderName = "Strict-Transport-Security";
+    internal Func<Stream, Stream>? ConfigurationStream { get; init; }
 
     // ".woff2" gibi: nokta + harf/rakam ile başlar, ayırıcı/boşluk/yol karakteri içermez.
     private static readonly Regex MimeExtensionPattern = new(@"^\.[a-z0-9][a-z0-9._-]{0,31}$", RegexOptions.Compiled);
@@ -100,7 +101,8 @@ public sealed class SiteHostingSettingsService(
         // vardı; panel koşulsuz "kaydedildi" diyordu. XML olarak geçerli bir belge IIS için hâlâ
         // geçersiz olabilir (tanımsız bölüm → sitenin TAMAMINA 500.19), o yüzden ikinci bir
         // kapı var. IIS yoksa cevap "reddetti" DEĞİL, "ölçülemedi"dir.
-        var yazma = UpdateWebConfig(site.PhysicalPath, request, () => IisWebConfigOkuyabiliyorMu(site.Name));
+        var yazma = UpdateWebConfig(site.PhysicalPath, request, () => IisWebConfigOkuyabiliyorMu(site.Name),
+            configureStream: ConfigurationStream, cancellationToken: cancellationToken);
         if (!yazma.Verified || (yazma.IisProbed && !yazma.IisAccepted))
         {
             // Diske inmeyen / IIS'in reddettiği bir yazma "kaydedildi" DEĞİLDİR; önceki içerik
@@ -1557,7 +1559,9 @@ public sealed class SiteHostingSettingsService(
         string root,
         UpdateSiteHostingSettingsRequest request,
         Func<bool?>? iisProbe = null,
-        Func<string, XDocument>? geriOkuyucu = null)
+        Func<string, XDocument>? geriOkuyucu = null,
+        Func<Stream, Stream>? configureStream = null,
+        CancellationToken cancellationToken = default)
     {
         var webConfigPath = Path.Combine(root, "web.config");
 
@@ -1790,7 +1794,7 @@ public sealed class SiteHostingSettingsService(
             }
         }
 
-        return KaydetVeGeriOku(webConfigPath, document, iisProbe, geriOkuyucu);
+        return KaydetVeGeriOku(webConfigPath, document, iisProbe, geriOkuyucu, configureStream, cancellationToken);
     }
 
     /// <summary>
@@ -1818,7 +1822,9 @@ public sealed class SiteHostingSettingsService(
         string webConfigPath,
         XDocument document,
         Func<bool?>? iisProbe,
-        Func<string, XDocument>? geriOkuyucu)
+        Func<string, XDocument>? geriOkuyucu,
+        Func<Stream, Stream>? configureStream,
+        CancellationToken cancellationToken)
     {
         // ÖNCEKİ İÇERİK: geri alma bunun üzerinden yapılır (yoksa null).
         byte[]? oncekiIcerik = null;
@@ -1837,11 +1843,11 @@ public sealed class SiteHostingSettingsService(
 
         try
         {
-            document.Save(webConfigPath);
+            WebConfigurationFile.Save(webConfigPath, document, configureStream, cancellationToken);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            // Yazma DUSTU: dosya degismedi. "Olculemedi" degil, BASARISIZ.
+            // Publication did not complete: report failure, never a saved measurement.
             return new WebConfigWriteMeasurement
             {
                 WriteFailed = true,
@@ -1979,13 +1985,13 @@ public sealed class SiteHostingSettingsService(
         {
             if (oncekiIcerik is not null)
             {
-                File.WriteAllBytes(webConfigPath, oncekiIcerik);
+                WebConfigurationFile.WriteBytes(webConfigPath, oncekiIcerik);
                 return true;
             }
 
             // Dosya YOKTU. Silmek yerine ZARARSIZ ve GEÇERLİ bir belge bırakılır: bozuk bir
             // web.config siteyi 500.19 ile düşürür, boş bir tanesi hiçbir şey değiştirmez.
-            new XDocument(new XElement("configuration")).Save(webConfigPath);
+            WebConfigurationFile.Save(webConfigPath, new XDocument(new XElement("configuration")));
             return true;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
