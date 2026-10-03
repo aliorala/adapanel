@@ -28,6 +28,8 @@ export type ErrorReport = {
 };
 
 export type ErrorReportingSettings = {
+  /** Opaque configuration identity; delivery timestamps do not change it. */
+  settingsRevision: string;
   enabled: boolean;
   collectorUrl: string;
   consentGrantedAtUtc: string | null;
@@ -46,6 +48,7 @@ function unconfirmed(): never { throw new UserFacingError("panel.errorReports.re
 function measuredSettings(envelope: ApiEnvelope<ErrorReportingSettings>): ErrorReportingSettings {
   const value = envelope?.data;
   if (envelope?.success !== true || !value || typeof value.enabled !== "boolean" || typeof value.collectorUrl !== "string" || typeof value.lastError !== "string" ||
+    typeof value.settingsRevision !== "string" || !value.settingsRevision.trim() ||
     !nullableText(value.consentGrantedAtUtc) || !nullableText(value.lastSentAtUtc) ||
     !Number.isSafeInteger(value.batchSize) || value.batchSize < 1 || value.batchSize > 50 ||
     !Number.isSafeInteger(value.retentionDays) || value.retentionDays < 1 || value.retentionDays > 365) unconfirmed();
@@ -67,14 +70,18 @@ export async function getErrorReportingSettings() {
   return measuredSettings(response.data);
 }
 
-export async function saveErrorReportingSettings(payload: ErrorReportingSettings) {
-  const response = await apiClient.put<ApiEnvelope<ErrorReportingSettings>>("/error-reports/settings", payload);
+export async function saveErrorReportingSettings(payload: Omit<ErrorReportingSettings, "settingsRevision">) {
+  const response = await apiClient.put<ApiEnvelope<ErrorReportingSettings>>("/error-reports/settings", {
+    enabled: payload.enabled, collectorUrl: payload.collectorUrl, batchSize: payload.batchSize, retentionDays: payload.retentionDays
+  });
   return measuredSettings(response.data);
 }
 
 // Toplayıcıya erişim yavaş olabilir (sunucu tarafı 20 sn ile sınırlar); istemci onu aşan bir pay bırakır.
-export async function sendPendingErrorReports() {
-  const response = await apiClient.post<ApiEnvelope<ErrorReportSendResult>>("/error-reports/send", {}, { timeout: 60_000 });
+export async function sendPendingErrorReports(expectedSettingsRevision: string) {
+  if (typeof expectedSettingsRevision !== "string" || !expectedSettingsRevision.trim())
+    throw new UserFacingError("errorReporting.settings_revision_required");
+  const response = await apiClient.post<ApiEnvelope<ErrorReportSendResult>>("/error-reports/send", { expectedSettingsRevision }, { timeout: 60_000 });
   const result = response.data?.data;
   if (response.data?.success !== true || !result || !Number.isSafeInteger(result.sentCount) || result.sentCount < 0) unconfirmed();
   return result;

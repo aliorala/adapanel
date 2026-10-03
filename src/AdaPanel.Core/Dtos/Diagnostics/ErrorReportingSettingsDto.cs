@@ -6,6 +6,9 @@ namespace AdaPanel.Core.Dtos.Diagnostics;
 /// </summary>
 public sealed class ErrorReportingSettingsDto
 {
+    /// <summary>Server-issued identity of the saved configuration; delivery status does not change it.</summary>
+    public string SettingsRevision { get; set; } = string.Empty;
+
     /// <summary>Kullanıcı kurulumda onay verdi mi. False ise kayıtlar yerelde kalır, gönderim olmaz.</summary>
     public bool Enabled { get; set; }
 

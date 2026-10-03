@@ -13,4 +13,8 @@ public interface IErrorReportSender
     /// Onay yoksa veya toplayıcı adresi boşsa 0 döner (gönderim yapılmaz).
     /// </summary>
     Task<int> SendPendingAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Manual delivery bound to the settings revision reviewed by the caller.</summary>
+    Task<int> SendPendingAsync(string expectedSettingsRevision, CancellationToken cancellationToken = default) =>
+        SendPendingAsync(cancellationToken);
 }

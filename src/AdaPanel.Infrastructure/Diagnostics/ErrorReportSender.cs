@@ -26,8 +26,12 @@ public sealed class ErrorReportSender(
     private static readonly TimeSpan PublicationTimeout = TimeSpan.FromSeconds(20);
     private string SettingsFilePath => fileStore.ResolvePath(SettingsPath);
 
-    public async Task<ErrorReportingSettingsDto> GetSettingsAsync(CancellationToken cancellationToken = default) =>
-        await fileStore.ReadAsync(SettingsPath, new ErrorReportingSettingsDto(), cancellationToken);
+    public async Task<ErrorReportingSettingsDto> GetSettingsAsync(CancellationToken cancellationToken = default)
+    {
+        var settings = await fileStore.ReadAsync(SettingsPath, new ErrorReportingSettingsDto(), cancellationToken);
+        settings.SettingsRevision = RevisionOf(settings);
+        return settings;
+    }
 
     public async Task<ErrorReportingSettingsDto> UpdateSettingsAsync(
         ErrorReportingSettingsDto settings,
@@ -35,7 +39,10 @@ public sealed class ErrorReportSender(
     {
         ArgumentNullException.ThrowIfNull(settings);
 
+        var enabled = settings.Enabled;
         var collectorUrl = (settings.CollectorUrl ?? string.Empty).Trim();
+        var batchSize = Math.Clamp(settings.BatchSize <= 0 ? 20 : settings.BatchSize, 1, 50);
+        var retentionDays = Math.Clamp(settings.RetentionDays <= 0 ? 30 : settings.RetentionDays, 1, 365);
         if (collectorUrl.Length > 0 && !IsValidCollectorUrl(collectorUrl))
         {
             throw new AppException("errorReporting.invalid_collector_url", 400, 400);
@@ -47,24 +54,36 @@ public sealed class ErrorReportSender(
             new ErrorReportingSettingsDto(),
             current => new ErrorReportingSettingsDto
             {
-                Enabled = settings.Enabled,
+                SettingsRevision = SettingsRevision.New(),
+                Enabled = enabled,
                 CollectorUrl = collectorUrl,
                 // Onay anı BİR KEZ yazılır; sonraki ayar güncellemeleri onay tarihini ezmez.
-                ConsentGrantedAtUtc = settings.Enabled
+                ConsentGrantedAtUtc = enabled
                     ? current.ConsentGrantedAtUtc ?? DateTime.UtcNow
                     : null,
-                BatchSize = Math.Clamp(settings.BatchSize <= 0 ? 20 : settings.BatchSize, 1, 50),
-                RetentionDays = Math.Clamp(settings.RetentionDays <= 0 ? 30 : settings.RetentionDays, 1, 365),
+                BatchSize = batchSize,
+                RetentionDays = retentionDays,
                 LastSentAtUtc = current.LastSentAtUtc,
                 LastError = current.LastError
             },
             cancellationToken);
     }
 
-    public async Task<int> SendPendingAsync(CancellationToken cancellationToken = default)
+    public Task<int> SendPendingAsync(CancellationToken cancellationToken = default) =>
+        SendPendingCoreAsync(null, cancellationToken);
+
+    public Task<int> SendPendingAsync(string expectedSettingsRevision, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(expectedSettingsRevision))
+            throw new AppException("errorReporting.settings_revision_required", 400, 400);
+        return SendPendingCoreAsync(expectedSettingsRevision, cancellationToken);
+    }
+
+    private async Task<int> SendPendingCoreAsync(string? expectedSettingsRevision, CancellationToken cancellationToken)
     {
         using var delivery = await ErrorReportDeliveryLifecycle.EnterSendAsync(SettingsFilePath, cancellationToken);
         var settings = await GetSettingsAsync(cancellationToken);
+        EnsureExpectedRevision(expectedSettingsRevision, settings);
 
         // Onay yok VEYA toplayıcı adresi boş → hiçbir şey gönderilmez, kayıtlar yerelde birikir.
         if (!settings.Enabled || string.IsNullOrWhiteSpace(settings.CollectorUrl))
@@ -113,6 +132,7 @@ public sealed class ErrorReportSender(
             using (await ErrorReportDeliveryLifecycle.EnterSettingsAsync(SettingsFilePath, cancellationToken))
             {
                 var current = await GetSettingsAsync(cancellationToken);
+                EnsureExpectedRevision(expectedSettingsRevision, current);
                 if (!SameConfiguration(settings, current))
                     throw new AppException("errorReporting.settings_changed", 409, 409);
                 cancellationToken.ThrowIfCancellationRequested();
@@ -206,6 +226,22 @@ public sealed class ErrorReportSender(
         string.Equals(expected.CollectorUrl?.Trim(), current.CollectorUrl?.Trim(), StringComparison.Ordinal) &&
         expected.ConsentGrantedAtUtc == current.ConsentGrantedAtUtc &&
         expected.BatchSize == current.BatchSize && expected.RetentionDays == current.RetentionDays;
+
+    private static string RevisionOf(ErrorReportingSettingsDto settings) =>
+        SettingsRevision.GetOrCompute(settings.SettingsRevision, new
+        {
+            settings.Enabled,
+            CollectorUrl = settings.CollectorUrl ?? string.Empty,
+            settings.ConsentGrantedAtUtc,
+            settings.BatchSize,
+            settings.RetentionDays
+        });
+
+    private static void EnsureExpectedRevision(string? expected, ErrorReportingSettingsDto settings)
+    {
+        if (expected is not null && !string.Equals(expected, settings.SettingsRevision, StringComparison.Ordinal))
+            throw new AppException("errorReporting.settings_changed", 409, 409);
+    }
 
     private static bool IsValidCollectorUrl(string url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var uri) &&

@@ -20,6 +20,12 @@
       <p>{{ t("panel.errorReports.loadFailedHint") }}</p>
       <button class="secondary compact" :disabled="Boolean(busy)" @click="loadAll">{{ t("panel.common.retry") }}</button>
     </div>
+    <div v-else-if="settingsConflict" class="settings-read-error settings-conflict" role="alert">
+      <strong>{{ t("panel.errorReports.settingsChangedTitle") }}</strong>
+      <p>{{ conflictMessage }}</p>
+      <p>{{ t("panel.errorReports.settingsChangedHint") }}</p>
+      <button class="secondary compact" :disabled="Boolean(busy)" @click="loadAll">{{ t("panel.errorReports.refresh") }}</button>
+    </div>
     <p v-else-if="!loaded" class="empty-state" role="status" aria-live="polite">
       {{ t("panel.common.loading") }}
     </p>
@@ -45,7 +51,7 @@
         </div>
       </div>
 
-      <p v-if="hasUnsavedChanges" class="settings-draft-hint" role="status">{{ t("panel.errorReports.saveBeforeSend") }}</p>
+      <p v-if="hasUnsavedChanges && settingsConfirmed" class="settings-draft-hint" role="status">{{ t("panel.errorReports.saveBeforeSend") }}</p>
       <!-- Onay ayarları -->
       <section class="form-surface settings-section">
         <div class="section-head">
@@ -92,7 +98,7 @@
             {{ busy === "send" ? t("panel.errorReports.sending") : t("panel.errorReports.sendNow") }}
           </button>
         </div>
-        <p v-if="!canSend && !hasUnsavedChanges" class="field-hint">{{ t("panel.errorReports.sendDisabledHint") }}</p>
+        <p v-if="!canSend && !hasUnsavedChanges && settingsConfirmed && !busy" class="field-hint">{{ t("panel.errorReports.sendDisabledHint") }}</p>
       </section>
 
       <!-- "Sessiz gönderim yok" sözünün arayüzdeki karşılığı: ne gidiyor, ne GİTMİYOR.
@@ -252,6 +258,8 @@ const busy = ref("");
 // Veri gelmeden liste "kayıt yok", ayarlar "kapalı" görünmemeli.
 const loaded = ref(false);
 const settingsConfirmed = ref(false);
+const settingsConflict = ref(false);
+const conflictMessage = ref("");
 const loadError = ref("");
 const savedSettings = ref<ErrorReportingSettings | null>(null);
 const auth = useAuthStore(), mountedEpoch = getSessionEpoch(), actor = auth.session?.user?.id, role = auth.session?.user?.role;
@@ -262,7 +270,7 @@ const noticeError = ref(false);
 const reports = ref<ErrorReport[]>([]);
 const expandedId = ref<number | null>(null);
 
-const settings = reactive<ErrorReportingSettings>({
+const settings = reactive<Omit<ErrorReportingSettings, "settingsRevision">>({
   enabled: false,
   collectorUrl: "",
   consentGrantedAtUtc: null,
@@ -274,7 +282,7 @@ const settings = reactive<ErrorReportingSettings>({
 
 const pendingCount = computed(() => reports.value.filter((report) => !report.sentAtUtc).length);
 watch(settings, () => { draftRevision++; }, { deep: true, flush: "sync" });
-const target = (value: ErrorReportingSettings) => JSON.stringify([value.enabled, value.collectorUrl.trim(), value.batchSize, value.retentionDays]);
+const target = (value: Omit<ErrorReportingSettings, "settingsRevision">) => JSON.stringify([value.enabled, value.collectorUrl.trim(), value.batchSize, value.retentionDays]);
 const hasUnsavedChanges = computed(() => !!savedSettings.value && target(settings) !== target(savedSettings.value));
 const canSave = computed(() => settingsConfirmed.value && !busy.value && Number.isSafeInteger(settings.batchSize) && settings.batchSize >= 1 && settings.batchSize <= 50 &&
   Number.isSafeInteger(settings.retentionDays) && settings.retentionDays >= 1 && settings.retentionDays <= 365);
@@ -288,6 +296,8 @@ function publishSettings(value: ErrorReportingSettings, revision: number, preser
   savedSettings.value = { ...value };
   if (!preserveDraft && draftRevision === revision) Object.assign(settings, value);
   settingsConfirmed.value = true;
+  settingsConflict.value = false;
+  conflictMessage.value = "";
   loadError.value = "";
 }
 
@@ -341,10 +351,10 @@ async function save() {
 
 async function sendNow() {
   if (!current() || !canSend.value) return;
-  const revision = draftRevision;
+  const revision = draftRevision, expectedSettingsRevision = savedSettings.value!.settingsRevision;
   busy.value = "send";
   try {
-    const result = await sendPendingErrorReports();
+    const result = await sendPendingErrorReports(expectedSettingsRevision);
     if (!current()) return;
     const unchanged = revision === draftRevision;
     await readAll(revision);
@@ -355,10 +365,24 @@ async function sendNow() {
         : t("panel.errorReports.nothingToSend"),
       false);
   } catch (error) {
-    if (current() && revision === draftRevision) showNotice(resolveApiMessage(error), true);
+    if (!current()) return;
+    if (invalidateSettingsConflict(error)) return;
+    if (revision === draftRevision) showNotice(resolveApiMessage(error), true);
   } finally {
     if (current()) busy.value = "";
   }
+}
+
+function invalidateSettingsConflict(error: unknown) {
+  const status = (error as { response?: { status?: number } })?.response?.status;
+  const key = extractApiMessage(error);
+  if (status !== 409 && key !== "errorReporting.settings_changed" && key !== "errorReporting.settings_revision_required") return false;
+  settingsConfirmed.value = false;
+  settingsConflict.value = true;
+  conflictMessage.value = resolveApiMessage(error);
+  notice.value = "";
+  loadError.value = "";
+  return true;
 }
 
 function toggleDetail(id: number) {

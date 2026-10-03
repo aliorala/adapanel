@@ -196,7 +196,8 @@ public sealed class NotificationLifecycleTests
         var audit = new SahteDenetim();
         var controller = new NotificationsController(f.Service(), audit)
         { ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() } };
-        var result = await controller.TestAsync(new TestNotificationRequest { Channel = "email", Message = "test body" }, cts.Token);
+        var result = await controller.TestAsync(new TestNotificationRequest { Channel = "email", Message = "test body",
+            ExpectedSettingsRevision = (await f.Service().GetSettingsAsync()).SettingsRevision }, cts.Token);
         Assert.IsType<OkObjectResult>(result.Result);
         Assert.Equal(1, f.Smtp.Accepted); Assert.True(f.Smtp.Disposed);
         Assert.Single(audit.Kayitlar, item => item.Action == "notifications.test_sent");
@@ -209,7 +210,8 @@ public sealed class NotificationLifecycleTests
         var audit = new SahteDenetim();
         var controller = new NotificationsController(f.Service(), audit)
         { ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() } };
-        await Assert.ThrowsAsync<IOException>(() => controller.TestAsync(new TestNotificationRequest { Channel = "email" }, default));
+        var revision = (await f.Service().GetSettingsAsync()).SettingsRevision;
+        await Assert.ThrowsAsync<IOException>(() => controller.TestAsync(new TestNotificationRequest { Channel = "email", ExpectedSettingsRevision = revision }, default));
         Assert.Empty(audit.Kayitlar); Assert.Equal(0, f.Smtp.Accepted);
     }
 
@@ -280,17 +282,29 @@ public sealed class NotificationLifecycleTests
     private static UpdateNotificationSettingsRequest Request() => new()
     { SmtpHost = "smtp.example.net", SmtpPort = 587, SmtpUserName = "smtp-user", FromEmail = "from@example.net", ToEmail = "to@example.net", UseSsl = true };
 
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         private readonly string root = Path.Combine(Path.GetTempPath(), "adapanel-notifications-" + Guid.NewGuid().ToString("N"));
         internal readonly JsonFileStore Store;
         internal readonly SmtpTransport Smtp = new();
         internal readonly HttpTransport Http = new();
+        internal readonly List<TrackingStream> Streams = [];
+        internal IPAddress[]? CheckedAddresses;
+        internal int ConnectorCalls, ConnectorPort;
+        internal CancellationToken ConnectorToken;
         internal string SettingsFile => Store.ResolvePath(SettingsPath);
         internal Fixture() => Store = new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = root }));
-        internal NotificationService Service(Func<CancellationToken, Task>? beforeWrite = null, OutboundAddressGuard.OutboundHostResolver? resolver = null) => new(
-            Store, Http, new Protector(), outboundResolver: resolver ?? ((_, _) => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") })))
-            { SmtpClientFactory = Smtp.Create, BeforeSettingsWrite = beforeWrite };
+        internal NotificationService Service(Func<CancellationToken, Task>? beforeWrite = null, OutboundAddressGuard.OutboundHostResolver? resolver = null,
+            bool allowInternal = false, Func<CancellationToken, Task>? beforeDispatch = null,
+            Func<IPAddress[], int, CancellationToken, ValueTask<Stream>>? connector = null) => new(
+            Store, Http, new Protector(), Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = root, AllowInternalOutboundTargets = allowInternal }),
+            resolver ?? ((_, _) => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") })))
+            { SmtpClientFactory = Smtp.Create, BeforeSettingsWrite = beforeWrite, BeforeTestDispatch = beforeDispatch, SmtpConnector = connector ?? Connect };
+        internal ValueTask<Stream> Connect(IPAddress[] addresses, int port, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested(); ConnectorCalls++; CheckedAddresses = addresses; ConnectorPort = port; ConnectorToken = ct;
+            var stream = new TrackingStream(); Streams.Add(stream); return ValueTask.FromResult<Stream>(stream);
+        }
         internal Task Seed(string password = "old-secret") => Store.WriteAsync(SettingsPath, new NotificationSettingsDto
         { SmtpHost = "smtp.example.net", SmtpPort = 587, SmtpUserName = "smtp-user", SmtpPassword = password.Length == 0 ? "" : "protected:" + password,
             FromEmail = "from@example.net", ToEmail = "to@example.net", UseSsl = true, WebhookUrl = "https://hooks.example.net/saved" });
@@ -302,7 +316,7 @@ public sealed class NotificationLifecycleTests
         public string Protect(string value) => "protected:" + value;
         public string Unprotect(string value) => value.StartsWith("protected:", StringComparison.Ordinal) ? value[10..] : throw new InvalidOperationException("unrecognized protected value");
     }
-    private sealed class HttpTransport : HttpMessageHandler, IHttpClientFactory
+    internal sealed class HttpTransport : HttpMessageHandler, IHttpClientFactory
     {
         internal string? ClientName, Url, Body;
         internal int Requests;
@@ -314,19 +328,26 @@ public sealed class NotificationLifecycleTests
             Body = await request.Content!.ReadAsStringAsync(ct); return new HttpResponseMessage(Status);
         }
     }
-    private sealed class SmtpTransport
+    internal sealed class SmtpTransport
     {
         internal string? FailurePhase, Password, Recipient, Subject, Body;
         internal Exception? Failure, DisconnectFailure, DisposeFailure;
         internal Action? AfterAccept;
         internal bool Connected, Disposed;
         internal int Connections, Accepted, Port;
+        internal int TimeoutMilliseconds = 120_000;
+        internal string? Host;
+        internal Stream? SuppliedStream;
+        internal int CertificateValidationOverrides;
+        internal Func<CancellationToken, Task>? BeforeConnect;
         internal SecureSocketOptions Options;
         internal ISmtpClient Create()
         { var client = DispatchProxy.Create<ISmtpClient, SmtpProxy>(); ((SmtpProxy)(object)client).Call = Invoke; return client; }
         private object? Invoke(MethodInfo method, object?[] args)
         {
             if (method.Name == "get_IsConnected") return Connected;
+            if (method.Name == "get_Timeout") return TimeoutMilliseconds;
+            if (method.Name == "set_ServerCertificateValidationCallback") { CertificateValidationOverrides++; return null; }
             if (method.Name == "Dispose")
             { Disposed = true; Connected = false; if (DisposeFailure is not null) throw DisposeFailure; return null; }
             if (method.Name == "DisconnectAsync")
@@ -337,9 +358,11 @@ public sealed class NotificationLifecycleTests
             var token = args.OfType<CancellationToken>().Single(); token.ThrowIfCancellationRequested();
             if (method.Name == "ConnectAsync")
             {
-                Connections++; Port = (int)args[1]!; Options = (SecureSocketOptions)args[2]!;
+                var offset = args[0] is Stream ? 1 : 0;
+                SuppliedStream = args[0] as Stream; Host = (string)args[offset]!;
+                Connections++; Port = (int)args[offset + 1]!; Options = (SecureSocketOptions)args[offset + 2]!;
                 if (FailurePhase == "connect") return Task.FromException(Failure!);
-                Connected = true; return Task.CompletedTask;
+                return ConnectedAsync(token);
             }
             if (method.Name == "AuthenticateAsync")
             { Password = (string)args[1]!; return FailurePhase == "authenticate" ? Task.FromException(Failure!) : Task.CompletedTask; }
@@ -353,6 +376,15 @@ public sealed class NotificationLifecycleTests
             throw new NotSupportedException(method.Name);
         }
         private Task Disconnect() { Connected = false; return Task.CompletedTask; }
+        private async Task ConnectedAsync(CancellationToken ct)
+        { if (BeforeConnect is not null) await BeforeConnect(ct); Connected = true; }
+    }
+    internal sealed class TrackingStream : MemoryStream
+    {
+        internal bool Disposed;
+        internal bool ThrowOnDispose;
+        protected override void Dispose(bool disposing)
+        { Disposed = true; base.Dispose(disposing); if (ThrowOnDispose) throw new IOException("stream cleanup failed"); }
     }
     public class SmtpProxy : DispatchProxy
     {

@@ -146,13 +146,25 @@ public static class OutboundConnectGuard
     /// "bağlanamadım" ile "adres yasak" ayrımını yapan tek şeydir. Verilmezse okunabilir bir
     /// varsayılan kullanılır.
     /// </param>
-    public static async ValueTask<Stream> ConnectAsync(
+    public static ValueTask<Stream> ConnectAsync(
         DnsEndPoint endpoint,
         OutboundTargetPolicy policy,
         OutboundAddressGuard.OutboundHostResolver resolver,
         Action<string, string>? onBlocked,
         CancellationToken cancellationToken,
-        string? blockedMessage = null)
+        string? blockedMessage = null) =>
+        ConnectAsync(endpoint, policy, resolver, onBlocked, cancellationToken, blockedMessage, ConnectSocketAsync);
+
+    // The connector receives only the addresses actually inspected above the socket boundary.
+    // Tests replace this last boundary; public callers retain the same socket implementation.
+    internal static async ValueTask<Stream> ConnectAsync(
+        DnsEndPoint endpoint,
+        OutboundTargetPolicy policy,
+        OutboundAddressGuard.OutboundHostResolver resolver,
+        Action<string, string>? onBlocked,
+        CancellationToken cancellationToken,
+        string? blockedMessage,
+        Func<IPAddress[], int, CancellationToken, ValueTask<Stream>> connector)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(resolver);
@@ -162,6 +174,7 @@ public static class OutboundConnectGuard
             resolver,
             policy,
             cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         if (inceleme.BlockedTarget is not null)
         {
@@ -177,11 +190,16 @@ public static class OutboundConnectGuard
             throw new HttpRequestException($"Ad çözülemedi: {endpoint.Host}");
         }
 
+        return await connector(inceleme.Addresses, endpoint.Port, cancellationToken);
+    }
+
+    private static async ValueTask<Stream> ConnectSocketAsync(IPAddress[] addresses, int port, CancellationToken cancellationToken)
+    {
         var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
         try
         {
             // SADECE denetlenen adreslere bağlanılır; ad ikinci kez çözülmez.
-            await socket.ConnectAsync(inceleme.Addresses, endpoint.Port, cancellationToken);
+            await socket.ConnectAsync(addresses, port, cancellationToken);
             return new NetworkStream(socket, ownsSocket: true);
         }
         catch

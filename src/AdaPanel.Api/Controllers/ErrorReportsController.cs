@@ -1,4 +1,5 @@
 using AdaPanel.Api.Extensions;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Diagnostics;
 using AdaPanel.Core.Interfaces;
@@ -63,9 +64,13 @@ public sealed class ErrorReportsController(
 
     /// <summary>Bekleyen kayıtları hemen gönderir (otomasyon turunu beklemeden).</summary>
     [HttpPost("send")]
-    public async Task<ActionResult<ApiResponse<ErrorReportSendResultDto>>> SendPendingAsync(CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<ErrorReportSendResultDto>>> SendPendingAsync(
+        [FromBody] SendErrorReportsRequest request, CancellationToken cancellationToken)
     {
-        var sentCount = await errorReportSender.SendPendingAsync(cancellationToken);
+        var revision = request?.ExpectedSettingsRevision;
+        if (string.IsNullOrWhiteSpace(revision))
+            throw new AppException("errorReporting.settings_revision_required", 400, 400);
+        var sentCount = await errorReportSender.SendPendingAsync(revision, cancellationToken);
 
         // Gönderim yapılmadıysa (onay kapalı / adres yok / bekleyen yok) denetim kaydı şişirilmez.
         if (sentCount > 0)

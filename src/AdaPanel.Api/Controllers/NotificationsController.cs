@@ -1,5 +1,6 @@
 ﻿using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Notifications;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
@@ -83,7 +84,16 @@ public sealed class NotificationsController(
     [HttpPost("test")]
     public async Task<ActionResult<ApiResponse<object>>> TestAsync([FromBody] TestNotificationRequest request, CancellationToken cancellationToken)
     {
-        await notificationService.TestAsync(request, cancellationToken);
+        var submitted = new TestNotificationRequest
+        {
+            Channel = request.Channel,
+            Message = request.Message,
+            ExpectedSettingsRevision = request.ExpectedSettingsRevision
+        };
+        if (string.IsNullOrWhiteSpace(submitted.ExpectedSettingsRevision))
+            throw new AppException("notifications.settings_revision_required", 400, 400);
+
+        await notificationService.TestAsync(submitted, cancellationToken);
 
         // Test göndermek DIŞARIYA mesaj çıkarır (yapılandırılmış adrese/webhook'a). Zararsız
         // görünür ama panelin kimlik bilgileriyle üçüncü bir tarafa istek atmanın yoludur; iz
@@ -92,8 +102,8 @@ public sealed class NotificationsController(
             HttpContext,
             "notifications.test_sent",
             "notifications",
-            $"Test notification sent over channel '{request.Channel}'.");
+            $"Test notification sent over channel '{submitted.Channel}'.");
 
-        return Ok(ApiResponse<object>.Ok(new { request.Channel }, "notifications.test_sent"));
+        return Ok(ApiResponse<object>.Ok(new { submitted.Channel }, "notifications.test_sent"));
     }
 }

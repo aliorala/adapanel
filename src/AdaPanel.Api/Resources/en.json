@@ -269,6 +269,9 @@
   "users.update.success": "The user was updated.",
   "update.package_changed": "The prepared update package changed. Refresh the package details and confirm installation again.",
   "update.install_already_scheduled": "Installation of this package is already scheduled. Wait for the panel to restart.",
-  "errorReporting.settings_changed": "Delivery settings changed during the operation. Check the current settings and try again.",
-  "notifications.settings_invalid": "SMTP settings are invalid. Check the port and email addresses."
+  "errorReporting.settings_changed": "Reporting settings changed; delivery was not started. Check the current destination and your consent.",
+  "notifications.settings_invalid": "SMTP settings are invalid. Check the port and email addresses.",
+  "notifications.settings_revision_required": "The displayed notification settings could not be verified. Refresh them and try again.",
+  "notifications.settings_changed": "Notification settings changed; the test was not started. Check the current destination.",
+  "errorReporting.settings_revision_required": "The displayed reporting settings could not be verified. Refresh them and try again."
 }

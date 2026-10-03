@@ -9,6 +9,8 @@ type ApiEnvelope<T> = {
 };
 
 export type NotificationSettings = {
+  /** Opaque identity of the configuration measured by the server. */
+  settingsRevision: string;
   smtpHost: string;
   smtpPort: number;
   smtpUserName: string;
@@ -23,6 +25,7 @@ export type NotificationSettings = {
 function measuredSettings(envelope: ApiEnvelope<NotificationSettings>): NotificationSettings {
   const value = envelope?.data;
   if (envelope?.success !== true || !value ||
+    typeof value.settingsRevision !== "string" || !value.settingsRevision.trim() ||
     [value.smtpHost, value.smtpUserName, value.smtpPassword, value.fromEmail, value.toEmail, value.webhookUrl].some(item => typeof item !== "string") ||
     !Number.isSafeInteger(value.smtpPort) || value.smtpPort < 1 || value.smtpPort > 65535 ||
     typeof value.hasSmtpPassword !== "boolean" || typeof value.useSsl !== "boolean")
@@ -35,15 +38,21 @@ export async function getNotificationSettings() {
   return measuredSettings(response.data);
 }
 
-export async function saveNotificationSettings(payload: NotificationSettings) {
-  const response = await apiClient.put<ApiEnvelope<NotificationSettings>>("/notify/settings", payload);
+export async function saveNotificationSettings(payload: Omit<NotificationSettings, "settingsRevision">) {
+  const response = await apiClient.put<ApiEnvelope<NotificationSettings>>("/notify/settings", {
+    smtpHost: payload.smtpHost, smtpPort: payload.smtpPort, smtpUserName: payload.smtpUserName, smtpPassword: payload.smtpPassword,
+    fromEmail: payload.fromEmail, toEmail: payload.toEmail, useSsl: payload.useSsl, webhookUrl: payload.webhookUrl
+  });
   return measuredSettings(response.data);
 }
 
-export async function sendNotificationTest(channel: string, message: string) {
+export async function sendNotificationTest(channel: string, message: string, expectedSettingsRevision: string) {
+  if (typeof expectedSettingsRevision !== "string" || !expectedSettingsRevision.trim())
+    throw new UserFacingError("notifications.settings_revision_required");
   const response = await apiClient.post<ApiEnvelope<{ channel: string }>>("/notify/test", {
     channel,
-    message
+    message,
+    expectedSettingsRevision
   });
   if (response.data?.success !== true || response.data.data?.channel !== channel)
     throw new UserFacingError("panel.notifications.resultUnconfirmed");

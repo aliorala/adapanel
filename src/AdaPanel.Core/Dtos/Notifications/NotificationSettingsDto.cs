@@ -2,6 +2,8 @@ namespace AdaPanel.Core.Dtos.Notifications;
 
 public sealed class NotificationSettingsDto
 {
+    public string SettingsRevision { get; set; } = string.Empty;
+
     public string SmtpHost { get; set; } = string.Empty;
 
     public int SmtpPort { get; set; } = 587;

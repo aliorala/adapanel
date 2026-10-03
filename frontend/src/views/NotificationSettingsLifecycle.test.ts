@@ -1,25 +1,26 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createPinia } from "pinia";
-import type { AxiosResponse, InternalAxiosRequestConfig } from "axios";
+import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from "axios";
 import { createRenderer, h, nextTick, ssrContextKey, type App, type Component } from "vue";
 import NotificationsView from "./NotificationsView.vue";
 import ErrorReportsView from "./ErrorReportsView.vue";
 import { apiClient, invalidateSessionRequests } from "../api/client";
 import { useAuthStore } from "../stores/auth";
-import type { NotificationSettings } from "../api/notifications";
-import type { ErrorReportingSettings, ErrorReport } from "../api/errorReports";
+import { sendNotificationTest, type NotificationSettings } from "../api/notifications";
+import { sendPendingErrorReports, type ErrorReportingSettings, type ErrorReport } from "../api/errorReports";
 
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 type Family = "notifications" | "reports";
 type State = { form: NotificationSettings; settings: ErrorReportingSettings; savedSettings: NotificationSettings | ErrorReportingSettings | null;
   busy: string; settingsLoaded: boolean; loaded: boolean; settingsConfirmed: boolean; loadError: string; hasUnsavedChanges: boolean;
   notice: string; noticeError: boolean; reports: ErrorReport[]; canSend: boolean; smtpReady: boolean;
+  settingsConflict: boolean; conflictMessage: string;
   loadSettings(): Promise<void>; loadAll(): Promise<void>; save(): Promise<void>; test(channel: "email" | "webhook"): Promise<void>; sendNow(): Promise<void> };
-const notification = (): NotificationSettings => ({ smtpHost: "smtp.example.test", smtpPort: 587, smtpUserName: "mail-user", smtpPassword: "", hasSmtpPassword: true, fromEmail: "panel@example.test", toEmail: "owner@example.test", useSsl: true, webhookUrl: "https://example.test/hooks/one" });
-const reporting = (): ErrorReportingSettings => ({ enabled: true, collectorUrl: "https://example.test/reports", consentGrantedAtUtc: "2026-10-01T00:00:00Z", batchSize: 20, retentionDays: 30, lastSentAtUtc: null, lastError: "" });
+const notification = (): NotificationSettings & { settingsRevision: string } => ({ settingsRevision: "notification-revision-one", smtpHost: "smtp.example.test", smtpPort: 587, smtpUserName: "mail-user", smtpPassword: "", hasSmtpPassword: true, fromEmail: "panel@example.test", toEmail: "owner@example.test", useSsl: true, webhookUrl: "https://example.test/hooks/one" });
+const reporting = (): ErrorReportingSettings & { settingsRevision: string } => ({ settingsRevision: "report-revision-one", enabled: true, collectorUrl: "https://example.test/reports", consentGrantedAtUtc: "2026-10-01T00:00:00Z", batchSize: 20, retentionDays: 30, lastSentAtUtc: null, lastError: "" });
 const report = (): ErrorReport => ({ id: 1, fingerprint: "mock", createdAtUtc: "2026-10-03T00:00:00Z", lastSeenAtUtc: "2026-10-03T00:00:00Z", panelVersion: "0.8.76", osVersion: "Windows", exceptionType: "System.Exception", message: "Masked fixture", stackTrace: "", routePattern: "/api/fixture", correlationId: "mock", occurrenceCount: 1, sentAtUtc: null });
 function response(config: InternalAxiosRequestConfig, data: unknown): AxiosResponse { return { config, data: { success: true, data }, headers: {}, status: 200, statusText: "OK" }; }
-function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }
+function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 const originalAdapter = apiClient.defaults.adapter;
 let app: App | undefined, calls: InternalAxiosRequestConfig[], read: (config: InternalAxiosRequestConfig) => Promise<AxiosResponse>, write: (config: InternalAxiosRequestConfig) => Promise<AxiosResponse>;
 let notifications: NotificationSettings, settings: ErrorReportingSettings, reports: ErrorReport[];
@@ -45,8 +46,8 @@ beforeEach(() => {
   write = async config => {
     if (config.method === "put") {
       const submitted = JSON.parse(String(config.data));
-      if (config.url === "/notify/settings") { notifications = { ...submitted, smtpPassword: "", hasSmtpPassword: !!submitted.smtpPassword || submitted.hasSmtpPassword }; return response(config, { ...notifications }); }
-      settings = { ...submitted, consentGrantedAtUtc: submitted.enabled ? "2026-10-01T00:00:00Z" : null }; return response(config, { ...settings });
+      if (config.url === "/notify/settings") { notifications = { ...notifications, ...submitted, settingsRevision: "notification-revision-saved", smtpPassword: "", hasSmtpPassword: !!submitted.smtpPassword || notifications.hasSmtpPassword }; return response(config, { ...notifications }); }
+      settings = { ...settings, ...submitted, settingsRevision: "report-revision-saved", consentGrantedAtUtc: submitted.enabled ? "2026-10-01T00:00:00Z" : null }; return response(config, { ...settings });
     }
     return response(config, config.url === "/notify/test" ? { channel: JSON.parse(String(config.data)).channel } : { sentCount: 1 });
   };
@@ -55,6 +56,57 @@ beforeEach(() => {
 afterEach(() => { unmount(); apiClient.defaults.adapter = originalAdapter; invalidateSessionRequests(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 for (const family of ["notifications", "reports"] as const) {
+  it.each([undefined, null, "", "   "])(`${family}: revision GET rejects missing or blank opaque identity (%s)`, async settingsRevision => {
+    const originalRead = read;
+    read = config => config.url?.endsWith("/settings") ? Promise.resolve(response(config, { ...(family === "notifications" ? notification() : reporting()), settingsRevision })) : originalRead(config);
+    const { state } = await mount(family); await send(state, family);
+    expect(state.settingsConfirmed).toBe(false); expect(state.loadError).not.toBe(""); expect(mutations()).toHaveLength(0);
+  });
+  it.each([undefined, " "])(`${family}: revision save rejects an acknowledgement without an identity (%s)`, async settingsRevision => {
+    const { state } = await mount(family); write = async config => response(config, { ...(family === "notifications" ? notification() : reporting()), settingsRevision });
+    await state.save(); await send(state, family); expect(state.settingsConfirmed).toBe(false); expect(state.noticeError).toBe(true); expect(mutations()).toHaveLength(1);
+  });
+  it(`${family}: revision sends the exact opaque saved identity rather than deriving it from editable fields`, async () => {
+    const settingsRevision = 'W/"opaque: Revision-A"', originalRead = read;
+    read = config => config.url?.endsWith("/settings") ? Promise.resolve(response(config, { ...(family === "notifications" ? notification() : reporting()), settingsRevision })) : originalRead(config);
+    const { state } = await mount(family); await send(state, family);
+    expect(JSON.parse(String(mutations()[0]!.data))).toMatchObject({ expectedSettingsRevision: settingsRevision });
+  });
+  it(`${family}: revision uses the new measured save acknowledgement for the next send`, async () => {
+    const { state } = await mount(family); edit(state, family); await state.save(); await send(state, family);
+    expect(JSON.parse(String(mutations()[1]!.data))).toMatchObject({ expectedSettingsRevision: family === "notifications" ? "notification-revision-saved" : "report-revision-saved" });
+    expect(JSON.parse(String(mutations()[0]!.data))).not.toHaveProperty("settingsRevision");
+  });
+  for (const draftChanges of [false, true]) it.each([400, 409])(`${family}: revision conflict %s requires an explicit refresh even when draft edits=${draftChanges}`, async status => {
+    const { state } = await mount(family), pending = deferred<AxiosResponse>(); let request!: InternalAxiosRequestConfig;
+    write = config => (request = config, pending.promise); const sending = send(state, family); await flush();
+    if (draftChanges) edit(state, family);
+    const draft = value(state, family), readsBefore = calls.filter(config => config.method === "get").length;
+    const reason = `${family === "notifications" ? "notifications" : "errorReporting"}.${status === 409 ? "settings_changed" : "settings_revision_required"}`;
+    const failure = new AxiosError("settings conflict", "ERR_BAD_REQUEST", request, undefined, { ...response(request, {}), status, data: { success: false, message: reason, data: null } });
+    pending.reject(failure); await sending;
+    expect(state.settingsConfirmed).toBe(false); expect(state.settingsConflict).toBe(true); expect(state.conflictMessage).toBe(reason);
+    const count = mutations().length; await send(state, family); expect(mutations()).toHaveLength(count); expect(calls.filter(config => config.method === "get")).toHaveLength(readsBefore);
+    expect(value(state, family)).toBe(draft);
+  });
+  it.each([undefined, " "])(`${family}: revision direct API rejects an absent identity before dispatch (%s)`, async revision => {
+    const invoke = family === "notifications"
+      ? () => sendNotificationTest("email", "fixture", revision as string)
+      : () => sendPendingErrorReports(revision as string);
+    await expect(invoke()).rejects.toThrow(); expect(mutations()).toHaveLength(0);
+  });
+  it(`${family}: revision refresh explicitly recovers conflict without silently replacing an edited target`, async () => {
+    const { state } = await mount(family), normalWrite = write;
+    write = async config => { throw new AxiosError("changed", "ERR_BAD_REQUEST", config, undefined, { ...response(config, null), status: 409, data: { success: false, message: `${family === "notifications" ? "notifications" : "errorReporting"}.settings_changed` } }); };
+    await send(state, family); expect(state.settingsConflict).toBe(true); edit(state, family); const draft = value(state, family);
+    if (family === "notifications") notifications = { ...notifications, settingsRevision: "external-new-revision", toEmail: "external@example.test" };
+    else settings = { ...settings, settingsRevision: "external-new-revision", collectorUrl: "https://external.example.test/reports" };
+    await load(state, family); expect(state.settingsConflict).toBe(false); expect(state.conflictMessage).toBe(""); expect(state.savedSettings?.settingsRevision).toBe("external-new-revision"); expect(value(state, family)).toBe(draft);
+    const count = mutations().length; await send(state, family); expect(mutations()).toHaveLength(count);
+    write = normalWrite; await state.save(); await send(state, family);
+    const written = mutations();
+    expect(JSON.parse(String(written[written.length - 1]!.data)).expectedSettingsRevision).toBe(family === "notifications" ? "notification-revision-saved" : "report-revision-saved");
+  });
   it(`${family}: saves a measured settings snapshot and permits a normal saved-target send`, async () => {
     const { state } = await mount(family); await state.save(); expect(state.noticeError).toBe(false); await send(state, family);
     expect(mutations()).toHaveLength(2); expect(state.noticeError).toBe(false);
@@ -144,6 +196,11 @@ it("notifications: a new SMTP target retains the same password draft while the o
 it("notifications: verifies the channel returned by a test", async () => {
   const { state } = await mount("notifications"); write = async config => response(config, { channel: "webhook" }); await state.test("email"); expect(state.noticeError).toBe(true);
 });
+it.each(["notifications.smtp_sender_rejected", "notifications.smtp_tls_failed"])("notifications: preserves a real delivery rejection without inventing a revision conflict (%s)", async reason => {
+  const { state } = await mount("notifications");
+  write = async config => { throw new AxiosError("delivery rejected", "ERR_BAD_REQUEST", config, undefined, { ...response(config, null), status: 400, data: { success: false, message: reason } }); };
+  await state.test("email"); expect(state.settingsConfirmed).toBe(true); expect(state.settingsConflict).toBe(false); expect(state.notice).toBe(reason); expect(state.noticeError).toBe(true);
+});
 it("reports: permits sending older pending records beyond the recent fifty-row list", async () => {
   reports = Array.from({ length: 50 }, (_, index) => ({ ...report(), id: index + 1, sentAtUtc: "2026-10-03T00:00:00Z" }));
   const { state } = await mount("reports"); expect(state.canSend).toBe(true); await state.sendNow(); expect(mutations()).toHaveLength(1); expect(state.noticeError).toBe(false);
@@ -161,4 +218,9 @@ it("reports: keeps measured delivery visible alongside a failed refresh, without
 it("reports: does not convert a malformed list into a measured empty list", async () => {
   const originalRead = read; read = config => config.url === "/error-reports" ? Promise.resolve(response(config, {})) : originalRead(config);
   const { state } = await mount("reports"); expect(state.loaded).toBe(false); expect(state.loadError).not.toBe("");
+});
+it("reports: delivery metadata refresh keeps the configuration revision usable", async () => {
+  const { state } = await mount("reports"); settings = { ...settings, lastSentAtUtc: "2026-10-04T03:00:00Z", lastError: "previous delivery diagnostic" };
+  await state.loadAll(); expect(state.hasUnsavedChanges).toBe(false); await state.sendNow();
+  expect(JSON.parse(String(mutations()[0]!.data)).expectedSettingsRevision).toBe("report-revision-one"); expect(state.noticeError).toBe(false);
 });

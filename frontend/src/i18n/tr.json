@@ -5440,6 +5440,13 @@
   "panel.errorReports.lastKnownSettings": "Son okunan durum — güncelliği doğrulanamadı",
   "panel.notifications.saveBeforeTest": "Kaydedilmemiş değişiklikler var. Yeni ayarları test etmek için önce kaydedin.",
   "panel.errorReports.saveBeforeSend": "Kaydedilmemiş değişiklikler var. Gönderim kayıtlı ayarları kullanır; değişikliklerinizi önce kaydedin.",
-  "errorReporting.settings_changed": "Gönderim ayarları işlem sırasında değişti. Güncel ayarları kontrol edip tekrar deneyin.",
-  "notifications.settings_invalid": "SMTP ayarları geçersiz. Portu ve e-posta adreslerini kontrol edin."
+  "errorReporting.settings_changed": "Rapor gönderim ayarları değişti; gönderim başlatılmadı. Güncel hedefi ve onayınızı kontrol edin.",
+  "notifications.settings_invalid": "SMTP ayarları geçersiz. Portu ve e-posta adreslerini kontrol edin.",
+  "notifications.settings_revision_required": "Ekrandaki bildirim ayarlarının güncelliği doğrulanamadı. Yenileyip tekrar deneyin.",
+  "notifications.settings_changed": "Bildirim ayarları değişti; test başlatılmadı. Güncel hedefi kontrol edin.",
+  "errorReporting.settings_revision_required": "Ekrandaki rapor gönderim ayarlarının güncelliği doğrulanamadı. Yenileyip tekrar deneyin.",
+  "panel.notifications.settingsChangedTitle": "Testten önce ayarları kontrol edin",
+  "panel.notifications.settingsChangedHint": "Yenile ile kayıtlı ayarları yükleyin ve alıcıyı kontrol edin. Kaydedilmemiş taslağınız korunur.",
+  "panel.errorReports.settingsChangedTitle": "Göndermeden önce ayarları kontrol edin",
+  "panel.errorReports.settingsChangedHint": "Yenile ile kayıtlı ayarları yükleyin ve gönderilecek adresi kontrol edin. Kaydedilmemiş taslağınız korunur."
 }

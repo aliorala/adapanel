@@ -20,6 +20,12 @@
       <p>{{ t("panel.notifications.loadFailedHint") }}</p>
       <button class="secondary compact" :disabled="Boolean(busy)" @click="loadSettings">{{ t("panel.common.retry") }}</button>
     </div>
+    <div v-else-if="settingsConflict" class="settings-read-error settings-conflict" role="alert">
+      <strong>{{ t("panel.notifications.settingsChangedTitle") }}</strong>
+      <p>{{ conflictMessage }}</p>
+      <p>{{ t("panel.notifications.settingsChangedHint") }}</p>
+      <button class="secondary compact" :disabled="Boolean(busy)" @click="loadSettings">{{ t("panel.notifications.refresh") }}</button>
+    </div>
     <p v-else-if="!settingsLoaded" class="empty-state" role="status" aria-live="polite">
       {{ t("panel.common.loading") }}
     </p>
@@ -45,7 +51,7 @@
       </div>
     </div>
 
-    <p v-if="hasUnsavedChanges" class="settings-draft-hint" role="status">{{ t("panel.notifications.saveBeforeTest") }}</p>
+    <p v-if="hasUnsavedChanges && settingsConfirmed" class="settings-draft-hint" role="status">{{ t("panel.notifications.saveBeforeTest") }}</p>
     <div class="segmented-tabs" role="tablist">
       <button role="tab" :aria-selected="activeTab === 'email'" :class="{ active: activeTab === 'email' }" @click="activeTab = 'email'">
         {{ t("panel.notifications.emailTab") }}
@@ -145,6 +151,8 @@ const busy = ref("");
 // Yüklenmemiş durumu "yapılandırılmamış/boş" göstermek yanıltıcıydı.
 const settingsLoaded = ref(false);
 const settingsConfirmed = ref(false);
+const settingsConflict = ref(false);
+const conflictMessage = ref("");
 const loadError = ref("");
 const savedSettings = ref<NotificationSettings | null>(null);
 const auth = useAuthStore(), mountedEpoch = getSessionEpoch(), actor = auth.session?.user?.id, role = auth.session?.user?.role;
@@ -166,7 +174,7 @@ const form = reactive({
 });
 
 watch(form, () => { draftRevision++; }, { deep: true, flush: "sync" });
-const target = (value: NotificationSettings) => JSON.stringify([value.smtpHost.trim(), value.smtpPort, value.smtpUserName.trim(), value.fromEmail.trim(), value.toEmail.trim(), value.useSsl, value.webhookUrl.trim()]);
+const target = (value: Omit<NotificationSettings, "settingsRevision">) => JSON.stringify([value.smtpHost.trim(), value.smtpPort, value.smtpUserName.trim(), value.fromEmail.trim(), value.toEmail.trim(), value.useSsl, value.webhookUrl.trim()]);
 const hasUnsavedChanges = computed(() => !!savedSettings.value && (target(form) !== target(savedSettings.value) || !!form.smtpPassword));
 const smtpReady = computed(() => Boolean(savedSettings.value?.smtpHost && savedSettings.value.fromEmail && savedSettings.value.toEmail));
 const canSave = computed(() => settingsConfirmed.value && !busy.value && !locked.value && Number.isSafeInteger(form.smtpPort) && form.smtpPort >= 1 && form.smtpPort <= 65535);
@@ -179,6 +187,8 @@ function publishSettings(value: NotificationSettings, revision: number, preserve
   if (!preserveDraft && draftRevision === revision) Object.assign(form, measured);
   settingsLoaded.value = true;
   settingsConfirmed.value = true;
+  settingsConflict.value = false;
+  conflictMessage.value = "";
   loadError.value = "";
 }
 
@@ -224,16 +234,30 @@ async function save() {
 
 async function test(channel: "email" | "webhook") {
   if (!current() || !(channel === "email" ? canTestEmail.value : canTestWebhook.value)) return;
-  const revision = draftRevision;
+  const revision = draftRevision, expectedSettingsRevision = savedSettings.value!.settingsRevision;
   busy.value = channel;
   try {
-    await sendNotificationTest(channel, t("panel.notifications.testMessage"));
+    await sendNotificationTest(channel, t("panel.notifications.testMessage"), expectedSettingsRevision);
     if (current() && revision === draftRevision) showNotice(t("panel.notifications.testSent"), false);
   } catch (error) {
-    if (current() && revision === draftRevision) showNotice(resolveApiMessage(error), true);
+    if (!current()) return;
+    if (invalidateSettingsConflict(error)) return;
+    if (revision === draftRevision) showNotice(resolveApiMessage(error), true);
   } finally {
     if (current()) busy.value = "";
   }
+}
+
+function invalidateSettingsConflict(error: unknown) {
+  const status = (error as { response?: { status?: number } })?.response?.status;
+  const key = extractApiMessage(error);
+  if (status !== 409 && key !== "notifications.settings_changed" && key !== "notifications.settings_revision_required") return false;
+  settingsConfirmed.value = false;
+  settingsConflict.value = true;
+  conflictMessage.value = resolveApiMessage(error);
+  notice.value = "";
+  loadError.value = "";
+  return true;
 }
 
 function showNotice(message: string, isError: boolean) {

@@ -1,10 +1,61 @@
 # AdaPanel Codex Memory
 
-## 2026-10-04 — R27 tamamlandı; bildirim/hata raporu düzeltmeleri yerel, yayımlanmadı
+## 2026-10-04 — R28 tamamlandı; R27+R28 içeren 0.8.77 yayımlandı/doğrulandı
 
-Yayımdaki kurucu **0.8.76 R26** olarak kalıyor; R27 için sürüm artırılmadı veya paket
-yayımlanmadı. Kullanıcının sürekli denetim, görsel açıklık/pratiklik ve dönemsel yayın
-hedefi aktif. Canlıya kurulum, gerçek e-posta/webhook/hata raporu gönderimi yapılmadı.
+Yayımdaki kurucu **0.8.77**; latest/draft=false/prerelease=false. Yayın zamanı
+**2026-10-04 02:48:00 İstanbul**. [Sürüm](https://github.com/aliorala/adapanel/releases/tag/0.8.77),
+[kurucu](https://github.com/aliorala/adapanel/releases/download/0.8.77/AdaPanelSetup.exe).
+**91.007.260 bayt**, SHA256 **8B90AA69E0D66C4CF5F334E2EC1B974563D81418BC0CC040044789BA7C1E860D**.
+Paketleme session42306 exit0: publish169dosya/0bulgu, installer0bulgu/version0.8.77.
+Yayın session5689 exit0: indirilen SHA yerelle aynı; remote digest/size/name/state ve
+UTF8 body ayrıca birebir doğrulandı (`release077-published-verification.json`). Public
+GitHub'a yalnız binary+notes, kaynak/history push yok. Canlıya kurulum yapılmadı.
+
+SMTP artık OutboundConnectGuard'ın bir kez çözülüp denetlenmiş IP akışını MailKit
+ConnectAsync(Stream, originalHost, port, options, CT)'ye verir; default certificate
+validation/TLS hostname/SNI korunur. AllowInternalOutboundTargets mevcut politikadır.
+DNS/socket fazına MailKit.Timeout linkedCT sınırı taşındı; kullanıcı iptali OCE, süre
+dolması TimeoutException; geç dönen stream dahil tüm cleanup yolları korunur. Timer
+scope sadececonnection; TLS/SMTP originalCT ile devam eder. Genel guard Inspect sonrası
+connector çağrısından önce iptali ölçer. MailKit4.17 kaynak kanıtları audit raporunda.
+
+GET/save Notification ve ErrorReportingSettings DTO.SettingsRevision; HTTP test/send
+ExpectedSettingsRevision zorunlu: missing400/stale409. Save servernewGUID, clienttoken
+yok sayılır. Legacy dosya GET'i yazmaz: SettingsRevision helper private-process HMAC
+fallback (eski plaintextpasswordofflineguess sızdırmaz, decryptyok). Restart legacytoken
+değişir→refresh; savedGUIDkalıcı. Statusmetadatarevisionı değiştirmez. Notificationtest
+teksettingssnapshotdispatch; manualErrorReport sendgate sonrası+preHTTPsettingsgate
+revisioncheck. TrustedautomationeskiAPI korunur. Directfileedit revisionkoruyarakbu
+kontratı bypass edebilir; bu tur adminAPI yollarını bağlar. HTTP ACK kaybı/kalıcıDB için
+collectoridempotency hâlâ ayrı iş, exactly-once garantisi verilmez.
+
+UI yalnız savedsnapshotrevision gönderir; conflict→gatesclosed + tekamberalert/refresh,
+dirtydraftpreserved; normalSMTP400 ayrı, sessiz GET/retry yok. Readfailtekalertöncelikli;
+savekapalıyken önce kaydet ipucu gizlenir. GERÇEK Vue+sahteAPI browser390darkTR/320lightEN/
+1440darkTR, widths380/380,310/310,1430/1430, consoleerror0. Conflict sendcounter0,
+refresh/retry/draft/save+acceptedmocktest/send görüldü. Preview24217 kapandı, auditTab28
+kapandı, viewportreset, __audit28 kaldırıldı, __preview346/4182korundu. Screenshotlar
+round28-notification-conflict-mobile.png, round28-reports-conflict-en320.png,
+round28-reports-conflict-desktop.png; tümü .tmp/audit-20261004/ altında. Gerçek SMTP/HTTP
+hedefine test gönderilmedi; yalnız resmi paket denetimi/yayını dış ağa çıktı.
+
+C# baseline110=50RED60green (newNotification33=31RED2green, ErrorRevision23=19RED4green,
+old54green); fix314/314. ExtraTimeout38=4RED34green→fix ortakregression154/154. Yeni66C#:
+notification38+report28. Son full **Infrastructure7.843+Core2=7.845/7.845**, skipped/fail0,
+build0uyarı/0hata; session33890exit0, release077-final log/TRX. FE **82dosya1.422/1.422**,
+newtarget85=old52+new33; baseline24RED+normalSMTP400extra2RED. Types/Vitegreen; sürüm
+0.8.77 sonrası Vite tekrarüretildi, wwwroot eşitlendi. FE/API TR/EN5450/275 eksiksiz.
+Componentaudit22Passed/3standardSkipped/0Failed bu yayın için yenidençalıştı, cache
+.tools/component-package-audit tutuldu; paketlemeyalnızaynıcomponentadımını tekrar etmedi.
+Notesparser+privacy12/12green. Detay docs/audit-2026-10-04.md; hiçbircompile/test/preview
+süreci aktif değil. Preexisting untracked TestResults/ korunur ve commit edilmez. Hedefaktif.
+
+## 2026-10-04 — R27 tamamlandığında yereldi; sonradan 0.8.77 içinde yayımlandı
+
+R27 bitiminde yayımdaki kurucu **0.8.76 R26** idi; bu tur tek başına paketlenmedi.
+R27 düzeltmeleri daha sonra yukarıdaki **0.8.77** yayınına dahil edildi. Kullanıcının
+sürekli denetim, görsel açıklık/pratiklik ve dönemsel yayın hedefi aktif. Canlıya kurulum,
+gerçek e-posta/webhook/hata raporu gönderimi yapılmadı.
 
 Bildirim ve hata raporu ekranları kaydedilmiş ayarları taslaktan ayırır. Mevcut veya istek
 sırasında değişen taslak yenileme/yeniden denemede korunur. Okuma başarısızsa açıklama,

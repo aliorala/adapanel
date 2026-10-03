@@ -24,6 +24,8 @@ public sealed class NotificationService(
 
     internal Func<ISmtpClient> SmtpClientFactory { get; init; } = static () => new SmtpClient();
     internal Func<CancellationToken, Task>? BeforeSettingsWrite { get; init; }
+    internal Func<IPAddress[], int, CancellationToken, ValueTask<Stream>>? SmtpConnector { get; init; }
+    internal Func<CancellationToken, Task>? BeforeTestDispatch { get; init; }
 
     /// <summary>
     /// Bildirim ayarlarının işaret ettiği iki dış hedefi (webhook adresi ve SMTP konağı) denetler.
@@ -35,11 +37,8 @@ public sealed class NotificationService(
     /// <c>SmtpHost:SmtpPort</c>'a TCP açar — yani ikisi de sunucunun ağından çıkar.
     /// </para>
     /// <para>
-    /// <b>DENETİM KAYDETME ANINDA, GÖNDERME ANINDA DEĞİL.</b> Gönderme yolu bildirim üreten her
-    /// olaydan (yedek bitti, sertifika yenilendi, disk doldu) çağrılır; oraya DNS çözümlemesi
-    /// koymak her bildirime bir ağ gidiş-dönüşü eklerdi ve DNS'in yavaş olduğu bir anda bildirim
-    /// zincirini kilitlerdi. Girdi buraya TEK yerden giriyor (<see cref="UpdateSettingsAsync"/>),
-    /// yani kapı da tek yerde duruyor.
+    /// Kaydetme denetimi geçersiz ayara erken yanıt verir. Gönderimde HTTP istemcisi ve SMTP
+    /// akış bağlantısı hedefi yeniden denetler; kaydetmeden sonra değişen DNS güvenilmez.
     /// </para>
     /// <para>
     /// <b>AÇIK KAPI BURADA ÖZELLİKLE ÖNEMLİ.</b> İç ağdaki bir SMTP aktarıcısı (ya da bu panelin
@@ -56,10 +55,9 @@ public sealed class NotificationService(
     /// her adımı soket açılmadan denetleniyor.
     /// </para>
     /// <para>
-    /// <b>KALAN SINIR — SMTP.</b> Posta gönderimi MailKit'in kendi soketini açar; MailKit'te
-    /// bağlantı-anı geri çağrısı YOKTUR. SMTP'de yönlendirme diye bir şey de yoktur, yani kapanan
-    /// asıl delik (302) burada zaten mevcut değil; açık kalan tek şey kaydetme ile gönderme arasında
-    /// DNS kaydının değişmesidir (rebinding). Bu AÇIKÇA raporlandı, "kapandı" denmedi.
+    /// SMTP de <see cref="OutboundConnectGuard"/> üzerinden çözülmüş adreslere
+    /// bağlanır. MailKit hazır akışı alır; TLS kimliği için özgün konak adı korunur ve yeniden
+    /// DNS çözümlemesi yapılmaz. MailKit'in varsayılan sertifika doğrulaması değiştirilmez.
     /// </para>
     /// </remarks>
     private async Task EnsureNotificationTargetsAllowedAsync(
@@ -139,6 +137,7 @@ public sealed class NotificationService(
             // publication lock prevents another request's password rotation being undone.
             settings.SmtpPassword = protectedPassword ?? current.SmtpPassword ?? string.Empty;
             settings.HasSmtpPassword = !string.IsNullOrWhiteSpace(settings.SmtpPassword);
+            settings.SettingsRevision = SettingsRevision.New();
             return settings;
         }, cancellationToken);
         return ToClientSettings(updated);
@@ -147,6 +146,11 @@ public sealed class NotificationService(
     public async Task SendEmailAsync(string subject, string body, CancellationToken cancellationToken = default)
     {
         var settings = await ReadStoredSettingsAsync(cancellationToken);
+        await SendEmailAsync(settings, subject, body, cancellationToken);
+    }
+
+    private async Task SendEmailAsync(NotificationSettingsDto settings, string subject, string body, CancellationToken cancellationToken)
+    {
         if (string.IsNullOrWhiteSpace(settings.SmtpHost) ||
             string.IsNullOrWhiteSpace(settings.FromEmail) ||
             string.IsNullOrWhiteSpace(settings.ToEmail))
@@ -182,6 +186,11 @@ public sealed class NotificationService(
     public async Task SendWebhookAsync(string eventName, string body, CancellationToken cancellationToken = default)
     {
         var settings = await ReadStoredSettingsAsync(cancellationToken);
+        await SendWebhookAsync(settings, eventName, body, cancellationToken);
+    }
+
+    private async Task SendWebhookAsync(NotificationSettingsDto settings, string eventName, string body, CancellationToken cancellationToken)
+    {
         if (string.IsNullOrWhiteSpace(settings.WebhookUrl))
         {
             throw new AppException("notifications.webhook_not_configured", 400, 400);
@@ -223,18 +232,32 @@ public sealed class NotificationService(
 
     public async Task TestAsync(TestNotificationRequest request, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var channel = request.Channel.Trim().ToLowerInvariant();
         var message = string.IsNullOrWhiteSpace(request.Message)
             ? "AdaPanel test bildirimi"
             : request.Message.Trim();
+        var expectedRevision = request.ExpectedSettingsRevision;
+        if (channel is not ("email" or "webhook"))
+            throw new AppException("notifications.channel_invalid", 400, 400);
+
+        // HTTP callers must submit a revision. Trusted legacy callers may omit it, but all
+        // callers dispatch exactly this measured snapshot instead of rereading latest settings.
+        var settings = await ReadStoredSettingsAsync(cancellationToken);
+        if (!string.IsNullOrWhiteSpace(expectedRevision) &&
+            !string.Equals(expectedRevision, GetRevision(settings), StringComparison.Ordinal))
+            throw new AppException("notifications.settings_changed", 409, 409);
+
+        if (BeforeTestDispatch is not null) await BeforeTestDispatch(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         switch (channel)
         {
             case "email":
-                await SendEmailAsync("AdaPanel test", message, cancellationToken);
+                await SendEmailAsync(settings, "AdaPanel test", message, cancellationToken);
                 break;
             case "webhook":
-                await SendWebhookAsync("adapanel.test", message, cancellationToken);
+                await SendWebhookAsync(settings, "adapanel.test", message, cancellationToken);
                 break;
             default:
                 throw new AppException("notifications.channel_invalid", 400, 400);
@@ -250,6 +273,7 @@ public sealed class NotificationService(
     {
         return new NotificationSettingsDto
         {
+            SettingsRevision = GetRevision(settings),
             SmtpHost = settings.SmtpHost,
             SmtpPort = settings.SmtpPort,
             SmtpUserName = settings.SmtpUserName,
@@ -261,6 +285,22 @@ public sealed class NotificationService(
             WebhookUrl = settings.WebhookUrl
         };
     }
+
+    private static string GetRevision(NotificationSettingsDto settings) => SettingsRevision.GetOrCompute(
+        settings.SettingsRevision,
+        new
+        {
+            SmtpHost = settings.SmtpHost?.Trim() ?? string.Empty,
+            settings.SmtpPort,
+            SmtpUserName = settings.SmtpUserName?.Trim() ?? string.Empty,
+            // Use the stored value only. Legacy plaintext is protected by the helper's
+            // process-private HMAC key; no decryption occurs while forming the revision.
+            StoredCredential = settings.SmtpPassword ?? string.Empty,
+            FromEmail = settings.FromEmail?.Trim() ?? string.Empty,
+            ToEmail = settings.ToEmail?.Trim() ?? string.Empty,
+            settings.UseSsl,
+            WebhookUrl = settings.WebhookUrl?.Trim() ?? string.Empty
+        });
 
     /// <summary>
     /// SMTP gönderiminin TEK yolu. Şifreleme kipi PORTA göre seçilir.
@@ -293,9 +333,32 @@ public sealed class NotificationService(
         var options = ResolveSecureSocketOptions(settings.UseSsl, settings.SmtpPort);
 
         var client = SmtpClientFactory();
+        Stream? transport = null;
         try
         {
-            await client.ConnectAsync(settings.SmtpHost, settings.SmtpPort, options, cancellationToken);
+            var endpoint = new DnsEndPoint(settings.SmtpHost, settings.SmtpPort);
+            var policy = OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false);
+            var resolver = outboundResolver ?? OutboundAddressGuard.SystemResolver;
+            // Preserve MailKit's hostname-connect timeout for the DNS/socket phase that
+            // now happens outside MailKit. Its TLS/SMTP phase keeps the original token
+            // and client timeout; an expired connect timer must not cancel an active send.
+            using (var connectionTimeout = new CancellationTokenSource(client.Timeout))
+            using (var connection = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, connectionTimeout.Token))
+            {
+                try
+                {
+                    transport = SmtpConnector is null
+                        ? await OutboundConnectGuard.ConnectAsync(endpoint, policy, resolver, null, connection.Token)
+                        : await OutboundConnectGuard.ConnectAsync(endpoint, policy, resolver, null, connection.Token, null, SmtpConnector);
+                    connection.Token.ThrowIfCancellationRequested();
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && connectionTimeout.IsCancellationRequested)
+                {
+                    throw new TimeoutException("SMTP connection timed out.");
+                }
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            await client.ConnectAsync(transport, settings.SmtpHost, settings.SmtpPort, options, cancellationToken);
 
             if (!string.IsNullOrWhiteSpace(settings.SmtpUserName))
             {
@@ -306,6 +369,10 @@ public sealed class NotificationService(
             }
 
             await client.SendAsync(message, cancellationToken);
+        }
+        catch (Exception exception) when (OutboundBlockedException.Cikar(exception) is { } blocked)
+        {
+            throw new AppException("notifications.smtp_host_forbidden", 403, 403, blocked.BlockedTarget);
         }
         catch (SmtpCommandException exception) when (IsSenderRejected(exception))
         {
@@ -353,6 +420,10 @@ public sealed class NotificationService(
             {
                 try { client.Dispose(); }
                 catch (Exception) { /* Preserve the measured delivery outcome. */ }
+                // MailKit normally owns the stream after ConnectAsync. Also close our
+                // reference when connect/cancellation fails before ownership is transferred.
+                try { transport?.Dispose(); }
+                catch (Exception) { /* Cleanup cannot replace acceptance or the original error. */ }
             }
         }
     }

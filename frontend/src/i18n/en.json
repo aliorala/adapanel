@@ -5440,6 +5440,13 @@
   "panel.errorReports.lastKnownSettings": "Last read status — freshness could not be verified",
   "panel.notifications.saveBeforeTest": "You have unsaved changes. Save the new settings before testing them.",
   "panel.errorReports.saveBeforeSend": "You have unsaved changes. Sending uses saved settings; save your changes first.",
-  "errorReporting.settings_changed": "Delivery settings changed during the operation. Check the current settings and try again.",
-  "notifications.settings_invalid": "SMTP settings are invalid. Check the port and email addresses."
+  "errorReporting.settings_changed": "Reporting settings changed; delivery was not started. Check the current destination and your consent.",
+  "notifications.settings_invalid": "SMTP settings are invalid. Check the port and email addresses.",
+  "notifications.settings_revision_required": "The displayed notification settings could not be verified. Refresh them and try again.",
+  "notifications.settings_changed": "Notification settings changed; the test was not started. Check the current destination.",
+  "errorReporting.settings_revision_required": "The displayed reporting settings could not be verified. Refresh them and try again.",
+  "panel.notifications.settingsChangedTitle": "Check the settings before testing",
+  "panel.notifications.settingsChangedHint": "Refresh to load the saved settings and check the recipient. Your unsaved draft is preserved.",
+  "panel.errorReports.settingsChangedTitle": "Check the settings before sending",
+  "panel.errorReports.settingsChangedHint": "Refresh to load the saved settings and check the destination. Your unsaved draft is preserved."
 }
