@@ -1,5 +1,43 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R40 tamamlandı; 0.8.84 paket/yayın hazırlığında
+
+Kaynak sürümü0.8.84; PUBLIC latest son doğrulamada0.8.83. 0.8.84 tag önkontrol404.
+Henüz0.8.84yayın/installerbaşarısı iddiası yok. User binary+notespublish authorized; liveinstall/sourcepush yok.
+R40 File extract/search/size immutableactor/request + SID/delegation/sitegeneration rechecks; scoped
+physicalpath hidden. ReadOnlyPostRoutes exact POST search/size+backupdownloaditems, CSRF unchanged.
+Search HTTP measuredDTO path/query/items/scanned/truncated/reason; oldtrustedarray overload preserved.
+Search actualopenedhandle length bounded2MiB, no staleFileInfo unbounded read. Exact5000/100 cap partial.
+Extract lifetime prefix cache removed after2 actualtempjunction REDs overwroteoutside-sitesandbox sentinel.
+Eachentry awaits then destination.SandboxRoot→outputPath reparsecheck. Previouslywrittenentries retained;
+general externalwriter atomicity notclaimed. ZIPquota measurement/open identity separate is laterauditcandidate.
+FTP HealHomeLinks zero-wait accountlease avoids create account→infra inversion; durableaccount+target
+recheckedafterapproval; busyaccounts skipped, no staleDelete/recreate or targetrepair.
+Files UI searchscope/min2/clear/error/retry/empty/partial+scannedcount separatesresults fromfolderlist.
+Partialsize reason+recalculate; failedrecalculation clears onlyrequestpath oldsize, othercache stays.
+Extractnamedarchive/target/overwriteconfirmation; strictresponseidentity and stalecontext protections.
+Finalnewbackend136=Authority74+Search8+Budget12+FTP15+ReadPolicy25+Junction2. Initialtarget1155green,
+postjunctiontarget1166green. Firstfull25828exit1 onlyoutdatedQuotaDirectoryWalk sourceguard; body updated
+withassertionspreserved. Secondfull67976exit1 only TerminalExecution cleanup IO; CMD wrapper waitedwhile
+PING stillownedcwd. Fixture usesdirectping PID +exactcleanuprootguard, unchangedassertions. Terminal4/4.
+Finalfull20854exit0 .NET Core2+Infra8881=8883/8883 fail0skip0, build0warning0error.
+TRX round40-final3-full_net8.0_20261004101905.trx and20261004102216.trx. No sourcechanges afterchecks.
+NewFE61; last15436exit0 types+112files2176/2176. Vite0.8.84green+wwwrootsync6assets, FE5580/API291parity.
+FEsizebaseline1RED19green then59/59; priorfull333982175supersededby2176. UIproofround40-ui-integrity.json.
+ChromeactualVue/Pinia fakeAPIonly; TR390doc380/380panel294/294;EN320doc310/310panel224/224form226/226;
+desktop1440doc1440/1440panel1114/1114. Searchpending/clear/error/zero/partial,sizepartialreason,extract
+confirmcancelverified. Finalimage round40-files-search-final-mobile.png; extract-confirm-mobile also.
+Appconsoleerrors0excludingextensions; existingi18nexperimentalwarning. HMRinitialresets notproductbug,
+finalflowsrepeatedafterfreeze. Tab40closed/viewportreset, __audit40removed, Vite74894CtrlCterminal.
+Allcurrenttestsfinished:63995junctionRED,67976full2exit1,20854full3exit0,15436FEexit0,53426components0.
+Freshrelease084components22Passed3standardlargeSkipped0Failed; privacy12/12andactualnote0findings;
+notesparser/versionguardpassed. release084-preflight.json; package maySkipComponentAudit onlysamefreshaudit.
+Failed terminal fixture unique root1f09fd1053d443fa99a035974fd62900 cleaned afterrecordedPIDgone;
+preexisting tests/AdaPanel.Infrastructure.Tests/TestResults/ untouched/untracked. Allagents FINALFREEZE.
+User0.8.75 question: oldUI label stagedinstallerabsence; normalaftercleanup, notproofofinstallfailure.
+Currentversion comesrunningDLL; ifnewerexpected but.75 stillfresh thenoldserverresponds. Forcecheck bypass15mcache.
+Chrome3usertabsnoAdaPanel; installedserverunmeasured. PriorpendingURLquestionnotanswered; donotrepeat.
+ContinuousunbudgetedgoalACTIVE, do notcomplete. Packaging/publicverification andfinaldocs remain now.
 ## 2026-10-04 — R38+R39 içeren 0.8.83 yayımlandı ve doğrulandı
 
 Public latest ve kaynaklar0.8.83. Yayın2026-10-04T06:31:29Z /09:31:29İstanbul.

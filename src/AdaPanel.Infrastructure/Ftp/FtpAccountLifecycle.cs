@@ -22,6 +22,26 @@ internal static class FtpAccountLifecycle
         try { token.ThrowIfCancellationRequested(); return lease; }
         catch { lease.Dispose(); throw; }
     }
+    // Infrastructure repair may already hold the infrastructure gate, while Create holds
+    // its account gate before entering infrastructure. Never wait in the reverse order.
+    internal static IDisposable? TryEnter(string name, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var key = name.Trim();
+        Entry entry;
+        lock (Entries)
+        {
+            if (!Entries.TryGetValue(key, out entry!)) Entries.Add(key, entry = new Entry());
+            entry.References++;
+        }
+        bool entered;
+        try { entered = entry.Gate.Wait(0, token); }
+        catch { Return(key, entry); throw; }
+        if (!entered) { Return(key, entry); return null; }
+        var lease = new Lease(key, entry);
+        try { token.ThrowIfCancellationRequested(); return lease; }
+        catch { lease.Dispose(); throw; }
+    }
     private static void Return(string key, Entry entry)
     {
         lock (Entries)

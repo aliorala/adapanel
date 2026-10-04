@@ -41,6 +41,9 @@ public sealed partial class FtpService(
     internal Func<string, bool, CancellationToken, Task<CommandResult>>? NativeScript { get; set; }
     // Local SAM status seam; native process output is never interpreted as proof of absence.
     internal Func<string, CancellationToken, Task<uint>>? NativeAccountStatus { get; set; }
+    internal Func<string, string?> HomeTargetResolver { get; set; } = static path =>
+        Directory.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName ?? path;
+    internal Func<string, CancellationToken, Task>? HomeRepairSnapshotReady { get; set; }
 
     private Task<CommandResult> RunCommandAsync(string fileName, string arguments, CancellationToken cancellationToken) =>
         NativeCommand is { } command ? command(fileName, arguments, cancellationToken)
@@ -891,33 +894,27 @@ public sealed partial class FtpService(
 
         foreach (var record in records)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var yollar = HomeLinkPaths(record.UserName);
+            var hedef = ReadRepairTarget(yollar);
+            if (hedef is null) continue;
 
-            string? hedef = null;
-            foreach (var yol in yollar)
+            if (HomeRepairSnapshotReady is not null) await HomeRepairSnapshotReady(record.UserName, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Create owns account -> infrastructure. A repair inside infrastructure must
+            // skip busy accounts, including the account that the current Create will finish.
+            using var accountLease = FtpAccountLifecycle.TryEnter(record.UserName, cancellationToken);
+            if (accountLease is null) continue;
+            var expectedRecord = JsonSerializer.Serialize(record);
+            async Task<bool> StillCurrent()
             {
-                try
-                {
-                    if (!Directory.Exists(yol))
-                    {
-                        continue;
-                    }
-
-                    // Düz klasörse hedefi kendisidir; junction ise gösterdiği yer.
-                    hedef = Directory.ResolveLinkTarget(yol, returnFinalTarget: true)?.FullName ?? yol;
-                    break;
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    // Okunamayan yol "yok" DEĞİLDİR; onarmaya da çalışmayız.
-                    hedef = null;
-                }
+                var current = await ReadAccountAsync(record.UserName, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                return JsonSerializer.Serialize(current) == expectedRecord &&
+                    string.Equals(ReadRepairTarget(yollar), hedef, StringComparison.OrdinalIgnoreCase);
             }
-
-            if (hedef is null || !Directory.Exists(hedef))
-            {
-                continue;
-            }
+            if (!await StillCurrent()) continue;
 
             foreach (var eksik in yollar.Where(yol => !Directory.Exists(yol)))
             {
@@ -929,12 +926,17 @@ public sealed partial class FtpService(
 
                 if (beforeMutation is not null) await beforeMutation(cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
+                // An approval can await SQL/native work. Do not carry its old account or
+                // link snapshot into publication after that wait.
+                if (!await StillCurrent()) break;
+                if (Directory.Exists(eksik)) continue;
                 Directory.CreateDirectory(ust);
 
                 var sonuc = await RunCommandAsync(
                     "cmd.exe",
                     $"/c mklink /J \"{eksik}\" \"{hedef}\"",
                     cancellationToken: cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
 
                 // Sonuç ÖLÇÜLÜR, çıkış koduna güvenilmez: bu deponun tekrarlanan dersi.
                 if (sonuc.Success && Directory.Exists(eksik))
@@ -944,7 +946,27 @@ public sealed partial class FtpService(
             }
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return onarilan;
+    }
+
+    private string? ReadRepairTarget(IReadOnlyList<string> paths)
+    {
+        foreach (var path in paths)
+        {
+            try
+            {
+                if (!Directory.Exists(path)) continue;
+                // A plain directory is its own target; a junction supplies its destination.
+                var target = HomeTargetResolver(path);
+                return target is not null && Directory.Exists(target) ? target : null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Unreadable does not mean absent; do not invent a target for that link.
+            }
+        }
+        return null;
     }
 
     private Task<FtpTlsMeasurement> EnsureFtpInfrastructureAsync(bool forceReconfigure, CancellationToken cancellationToken,

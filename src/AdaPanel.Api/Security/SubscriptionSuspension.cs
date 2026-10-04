@@ -110,11 +110,9 @@ public static class SubscriptionSuspension
         string? path,
         CancellationToken cancellationToken)
     {
-        // This POST transports a password in its body and returns a ZIP; it never restores
-        // live files. Keep the exception exact and method-specific (not a backup prefix).
-        var selectedDownload = string.Equals(httpMethod, "POST", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(path?.TrimEnd('/'), "/api/v1/backup/download-items", StringComparison.OrdinalIgnoreCase);
-        if (!IsStateChanging(httpMethod) || IsExemptPath(path) || selectedDownload || !IsBoundBySuspension(user))
+        // Body-based inspection/download endpoints remain readable during suspension;
+        // the shared allowlist is exact and method-specific, never a route-prefix exemption.
+        if (!IsStateChanging(httpMethod) || IsExemptPath(path) || ReadOnlyPostRoutes.IsMatch(httpMethod, path) || !IsBoundBySuspension(user))
         {
             return;
         }

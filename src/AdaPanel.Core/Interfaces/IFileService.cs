@@ -142,7 +142,18 @@ public interface IFileService
 
     Task<FileWorkspaceDto> ExtractAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default);
 
+    Task<FileWorkspaceDto> ExtractAsync(ArchiveFileRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Authorized archive extraction is not implemented.");
+
     Task<IReadOnlyCollection<FileEntryDto>> SearchAsync(SearchFilesRequest request, CancellationToken cancellationToken = default);
+
+    Task<FileSearchResultDto> SearchMeasuredAsync(SearchFilesRequest request, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Measured file searching is not implemented.");
+
+    Task<FileSearchResultDto> SearchMeasuredAsync(SearchFilesRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeRead, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Authorized file searching is not implemented.");
 
     /// <summary>
     /// Bir klasörün ÖZYİNELEMELİ boyutunu ve öge sayılarını hesaplar (Plesk'teki "Calculate size").
@@ -173,6 +184,10 @@ public interface IFileService
     /// </list>
     /// </remarks>
     Task<DirectorySizeDto> CalculateSizeAsync(string path, CancellationToken cancellationToken = default);
+
+    Task<DirectorySizeDto> CalculateSizeAsync(string path,
+        Func<SiteDto, CancellationToken, Task> beforeRead, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Authorized file size measurement is not implemented.");
 
     /// <summary>
     /// Verilen sanal yolların diskte kapladığı TOPLAM — disk KOTASI denetiminin ön ölçümü.

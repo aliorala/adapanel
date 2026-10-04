@@ -5562,5 +5562,21 @@
   "panel.files.permissionsUnverified": "The permission command ran, but completion on every target could not be verified. Check access.",
   "files.acl_unverified": "Completion of the permission change on every target could not be verified.",
   "ftp.user_status_unknown": "The Windows FTP account status could not be verified. The operation did not complete; try again.",
-  "panel.files.createTarget": "Create in: {path}"
+  "panel.files.createTarget": "Create in: {path}",
+  "panel.files.searchScope": "Scope: {path} and its subfolders.",
+  "panel.files.searchMinimum": "Enter at least 2 characters.",
+  "panel.files.searchResultsTitle": "Search results",
+  "panel.files.searchResultsFor": "Results for “{query}”",
+  "panel.files.searchResultCount": "Showing {count} results",
+  "panel.files.searchScanned": "Files scanned: {count}",
+  "panel.files.searchClear": "Clear search",
+  "panel.files.searchWorking": "Searching files…",
+  "panel.files.searchFolderList": "Folder contents",
+  "panel.files.recalculateSize": "Recalculate",
+  "panel.files.partialSizeDetails": "Why the count is incomplete",
+  "panel.files.extractConfirmTitle": "Extract ZIP archive?",
+  "panel.files.extractConfirmMessage": "The archive “{name}” will be extracted to: {path}. Existing files with the same names will be overwritten. Make sure you have any necessary backups before continuing.",
+  "panel.files.extractConfirmAction": "Extract archive",
+  "files.search_truncated_files": "The scan reached its 5,000-file limit. The search may be incomplete; search within a narrower folder.",
+  "files.search_truncated_results": "The search reached its 100-result limit. More matches may exist; narrow your query or folder."
 }

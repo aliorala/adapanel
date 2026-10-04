@@ -134,13 +134,34 @@
         <span class="progress-fill" :style="{ width: `${uploadPercent}%` }"></span>
       </div>
 
-      <form v-if="workspace?.isDirectory" class="search-row" @submit.prevent="runSearch">
-        <input v-model="searchQuery" minlength="2" :aria-label="t('panel.files.searchHint')" :placeholder="t('panel.files.searchHint')" />
-        <button type="submit" class="secondary compact">{{ t("panel.files.search") }}</button>
-      </form>
+      <section v-if="workspace?.isDirectory && !loading && !workspaceLoad.message.value" class="file-search">
+        <form class="search-row" :aria-busy="searchBusy" @submit.prevent="runSearch">
+          <label class="search-field" for="files-search-query">
+            <span>{{ t("panel.files.searchHint") }}</span>
+            <input id="files-search-query" v-model="searchQuery" required minlength="2" :disabled="searchBusy" aria-describedby="files-search-scope" autocomplete="off" />
+          </label>
+          <button type="submit" class="secondary compact" :disabled="searchBusy || searchQuery.trim().length < 2">
+            {{ searchBusy ? t("panel.files.searchWorking") : t("panel.files.search") }}
+          </button>
+          <button v-if="searchRan || searchBusy || searchError" type="button" class="secondary compact" @click="clearSearch">
+            {{ t("panel.files.searchClear") }}
+          </button>
+        </form>
+        <small id="files-search-scope" class="meta search-context">{{ t("panel.files.searchScope", { path: workspace.path }) }} {{ t("panel.files.searchMinimum") }}</small>
+      </section>
 
-      <template v-if="searchRan">
-        <div v-if="searchResults.length" class="search-results">
+      <section v-if="searchRan || searchBusy || searchError" class="search-panel" :aria-label="t('panel.files.searchResultsTitle')">
+        <div class="search-heading">
+          <h3>{{ t("panel.files.searchResultsTitle") }}</h3>
+          <span v-if="searchRan && !searchBusy && !searchError" class="status-pill">{{ t("panel.files.searchResultCount", { count: searchResults.length }) }}</span>
+        </div>
+        <p v-if="searchSubmittedQuery" class="meta search-context">{{ t("panel.files.searchResultsFor", { query: searchSubmittedQuery }) }}</p>
+        <p v-if="searchBusy" class="meta" role="status" aria-live="polite">{{ t("panel.files.searchWorking") }}</p>
+        <SectionLoadError v-else-if="searchError" :message="searchError" @retry="runSearch" />
+        <template v-else-if="searchRan">
+          <p v-if="searchScannedFiles !== null" class="meta">{{ t("panel.files.searchScanned", { count: searchScannedFiles }) }}</p>
+          <p v-if="searchTruncated" class="search-warning" role="status">{{ hataMetni(searchTruncatedReason) }}</p>
+          <div v-if="searchResults.length" class="search-results">
           <button
             v-for="entry in searchPager.items.value"
             :key="entry.path"
@@ -150,9 +171,10 @@
             <small>{{ entry.path }}</small>
           </button>
           <TablePager :state="searchPager" />
-        </div>
-        <p v-else class="empty-state">{{ t("panel.files.searchEmpty") }}</p>
-      </template>
+          </div>
+          <p v-else class="empty-state">{{ t("panel.files.searchEmpty") }}</p>
+        </template>
+      </section>
 
       <!-- "Yükleniyor", "klasör boş" ve "okunamadı" AYRI durumlar: üçü de aynı boş tabloya
            düşüyordu ve kullanıcı listenin gelmediğini mi yoksa klasörün gerçekten boş mu
@@ -162,6 +184,7 @@
       <SectionLoadError v-else-if="workspaceLoad.message.value" :message="workspaceLoad.message.value" @retry="() => refresh()" />
 
       <template v-else-if="workspace?.isDirectory">
+        <h3 v-if="searchRan || searchBusy || searchError" class="folder-list-heading">{{ t("panel.files.searchFolderList") }}</h3>
         <!-- TOPLU EYLEM ÇUBUĞU. "Seçilenleri sil" YIKICI eylemdir ve önceden "Kopyala" ile
              "Seçimi temizle" arasında, tam da refleksle basılan yerde duruyordu. Artık kendi
              grubunda, ayırıcı bir çizginin ardında ve çubuğun öbür ucunda: yanlış düğmeye
@@ -271,18 +294,22 @@
                    düğme daha eksiltir. -->
               <span class="size-cell" role="cell" :data-label="t('panel.files.sizeColumn')">
                 <template v-if="!entry.isDirectory">{{ boyutMetni(entry.size) }}</template>
-                <template v-else-if="folderSizes[entry.path]">
+                <span v-else-if="folderSizes[entry.path]" class="folder-size-result">
                   <span :title="folderSizes[entry.path].truncated ? kesikSebebi(folderSizes[entry.path]) : undefined">
                     {{ folderSizes[entry.path].truncated
                       ? t("panel.files.sizeAtLeast", { size: boyutMetni(folderSizes[entry.path].totalBytes) })
                       : boyutMetni(folderSizes[entry.path].totalBytes) }}
                   </span>
-                </template>
+                  <button v-if="folderSizes[entry.path].truncated" type="button" class="link-button size-explanation" @click="showNotice(kesikSebebi(folderSizes[entry.path]), true)">{{ t("panel.files.partialSizeDetails") }}</button>
+                  <button type="button" class="link-button size-calc" :disabled="Boolean(sizeBusyPath)" @click="calculateFolderSize(entry)">
+                    {{ sizeBusyPath === entry.path ? t("panel.files.calcSizeBusy") : t("panel.files.recalculateSize") }}
+                  </button>
+                </span>
                 <button
                   v-else
                   type="button"
                   class="link-button size-calc"
-                  :disabled="sizeBusyPath === entry.path"
+                  :disabled="Boolean(sizeBusyPath)"
                   @click="calculateFolderSize(entry)">
                   {{ sizeBusyPath === entry.path ? t("panel.files.calcSizeBusy") : t("panel.files.calcSize") }}
                 </button>
@@ -633,6 +660,28 @@ const { notice, noticeError, showNotice, resolveApiMessage, clearNotice } = useN
 const searchQuery = ref("");
 const searchResults = ref<FileEntry[]>([]);
 const searchRan = ref(false);
+const searchBusy = ref(false);
+const searchError = ref("");
+const searchSubmittedQuery = ref("");
+const searchPath = ref("");
+const searchTruncated = ref(false);
+const searchTruncatedReason = ref("");
+const searchScannedFiles = ref<number | null>(null);
+
+function resetSearchResult() {
+  searchRequest++;
+  searchBusy.value = false;
+  searchError.value = "";
+  searchResults.value = [];
+  searchRan.value = false;
+  searchSubmittedQuery.value = "";
+  searchPath.value = "";
+  searchTruncated.value = false;
+  searchTruncatedReason.value = "";
+  searchScannedFiles.value = null;
+}
+function clearSearch() { searchQuery.value = ""; resetSearchResult(); }
+watch(searchQuery, resetSearchResult, { flush: "sync" });
 
 // Klasör tek seferde DOM'a basılmaz (bkz. composables/usePagination.ts).
 const entries = computed(() => workspace.value?.entries ?? []);
@@ -743,6 +792,7 @@ let dragDepth = 0;
 // birbirine karışmasın.
 const folderSizes = ref<Record<string, DirectorySizeResult>>({});
 const sizeBusyPath = ref("");
+let sizeRequest = 0;
 
 /**
  * Hedef olarak seçilebilecek alt klasörler. Taşınan/kopyalanan ögelerin KENDİLERİ listede yer
@@ -793,6 +843,9 @@ watch(selectedSiteName, async (siteName, previousSiteName) => {
 async function refresh(path = workspace.value?.path || siteRootPath.value) {
   if (!isFileViewActive() || !await allowNavigation() || !isFileViewActive()) return;
   const request = ++workspaceRequest;
+  resetSearchResult();
+  sizeRequest++;
+  sizeBusyPath.value = "";
   const site = selectedSiteName.value;
   if (!selectedSiteName.value || !(path === siteRootPath.value || path.startsWith(`${siteRootPath.value}/`))) {
     workspace.value = null;
@@ -1049,16 +1102,19 @@ async function onDrop(event: DragEvent) {
  * olurdu. Bu yüzden hem satırda "en az" denir hem de şeritte sebep (çeviri anahtarı) yazılır.
  */
 async function calculateFolderSize(entry: FileEntry) {
-  if (!entry.isDirectory || sizeBusyPath.value) {
+  if (!isFileViewActive() || !entry.isDirectory || sizeBusyPath.value || loading.value || workspaceLoad.message.value) {
     return;
   }
-
+  entry = { ...entry };
+  const isCurrent = currentFileContext();
+  const request = ++sizeRequest;
   sizeBusyPath.value = entry.path;
+  // A failed new measurement must not leave the previous size looking current.
+  delete folderSizes.value[entry.path];
   try {
     const result = await getDirectorySize(entry.path);
-    // Sonuç SUNUCUNUN döndürdüğü yola yazılır, istediğimiz yola değil: cevap gecikirse ve
-    // kullanıcı başka klasöre geçtiyse ölçüm yanlış satıra düşmez (yeni listede o yol yoktur).
-    folderSizes.value = { ...folderSizes.value, [result.path || entry.path]: result };
+    if (!isCurrent() || request !== sizeRequest) return;
+    folderSizes.value = { ...folderSizes.value, [entry.path]: result };
     const olcum = t("panel.files.sizeSummary", {
       name: entry.name,
       size: boyutMetni(result.totalBytes),
@@ -1069,9 +1125,9 @@ async function calculateFolderSize(entry: FileEntry) {
       result.truncated ? `${olcum}\n${kesikSebebi(result)}` : olcum,
       result.truncated);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent() && request === sizeRequest) showNotice(resolveApiMessage(error), true);
   } finally {
-    sizeBusyPath.value = "";
+    if (request === sizeRequest) sizeBusyPath.value = "";
   }
 }
 
@@ -1104,12 +1160,26 @@ function tarihMetni(value: string | null) {
 }
 
 async function runSearch() {
+  if (!isFileViewActive() || !workspace.value?.isDirectory || loading.value || workspaceLoad.message.value || searchQuery.value.trim().length < 2 || searchBusy.value) return;
   const request = ++searchRequest;
   const isCurrent = currentFileContext();
+  const path = workspace.value.path, query = searchQuery.value.trim();
+  searchBusy.value = true;
+  searchError.value = "";
+  searchRan.value = false;
+  searchResults.value = [];
+  searchSubmittedQuery.value = query;
+  searchPath.value = path;
+  searchTruncated.value = false;
+  searchTruncatedReason.value = "";
+  searchScannedFiles.value = null;
   try {
-    const result = await searchFiles(workspace.value?.path || "", searchQuery.value);
+    const result = await searchFiles(path, query);
     if (!isCurrent() || request !== searchRequest) return;
-    searchResults.value = result;
+    searchResults.value = result.items;
+    searchTruncated.value = result.truncated;
+    searchTruncatedReason.value = result.truncatedReasonKey;
+    searchScannedFiles.value = result.scannedFiles;
     searchPager.reset();
     // "Sonuç yok" ile "henüz aranmadı" ayrı: boş sonuç listesi sessizce kaybolmasın.
     searchRan.value = true;
@@ -1117,27 +1187,50 @@ async function runSearch() {
     if (!isCurrent() || request !== searchRequest) return;
     searchResults.value = [];
     searchRan.value = false;
-    showNotice(resolveApiMessage(error), true);
-  }
+    searchError.value = resolveApiMessage(error);
+  } finally { if (request === searchRequest) searchBusy.value = false; }
 }
 
 async function compress(path: string) {
-  await runArchive(() => compressPath(path), "panel.files.compressed");
+  await runArchive(path, false);
 }
 
 async function extract(path: string) {
-  await runArchive(() => extractPath(path), "panel.files.extracted");
+  await runArchive(path, true);
 }
 
-async function runArchive(operation: () => Promise<FileWorkspace>, messageKey: string) {
-  if (archiveBusy.value || disposed || locked.value) return;
-  const isCurrent = currentFileContext();
+async function runArchive(path: string, extracting: boolean) {
+  if (!isFileViewActive() || archiveBusy.value || locked.value || loading.value || workspaceLoad.message.value || !workspace.value?.isDirectory) return;
+  const isCurrent = currentFileContext(false);
+  const destination = workspace.value.path;
   archiveBusy.value = true;
   try {
-    const result = await operation();
+    if (extracting) {
+      const name = path.replace(/\\/g, "/").split("/").pop()!;
+      const approved = await confirm({
+        title: t("panel.files.extractConfirmTitle"),
+        message: t("panel.files.extractConfirmMessage", { name, path: destination }),
+        impact: [path, destination], tone: "danger", confirmLabel: t("panel.files.extractConfirmAction")
+      });
+      if (!approved || !isCurrent() || locked.value) return;
+    }
+    const result = await (extracting ? extractPath(path) : compressPath(path));
     if (!isCurrent()) return;
+    // The mutation response owns this newer workspace; older list reads cannot
+    // put the pre-operation directory back after publication.
+    workspaceRequest++;
+    loading.value = false;
+    workspaceLoad.clear();
+    resetSearchResult();
+    sizeRequest++;
+    sizeBusyPath.value = "";
+    folderSizes.value = {};
+    openActionsPath.value = "";
     workspace.value = result;
-    showNotice(t(messageKey), false);
+    fileContent.value = result.content;
+    savedContent.value = result.content;
+    selection.keepOnly(result.entries.map(entry => entry.path));
+    showNotice(t(extracting ? "panel.files.extracted" : "panel.files.compressed"), false);
   } catch (error) {
     if (isCurrent()) showNotice(resolveApiMessage(error), true);
   } finally { archiveBusy.value = false; }
@@ -1767,6 +1860,10 @@ async function restore(record: BackupRecord) {
   white-space: normal;
 }
 
+.folder-size-result { display: grid; gap: 4px; min-width: 0; }
+.folder-size-result button { white-space: normal; text-align: inherit; overflow-wrap: anywhere; }
+.size-explanation { color: var(--warn-1); font-size: var(--fs-xs); }
+
 .overwrite-field input {
   flex: 0 0 16px;
   width: 16px;
@@ -1917,13 +2014,21 @@ async function restore(record: BackupRecord) {
   outline-offset: 2px;
 }
 
-.search-row input {
-  flex: 1;
-}
+.file-search { display: grid; gap: var(--sp-8); min-width: 0; }
+.search-row { flex-wrap: wrap; min-width: 0; }
+.search-field { flex: 1 1 220px; min-width: 0; display: grid; gap: 6px; }
+.search-field span { font-size: var(--fs-xs); color: var(--text-muted); }
+.search-context { overflow-wrap: anywhere; margin: 0; }
+.search-panel { display: grid; gap: var(--sp-8); padding: var(--sp-12); border: 1px solid var(--panel-border); border-radius: var(--radius-sm); min-width: 0; background: var(--surface-1); }
+.search-heading { display: flex; flex-wrap: wrap; gap: var(--sp-8); align-items: center; justify-content: space-between; }
+.search-heading h3, .folder-list-heading { margin: 0; font-size: var(--fs-sm); }
+.search-panel .meta, .search-panel .empty-state { margin: 0; }
+.search-warning { margin: 0; color: var(--warn-1); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 
 .search-results {
   display: grid;
   gap: 6px;
+  min-width: 0;
 }
 
 .search-result {
@@ -1932,6 +2037,9 @@ async function restore(record: BackupRecord) {
   background: var(--surface-2);
   color: var(--text-strong);
   text-align: left;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .search-result small {

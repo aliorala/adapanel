@@ -39,7 +39,11 @@ export async function getFileWorkspace(path = "") {
   // Scoped accounts see the sites listing directly when they request the virtual root.
   const responsePath = response.data?.data?.path;
   const expectedPath = !filePathIdentity(path) && typeof responsePath === "string" && filePathIdentity(responsePath) === "sites" ? "sites" : path;
-  const result = measuredWorkspace(response.data, expectedPath);
+  return measuredReadableWorkspace(response.data, expectedPath);
+}
+
+function measuredReadableWorkspace(envelope: ApiEnvelope<FileWorkspace>, path: string) {
+  const result = measuredWorkspace(envelope, path);
   const rows = new Set<string>();
   const validEntries = result.entries.every(entry => {
     if (typeof entry.name !== "string" || !entry.name.trim() || /[\\/]/.test(entry.name) || entry.name === "." || entry.name === ".." ||
@@ -169,7 +173,13 @@ export type DirectorySizeResult = {
 
 export async function getDirectorySize(path: string) {
   const response = await apiClient.post<ApiEnvelope<DirectorySizeResult>>("/files/size", { path });
-  return response.data.data;
+  const value = response.data?.data;
+  if (response.data?.success !== true || !value || typeof value.path !== "string" || filePathIdentity(value.path) !== filePathIdentity(path) ||
+    ![value.totalBytes, value.fileCount, value.directoryCount].every(count => Number.isSafeInteger(count) && count >= 0) ||
+    typeof value.truncated !== "boolean" || typeof value.truncatedReasonKey !== "string" || (value.truncated && !value.truncatedReasonKey.trim())) {
+    throw new UserFacingError("panel.files.resultUnconfirmed");
+  }
+  return value;
 }
 
 export function getDownloadUrl(path: string) {
@@ -178,17 +188,49 @@ export function getDownloadUrl(path: string) {
 
 export async function compressPath(path: string, destinationPath = "") {
   const response = await apiClient.post<ApiEnvelope<FileWorkspace>>("/files/compress", { path, destinationPath });
-  return response.data.data;
+  const destination = destinationPath.trim() || `${path.replace(/[\\/]+$/, "")}.zip`;
+  const result = measuredReadableWorkspace(response.data, parentPathOf(destination));
+  if (!result.isDirectory || !result.entries.some(entry => !entry.isDirectory && filePathIdentity(entry.path) === filePathIdentity(destination))) {
+    throw new UserFacingError("panel.files.resultUnconfirmed");
+  }
+  return result;
 }
 
 export async function extractPath(path: string, destinationPath = "") {
   const response = await apiClient.post<ApiEnvelope<FileWorkspace>>("/files/extract", { path, destinationPath });
-  return response.data.data;
+  const result = measuredReadableWorkspace(response.data, destinationPath.trim() || parentPathOf(path));
+  if (!result.isDirectory) throw new UserFacingError("panel.files.resultUnconfirmed");
+  return result;
 }
 
+export type FileSearchResult = {
+  path: string;
+  query: string;
+  items: FileEntry[];
+  scannedFiles: number;
+  truncated: boolean;
+  truncatedReasonKey: string;
+};
+
 export async function searchFiles(path: string, query: string) {
-  const response = await apiClient.post<ApiEnvelope<FileEntry[]>>("/files/search", { path, query });
-  return response.data.data;
+  const response = await apiClient.post<ApiEnvelope<FileSearchResult>>("/files/search", { path, query });
+  const value = response.data?.data;
+  const prefix = `${filePathIdentity(path)}/`, seen = new Set<string>();
+  const validItems = Array.isArray(value?.items) && value.items.every(entry => {
+    if (!entry || typeof entry.path !== "string" || typeof entry.name !== "string" || !entry.name.trim() || /[\\/]/.test(entry.name) ||
+      entry.isDirectory !== false || typeof entry.size !== "number" || !Number.isFinite(entry.size) || entry.size < 0 ||
+      typeof entry.extension !== "string" || (entry.lastModifiedUtc !== null && typeof entry.lastModifiedUtc !== "string")) return false;
+    const key = filePathIdentity(entry.path), parts = key.split("/");
+    if (!key.startsWith(prefix) || parts.some(part => !part || part === "." || part === "..") || parts[parts.length - 1] !== entry.name.toLowerCase() || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (response.data?.success !== true || !value || typeof value.path !== "string" || filePathIdentity(value.path) !== filePathIdentity(path) ||
+    value.query !== query.trim() || !validItems || !Number.isSafeInteger(value.scannedFiles) || value.scannedFiles < value.items.length ||
+    typeof value.truncated !== "boolean" || typeof value.truncatedReasonKey !== "string" || (value.truncated && !value.truncatedReasonKey.trim())) {
+    throw new UserFacingError("panel.files.resultUnconfirmed");
+  }
+  return value;
 }
 
 /**

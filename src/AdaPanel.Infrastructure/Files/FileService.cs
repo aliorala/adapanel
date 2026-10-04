@@ -84,6 +84,13 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     internal Func<string, string, CancellationToken, Task<CommandResult>> PermissionCommand { get; set; } =
         static (fileName, arguments, token) => ProcessRunner.RunAsync(fileName, arguments, cancellationToken: token);
 
+    internal Func<string, CancellationToken, Task<string>>? ReadSearchContent { get; set; }
+    internal Func<string, Stream> OpenSearchContent { get; set; } = static path =>
+        new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+    internal Func<string, CancellationToken, Task>? ExtractEntryReady { get; set; }
+    internal Func<CancellationToken, Task>? SizeWalkCompleted { get; set; }
+
     public Task<FileWorkspaceDto> GetWorkspaceAsync(string path, CancellationToken cancellationToken = default) =>
         GetWorkspaceCoreAsync(path, null, cancellationToken);
 
@@ -1276,37 +1283,40 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         }
     }
 
-    public async Task<FileWorkspaceDto> ExtractAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default)
+    public Task<FileWorkspaceDto> ExtractAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default) =>
+        ExtractCoreAsync(request, null, cancellationToken);
+
+    public Task<FileWorkspaceDto> ExtractAsync(ArchiveFileRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        ExtractCoreAsync(request, beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken);
+
+    private async Task<FileWorkspaceDto> ExtractCoreAsync(ArchiveFileRequest request,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
         var archivePath = NormalizeVirtualPath(request.Path);
+        var destinationPath = string.IsNullOrWhiteSpace(request.DestinationPath)
+            ? BuildParentPath(archivePath)
+            : NormalizeVirtualPath(request.DestinationPath);
         var archive = await ResolveTargetAsync(archivePath, cancellationToken);
         EnsureSiteTarget(archive);
         EnsureNotSiteRoot(archive);
+        await ApprovePublicationAsync(archive, beforeMutation, cancellationToken);
         if (!File.Exists(archive.PhysicalPath) || !string.Equals(Path.GetExtension(archive.PhysicalPath), ".zip", StringComparison.OrdinalIgnoreCase))
         {
             throw new AppException("files.invalid_archive", 400, 400);
         }
 
-        var destinationPath = string.IsNullOrWhiteSpace(request.DestinationPath)
-            ? BuildParentPath(archivePath)
-            : NormalizeVirtualPath(request.DestinationPath);
         var destination = await ResolveTargetAsync(destinationPath, cancellationToken);
         EnsureSiteTarget(destination);
+        await ApproveTransferAsync(archive, destination, beforeMutation, cancellationToken);
+        EnsureNoReparsePoints(destination.SandboxRoot, destination.PhysicalPath);
         Directory.CreateDirectory(destination.PhysicalPath);
-
-        // BAĞLANTI DENETİMİNİN ÖNBELLEĞİ. Denetim girdi BAŞINA yapılır ama aynı klasör öneki bir
-        // arşivde binlerce kez geçer (bir WordPress paketinde <c>wp-content/plugins/...</c> tek
-        // başına binlerce girdinin önekidir). Önbellek olmadan her girdi için önekin HER parçasına
-        // üç dosya sistemi sorgusu (Exists + Exists + GetAttributes) düşerdi; bu, meşru bir paketin
-        // açılmasını ölçülebilir biçimde yavaşlatırdı. Önbellek DOĞRULUĞU düşürmez: bir arşiv
-        // girdisi bağlantı OLUŞTURAMAZ (zip girdisi ya dosya ya klasördür), yani bu döngü sürerken
-        // "temiz" damgalanmış bir önek bağlantıya DÖNÜŞEMEZ.
-        var denetlenenOnekler = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         using var zip = ZipFile.OpenRead(archive.PhysicalPath);
         foreach (var entry in zip.Entries)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            if (ExtractEntryReady is not null) await ExtractEntryReady(entry.FullName, cancellationToken);
+            await ApproveTransferAsync(archive, destination, beforeMutation, cancellationToken);
             var outputPath = Path.GetFullPath(Path.Combine(destination.PhysicalPath, entry.FullName));
             if (!outputPath.StartsWith(
                     destination.PhysicalPath.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
@@ -1315,32 +1325,9 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                 throw new AppException("files.path_outside_root", 400, 400);
             }
 
-            // ============================================================================
-            // DİZGE DENETİMİ TEK BAŞINA YETMEZ — ÖLÇÜLDÜ (FileExtractTests, gerçek kavşakla).
-            //
-            // Yukarıdaki önek karşılaştırması yalnız yolun YAZILIŞINA bakar. Kiracının kendi belge
-            // kökünde <c>bag</c> adında bir KAVŞAK (junction) varsa, <c>bag/kacti.txt</c> adlı bir
-            // arşiv girdisinin çözülmüş yolu <c>&lt;kök&gt;\bag\kacti.txt</c> olur — yani önek
-            // denetimini SORUNSUZ geçer. Kaçış dizgede değil DİSKTE olur: yazma kavşağı takip eder
-            // ve dosya kavşağın hedefine düşer. Ölçüm bunu birebir gösterdi: dosya sanal alanın
-            // dışına yazıldı.
-            //
-            // Bu, bu depodaki tekrarlayan hata sınıfının tam örneğidir: denetim VAR, ama
-            // denetlenen değeri (arşiv girdisinin adı) SALDIRGAN belirliyor. Panelin geri kalanında
-            // yol her zaman ResolveTargetAsync'ten geçer ve orada aynı bağlantı denetimi zaten
-            // yapılır (ResolveSandboxTarget → EnsureNoReparsePoints); arşiv girdisi o kapıya HİÇ
-            // uğramayan tek yoldur, dolayısıyla denetimi burada tekrarlamak zorunludur.
-            //
-            // Neden AĞIR: panel LocalSystem olarak koşar. Kaçan yazmayı hedefte hiçbir ACL
-            // durdurmaz — kavşağın gösterdiği yer başka kiracının sitesi, panelin kendi veri
-            // klasörü ya da <c>C:\Windows</c> olabilir. Kavşak oluşturmak Windows'ta AYRICALIK
-            // GEREKTİRMEZ (sembolik bağın aksine), yani kendi sitesinde PHP/ASP çalıştıran her
-            // kiracı bunu kurabilir.
-            //
-            // DENETİM YAZMADAN ÖNCE: klasör oluşturma da bağlantıyı takip eder, yani
-            // CreateDirectory'den SONRA bakmak kaçışın yarısını çoktan gerçekleştirmiş olurdu.
-            // ============================================================================
-            EnsureNoReparsePoints(destination.PhysicalPath, outputPath, denetlenenOnekler);
+            // Await'ler sırasında önceki temiz önek bir bağlantıyla değiştirilebilir. Her
+            // girdide, klasör/dosya yazmadan önce hedef klasör dahil bütün yolu yeniden denetle.
+            EnsureNoReparsePoints(destination.SandboxRoot, outputPath);
 
             if (string.IsNullOrEmpty(entry.Name))
             {
@@ -1352,10 +1339,22 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             entry.ExtractToFile(outputPath, overwrite: true);
         }
 
-        return await GetWorkspaceAsync(destinationPath, cancellationToken);
+        await ApproveTransferAsync(archive, destination, beforeMutation, cancellationToken);
+        return await ReadMutationWorkspaceAsync(destinationPath, beforeMutation, cancellationToken);
     }
 
-    public async Task<IReadOnlyCollection<FileEntryDto>> SearchAsync(SearchFilesRequest request, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyCollection<FileEntryDto>> SearchAsync(SearchFilesRequest request, CancellationToken cancellationToken = default) =>
+        (await SearchMeasuredAsync(request, cancellationToken)).Items;
+
+    public Task<FileSearchResultDto> SearchMeasuredAsync(SearchFilesRequest request, CancellationToken cancellationToken = default) =>
+        SearchMeasuredCoreAsync(request, null, cancellationToken);
+
+    public Task<FileSearchResultDto> SearchMeasuredAsync(SearchFilesRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeRead, CancellationToken cancellationToken) =>
+        SearchMeasuredCoreAsync(request, beforeRead ?? throw new ArgumentNullException(nameof(beforeRead)), cancellationToken);
+
+    private async Task<FileSearchResultDto> SearchMeasuredCoreAsync(SearchFilesRequest request,
+        Func<SiteDto, CancellationToken, Task>? beforeRead, CancellationToken cancellationToken)
     {
         var query = request.Query.Trim();
         if (query.Length < 2)
@@ -1366,15 +1365,18 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         var normalizedPath = NormalizeVirtualPath(request.Path);
         var target = await ResolveTargetAsync(normalizedPath, cancellationToken);
         EnsureSiteTarget(target);
+        await ApprovePublicationAsync(target, beforeRead, cancellationToken);
         if (!Directory.Exists(target.PhysicalPath))
         {
             throw new AppException("files.not_found", 404, 404);
         }
 
         var results = new List<FileEntryDto>();
+        var scannedFiles = 0;
         foreach (var path in EnumerateSafeFiles(target.PhysicalPath).Take(5000))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            scannedFiles++;
             var file = new FileInfo(path);
             var nameMatch = file.Name.Contains(query, StringComparison.OrdinalIgnoreCase);
             var contentMatch = false;
@@ -1382,8 +1384,11 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             {
                 try
                 {
-                    var content = await File.ReadAllTextAsync(path, cancellationToken);
-                    contentMatch = content.Contains(query, StringComparison.OrdinalIgnoreCase);
+                    var content = ReadSearchContent is { } read
+                        ? await read(path, cancellationToken)
+                        : await ReadSearchFileAsync(path, cancellationToken);
+                    await ApprovePublicationAsync(target, beforeRead, cancellationToken);
+                    contentMatch = content?.Contains(query, StringComparison.OrdinalIgnoreCase) == true;
                 }
                 catch (DecoderFallbackException)
                 {
@@ -1413,7 +1418,28 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             }
         }
 
-        return results;
+        await ApprovePublicationAsync(target, beforeRead, cancellationToken);
+        var reason = results.Count >= 100 ? "files.search_truncated_results"
+            : scannedFiles >= 5000 ? "files.search_truncated_files" : string.Empty;
+        return new FileSearchResultDto { Path = normalizedPath, Query = query, Items = results.ToArray(), ScannedFiles = scannedFiles,
+            Truncated = reason.Length != 0, TruncatedReasonKey = reason };
+    }
+
+    private async Task<string?> ReadSearchFileAsync(string path, CancellationToken token)
+    {
+        await using var stream = OpenSearchContent(path);
+        token.ThrowIfCancellationRequested();
+        // The path's earlier FileInfo may describe a different version. Measure and read
+        // the same opened handle, and never let a later growth turn this into an unbounded read.
+        var length = stream.Length;
+        if (length > 2 * 1024 * 1024) return null;
+        var bytes = new byte[checked((int)length)];
+        await stream.ReadExactlyAsync(bytes, token);
+        token.ThrowIfCancellationRequested();
+        using var content = new MemoryStream(bytes, writable: false);
+        using var reader = new StreamReader(content, Encoding.UTF8, detectEncodingFromByteOrderMarks: true,
+            bufferSize: 1024, leaveOpen: true);
+        return await reader.ReadToEndAsync(token);
     }
 
     /// <inheritdoc />
@@ -1428,6 +1454,11 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// </remarks>
     public Task<DirectorySizeDto> CalculateSizeAsync(string path, CancellationToken cancellationToken = default) =>
         CalculateSizeAsync(path, BoyutOgeButcesi, BoyutSureButcesiMs, cancellationToken);
+
+    public Task<DirectorySizeDto> CalculateSizeAsync(string path,
+        Func<SiteDto, CancellationToken, Task> beforeRead, CancellationToken cancellationToken) =>
+        CalculateSizeCoreAsync(path, BoyutOgeButcesi, BoyutSureButcesiMs,
+            beforeRead ?? throw new ArgumentNullException(nameof(beforeRead)), cancellationToken);
 
     /// <summary>
     /// Yukarıdakinin BÜTÇESİ DIŞARIDAN verilen hâli — tek uygulama budur.
@@ -1444,11 +1475,15 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// yüzeyde yalnız sabitlerle çağrılan biçim vardır.
     /// </para>
     /// </remarks>
-    internal async Task<DirectorySizeDto> CalculateSizeAsync(
+    internal Task<DirectorySizeDto> CalculateSizeAsync(
         string path,
         int ogeButcesi,
         int sureButcesiMs,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        CalculateSizeCoreAsync(path, ogeButcesi, sureButcesiMs, null, cancellationToken);
+
+    private async Task<DirectorySizeDto> CalculateSizeCoreAsync(string path, int ogeButcesi, int sureButcesiMs,
+        Func<SiteDto, CancellationToken, Task>? beforeRead, CancellationToken cancellationToken)
     {
         var normalizedPath = NormalizeVirtualPath(path);
 
@@ -1458,6 +1493,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         var target = await ResolveTargetAsync(normalizedPath, cancellationToken);
         EnsureSiteTarget(target);
         EnsureInsideSandbox(target);
+        await ApprovePublicationAsync(target, beforeRead, cancellationToken);
 
         // SİTE KÖKÜ BİLEREK YASAKLANMADI (EnsureNotSiteRoot çağrılmaz): "sitem ne kadar yer
         // kaplıyor" bu ucun en sık sorulacak sorusudur. Kök koruması, kökü DEĞİŞTİREN/silen
@@ -1478,6 +1514,9 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             target.PhysicalPath,
             new SafeDirectoryWalkBudget(ogeButcesi, sureButcesiMs),
             cancellationToken);
+
+        if (SizeWalkCompleted is not null) await SizeWalkCompleted(cancellationToken);
+        await ApprovePublicationAsync(target, beforeRead, cancellationToken);
 
         return new DirectorySizeDto
         {
@@ -1751,19 +1790,9 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// <summary>
     /// Kökten hedefe giden yolun HİÇBİR parçasının bağlantı (junction/symlink) olmadığını doğrular.
     /// </summary>
-    /// <param name="denetlenenOnekler">
-    /// Verilirse, "temiz" çıkan her ara yol buraya yazılır ve bir daha sorulmaz.
-    /// <para>
-    /// <b>Neden var:</b> arşiv çıkarma bu denetimi GİRDİ BAŞINA çağırır ve bir arşivde aynı klasör
-    /// öneki binlerce girdide tekrarlanır. Önbelleksiz hâl, meşru bir paketin açılmasına önek
-    /// parçası başına üç dosya sistemi sorgusu eklerdi. <c>null</c> ise (tek yol çözümleyen bütün
-    /// çağrılar) davranış birebir eskisidir.
-    /// </para>
-    /// </param>
     private static void EnsureNoReparsePoints(
         string sandboxRoot,
-        string fullPath,
-        HashSet<string>? denetlenenOnekler = null)
+        string fullPath)
     {
         var relativePath = Path.GetRelativePath(sandboxRoot, fullPath);
         var currentPath = sandboxRoot;
@@ -1772,11 +1801,6 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                      StringSplitOptions.RemoveEmptyEntries))
         {
             currentPath = Path.Combine(currentPath, segment);
-            if (denetlenenOnekler is not null && !denetlenenOnekler.Add(currentPath))
-            {
-                continue;
-            }
-
             if ((File.Exists(currentPath) || Directory.Exists(currentPath)) &&
                 File.GetAttributes(currentPath).HasFlag(FileAttributes.ReparsePoint))
             {

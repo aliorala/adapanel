@@ -287,5 +287,7 @@
   "files.content_too_large": "The file exceeds the 1 MB editing limit, so its contents were not loaded. You can download the original file.",
   "files.content_not_editable": "The file contains binary data or its text encoding could not be verified. Editing is disabled to preserve its contents; you can download the original file.",
   "files.acl_unverified": "Completion of the permission change on every target could not be verified.",
-  "ftp.user_status_unknown": "The Windows FTP account status could not be verified. The operation did not complete; try again."
+  "ftp.user_status_unknown": "The Windows FTP account status could not be verified. The operation did not complete; try again.",
+  "files.search_truncated_files": "The scan reached its 5,000-file limit. The search may be incomplete; search within a narrower folder.",
+  "files.search_truncated_results": "The search reached its 100-result limit. More matches may exist; narrow your query or folder."
 }

@@ -88,11 +88,9 @@ public static class PanelTokenCapabilities
             throw new AppException("auth.forbidden", 403, 403, TerminalReason);
         }
 
-        // Password-bearing selected ZIP download is a read. Do not exempt its prefix,
-        // other HTTP methods, restore-items, or any neighboring backup operation.
-        var selectedDownload = string.Equals(httpMethod, "POST", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(path?.TrimEnd('/'), "/api/v1/backup/download-items", StringComparison.OrdinalIgnoreCase);
-        if (PanelAuthentication.IsStateChanging(httpMethod) && !selectedDownload && !AllowsDestructive(user))
+        // Inspection/download bodies do not require destructive capability. Neighboring
+        // mutations and every other non-read method retain their existing restriction.
+        if (PanelAuthentication.IsStateChanging(httpMethod) && !ReadOnlyPostRoutes.IsMatch(httpMethod, path) && !AllowsDestructive(user))
         {
             throw new AppException("auth.forbidden", 403, 403, ReadOnlyReason);
         }

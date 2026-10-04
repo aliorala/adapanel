@@ -163,3 +163,38 @@ it("also bounds CSRF response-body reads and does not cache their late tokens", 
     expect(adapter.mock.calls.map(([config]) => config.headers.get("X-CSRF-TOKEN"))).toEqual(["fresh-token", "fresh-token"]);
   } finally { finishBody({ data: { requestToken: "late-body-token" } }); await waiting; }
 });
+
+describe("suspended file inspection", () => {
+  it.each(["/files/search", "/files/size"])("permits only the exact POST read %s with a CSRF token", async url => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(csrfResponse("read-token")));
+    const adapter = recordingAdapter(); setReadOnlyMode("subscription.suspended_readonly");
+    await apiClient.post(url, { path: "sites/a.test", query: "index" });
+    expect(adapter).toHaveBeenCalledOnce();
+    expect(adapter.mock.calls[0][0].url).toBe(url);
+    expect(adapter.mock.calls[0][0].headers.get("X-CSRF-TOKEN")).toBe("read-token");
+  });
+  it.each([
+    ["put", "/files/search"], ["delete", "/files/size"], ["patch", "/files/search"],
+    ["post", "/prefix/files/search"], ["post", "/files/search/extra"], ["post", "/files/size-extra"],
+    ["post", "/files/extract"], ["post", "/files/mkdir"], ["post", "/files/acl"]
+  ])("continues rejecting %s %s before CSRF or network dispatch", async (method, url) => {
+    const fetcher = vi.fn().mockResolvedValue(csrfResponse("never-used")); vi.stubGlobal("fetch", fetcher);
+    const adapter = recordingAdapter(); setReadOnlyMode("subscription.suspended_readonly");
+    await expect(apiClient.request({ method, url, data: {} })).rejects.toMatchObject({ response: { status: 403 } });
+    expect(adapter).not.toHaveBeenCalled(); expect(fetcher).not.toHaveBeenCalled();
+  });
+  it.each(["/files/search", "/files/size"])("still cancels an old session's %s while it waits for CSRF", async url => {
+    const token = pendingCsrf(), fetcher = vi.fn().mockReturnValue(token.promise); vi.stubGlobal("fetch", fetcher);
+    const adapter = recordingAdapter();
+    const pending = apiClient.post(url, { path: "sites/a.test" }).catch(error => error);
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+    invalidateSessionRequests(); setReadOnlyMode("subscription.suspended_readonly"); token.resolve(csrfResponse("obsolete"));
+    expect(axios.isCancel(await pending)).toBe(true); expect(adapter).not.toHaveBeenCalled();
+  });
+  it("does not let the allowed file read bypass CSRF failure", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response("invalid token", { status: 503 })); vi.stubGlobal("fetch", fetcher);
+    const adapter = recordingAdapter(); setReadOnlyMode("subscription.suspended_readonly");
+    await expect(apiClient.post("/files/search", { path: "sites/a.test", query: "index" })).rejects.toMatchObject({ response: { status: 503 } });
+    expect(fetcher).toHaveBeenCalledOnce(); expect(adapter).not.toHaveBeenCalled();
+  });
+});

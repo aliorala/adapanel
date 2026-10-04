@@ -5562,5 +5562,21 @@
   "panel.files.permissionsUnverified": "İzin komutu çalıştı, ancak tüm hedeflerde tamamlandığı doğrulanamadı. Erişimi kontrol edin.",
   "files.acl_unverified": "İzin değişikliğinin tüm hedeflerde tamamlandığı doğrulanamadı.",
   "ftp.user_status_unknown": "Windows FTP hesabının durumu doğrulanamadı. İşlem tamamlanmadı; yeniden deneyin.",
-  "panel.files.createTarget": "Oluşturulacağı klasör: {path}"
+  "panel.files.createTarget": "Oluşturulacağı klasör: {path}",
+  "panel.files.searchScope": "Kapsam: {path} ve alt klasörleri.",
+  "panel.files.searchMinimum": "En az 2 karakter yazın.",
+  "panel.files.searchResultsTitle": "Arama sonuçları",
+  "panel.files.searchResultsFor": "“{query}” için sonuçlar",
+  "panel.files.searchResultCount": "{count} sonuç gösteriliyor",
+  "panel.files.searchScanned": "Taranan dosya: {count}",
+  "panel.files.searchClear": "Aramayı temizle",
+  "panel.files.searchWorking": "Dosyalar aranıyor…",
+  "panel.files.searchFolderList": "Klasör içeriği",
+  "panel.files.recalculateSize": "Yeniden hesapla",
+  "panel.files.partialSizeDetails": "Eksik sayımın nedeni",
+  "panel.files.extractConfirmTitle": "ZIP arşivi açılsın mı?",
+  "panel.files.extractConfirmMessage": "“{name}” arşivi şu klasöre açılacak: {path}. Aynı adlı mevcut dosyaların üzerine yazılır. Devam etmeden önce gerekli yedekleri aldığınızdan emin olun.",
+  "panel.files.extractConfirmAction": "Arşivi aç",
+  "files.search_truncated_files": "5.000 dosyalık tarama sınırına ulaşıldı. Arama tamamlanmamış olabilir; daha dar bir klasörde yeniden arayın.",
+  "files.search_truncated_results": "100 sonuç sınırına ulaşıldı. Başka eşleşmeler olabilir; arama ifadesini veya klasörü daraltın."
 }

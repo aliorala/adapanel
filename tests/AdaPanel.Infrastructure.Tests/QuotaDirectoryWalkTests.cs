@@ -353,7 +353,7 @@ public sealed class QuotaDirectoryWalkTests : IDisposable
         var kapsamServisi = KaynakOku("src", "AdaPanel.Infrastructure", "Security", "CustomerScopeService.cs");
         var ortakYuruyus = KaynakOku("src", "AdaPanel.Infrastructure", "Files", "SafeDirectoryWalk.cs");
 
-        var boyutHesabi = GovdeAl(dosyaServisi, "internal async Task<DirectorySizeDto> CalculateSizeAsync(");
+        var boyutHesabi = GovdeAl(dosyaServisi, "private async Task<DirectorySizeDto> CalculateSizeCoreAsync(");
         var kotaHesabi = GovdeAl(kapsamServisi, "internal async Task<DiskUsage> GetDiskUsageMbAsync(");
 
         // 1) İKİSİ DE ortak yürüyüşü çağırır.

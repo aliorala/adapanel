@@ -97,14 +97,16 @@ public sealed class TerminalExecutionTests
     [Fact]
     public async Task Timeout_covers_inherited_output_pipes_after_parent_exits()
     {
-        var root = Path.Combine(Path.GetTempPath(), "adapanel-terminal-" + Guid.NewGuid().ToString("N"));
+        var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "adapanel-terminal-" + Guid.NewGuid().ToString("N")));
         Directory.CreateDirectory(root);
         var pidFile = Path.Combine(root, "child.pid");
         Task<AdaPanel.Core.Dtos.Terminal.TerminalCommandResultDto>? operation = null;
         try
         {
             var service = new TerminalService(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = root }));
-            var command = "$si=[System.Diagnostics.ProcessStartInfo]::new('cmd.exe','/c ping -n 60 127.0.0.1'); " +
+            // Record the actual pipe-owning child. Waiting for a killed CMD wrapper would
+            // not wait for its PING descendant to release the inherited working directory.
+            var command = "$si=[System.Diagnostics.ProcessStartInfo]::new('ping.exe','-n 60 127.0.0.1'); " +
                 "$si.UseShellExecute=$false; $si.CreateNoWindow=$true; " +
                 "$p=[System.Diagnostics.Process]::Start($si); [IO.File]::WriteAllText('" + pidFile.Replace("'", "''") + "',$p.Id); " +
                 "[Console]::WriteLine('PARENT-COMPLETED')";
@@ -136,6 +138,10 @@ public sealed class TerminalExecutionTests
             {
                 try { await operation.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
             }
+            var tempRoot = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar);
+            if (!string.Equals(Path.GetDirectoryName(root), tempRoot, StringComparison.OrdinalIgnoreCase) ||
+                !Path.GetFileName(root).StartsWith("adapanel-terminal-", StringComparison.Ordinal))
+                throw new InvalidOperationException("Terminal fixture cleanup is outside its owned temporary root.");
             Directory.Delete(root, recursive: true);
         }
     }

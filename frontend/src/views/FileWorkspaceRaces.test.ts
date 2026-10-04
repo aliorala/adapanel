@@ -106,12 +106,15 @@ it.each(["compress", "extract"] as const)("ignores %s results after navigating t
 });
 
 it("keeps the newest search when responses arrive in reverse order", async () => {
-  const first = deferred<never[]>();
-  vi.mocked(searchFiles).mockReturnValueOnce(first.promise).mockResolvedValueOnce([{ name: "new" }] as never);
+  const result = (name: string): Awaited<ReturnType<typeof searchFiles>> => ({ path: "sites/a.test", query: name,
+    items: [{ name, path: `sites/a.test/${name}`, isDirectory: false, size: 1, extension: "", lastModifiedUtc: null }],
+    scannedFiles: 1, truncated: false, truncatedReasonKey: "" });
+  const first = deferred<Awaited<ReturnType<typeof searchFiles>>>();
+  vi.mocked(searchFiles).mockReturnValueOnce(first.promise).mockResolvedValueOnce(result("new"));
   const state = await mount<FilesState>(FilesView);
   state.searchQuery = "old"; const pending = state.runSearch();
   state.searchQuery = "new"; await state.runSearch();
-  first.resolve([{ name: "old" }] as never); await pending;
+  first.resolve(result("old")); await pending;
   expect(state.searchResults.map(item => item.name)).toEqual(["new"]);
 });
 

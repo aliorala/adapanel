@@ -144,8 +144,11 @@ export function readSecureEntryPath(): string {
  *
  * İSTİSNA — `/auth/*`: sunucu da bu yolları askıya takmıyor. Aksi hâlde askıdaki kullanıcı
  * çıkış yapamaz, parolasını değiştiremez, iki adımlı doğrulamasını yönetemez görünürdü.
+ * Seçili yedeği indirme, dosya arama ve boyut ölçümü de yalnız açıkça listelenen POST
+ * yollarında salt okumadır. Bu istisnalar CSRF ve oturum kontrollerini atlamaz.
  */
 const MUTATING_METHODS = ["POST", "PUT", "PATCH", "DELETE"];
+const READ_ONLY_POST_PATHS = new Set(["/backup/download-items", "/files/search", "/files/size"]);
 let readOnlyMessageKey = "";
 
 /** Salt okunur modu açar (mesaj anahtarıyla) ya da boş dizgiyle kapatır. Tek çağıran: abonelik store'u. */
@@ -210,7 +213,7 @@ apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) =>
 
   const method = (config.method ?? "get").toUpperCase();
   if (MUTATING_METHODS.includes(method)) {
-    const readOnlyAllowed = isAuthPath(config.url) || (method === "POST" && config.url === "/backup/download-items");
+    const readOnlyAllowed = isAuthPath(config.url) || (method === "POST" && READ_ONLY_POST_PATHS.has(config.url ?? ""));
     if (isReadOnlyMode() && !readOnlyAllowed) {
       throw readOnlyRejection(config);
     }

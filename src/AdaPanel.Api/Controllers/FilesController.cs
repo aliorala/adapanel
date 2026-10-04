@@ -330,15 +330,13 @@ public sealed class FilesController(
     [HttpPost("extract")]
     public async Task<ActionResult<ApiResponse<FileWorkspaceDto>>> ExtractAsync([FromBody] ArchiveFileRequest request, CancellationToken cancellationToken)
     {
-        await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.Path, allowRoot: false, cancellationToken);
-        if (!string.IsNullOrWhiteSpace(request.DestinationPath))
-        {
-            await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.DestinationPath, allowRoot: false, cancellationToken);
-        }
+        request = new ArchiveFileRequest { Path = request.Path, DestinationPath = request.DestinationPath };
+        using var publication = await CapturePublicationAsync(string.IsNullOrWhiteSpace(request.DestinationPath)
+            ? [request.Path] : [request.Path, request.DestinationPath], cancellationToken);
 
         // Tavan ÖLÇÜMDEN de önce alınır: kota ölçümü arşivin girdi listesini gezer, yani kendisi
         // de ağır bir iştir.
-        using var kapsam = await AgirIseGirisAsync(cancellationToken);
+        using var kapsam = await AgirIseGirisAsync(cancellationToken, publication.Principal);
 
         // KOTA: arşiv açmak, sıkıştırılmış boyutun KATLARI kadar yer açabilir — kotanın en sessiz
         // deliniş yolu buydu. Ölçüm arşivin AÇILMIŞ boyutu üzerinden yapılır (bkz.
@@ -346,9 +344,10 @@ public sealed class FilesController(
         await EnsureDiskQuotaAsync(
             string.IsNullOrWhiteSpace(request.DestinationPath) ? request.Path : request.DestinationPath,
             async ct => (await fileService.MeasureArchiveContentBytesAsync(request.Path, ct), string.Empty),
-            cancellationToken);
+            cancellationToken, publication.Principal);
 
-        var workspace = await fileService.ExtractAsync(request, cancellationToken);
+        var workspace = await fileService.ExtractAsync(request, publication.ApproveAsync, cancellationToken);
+        await publication.RevalidateAsync(cancellationToken);
 
         // Çıkarma, arşivin içeriğiyle var olan dosyaların ÜZERİNE yazabilir; yani içerik kaybının
         // sessiz yollarından biridir. Hedef de kayda geçer.
@@ -358,21 +357,24 @@ public sealed class FilesController(
             $"Extracted to '{(string.IsNullOrWhiteSpace(request.DestinationPath) ? "(default)" : request.DestinationPath)}'.",
             cancellationToken);
 
-        return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace, "files.extracted"));
+        await publication.RevalidateAsync(cancellationToken);
+        return Ok(ApiResponse<FileWorkspaceDto>.Ok(ProjectWorkspace(workspace, publication.Principal), "files.extracted"));
     }
 
     [HttpPost("search")]
-    public async Task<ActionResult<ApiResponse<IReadOnlyCollection<FileEntryDto>>>> SearchAsync([FromBody] SearchFilesRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<FileSearchResultDto>>> SearchAsync([FromBody] SearchFilesRequest request, CancellationToken cancellationToken)
     {
-        await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.Path, allowRoot: false, cancellationToken);
+        request = new SearchFilesRequest { Path = request.Path, Query = request.Query };
+        using var read = await CaptureFileUseAsync([request.Path], readOnly: true, cancellationToken, allowVirtualRoot: false);
 
         // ARAMA DA AĞIR İŞ AİLESİNDEDİR ve bu ölçülerek eklendi: uç 5.000 dosyaya kadar geziyor ve
         // her uygun dosyanın 2 MB'a kadarını İÇERİK OLARAK okuyor. Ailenin dışında bırakmak, tam
         // da bu depoda tekrarlayan hatayı yapmak olurdu — koruma bir uca gömülür, kardeş uç
         // korumasız kalır.
-        using var kapsam = await AgirIseGirisAsync(cancellationToken);
-        var results = await fileService.SearchAsync(request, cancellationToken);
-        return Ok(ApiResponse<IReadOnlyCollection<FileEntryDto>>.Ok(results));
+        using var kapsam = await AgirIseGirisAsync(cancellationToken, read.Principal);
+        var results = await fileService.SearchMeasuredAsync(request, read.ApproveAsync, cancellationToken);
+        await read.RevalidateAsync(cancellationToken);
+        return Ok(ApiResponse<FileSearchResultDto>.Ok(results));
     }
 
     /// <summary>
@@ -396,13 +398,15 @@ public sealed class FilesController(
     [HttpPost("size")]
     public async Task<ActionResult<ApiResponse<DirectorySizeDto>>> CalculateSizeAsync([FromBody] DirectorySizeRequest request, CancellationToken cancellationToken)
     {
-        await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.Path, allowRoot: false, cancellationToken);
+        request = new DirectorySizeRequest { Path = request.Path };
+        using var read = await CaptureFileUseAsync([request.Path], readOnly: true, cancellationToken, allowVirtualRoot: false);
 
         // BU UÇ EN UCUZ SALDIRI YOLUYDU: hız sınırı yok, gövdesi bir satır, ve her çağrı tam
         // hızda 15 saniyeye kadar ağaç yürüyüşü başlatıyor. Tek isteğin bütçesi vardı, istek
         // SAYISININ bütçesi yoktu.
-        using var kapsam = await AgirIseGirisAsync(cancellationToken);
-        var result = await fileService.CalculateSizeAsync(request.Path, cancellationToken);
+        using var kapsam = await AgirIseGirisAsync(cancellationToken, read.Principal);
+        var result = await fileService.CalculateSizeAsync(request.Path, read.ApproveAsync, cancellationToken);
+        await read.RevalidateAsync(cancellationToken);
         return Ok(ApiResponse<DirectorySizeDto>.Ok(result));
     }
 
@@ -424,11 +428,12 @@ public sealed class FilesController(
     /// kotasız bırakmak gibi SINIRSIZ bırakmak, korumayı en yetkili hesapta kaldırmak olurdu.
     /// </para>
     /// </remarks>
-    private async Task<IDisposable> AgirIseGirisAsync(CancellationToken cancellationToken)
+    private async Task<IDisposable> AgirIseGirisAsync(CancellationToken cancellationToken, ClaimsPrincipal? acceptedPrincipal = null)
     {
-        var sahip = CustomerAccess.IsCustomer(User)
-            ? await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken)
-            : User.GetRequiredUserId();
+        var principal = acceptedPrincipal ?? User;
+        var sahip = CustomerAccess.IsCustomer(principal)
+            ? await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, principal, cancellationToken)
+            : principal.GetRequiredUserId();
 
         return agirIsKapisi.Enter($"{AgirIsAilesi}:{sahip:N}", AgirIsSiniri, "files.too_many_operations");
     }
@@ -462,14 +467,15 @@ public sealed class FilesController(
     private async Task EnsureDiskQuotaAsync(
         string? scopePath,
         Func<CancellationToken, Task<(long Bayt, string KesilmeSebebi)>> olcum,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, ClaimsPrincipal? acceptedPrincipal = null)
     {
+        var principal = acceptedPrincipal ?? User;
         Guid? quotaOwner = null;
-        if (CustomerAccess.IsCustomer(User))
+        if (CustomerAccess.IsCustomer(principal))
         {
-            quotaOwner = await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken);
+            quotaOwner = await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, principal, cancellationToken);
         }
-        else if (CustomerAccess.IsReseller(User))
+        else if (CustomerAccess.IsReseller(principal))
         {
             quotaOwner = await ResolveSiteOwnerAsync(scopePath, cancellationToken);
         }
@@ -502,7 +508,7 @@ public sealed class FilesController(
     private Task<PublicationUse> CapturePublicationAsync(string[] paths, CancellationToken token) =>
         CaptureFileUseAsync(paths, readOnly: false, token);
 
-    private async Task<PublicationUse> CaptureFileUseAsync(string[] paths, bool readOnly, CancellationToken token)
+    private async Task<PublicationUse> CaptureFileUseAsync(string[] paths, bool readOnly, CancellationToken token, bool allowVirtualRoot = true)
     {
         var principal = new ClaimsPrincipal(User.Identities.Select(identity => new ClaimsIdentity(identity)));
         var services = HttpContext.RequestServices;
@@ -517,7 +523,7 @@ public sealed class FilesController(
             var names = paths.Select(path => (path ?? string.Empty).Replace('\\', '/')
                     .Split('/', StringSplitOptions.RemoveEmptyEntries))
                 .Select(segments => segments.Length >= 2 && string.Equals(segments[0], "sites", StringComparison.OrdinalIgnoreCase)
-                    ? segments[1] : readOnly && (segments.Length == 0 || segments.Length == 1 && string.Equals(segments[0], "sites", StringComparison.OrdinalIgnoreCase))
+                    ? segments[1] : readOnly && allowVirtualRoot && (segments.Length == 0 || segments.Length == 1 && string.Equals(segments[0], "sites", StringComparison.OrdinalIgnoreCase))
                         ? null : throw new AdaPanel.Core.Common.AppException(
                             readOnly && CustomerAccess.IsScoped(principal) ? "auth.site_forbidden" : "files.site_required",
                             readOnly && CustomerAccess.IsScoped(principal) ? 403 : 400,
@@ -533,7 +539,7 @@ public sealed class FilesController(
             {
                 await actor.RevalidateAsync(db, customerScopes, sessions, principal, currentToken);
                 foreach (var path in paths)
-                    await CustomerAccess.EnsureFilesPathAsync(customerScopes, principal, path, allowRoot: readOnly, currentToken);
+                    await CustomerAccess.EnsureFilesPathAsync(customerScopes, principal, path, allowRoot: readOnly && allowVirtualRoot, currentToken);
                 currentToken.ThrowIfCancellationRequested();
             }
             use = new PublicationUse(targets, Revalidate, principal);
