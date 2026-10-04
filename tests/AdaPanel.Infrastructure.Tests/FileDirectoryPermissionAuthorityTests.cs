@@ -265,8 +265,9 @@ public sealed class FileDirectoryPermissionAuthorityTests
         var response = await f.Run();
         Assert.True(response.Data!.PermissionsVerified);
         Assert.NotEmpty(response.Data.PermissionsDetail);
-        // Official icacls /L semantics: operate on symbolic links, not their destinations.
-        Assert.EndsWith(" /T /C /L", Assert.Single(f.Commands));
+        // Ordinary entries are measured first and processed without native recursion.
+        Assert.EndsWith(" /C /L", Assert.Single(f.Commands));
+        Assert.DoesNotContain(" /T ", Assert.Single(f.Commands));
         var read = await f.Files.GetWorkspaceAsync(f.RequestedPath, f.Token);
         Assert.Null(read.PermissionsVerified);
         Assert.Empty(read.PermissionsDetail);

@@ -1,5 +1,41 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R44 doğrulandı; 0.8.86 paket/yayın hazırlanıyor
+
+Kaynak sürüm0.8.86, publiclatest13:00kontrolü0.8.85, .86tagyok. Henüz .86 yayımlanmadı.
+R43+R44 birlikte periyodik installer+notes yayını yetkili; canlıkurulum/sourcepush yok.
+Chrome açıksekmeenvanterinde AdaPanel yok; canlısürümölçülmedi, URL sorusunu tekrarlama.
+
+R44 Files ACL /T/C/L descendantjunction dışhedef dosyalarını değiştiriyordu: actualnative
+ilk14'te7RED7green. İlk sandboxfixtureACL erişimreddi kanıtdeğil; elevated gerçekölçüm esas.
+FileService önce bounded ordinaryplan50k/5sn, sonra öğebaşı authority+CT+ancestor/typecheck,
+native /C/L noT/noinheritance değişikliği. Linkedexecution2dk, timeout503; partialeffectsrollbackyok.
+Sanitized toplammeasurement true/null, skippedlinkcount; effectiveWindowsaccess garantisi değil.
+Yeni native30 R/RX/W/M/F direct/nestedjunction+normal+budget/cancel/revoke/partial/nativeerror.
+Outside dörtDACL protected/unprotected korunur; nativecurrentSID ownedtemp/IIS+SAMfake.
+Native503cmd/500extrafiles12332ms; büyük ağaçta2dk partial503 olabilir. Yeni nativewriteoptimizasyon yok.
+İlkrelated131/131; sonnative30+old54=84/84. Deadlinefixture1sn/outer10sn; globalownedfixture90sn.
+
+FE yeni18tests: ilk16RED, sonraki notice ek3RED15green; related13files268/268.
+permissionOperation acceptedpath/principal/rights/isDirectory persistentcard; busy/true/null/error,
+details yalnız kapalıteknikalanda; neutralGET preserved (errorolsadakartgörünür), newmutationdispatch
+eskiresult+noticeclear, canceledprompt/confirmkorur; path/site/session/epoch/unmount invalidate.
+TR/EN7newkeys+scope/targetmetni. RootChrome realVue/fakeHTTP TR390darkdoc380/card300,
+EN320lightdoc310/card230, desktop1440doc1430/card1120; yataytaşmayok, appconsoleerror0(extensionhariç).
+Success→GETfailure POST1sabit GET4→5; statebaşarı/unverified/error görüldü. Screenshots
+.tmp/audit-20261004/round44-permission-result-{tr390,en320-light,desktop}.png.
+Preview57135terminal/Tab44closed/viewportreset/__audit44deleted. Finalimage D:/path, /D:/ değil.
+
+FinalFE115files2240/2240/types/VitePASS; wwwroot152filesallSHAequal6indexassets;TR/EN5614equal.
+Releasebuild32710exit0,0warn0err. Broad73280TERMINALexit0: Core2+Infra9046=9048/9048fail0skip0,
+realSAM2 excluded --filter FullyQualifiedName!~FtpCreateRollbackTests. TRX round44-final_net8.0_
+20261004125933.trx ve130322.trx. Tüm C# writersfrozen; rootalone.NET -m:1/nodeReuse:false.
+Freshcomponents18686exit0,22Passed3standardlargeSkipped0Failed (PS7TLSfail→nativePS5validcerts).
+Package audit duplicate skip kullanılabilir; .tools/inno/ISCC.exe mevcut. Release parser+privacy12/12,
+actualnotesprivacy0findings. verify-release086.ps1 hazır, yalnızpublisherdownloadverifyexit0sonrasıçalıştır.
+Doküman docs/audit-2026-10-04.md:R44 güncel. TestResults/ eskiuntrackedkorunur,commitdışı.
+GoalACTIVE bitmişişaretleme. Bu batchkaynaklarıcommit/paket/yayın henüzbekliyor.
+
 ## 2026-10-04 — R43 doğrulandı (henüz yayımlanmadı)
 
 Kaynak/public sürüm0.8.85. Public latest kimliksiz GitHub API ile tekrar .85 doğrulandı;

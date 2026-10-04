@@ -471,6 +471,32 @@
         <button type="submit" class="secondary compact" v-bind="writeGate(!canSetPermissions || !permissionPrincipal.trim())">{{ permissionsBusy ? t("panel.confirm.working") : t("panel.files.permissions") }}</button>
       </form>
       </section>
+        <section v-if="permissionOperation" :class="['permission-result', `is-${permissionOperation.status}`]" aria-labelledby="permission-result-title" :aria-busy="permissionOperation.status === 'running'">
+          <div class="permission-result-head">
+            <h4 id="permission-result-title" role="status">{{ t(permissionOperation.status === 'running' ? 'panel.files.permissionsApplying'
+              : permissionOperation.status === 'succeeded' ? 'panel.files.permissionsSaved'
+              : permissionOperation.status === 'unverified' ? 'panel.files.permissionsResultUnverifiedTitle' : 'panel.files.permissionsFailedTitle') }}</h4>
+            <button v-if="permissionOperation.status !== 'running'" class="secondary compact" :aria-label="t('panel.files.permissionsDismissResult')" @click="dismissPermissionOperation">×</button>
+          </div>
+          <dl class="permission-result-target">
+            <div class="permission-result-path"><dt>{{ t('panel.files.permissionsTarget') }}</dt><dd>{{ permissionOperation.path }}</dd></div>
+            <div><dt>{{ t('panel.security.principal') }}</dt><dd>{{ permissionOperation.principal }}</dd></div>
+            <div><dt>{{ t('panel.security.rights') }}</dt><dd>{{ permissionOperation.rights === 'R' ? t('panel.security.rights.read')
+              : permissionOperation.rights === 'M' ? t('panel.security.rights.modify')
+              : permissionOperation.rights === 'F' ? t('panel.security.rights.full') : permissionOperation.rights }}</dd></div>
+          </dl>
+          <p v-if="permissionOperation.status === 'running'" class="permission-result-hint">{{ t('panel.files.permissionsPendingHint') }}</p>
+          <p v-else-if="permissionOperation.status === 'succeeded'" class="permission-result-hint">{{ t('panel.files.permissionsResultHint') }}</p>
+          <p v-else-if="permissionOperation.status === 'unverified'" class="permission-result-warning" role="alert">{{ t('panel.files.permissionsUnverified') }}</p>
+          <template v-else>
+            <p class="permission-result-error" role="alert">{{ permissionOperation.error }}</p>
+            <p class="permission-result-hint">{{ t('panel.files.permissionsPartialHint') }}</p>
+          </template>
+          <details v-if="permissionOperation.detail" class="permission-result-details">
+            <summary>{{ t('panel.common.technicalDetails') }}</summary>
+            <pre>{{ permissionOperation.detail }}</pre>
+          </details>
+        </section>
     </section>
 
     <section v-else class="form-surface workspace-card">
@@ -582,7 +608,7 @@ import { useBackupRestore, restoreResult } from "../composables/useBackupRestore
 import BackupRestoreResult from "../components/BackupRestoreResult.vue";
 import { UserFacingError } from "../utils/apiError";
 import { useNavigationGuard, allowNavigation } from "../composables/navigationGuard";
-import { useAuthStore } from "../stores/auth";
+import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import router from "../router";
 import { useSitesStore } from "../stores/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
@@ -658,8 +684,23 @@ function archiveOutput(workspace: FileWorkspace, source: string) {
   const entry = workspace.entries.find(item => !item.isDirectory && filePathKey(item.path) === expected);
   return entry ? { path: entry.path, name: entry.name, size: entry.size } : null;
 }
+type PermissionOperation = {
+  status: 'running' | 'succeeded' | 'unverified' | 'failed';
+  path: string;
+  principal: string;
+  rights: string;
+  isDirectory: boolean;
+  error: string;
+  detail: string;
+};
+const permissionState = ref<PermissionOperation | null>(null);
+let permissionContext: (() => boolean) | null = null;
+const permissionOperation = computed(() => permissionState.value && permissionContext?.() ? permissionState.value : null);
 watch(() => [authStore.session, authStore.session?.user?.id, authStore.session?.user?.role], () => {
-  if (!isFileViewActive()) archiveState.value = null;
+  if (!isFileViewActive()) {
+    archiveState.value = null;
+    permissionState.value = null;
+  }
 }, { flush: "sync" });
 let searchRequest = 0;
 function currentFileContext(trackRead = true) {
@@ -688,7 +729,7 @@ function beforeUnload(event: BeforeUnloadEvent) {
   if (isDirty.value || saving.value) { event.preventDefault(); event.returnValue = ""; }
 }
 onMounted(() => window.addEventListener("beforeunload", beforeUnload));
-onBeforeUnmount(() => { disposed = true; archiveState.value = null; workspaceRequest++; window.removeEventListener("beforeunload", beforeUnload); });
+onBeforeUnmount(() => { disposed = true; archiveState.value = null; permissionState.value = null; workspaceRequest++; window.removeEventListener("beforeunload", beforeUnload); });
 async function changeSite(event: Event) {
   if (!isFileViewActive()) return;
   const isCurrent = currentFileContext(false);
@@ -902,6 +943,7 @@ watch(selectedSiteName, async (siteName, previousSiteName) => {
   fileNavigationGeneration++;
   requestedWorkspacePath = "";
   archiveState.value = null;
+  permissionState.value = null;
   workspace.value = null;
   searchResults.value = [];
   searchRan.value = false;
@@ -927,6 +969,7 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
 
   if (path !== requestedWorkspacePath) {
     archiveState.value = null;
+    permissionState.value = null;
     requestedWorkspacePath = path;
     fileNavigationGeneration++;
   }
@@ -1042,7 +1085,7 @@ async function uploadMany(files: File[], folders: string[]) {
     for (const file of files) {
       if (!isCurrent() || locked.value) return;
       try {
-        dismissArchiveOperation();
+        dismissFileOperationResults();
         await uploadFile(hedef, file);
         if (!isCurrent()) return;
         uploadDone.value += 1;
@@ -1306,6 +1349,7 @@ async function runArchive(path: string, extracting: boolean) {
       }
     }
     archiveState.value!.status = "running";
+    dismissPermissionOperation();
     clearNotice();
     const result = await (extracting ? extractPath(path) : compressPath(path, "", collision));
     if (!isCurrent()) return;
@@ -1359,19 +1403,41 @@ function dismissArchiveOperation() {
   if (archiveOperation.value?.status === "succeeded" || archiveOperation.value?.status === "failed") archiveState.value = null;
 }
 
+function dismissPermissionOperation() {
+  if (permissionOperation.value && permissionOperation.value.status !== 'running') permissionState.value = null;
+}
+
+function dismissFileOperationResults() {
+  dismissArchiveOperation();
+  dismissPermissionOperation();
+  // Called only at dispatch: cancelling a prompt keeps the previous outcome visible.
+  clearNotice();
+}
+
 async function savePermissions() {
   if (!canSetPermissions.value || !workspace.value) return;
   const isCurrent = currentFileContext(false);
   const path = workspace.value.path, principal = permissionPrincipal.value, rights = permissionRights.value;
   permissionsBusy.value = true;
+  dismissFileOperationResults();
+  permissionContext = isCurrent;
+  permissionState.value = { status: 'running', path, principal, rights, isDirectory: workspace.value.isDirectory, error: '', detail: '' };
+  const operation = permissionState.value;
   try {
-    dismissArchiveOperation();
     const result = await updatePermissions(path, principal, rights);
     if (!isCurrent()) return;
+    // The server measures native command processing, not effective access for this account.
+    operation.status = result.permissionsVerified === true ? 'succeeded' : 'unverified';
+    operation.detail = result.permissionsDetail;
     if (result.permissionsVerified === true) showNotice(t("panel.files.permissionsSaved"), false);
-    else showNotice([t("panel.files.permissionsUnverified"), result.permissionsDetail].filter(Boolean).join("\n\n"), true);
+    else showNotice(t("panel.files.permissionsUnverified"), true);
   } catch (error) {
-    if (isCurrent()) showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) {
+      operation.status = 'failed';
+      operation.error = t(extractApiMessage(error));
+      operation.detail = extractApiDetails(error);
+      showNotice(operation.error, true);
+    }
   } finally { permissionsBusy.value = false; }
 }
 
@@ -1397,7 +1463,7 @@ async function createFolder() {
     });
     if (!folderName?.trim() || !isCurrent() || locked.value || workspaceLoad.message.value) return;
     const basePath = `${parentPath}/${folderName.trim()}`;
-    dismissArchiveOperation();
+    dismissFileOperationResults();
     await createDirectory(basePath);
     if (!isCurrent()) return;
     const refreshed = await refreshAfterFileOperation(parentPath, isCurrent);
@@ -1442,7 +1508,7 @@ async function createNewFile() {
     }
 
     const basePath = `${parentPath}/${name}`;
-    dismissArchiveOperation();
+    dismissFileOperationResults();
     await createFile(basePath);
     if (!isCurrent()) return;
     // Dosya oluşturulup DÜZENLEYİCİDE açılır: "oluştur" sonrası kullanıcı ayrıca aramak
@@ -1477,7 +1543,7 @@ async function renamePath(entry: FileEntry) {
       defaultValue: entry.name
     });
     if (!newName || newName.trim() === entry.name || !isCurrent() || locked.value) return;
-    dismissArchiveOperation();
+    dismissFileOperationResults();
     const result = await renameEntry(entry.path, newName.trim(), false);
     if (!isCurrent()) return;
     const refreshed = await refreshAfterFileOperation(sourceFolder, isVisible);
@@ -1543,7 +1609,7 @@ async function runTransfer() {
     const warnings: { name: string; reason: string }[] = [];
     let done = 0;
 
-    dismissArchiveOperation();
+    dismissFileOperationResults();
     if (mode === "move") {
       const result = await moveEntries(paths, destination, overwrite);
       if (!isCurrent()) return;
@@ -1647,7 +1713,7 @@ async function removePath(entry: FileEntry) {
       action: async () => {
         if (!isCurrent() || locked.value) return;
         try {
-          dismissArchiveOperation();
+          dismissFileOperationResults();
           await deletePath(entry.path);
           if (!isCurrent()) return;
           const refreshed = await refreshAfterFileOperation(sourceFolder, isCurrent);
@@ -1698,7 +1764,7 @@ async function removeSelected() {
     });
     if (!onay || !isCurrent() || locked.value) return;
 
-    dismissArchiveOperation();
+    dismissFileOperationResults();
     const outcome = await bulk.runBulk(targets, (entry) => entry.path, (entry) => deletePath(entry.path), () => isCurrent() && !locked.value);
     if (!isCurrent()) return;
     const refreshed = await refreshAfterFileOperation(sourceFolder, isCurrent);
@@ -1716,7 +1782,7 @@ async function saveCurrentFile(): Promise<boolean> {
   const isCurrent = currentFileContext(false);
   saving.value = true;
   try {
-    dismissArchiveOperation();
+    dismissFileOperationResults();
     await saveFile(path, content);
     if (!isCurrent()) return false;
     savedContent.value = content;
@@ -2235,6 +2301,35 @@ async function restore(record: BackupRecord) {
   min-width: min(180px, 100%);
 }
 
+.permission-result {
+  --permission-tone: var(--warn-1);
+  display: grid;
+  gap: var(--sp-12);
+  min-width: 0;
+  padding: var(--sp-16);
+  border: 1px solid color-mix(in srgb, var(--permission-tone) 35%, var(--panel-border));
+  border-left: 3px solid var(--permission-tone);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+}
+.permission-result.is-succeeded { --permission-tone: var(--ok-1); }
+.permission-result.is-failed { --permission-tone: var(--danger-1); }
+.permission-result-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-12); }
+.permission-result-head h4 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.permission-result-head button { flex: 0 0 auto; }
+.permission-result-target { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-12); margin: 0; }
+.permission-result-target > div { min-width: 0; }
+.permission-result-path { grid-column: 1 / -1; }
+.permission-result-target dt { margin-bottom: var(--sp-4); color: var(--text-muted); font-size: var(--fs-xs); }
+.permission-result-target dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.permission-result p { margin: 0; overflow-wrap: anywhere; }
+.permission-result-hint { color: var(--text-muted); }
+.permission-result-warning { color: var(--warn-text); }
+.permission-result-error { color: var(--danger-text); }
+.permission-result-details { min-width: 0; }
+.permission-result-details summary { cursor: pointer; font-size: var(--fs-xs); font-weight: 600; }
+.permission-result-details pre { margin: var(--sp-8) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--fs-xs)/1.5 var(--font-mono); }
+
 /* Hizalamanın anlam taşıdığı dosyalar (.htaccess, web.config, robots.txt) orantılı yazı tipinde
    okunmuyordu; girinti ve sütun hizası ancak tek aralıklı yazı tipinde görünür. */
 .file-editor {
@@ -2315,6 +2410,7 @@ async function restore(record: BackupRecord) {
 
 /* Keep file actions visible when the workspace is narrower than the six-column table. */
 @container file-workspace (max-width: 790px) {
+  .permission-result-target { grid-template-columns: 1fr; }
   .files-table .data-row { min-width: 0; }
   .files-table .table-head { grid-template-columns: minmax(0, 1fr); }
   .files-table .table-head > :not(.select-cell) {

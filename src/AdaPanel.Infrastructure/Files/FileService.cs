@@ -87,6 +87,10 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     internal Func<string, string, CancellationToken, Task<CommandResult>> PermissionCommand { get; set; } =
         static (fileName, arguments, token) => ProcessRunner.RunAsync(fileName, arguments, cancellationToken: token);
 
+    internal Func<SafeDirectoryWalkBudget> PermissionWalkBudget { get; set; } =
+        static () => new SafeDirectoryWalkBudget(50_000, 5_000);
+    internal TimeSpan PermissionExecutionTimeout { get; set; } = TimeSpan.FromMinutes(2);
+
     internal Func<string, CancellationToken, Task<string>>? ReadSearchContent { get; set; }
     internal Func<string, Stream> OpenSearchContent { get; set; } = static path =>
         new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096,
@@ -1016,22 +1020,69 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         var rights = AclInputValidator.EnsureRights(request.Rights);
         var target = await ResolveTargetAsync(normalizedPath, cancellationToken);
         EnsureSiteTarget(target);
-        // Site kökünün TAMAMINA /T ile izin uygulamak diğer işlemlerde de yasak; burada eksikti.
         EnsureNotSiteRoot(target);
 
         await ApprovePublicationAsync(target, beforeMutation, cancellationToken);
-        EnsureNoReparsePoints(target.SandboxRoot, target.PhysicalPath);
-        var result = await PermissionCommand(
-            "icacls.exe",
-            // /L changes a symbolic link itself rather than its external destination.
-            $"\"{target.PhysicalPath}\" /grant \"{principal}:{rights}\" /T /C /L",
-            cancellationToken);
-        await ApprovePublicationAsync(target, beforeMutation, cancellationToken);
-        var outcome = MeasurePermissionProcessing(result);
+        EnsurePermissionPath(target, target.PhysicalPath);
+        var plan = new List<(string Path, bool Directory)>
+        {
+            (target.PhysicalPath, File.GetAttributes(target.PhysicalPath).HasFlag(FileAttributes.Directory))
+        };
+        var linksSkipped = 0;
+        if (plan[0].Directory)
+        {
+            // /T follows directory junctions even with /L. Measure the entire ordinary tree
+            // before the first effect; do not silently apply a partial/truncated plan.
+            var walk = SafeDirectoryWalk.Yuru(target.PhysicalPath, PermissionWalkBudget(), entry =>
+            {
+                EnsurePermissionPath(target, entry.FullName);
+                plan.Add((entry.FullName, entry is DirectoryInfo));
+            }, null, cancellationToken, () => linksSkipped++);
+            if (walk.Truncated)
+                throw new AppException("files.acl_failed", 500, 500, "The ACL target tree could not be fully measured before processing.");
+        }
+
+        var allMeasured = true;
+        using (var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+        {
+            execution.CancelAfter(PermissionExecutionTimeout);
+            try
+            {
+                foreach (var entry in plan)
+                {
+                    await ApprovePublicationAsync(target, beforeMutation, execution.Token);
+                    // Repeat after every authority await: a descendant can be replaced with
+                    // a junction after planning. /L alone is not an ancestor boundary.
+                    EnsurePermissionPath(target, entry.Path);
+                    if (File.GetAttributes(entry.Path).HasFlag(FileAttributes.Directory) != entry.Directory)
+                        throw new AppException("files.acl_failed", 409, 409, "An ACL target changed while processing was pending.");
+                    var result = await PermissionCommand("icacls.exe",
+                        $"\"{entry.Path}\" /grant \"{principal}:{rights}\" /C /L", execution.Token);
+                    await ApprovePublicationAsync(target, beforeMutation, execution.Token);
+                    allMeasured &= MeasurePermissionProcessing(result).Verified == true;
+                }
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && execution.IsCancellationRequested)
+            {
+                throw new AppException("files.acl_failed", 503, 503, "ACL processing exceeded its time limit; previously applied entries may remain changed.");
+            }
+        }
         var workspace = await ReadMutationWorkspaceAsync(normalizedPath, beforeMutation, cancellationToken);
-        workspace.PermissionsVerified = outcome.Verified;
-        workspace.PermissionsDetail = outcome.Detail;
+        workspace.PermissionsVerified = allMeasured ? true : null;
+        workspace.PermissionsDetail = allMeasured
+            ? $"ACL command processed {plan.Count.ToString(CultureInfo.InvariantCulture)} ordinary item(s); failed processing 0 item(s)."
+            : "ACL commands exited successfully, but at least one processing summary could not be measured.";
+        if (linksSkipped > 0)
+            workspace.PermissionsDetail += $" Skipped {linksSkipped.ToString(CultureInfo.InvariantCulture)} link(s); their destinations were not included.";
         return workspace;
+    }
+
+    private static void EnsurePermissionPath(ResolvedTarget target, string path)
+    {
+        if (!PathContainment.IsRootOrInside(target.PhysicalPath, path) ||
+            File.GetAttributes(target.SandboxRoot).HasFlag(FileAttributes.ReparsePoint))
+            throw new AppException("files.path_outside_root", 400, 400);
+        EnsureNoReparsePoints(target.SandboxRoot, path);
     }
 
     private Task<FileWorkspaceDto> ReadMutationWorkspaceAsync(string path,
