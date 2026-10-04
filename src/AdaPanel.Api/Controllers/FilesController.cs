@@ -132,11 +132,13 @@ public sealed class FilesController(
         {
             var existing = await fileService.MeasureAsync([virtualPath], ct);
             return (Math.Max(0, length - existing.TotalBytes), string.Empty);
-        }, cancellationToken);
+        }, cancellationToken, publication.Principal);
 
         await using var stream = file.OpenReadStream();
         var savedPath = await fileService.SaveUploadAsync(virtualPath, stream, publication.ApproveAsync, cancellationToken);
+        await publication.RevalidateAsync(cancellationToken);
         await WriteAuditAsync("files.uploaded", savedPath, $"File uploaded ({length} bytes).", cancellationToken);
+        await publication.RevalidateAsync(cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { path = savedPath }, "files.uploaded"));
     }
 
@@ -152,8 +154,9 @@ public sealed class FilesController(
         // çıkışı olmayan bir kilide girerdi. Hedef yoksa ölçüm 0 döner (yeni dosya).
         var workspace = await fileService.WriteAsync(request, publication.ApproveAsync,
             (growth, token) => EnsureDiskQuotaAsync(request.Path,
-                _ => Task.FromResult((growth, string.Empty)), token), cancellationToken);
+                _ => Task.FromResult((growth, string.Empty)), token, publication.Principal), cancellationToken);
 
+        await publication.RevalidateAsync(cancellationToken);
         // İÇERİK YAZILMAZ, yalnız boyutu: bir dosyanın gövdesi (yapılandırma, bağlantı dizesi,
         // müşteri verisi) denetim kaydına kopyalanırsa kayıt, korumaya çalıştığı sırların ikinci
         // bir deposuna dönüşür.
@@ -162,8 +165,9 @@ public sealed class FilesController(
             request.Path,
             $"File content saved ({(request.Content ?? string.Empty).Length} characters).",
             cancellationToken);
+        await publication.RevalidateAsync(cancellationToken);
 
-        return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace, "files.saved"));
+        return Ok(ApiResponse<FileWorkspaceDto>.Ok(ProjectWorkspace(workspace, publication.Principal), "files.saved"));
     }
 
     [HttpDelete]
@@ -172,8 +176,10 @@ public sealed class FilesController(
         request = new DeleteFileRequest { Path = request.Path };
         using var publication = await CapturePublicationAsync([request.Path], cancellationToken);
         var workspace = await fileService.DeleteAsync(request, publication.ApproveAsync, cancellationToken);
+        await publication.RevalidateAsync(cancellationToken);
         await WriteAuditAsync("files.deleted", request.Path, "File or directory deleted.", cancellationToken);
-        return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace, "files.deleted"));
+        await publication.RevalidateAsync(cancellationToken);
+        return Ok(ApiResponse<FileWorkspaceDto>.Ok(ProjectWorkspace(workspace, publication.Principal), "files.deleted"));
     }
 
     [HttpPost("mkdir")]

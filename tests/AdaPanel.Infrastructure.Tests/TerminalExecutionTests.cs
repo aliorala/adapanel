@@ -66,7 +66,7 @@ public sealed class TerminalExecutionTests
                 catch (ArgumentException) { }
                 catch (InvalidOperationException) { }
             }
-            Directory.Delete(root, recursive: true);
+            await DeleteOwnedRootAsync(root);
         }
     }
 
@@ -91,7 +91,7 @@ public sealed class TerminalExecutionTests
             Assert.Contains("Türkçe ĞÜŞİÖÇ", result.StandardError);
             Assert.DoesNotContain("CLIXML", result.StandardError);
         }
-        finally { Directory.Delete(root, recursive: true); }
+        finally { await DeleteOwnedRootAsync(root); }
     }
 
     [Fact]
@@ -138,11 +138,42 @@ public sealed class TerminalExecutionTests
             {
                 try { await operation.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
             }
-            var tempRoot = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar);
-            if (!string.Equals(Path.GetDirectoryName(root), tempRoot, StringComparison.OrdinalIgnoreCase) ||
-                !Path.GetFileName(root).StartsWith("adapanel-terminal-", StringComparison.Ordinal))
-                throw new InvalidOperationException("Terminal fixture cleanup is outside its owned temporary root.");
-            Directory.Delete(root, recursive: true);
+            await DeleteOwnedRootAsync(root);
+        }
+    }
+
+    private static async Task DeleteOwnedRootAsync(string root)
+    {
+        const string prefix = "adapanel-terminal-";
+        var target = Path.GetFullPath(root);
+        var tempRoot = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar);
+        var name = Path.GetFileName(target);
+        if (!string.Equals(Path.GetDirectoryName(target), tempRoot, StringComparison.OrdinalIgnoreCase) ||
+            !name.StartsWith(prefix, StringComparison.Ordinal) ||
+            !Guid.TryParseExact(name[prefix.Length..], "N", out _))
+            throw new InvalidOperationException("Terminal fixture cleanup is outside its owned temporary root.");
+
+        var elapsed = Stopwatch.StartNew();
+        while (true)
+        {
+            FileAttributes attributes;
+            try { attributes = File.GetAttributes(target); }
+            catch (DirectoryNotFoundException) { return; }
+            catch (FileNotFoundException) { return; }
+            if ((attributes & FileAttributes.ReparsePoint) != 0 || (attributes & FileAttributes.Directory) == 0)
+                throw new InvalidOperationException("Terminal fixture cleanup target is not an ordinary owned directory.");
+            try
+            {
+                Directory.Delete(target, recursive: true);
+                return;
+            }
+            catch (IOException error) when ((error.HResult & 0xffff) is 32 or 33 &&
+                elapsed.Elapsed < TimeSpan.FromSeconds(5))
+            {
+                // Process/outcome assertions have already finished. Retry only transient
+                // sharing/lock failures while Windows releases the owned working directory.
+                await Task.Delay(25);
+            }
         }
     }
 }

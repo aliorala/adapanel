@@ -296,7 +296,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             }, cancellationToken, token => ApprovePublicationAsync(target, beforePublication, token), failIfExists);
         }
 
-        return await GetWorkspaceAsync(normalizedPath, cancellationToken);
+        return await ReadMutationWorkspaceAsync(normalizedPath, beforePublication, cancellationToken);
     }
 
     public Task<FileWorkspaceDto> DeleteAsync(DeleteFileRequest request, CancellationToken cancellationToken = default) =>
@@ -325,7 +325,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         }
 
         await ApprovePublicationAsync(target, beforeMutation, cancellationToken);
-        var workspace = await GetWorkspaceAsync(BuildParentPath(normalizedPath), cancellationToken);
+        var workspace = await ReadMutationWorkspaceAsync(BuildParentPath(normalizedPath), beforeMutation, cancellationToken);
         await ApprovePublicationAsync(target, beforeMutation, cancellationToken);
         return workspace;
     }

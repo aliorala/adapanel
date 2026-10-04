@@ -154,7 +154,7 @@
       </div>
 
       <div class="row-actions">
-        <button class="compact" v-bind="writeGate(creating)" @click="createUser">
+        <button class="compact" v-bind="writeGate(accountBusy)" @click="createUser">
           {{ creating ? t("panel.database.saving") : t("panel.ftp.createAction") }}
         </button>
         <button class="secondary compact" @click="showCreateForm = false">
@@ -163,7 +163,30 @@
       </div>
     </section>
 
-    <SectionLoadError v-if="usersLoad.message.value" :message="readErrorMessage(usersLoaded ? 'panel.ftp.listStale' : 'panel.ftp.listLoadFailed', usersLoad.message.value)" :busy="usersLoading" @retry="refresh" />
+    <section v-if="accountOperation" :class="['ftp-account-result', `is-${accountOperation.status}`]" aria-labelledby="ftp-account-result-heading" :aria-busy="accountOperation.status === 'running' || accountOperation.status === 'refreshing'">
+      <div class="ftp-account-result-head">
+        <h3 id="ftp-account-result-heading" role="status">{{ t(accountOperation.status === 'running'
+          ? accountOperation.kind === 'create' ? 'panel.ftp.accountCreating' : accountOperation.kind === 'password' ? 'panel.ftp.accountChangingPassword' : 'panel.ftp.accountDeleting'
+          : accountOperation.status === 'refreshing' ? 'panel.ftp.accountRefreshing'
+          : accountOperation.status === 'failed' ? 'panel.ftp.accountOperationFailed'
+          : accountOperation.kind === 'create' ? 'panel.ftp.created' : accountOperation.kind === 'password' ? 'panel.ftp.passwordChanged' : 'panel.ftp.deleted') }}</h3>
+        <button v-if="accountOperation.status === 'succeeded' || accountOperation.status === 'failed'" class="secondary compact" :aria-label="t('panel.ftp.accountDismissResult')" @click="dismissAccountOperation">×</button>
+      </div>
+      <dl class="ftp-account-identity">
+        <div><dt>{{ t('panel.database.userName') }}</dt><dd>{{ accountOperation.userName }}</dd></div>
+        <div v-if="accountOperation.siteName"><dt>{{ t('panel.sites.name') }}</dt><dd>{{ accountOperation.siteName }}</dd></div>
+        <div v-if="accountOperation.homePath" class="ftp-account-home"><dt>{{ t('panel.ftp.homePath') }}</dt><dd>{{ accountOperation.homePath }}</dd></div>
+      </dl>
+      <p v-if="accountOperation.status === 'running' || accountOperation.status === 'refreshing'" class="ftp-account-hint">{{ t('panel.ftp.accountOperationPendingHint') }}</p>
+      <p v-if="accountOperation.error" class="ftp-account-error" role="alert">{{ accountOperation.error }}</p>
+      <p v-if="accountOperation.warningKey" class="ftp-account-warning" role="status">{{ t(accountOperation.warningKey) }}</p>
+      <div v-if="accountOperation.refreshError" class="ftp-account-refresh">
+        <p role="alert">{{ accountOperation.refreshError }}</p>
+        <button class="secondary compact" :disabled="accountBusy || usersLoading" @click="refreshAccountListing">{{ t('panel.ftp.refresh') }}</button>
+      </div>
+    </section>
+
+    <SectionLoadError v-if="usersLoad.message.value && !accountOperation?.refreshError" :message="readErrorMessage(usersLoaded ? 'panel.ftp.listStale' : 'panel.ftp.listLoadFailed', usersLoad.message.value)" :busy="usersLoading" @retry="refresh" />
     <section class="data-table ftp-table" role="table" :aria-label="t('panel.ftp.title')" :aria-busy="usersLoading">
       <div class="data-row table-head ftp-row" role="row">
         <span role="columnheader">{{ t("panel.database.userName") }}</span>
@@ -256,7 +279,7 @@ const props = defineProps<{ siteName?: string }>();
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
-const { writeGate } = useSubscriptionGate();
+const { writeGate, locked } = useSubscriptionGate();
 const { prompt } = usePrompt();
 const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
@@ -278,7 +301,20 @@ const serverCheckCompleted = ref(false);
 const creating = ref(false);
 const deletingUser = ref("");
 const changingPassword = ref("");
-const accountBusy = computed(() => Boolean(deletingUser.value || changingPassword.value));
+const accountBusy = computed(() => Boolean(creating.value || deletingUser.value || changingPassword.value));
+type AccountOperation = {
+  kind: 'create' | 'password' | 'delete';
+  status: 'running' | 'refreshing' | 'succeeded' | 'failed';
+  userName: string;
+  siteName: string;
+  homePath: string;
+  warningKey: string;
+  error: string;
+  refreshError: string;
+};
+const accountState = ref<AccountOperation | null>(null);
+let accountContext: ReturnType<typeof ftpContext> | null = null;
+const accountOperation = computed(() => accountState.value && accountContext?.current() ? accountState.value : null);
 const notice = ref("");
 const noticeDetails = ref("");
 const noticeError = ref(false);
@@ -304,16 +340,66 @@ let usersRequest = 0;
 let statusRequest = 0;
 let tlsRequest = 0;
 let createVersion = 0;
-onBeforeUnmount(() => { disposed = true; scopeVersion++; });
+onBeforeUnmount(() => { disposed = true; scopeVersion++; accountState.value = null; form.password = ''; });
 
 function ftpContext() {
   const site = props.siteName, version = scopeVersion, epoch = getSessionEpoch();
-  return { current: () => !disposed && props.siteName === site && scopeVersion === version && getSessionEpoch() === epoch };
+  const session = authStore.session, actorId = session?.user?.id, role = session?.user?.role;
+  return { current: () => !disposed && props.siteName === site && scopeVersion === version && getSessionEpoch() === epoch
+    && authStore.session === session && authStore.session?.isAuthenticated === true
+    && authStore.session?.user?.id === actorId && authStore.session?.user?.role === role };
 }
 
 function canManageUser(userName: string) {
-  return !disposed && usersLoaded.value && !accountBusy.value && users.value.some(user =>
+  return !disposed && !locked.value && usersLoaded.value && !accountBusy.value && users.value.some(user =>
     user.userName === userName && (!props.siteName || (user.siteName ?? "").toLowerCase() === props.siteName.toLowerCase()));
+}
+
+function sameAccountTarget(target: Pick<FtpUser, 'userName' | 'siteName' | 'homePath'>) {
+  const normalized = (value: string) => value.trim().replace(/\\/g, '/').toLowerCase();
+  return users.value.some(user => normalized(user.userName) === normalized(target.userName)
+    && normalized(user.siteName) === normalized(target.siteName) && normalized(user.homePath) === normalized(target.homePath));
+}
+
+async function runAccountWrite(kind: AccountOperation['kind'], target: Pick<FtpUser, 'userName' | 'siteName' | 'homePath'>,
+  context: ReturnType<typeof ftpContext>, action: () => Promise<unknown>, success: () => void, notify: () => boolean = () => true) {
+  // Invalidate reads that started before this write. No password enters this retained result.
+  usersRequest++;
+  usersLoading.value = false;
+  accountContext = context;
+  accountState.value = { kind, status: 'running', userName: target.userName, siteName: target.siteName,
+    homePath: target.homePath, warningKey: '', error: '', refreshError: '' };
+  const operation = accountState.value;
+  showNotice('', false);
+  let succeeded = false;
+  try {
+    await action();
+    if (!context.current()) return;
+    succeeded = true;
+  } catch (error) {
+    if (!context.current()) return;
+    operation.error = t(extractApiMessage(error));
+    if (notify()) showApiError(error);
+  }
+  if (!context.current()) return;
+  operation.status = 'refreshing';
+  const refreshed = await refresh();
+  if (!context.current() || accountState.value !== operation) return;
+  operation.refreshError = refreshed ? '' : t('panel.ftp.accountRefreshFailed');
+  operation.status = succeeded ? 'succeeded' : 'failed';
+  if (succeeded && notify()) success();
+}
+
+async function refreshAccountListing() {
+  if (!accountOperation.value || accountBusy.value || usersLoading.value) return;
+  await refresh();
+}
+
+function dismissAccountOperation() {
+  if (accountOperation.value?.status === 'succeeded' || accountOperation.value?.status === 'failed') {
+    accountState.value = null;
+    accountContext = null;
+  }
 }
 
 const form = reactive({
@@ -379,12 +465,14 @@ const pager = usePagination(filteredUsers);
 watch(search, () => pager.reset());
 
 watch(
-  [() => props.siteName, () => authStore.session?.user?.id, () => authStore.session?.user?.role],
+  [() => props.siteName, () => authStore.session, () => authStore.session?.user?.id, () => authStore.session?.user?.role],
   ([value]) => {
     scopeVersion++;
     creating.value = false;
     changingPassword.value = "";
     deletingUser.value = "";
+    accountState.value = null;
+    accountContext = null;
     users.value = [];
     usersLoaded.value = false;
     usersLoading.value = false;
@@ -413,17 +501,16 @@ watch(
 
 watch([() => form.siteName, showCreateForm], ([target, open], [previousTarget]) => {
   createVersion++;
-  creating.value = false;
   if (target !== previousTarget) form.homePath = "";
   if (!open) form.password = "";
 }, { flush: "sync" });
 
 onMounted(async () => {
-  const epoch = getSessionEpoch();
+  const context = ftpContext();
   if (sitesStore.sites.length === 0 && !sitesStore.loading) {
     await sitesStore.fetchSites().catch(() => undefined);
   }
-  if (disposed || epoch !== getSessionEpoch()) return;
+  if (!context.current()) return;
   mountedReady = true;
   await Promise.allSettled([prepareServer(), refresh(), loadTls()]);
 });
@@ -514,9 +601,13 @@ async function refresh() {
     users.value = result;
     usersLoaded.value = true;
     usersLoad.clear();
+    if (accountOperation.value) accountOperation.value.refreshError = '';
     return true;
   } catch (error) {
-    if (context.current() && request === usersRequest) captureReadError(usersLoad, 'panel.ftp.listLoadFailed', error);
+    if (context.current() && request === usersRequest) {
+      captureReadError(usersLoad, 'panel.ftp.listLoadFailed', error);
+      if (accountOperation.value) accountOperation.value.refreshError = t('panel.ftp.accountRefreshFailed');
+    }
     return false;
   } finally {
     if (context.current() && request === usersRequest) usersLoading.value = false;
@@ -556,44 +647,43 @@ async function loadStatus() {
 }
 
 async function createUser() {
-  if (disposed || creating.value || !showCreateForm.value) return;
+  if (disposed || locked.value || accountBusy.value || !showCreateForm.value) return;
   const context = ftpContext(), version = createVersion;
-  const current = () => context.current() && version === createVersion;
   const payload = { ...form, siteName: props.siteName || form.siteName };
+  let notificationVersion = version;
   creating.value = true;
 
   try {
-    const result = await createFtpUser({ ...payload });
-    if (!current()) return;
-    const expiryWarning = result.message === "ftp.user_created_password_expires" || result.message === "ftp.user_created_expiry_unverified"
-      ? result.message
-      : result.passwordNeverExpires === false ? "ftp.user_created_password_expires"
-      : result.passwordNeverExpires === null ? "ftp.user_created_expiry_unverified" : "";
-    form.userName = "";
-    form.password = "";
-    form.homePath = "";
-    showCreateForm.value = false;
-    const completedVersion = createVersion;
-    const refreshed = await refresh();
-    if (!context.current() || createVersion !== completedVersion) return;
-    if (expiryWarning) {
-      // Hesap açıldı; süre dolumu uyarısı sonraki liste okumasında kaybolmamalı.
-      const refreshError = refreshed ? "" : usersLoad.message.value;
-      showNotice([t(expiryWarning), refreshError].filter(Boolean).join("\n\n"), true);
-    } else {
-      showNotice(t("panel.ftp.created"), false);
-    }
-  } catch (error) {
-    if (current()) showApiError(error);
+    await runAccountWrite('create', payload, context, async () => {
+      const result = await createFtpUser({ ...payload });
+      if (!context.current()) return;
+      const operation = accountState.value!;
+      Object.assign(operation, { userName: result.userName, siteName: result.siteName, homePath: result.homePath });
+      operation.warningKey = result.message === "ftp.user_created_password_expires" || result.message === "ftp.user_created_expiry_unverified"
+        ? result.message : result.passwordNeverExpires === false ? "ftp.user_created_password_expires"
+        : result.passwordNeverExpires === null ? "ftp.user_created_expiry_unverified" : "";
+      users.value = [...users.value.filter(user => user.userName.toLowerCase() !== result.userName.toLowerCase()), result];
+      if (version === createVersion) {
+        form.userName = "";
+        form.password = "";
+        form.homePath = "";
+        showCreateForm.value = false;
+        notificationVersion = createVersion;
+      }
+    }, () => {
+      const warning = accountOperation.value?.warningKey;
+      showNotice(warning ? [t(warning), usersLoad.message.value].filter(Boolean).join('\n\n') : t('panel.ftp.created'), !!warning);
+    }, () => createVersion === notificationVersion);
   } finally {
     payload.password = "";
-    if (current()) creating.value = false;
+    if (context.current()) creating.value = false;
   }
 }
 
 async function changeFtpPassword(userName: string) {
   if (!canManageUser(userName)) return;
   const context = ftpContext();
+  const target = { ...users.value.find(user => user.userName === userName)! };
   changingPassword.value = userName;
   let password: string | null = null;
   try {
@@ -606,13 +696,14 @@ async function changeFtpPassword(userName: string) {
       confirmLabel: t("panel.ftp.changePassword")
     });
 
-    if (!context.current() || password === null) return;
+    if (!context.current() || locked.value || !sameAccountTarget(target) || password === null) return;
     if (password.length < 8) {
       showNotice(t("panel.ftp.passwordTooShort"), true);
       return;
     }
-    await setFtpPassword(userName, password);
-    if (context.current()) showNotice(t("panel.ftp.passwordChanged"), false);
+    const submittedPassword = password;
+    await runAccountWrite('password', target, context, () => setFtpPassword(target.userName, submittedPassword),
+      () => showNotice(t("panel.ftp.passwordChanged"), false));
   } catch (error) {
     if (context.current()) showApiError(error);
   } finally {
@@ -628,6 +719,7 @@ async function changeFtpPassword(userName: string) {
 async function removeUser(userName: string) {
   if (!canManageUser(userName)) return;
   const context = ftpContext();
+  const target = { ...users.value.find(user => user.userName === userName)! };
   deletingUser.value = userName;
   try {
     await confirm({
@@ -636,17 +728,13 @@ async function removeUser(userName: string) {
       impact: [userName],
       requireText: userName,
       action: async () => {
-        if (!context.current()) return;
-        try {
-          await deleteFtpUser(userName);
+        if (!context.current() || locked.value || !sameAccountTarget(target)) return;
+        await runAccountWrite('delete', target, context, async () => {
+          await deleteFtpUser(target.userName);
           if (!context.current()) return;
           // The deletion was confirmed even if the next list read fails.
           users.value = users.value.filter(user => user.userName.toLowerCase() !== userName.toLowerCase());
-          await refresh();
-          if (context.current()) showNotice(t("panel.ftp.deleted"), false);
-        } catch (error) {
-          if (context.current()) showApiError(error);
-        }
+        }, () => showNotice(t("panel.ftp.deleted"), false));
       }
     });
   } finally {
@@ -692,6 +780,34 @@ function readErrorMessage(prefix: string, error: string) {
 .page-notice { padding-right: 52px; }
 .ftp-empty { display: grid; justify-items: start; gap: var(--sp-8); }
 .ftp-empty p { margin: 0; }
+.ftp-account-result {
+  --account-tone: var(--panel-border);
+  display: grid;
+  gap: var(--sp-12);
+  min-width: 0;
+  padding: var(--sp-16);
+  border: 1px solid color-mix(in srgb, var(--account-tone) 45%, var(--panel-border));
+  border-left: 3px solid var(--account-tone);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+}
+.ftp-account-result.is-succeeded { --account-tone: var(--ok-1); }
+.ftp-account-result.is-failed { --account-tone: var(--danger-1); }
+.ftp-account-result.is-running, .ftp-account-result.is-refreshing { --account-tone: var(--warn-1); }
+.ftp-account-result-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-12); }
+.ftp-account-result-head h3 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.ftp-account-result-head button { flex: 0 0 auto; }
+.ftp-account-identity { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-12); margin: 0; }
+.ftp-account-identity > div { min-width: 0; }
+.ftp-account-identity dt { color: var(--text-muted); font-size: var(--fs-xs); margin-bottom: var(--sp-4); }
+.ftp-account-identity dd { margin: 0; overflow-wrap: anywhere; font-weight: 600; }
+.ftp-account-home { grid-column: 1 / -1; }
+.ftp-account-result p { margin: 0; overflow-wrap: anywhere; }
+.ftp-account-hint { color: var(--text-muted); }
+.ftp-account-error { color: var(--danger-text); }
+.ftp-account-warning, .ftp-account-refresh { color: var(--warn-text); }
+.ftp-account-refresh { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-12); border-top: 1px solid var(--panel-border); padding-top: var(--sp-12); }
+.ftp-account-refresh p { flex: 1 1 240px; }
 .ftp-row > [role="cell"]::before { display: none; }
 .compact-head {
   align-items: center;
@@ -814,6 +930,7 @@ function readErrorMessage(prefix: string, error: string) {
 .ftp-tls-summary p.ftp-tls-warning { color: var(--warn-1); }
 
 @container ftp-workspace (max-width: 880px) {
+  .ftp-account-identity { grid-template-columns: 1fr; }
   .ftp-tls-summary { grid-template-columns: 1fr; }
   .ftp-row { grid-template-columns: 1fr; min-width: 0; gap: var(--sp-8); }
   .ftp-row.table-head { position: absolute; width: 1px; height: 1px; padding: 0; clip-path: inset(50%); overflow: hidden; white-space: nowrap; }

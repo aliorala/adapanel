@@ -59,10 +59,12 @@ public sealed class FtpRecursivePermissionBoundaryTests(ITestOutputHelper output
         await using var f = await Fixture.Create(junction: true);
         f.FailHomeConfiguration = true;
         var outside = f.OutsideAcl();
+        var homeBefore = f.HomeAcl();
         var records = await f.RecordBytes();
         var error = await Assert.ThrowsAsync<AppException>(() => f.Run(rollback: false));
         Assert.Equal("ftp.site_configuration_failed", error.MessageKey);
-        Assert.Equal(2, f.NativeCommands.Count); // Only the attempted Home grant is recovered.
+        Assert.Single(f.NativeCommands); // Recovery restores added bits through the original handle.
+        Assert.Equal(homeBefore, f.HomeAcl());
         Assert.Equal(outside, f.OutsideAcl());
         Assert.Equal(records, await f.RecordBytes());
         Assert.Equal("outside sentinel", await File.ReadAllTextAsync(f.Sentinel, f.Token));
@@ -150,14 +152,16 @@ public sealed class FtpRecursivePermissionBoundaryTests(ITestOutputHelper output
         f.ProtectOrdinaryDirectory();
         f.FailHomeConfiguration = true;
         var homeBefore = f.HomeAcl();
+        var treeBefore = f.AllHomeAcl();
         var outside = f.OutsideAcl();
         var records = await f.RecordBytes();
         var error = await Assert.ThrowsAsync<AppException>(() => f.Run(rollback: false));
         Assert.Equal("ftp.site_configuration_failed", error.MessageKey);
-        Assert.Equal(2, f.NativeCommands.Count); // Protected child grant + only its recovery.
+        Assert.Single(f.NativeCommands); // Protected child grant; recovery uses its original handle.
         Assert.DoesNotContain(f.NativeCommands, command => command.StartsWith($"\"{f.Home}\" ", StringComparison.Ordinal));
         Assert.Equal(1, f.HomeCleanupCalls);
         Assert.Equal(homeBefore, f.HomeAcl());
+        Assert.Equal(treeBefore, f.AllHomeAcl());
         Assert.Equal(outside, f.OutsideAcl());
         Assert.Equal(records, await f.RecordBytes());
     }

@@ -1,5 +1,51 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R43 doğrulandı (henüz yayımlanmadı)
+
+Kaynak/public sürüm0.8.85. Public latest kimliksiz GitHub API ile tekrar .85 doğrulandı;
+91,115,720bytes, SHA2567948E3059463C92EAD08413D31F752CC6B2EDFD0D79EA433DA6314EE64562F0C.
+R43 henüz public kurucuda yok; .85 binary üzerine yazılmadı. Sonraki periyodik yayın .86 olabilir.
+Canlı panel kurulumu/sürümü ölçülmedi; Chrome açık sekmelerinde AdaPanel yok. URL sorusunu tekrarlama.
+Paket hazır değil: kurulum sonrası geçici paket temizliği normal olabilir; .75 ekranı .85 kuruldu kanıtı değil.
+
+R43 FTP: mevcut hesabın touched-entry recovery eski RX haklarını siliyordu (11RED/5green).
+FtpPermissionChange no-follow SafeFileHandle+FileId+exactSID/scope önceki Allow mask saklar;
+rollback fresh DACL'den yalnız addedbits çıkarır, disjoint/concurrentSID/deny korur. Samepathreplacement/
+gone/junction'a dokunmaz, ownedhome cleanup devam eder. Finally handle Dispose. OS-wide atomicCAS veya
+aynı bitlere ikinci bağımsız grant niyetini ayırma garantisi yok. Native testler unique ownedtemp/currentSID,
+SAM/IISfake. SYSTEM rule değişimi sadece ownedfixture içinde save/restore; dış canlıhesap yok.
+YeniFTP16 +Files34 =50backend; ilk37RED/13green, related515/515 finalGREEN.
+Files Write/Upload kota acceptedPrincipal; Write/Delete/Upload pre/post-audit revalidate+CT;
+Write/Delete ProjectWorkspace, final read actual SiteDto callback authorization.
+
+FTP FE yeni21tests (ilk17:15RED2green); related110/110. Full114files2222/2222/types/Vite PASS.
+accountOperation persistentcard; commonwrite/onay/followupGETlock; failure→GET reconcile≠success;
+sameactorsessionref/epoch/context invalidation; oldGET/newdraft protection; no password retained.
+Root template/CSS+TR/EN8keys. FE5607/5607, wwwroot152filesSHAequal/6indexassets.
+ChromeTR390dark doc380/380/card330/330;EN320light doc310/310/card260/260;desktop1440/card1190.
+Actual fakeHTTP count GETretry accountwrites1→1/listreads2→3. Appconsoleerror0(extensionexcluded).
+Screenshots .tmp/audit-20261004/round43-ftp-result-{tr390,en320-light,desktop}.png.
+Preview91871terminal/Tab43closed/viewportreset/__audit43removed. Finalimage path D:/... not /D:/....
+
+İlk broad22756: Core2 pass/Infra9015pass1FAIL CSS tokenparser inline --account-tone tanımını görmedi.
+CSS declaration multiline yapıldı; renk/davranış/test değişmedi. Vite+sync repeated SHAequal. CSS3/3pass.
+İkinci broad27973: Core2 pass/Infra9015pass1FAIL yalnız TerminalExecutionTests cleanup sharinglock.
+Outcome/deadline/parent-exit assertions geçti; TerminalService untouched. Testcleanup exacttemp parent+
+prefixGUID+ordinary/reparse guard, sadece Win32 32/33 için5sec/25ms boundedretry. Üçcleanup aynıhelper.
+Eski failedfixture ...terminal-8e07ed0320fd406e987e8be841b987bd ordinary/empty doğrulanıp nonrecursive silindi.
+Terminal+CSS7/7pass; final2build0warnings/errors. SON .NET97405 TERMINAL exit0: Core2+Infra9016=
+9018/9018,fail0skip0 (realSAM2 excluded). TRX round43-final2_net8.0_20261004123142.trx ve123524.trx.
+Tüm C# writers FINALFREEZE; root alone .NET, serialize -m:1/nodeReuse:false; realSAM2 dışlamak zorunlu
+--filter FullyQualifiedName!~FtpCreateRollbackTests. Şu an root test/preview/package process yok.
+Docs audit-2026-10-04.md R43 güncel; doğrulanmış kaynak yerel commit'e alınır. TestResults/ eskiuntrackedkorunur.
+
+R44 adayı (yalnız READONLY): FileService SetPermissionsCoreAsync1008–1034 /T/C/L descendantjunction
+izliyor olabilir. ResolveSandboxTarget/EnsureNoReparsePoints sadece seçilen target+ancestors; altwalkyok.
+Admin-only endpoint; tenantbypass diye iddia etme. Native currentSID/ownedtemp test ilkadım.
+FE FilesView savePermissions1362 eski successnotice'ı yeniPOST başında temizlemiyor; deferred2ndPOSTtest.
+Recursivecheckboxyok, mevcut açıklama tümaltöğeler. Nofollowpolicy doğrulanınca açıklamayı düzelt.
+Agents tamamlandı; yeniden görev için followup_task. Continuousgoal ACTIVE; bitmiş işaretleme.
+
 ## 2026-10-04 — R41+R42 içeren 0.8.85 yayımlandı ve doğrulandı
 
 PUBLIC latest ve kaynak0.8.85; yayın2026-10-04T09:00:26Z /12:00:26İstanbul.
