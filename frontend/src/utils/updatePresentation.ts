@@ -5,7 +5,7 @@ type Presentation = { state: string; tone: "ok" | "info" | "warn" | "error"; ico
 export function describeUpdateState(status: UpdateStatus | null, confirmed: boolean, checking: boolean, phase = ""): Presentation {
   if (phase === "failed") return { state: "failed", tone: "error", icon: "alert" };
   if (phase === "timeout") return { state: "unconfirmed", tone: "warn", icon: "alert" };
-  if (["scheduled", "restarting", "verifying"].includes(phase) || status?.isInstallScheduled === true)
+  if (["scheduled", "restarting", "verifying"].includes(phase) || (confirmed && status?.isInstallScheduled === true))
     return { state: "installing", tone: "info", icon: "clock" };
   if (phase === "downloading") return { state: "downloading", tone: "info", icon: "download" };
   if (checking) return { state: "checking", tone: "info", icon: "clock" };

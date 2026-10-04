@@ -16,18 +16,27 @@
       :phase="busy === 'download' ? 'downloading' : installPhase" />
 
     <template v-if="status">
-      <div v-if="installPhase" class="install-progress" role="status" aria-live="polite">
-        <div class="progress-track" role="progressbar" :aria-valuenow="installPercent" aria-valuemin="0" aria-valuemax="100">
-          <div class="progress-fill" :class="{ done: installPhase === 'done' }" :style="{ width: installPercent + '%' }"></div>
+      <section v-if="installPhase" :class="['install-progress', `is-${installPhase}`]" aria-labelledby="install-watch-title">
+        <div class="install-progress-head">
+          <span class="install-phase-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <template v-if="installPhase === 'done'"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></template>
+              <template v-else-if="installPhase === 'failed' || installPhase === 'timeout'"><path d="m12 3 10 18H2L12 3Z" /><path d="M12 9v5m0 3h.01" /></template>
+              <template v-else><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></template>
+            </svg>
+          </span>
+          <div class="install-progress-copy">
+            <h3 id="install-watch-title" role="status">{{ t('panel.update.phase.' + installPhase) }}</h3>
+            <p class="meta">{{ t(installPhase === 'done' ? 'panel.update.phaseVerifiedHint' : installPhase === 'failed' || installPhase === 'timeout' ? 'panel.update.phaseCheckAgainHint' : 'panel.update.phaseHintReal') }}</p>
+          </div>
         </div>
-        <div class="progress-meta">
-          <strong>{{ t('panel.update.phase.' + installPhase) }}</strong>
-          <span class="meta">%{{ installPercent }} · {{ formatElapsed(installElapsedSeconds) }}</span>
-        </div>
-        <p class="meta">{{ t("panel.update.phaseHintReal") }}</p>
-      </div>
+        <dl class="install-observations">
+          <div><dt>{{ t('panel.update.targetVersion') }}</dt><dd>{{ installTargetVersion || '—' }}</dd></div>
+          <div><dt>{{ t('panel.update.watchElapsed') }}</dt><dd>{{ formatElapsed(installElapsedSeconds) }}</dd></div>
+        </dl>
+      </section>
 
-      <section v-if="status.isUpdateAvailable || status.isPackageReady || status.isInstallScheduled || busy || monitoring" class="update-next-step">
+      <section v-if="!status.isInstallScheduled && !monitoring && (status.isUpdateAvailable || status.isPackageReady || busy)" class="update-next-step">
         <div class="next-step-heading">
           <h3>{{ t("panel.update.nextStep") }}</h3>
           <p class="meta">{{ t("panel.update.safeApplyHint") }}</p>
@@ -90,7 +99,8 @@ const mountedEpoch = getSessionEpoch(), actor = auth.session?.user?.id, role = a
 let disposed = false;
 const current = () => !disposed && getSessionEpoch() === mountedEpoch && auth.session?.user?.id === actor && auth.session?.user?.role === role;
 const validHash = (hash?: string) => typeof hash === "string" && /^[a-f\d]{64}$/i.test(hash);
-const prepared = (value: UpdateStatus | null) => !!value?.isPackageReady && !!value.preparedVersion?.trim() && validHash(value.preparedPackageSha256);
+const preparedIdentity = (value: UpdateStatus | null) => !!value?.preparedVersion?.trim() && validHash(value.preparedPackageSha256);
+const prepared = (value: UpdateStatus | null) => !!value?.isPackageReady && preparedIdentity(value);
 const canDownload = computed(() => statusConfirmed.value && !!status.value && !status.value.isCheckFailed && status.value.isUpdateAvailable &&
   !!status.value.downloadUrl && validHash(status.value.packageSha256) && !status.value.isInstallScheduled && !busy.value && !refreshing.value && !monitoring.value);
 const canInstall = computed(() => statusConfirmed.value && prepared(status.value) && !status.value?.isInstallScheduled && !busy.value && !refreshing.value && !monitoring.value);
@@ -100,50 +110,18 @@ const noticeError = ref(false);
 /**
  * Kurulumun GÖZLEMLENEN aşaması — tahmin değil, her yoklamada gerçekten ölçülen durum:
  * scheduled  = panel hâlâ yanıt veriyor, kurulum henüz servisi durdurmadı
- * restarting = istek düşüyor, servis duruyor/yeniden başlıyor (beklenen)
- * verifying  = panel geri döndü, sürüm karşılaştırılıyor
+ * restarting = son istek yanıtlanamadı; yeniden başlama nedeni doğrulanmış değil
+ * verifying  = istek yeniden yanıtlandı, sürüm karşılaştırılıyor
  * done       = yeni sürüm doğrulandı
  * timeout    = 15 dakika doldu
  */
 const installPhase = ref<"" | "scheduled" | "restarting" | "verifying" | "done" | "failed" | "timeout">("");
 const installElapsedSeconds = ref(0);
+const installTargetVersion = ref("");
 const installAttempt = ref<UpdateAttempt | null>(null);
 // Bu denemenin baslangic ani: calistiricinin BU denemeye ait durumu mu, yoksa onceki bir denemeden
 // kalan eski dosya mi oldugunu ayirt etmek icin sart.
 let installStartedAtIso = "";
-
-/**
- * Yüzde, ZAMANLAYICIYLA DEĞİL gerçekten gözlemlenen kilometre taşlarıyla ilerler. Her değer,
- * sunucudan alınan somut bir cevaba karşılık gelir:
- *
- *   %10  kurulum planlandı   → API "planlandı" dedi
- *   %35  panel hâlâ ayakta   → istek başarılı, sürüm eski (kurulum henüz servisi durdurmadı)
- *   %60  panel kapandı       → istek düşüyor; dosyaların değiştirildiği an
- *   %85  panel geri döndü    → istek yeniden başarılı, sürüm karşılaştırılıyor
- *   %100 sürüm doğrulandı    → yeni sürüm okundu
- *
- * Kapalı olduğu aralıkta ara bir yüzde ÜRETİLMEZ: paneli durduran şey aynı zamanda ilerlemeyi
- * bildirecek olan şeydir, dolayısıyla o pencerede sunucudan sinyal gelmesi mümkün değildir.
- * Uydurma bir sayı yerine geçen süre ayrıca gösterilir.
- */
-const installPercent = computed(() => {
-  switch (installPhase.value) {
-    case "scheduled":
-      return installElapsedSeconds.value > 0 ? 35 : 10;
-    case "restarting":
-      return 60;
-    case "verifying":
-      return 85;
-    case "done":
-      return 100;
-    case "failed":
-    case "timeout":
-      // Basarisizlikta cubugu 100'e cekmek "tamamlandi" izlenimi verirdi; oldugu yerde birakiyoruz.
-      return 60;
-    default:
-      return 0;
-  }
-});
 
 // Ekrana GİRMEK "kontrol et" demektir: kullanıcı buraya güncelleme var mı diye bakmaya gelir,
 // önbellekten bayat cevap vermek bu ekranın tek işini boşa çıkarır.
@@ -167,9 +145,13 @@ async function refresh(force = true) {
     if (installPhase.value === "failed" || installPhase.value === "timeout") {
       installPhase.value = "";
       installElapsedSeconds.value = 0;
+      installTargetVersion.value = "";
       installAttempt.value = null;
     }
     notice.value = "";
+    if (next.isInstallScheduled) {
+      startPostInstallWatch(next.preparedVersion?.trim() ?? "", next.currentVersion, next.lastAttempt, next);
+    }
   } catch (error) {
     if (current() && revision === statusRevision) { statusConfirmed.value = false; showNotice(resolveApiMessage(error), true); }
   } finally {
@@ -228,7 +210,7 @@ async function installUpdate() {
     const result = await installPreparedUpdate(expectedVersion, expectedPackageSha256);
     if (!current() || revision !== statusRevision) return;
     status.value = result;
-    if (!result.isInstallScheduled || !prepared(result) || !sameVersion(result.preparedVersion!, expectedVersion) ||
+    if (!result.isInstallScheduled || !preparedIdentity(result) || !sameVersion(result.preparedVersion!, expectedVersion) ||
       result.preparedPackageSha256!.toLowerCase() !== expectedPackageSha256.toLowerCase()) {
       statusConfirmed.value = false;
       showNotice(t("panel.update.resultUnconfirmed"), true);
@@ -236,7 +218,7 @@ async function installUpdate() {
     }
     statusConfirmed.value = true;
     showNotice(t("panel.update.waitingRestart"), false);
-    startPostInstallWatch(expectedVersion, checked.currentVersion, checked.lastAttempt);
+    startPostInstallWatch(expectedVersion, checked.currentVersion, checked.lastAttempt, result);
   } catch (error) {
     if (current() && revision === statusRevision) { statusConfirmed.value = false; showNotice(resolveApiMessage(error), true); }
   } finally {
@@ -256,33 +238,50 @@ function sameVersion(first: string, second: string) {
   return normalize(first) === normalize(second);
 }
 
-function startPostInstallWatch(expectedVersion: string, previousVersion: string, previousAttempt: UpdateAttempt | null) {
+function startPostInstallWatch(expectedVersion: string, previousVersion: string, previousAttempt: UpdateAttempt | null, scheduledStatus: UpdateStatus) {
   stopPostInstallWatch();
+  installElapsedSeconds.value = 0;
+  installTargetVersion.value = "";
+  installAttempt.value = null;
+  const scheduledAt = Date.parse(scheduledStatus.installScheduledAtUtc ?? "");
+  const checkedAt = Date.parse(scheduledStatus.checkedAtUtc);
+  if (!expectedVersion.trim() || !Number.isFinite(scheduledAt) || !Number.isFinite(checkedAt) || scheduledAt > checkedAt) {
+    statusConfirmed.value = false;
+    showNotice(t("panel.update.resultUnconfirmed"), true);
+    return;
+  }
+  // Both timestamps come from the server. Only elapsed time since this read uses
+  // the browser clock, so clock skew and reopening the view cannot extend the window.
+  const observedAge = checkedAt - scheduledAt;
   const generation = watchGeneration, startedAt = Date.now();
   const previousAttemptIdentity = JSON.stringify(previousAttempt);
   const owned = () => current() && generation === watchGeneration;
   monitoring.value = true;
   installPhase.value = "scheduled";
-  installElapsedSeconds.value = 0;
-  installAttempt.value = null;
-  installStartedAtIso = new Date().toISOString();
+  installTargetVersion.value = expectedVersion;
+  installElapsedSeconds.value = Math.floor(observedAge / 1000);
+  installStartedAtIso = new Date(scheduledAt).toISOString();
   const reloadLater = () => {
     reloadHandle = window.setTimeout(() => {
       reloadHandle = null;
       if (current()) window.location.reload();
     }, 1500);
   };
-  // Keep the deadline independent of HTTP completion, including hung responses.
-  progressHandle = window.setInterval(() => {
+  const updateElapsed = () => {
     if (!owned()) { stopPostInstallWatch(true); return; }
-    installElapsedSeconds.value = Math.round((Date.now() - startedAt) / 1000);
-    if (Date.now() - startedAt >= 15 * 60_000) {
+    const elapsed = observedAge + Math.max(0, Date.now() - startedAt);
+    installElapsedSeconds.value = Math.floor(elapsed / 1000);
+    if (elapsed >= 15 * 60_000) {
       installPhase.value = "timeout";
       statusConfirmed.value = false;
       stopPostInstallWatch(true);
       showNotice(t("panel.update.updateTimeout"), true);
     }
-  }, 1000);
+  };
+  updateElapsed();
+  if (!owned()) return;
+  // Keep the original deadline independent of HTTP completion, including hung responses.
+  progressHandle = window.setInterval(updateElapsed, 1000);
   const poll = async () => {
     postInstallHandle = null;
     if (!owned()) { stopPostInstallWatch(true); return; }
@@ -308,7 +307,7 @@ function startPostInstallWatch(expectedVersion: string, previousVersion: string,
         showNotice(attempt.isFailed === true ? describeAttemptFailure(attempt) : t("panel.update.resultUnconfirmed"), true);
         return;
       }
-      installPhase.value = installPhase.value === "restarting" ? "verifying" : "scheduled";
+      installPhase.value = installPhase.value === "restarting" || installPhase.value === "verifying" ? "verifying" : "scheduled";
     } catch (error) {
       if (!owned()) return;
       statusConfirmed.value = false;
@@ -429,47 +428,30 @@ function showNotice(message: string, isError: boolean) {
 }
 
 .install-progress {
+  --watch-color: var(--accent-1);
   display: grid;
-  gap: var(--sp-8);
-  padding: var(--sp-12);
-  border: 1px solid var(--panel-border);
+  gap: var(--sp-16);
+  padding: var(--sp-16);
+  border: 1px solid color-mix(in srgb, var(--watch-color) 25%, var(--panel-border));
+  border-left: 3px solid var(--watch-color);
   border-radius: var(--radius-sm);
   background: var(--surface-1);
+  min-width: 0;
 }
-
-.progress-track {
-  height: 8px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--text-strong) 12%, transparent);
-  overflow: hidden;
-}
-
-.progress-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: var(--accent-1);
-  /* Adımlar arası sıçrama yumuşasın; süre kısa tutuluyor ki ilerleme "akıyormuş" gibi görünüp
-     olduğundan fazlasını ima etmesin. */
-  transition: width 400ms ease;
-}
-
-.progress-fill.done {
-  background: var(--ok-1);
-}
-
-.progress-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--sp-12);
-  flex-wrap: wrap;
-}
-
-/* SAYILAR SAGA + tabular-nums: yuzde ve gecen sure her saniye degisiyor. Orantili rakamlarda
-   "%9" ile "%85" farkli genislikte cizilip satiri titretiyordu; sabit genislikli rakamda
-   yerinden oynamaz. */
-.progress-meta .meta {
-  font-variant-numeric: tabular-nums;
-}
+.install-progress.is-done { --watch-color: var(--ok-1); }
+.install-progress.is-failed { --watch-color: var(--danger-1); }
+.install-progress.is-timeout { --watch-color: var(--warn-1); }
+.install-progress-head { display: flex; align-items: flex-start; gap: var(--sp-12); }
+.install-phase-icon { display: grid; place-items: center; flex: 0 0 38px; height: 38px; border-radius: 50%; color: var(--text-strong); background: color-mix(in srgb, var(--watch-color) 10%, var(--surface-1)); }
+.install-phase-icon svg { width: 22px; height: 22px; }
+.install-progress-copy { min-width: 0; }
+.install-progress-copy h3 { margin: 0 0 var(--sp-4); font-size: var(--fs-md); line-height: 1.5; overflow-wrap: anywhere; }
+.install-progress-copy p { line-height: 1.6; overflow-wrap: anywhere; }
+.install-observations { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-12); margin: 0; padding-top: var(--sp-12); border-top: 1px solid var(--panel-border); }
+.install-observations > div { min-width: 0; }
+.install-observations dt { color: var(--text-muted); font-size: var(--fs-xs); }
+.install-observations dd { margin: var(--sp-4) 0 0; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+@media (max-width: 420px) { .install-progress-head { flex-direction: column; } }
 
 /* 3 -> 2 sutun: izgarada YALNIZ IKI oge var (SHA256 ve paket yolu). Ucuncu sutun her zaman
    bostu ve iki uzun deger, bos bir sutunun yaninda gereksiz yere daraliyordu. */

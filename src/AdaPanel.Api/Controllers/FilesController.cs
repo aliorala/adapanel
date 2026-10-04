@@ -131,17 +131,25 @@ public sealed class FilesController(
         if (length > PanelServerLimits.FileUploadMaxBytes)
             throw new AppException("files.upload_too_large", 413, 413);
         using var publication = await CapturePublicationAsync([path ?? string.Empty, virtualPath], cancellationToken);
+        var ownership = new FileOwnership(ResolveSiteOwnerAsync);
+        async Task Approve(SiteDto site, CancellationToken token)
+        {
+            await publication.ApproveAsync(site, token);
+            await ownership.ValidateAsync(token);
+        }
         cancellationToken.ThrowIfCancellationRequested();
         await using var stream = file.OpenReadStream();
         // The service measures the complete private payload and keeps the original
         // target open through quota and publication, so the deduction cannot go stale.
         var savedPath = await fileService.SaveUploadAsync(virtualPath, stream, length,
-            PanelServerLimits.FileUploadMaxBytes, publication.ApproveAsync,
+            PanelServerLimits.FileUploadMaxBytes, Approve,
             (growth, token) => EnsureDiskQuotaAsync(path,
-                _ => Task.FromResult((growth, string.Empty)), token, publication.Principal), cancellationToken);
+                _ => Task.FromResult((growth, string.Empty)), token, publication.Principal, ownership), cancellationToken);
         await publication.RevalidateAsync(cancellationToken);
+        await ownership.ValidateAsync(cancellationToken);
         await WriteAuditAsync("files.uploaded", savedPath, $"File uploaded ({length} bytes).", cancellationToken);
         await publication.RevalidateAsync(cancellationToken);
+        await ownership.ValidateAsync(cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { path = savedPath }, "files.uploaded"));
     }
 
@@ -150,16 +158,23 @@ public sealed class FilesController(
     {
         request = new WriteFileRequest { Path = request.Path, Content = request.Content, FailIfExists = request.FailIfExists };
         using var publication = await CapturePublicationAsync([request.Path], cancellationToken);
+        var ownership = new FileOwnership(ResolveSiteOwnerAsync);
+        async Task Approve(SiteDto site, CancellationToken token)
+        {
+            await publication.ApproveAsync(site, token);
+            await ownership.ValidateAsync(token);
+        }
 
         // KOTA: yazma da diski büyütür. Ölçülen şey DELTA'dır (yeni içerik − hedefte hâlihazırda
         // duran dosya), gelen içeriğin tamamı değil — aksi hâlde kotası dolmuş bir kullanıcı,
         // sitesini onarmak için bir dosyayı KÜÇÜLTMEK istediğinde bile reddedilirdi ve panelden
         // çıkışı olmayan bir kilide girerdi. Hedef yoksa ölçüm 0 döner (yeni dosya).
-        var workspace = await fileService.WriteAsync(request, publication.ApproveAsync,
+        var workspace = await fileService.WriteAsync(request, Approve,
             (growth, token) => EnsureDiskQuotaAsync(request.Path,
-                _ => Task.FromResult((growth, string.Empty)), token, publication.Principal), cancellationToken);
+                _ => Task.FromResult((growth, string.Empty)), token, publication.Principal, ownership), cancellationToken);
 
         await publication.RevalidateAsync(cancellationToken);
+        await ownership.ValidateAsync(cancellationToken);
         // İÇERİK YAZILMAZ, yalnız boyutu: bir dosyanın gövdesi (yapılandırma, bağlantı dizesi,
         // müşteri verisi) denetim kaydına kopyalanırsa kayıt, korumaya çalıştığı sırların ikinci
         // bir deposuna dönüşür.
@@ -169,6 +184,7 @@ public sealed class FilesController(
             $"File content saved ({(request.Content ?? string.Empty).Length} characters).",
             cancellationToken);
         await publication.RevalidateAsync(cancellationToken);
+        await ownership.ValidateAsync(cancellationToken);
 
         return Ok(ApiResponse<FileWorkspaceDto>.Ok(ProjectWorkspace(workspace, publication.Principal), "files.saved"));
     }
@@ -214,7 +230,7 @@ public sealed class FilesController(
         request = new MoveFilesRequest { Paths = (request.Paths ?? []).ToArray(), DestinationPath = request.DestinationPath,
             NewName = request.NewName, Overwrite = request.Overwrite };
         using var publication = await CapturePublicationAsync([.. request.Paths, request.DestinationPath], cancellationToken);
-        var ownership = new TransferOwnership(ResolveSiteOwnerAsync);
+        var ownership = new FileOwnership(ResolveSiteOwnerAsync);
         async Task Approve(SiteDto site, CancellationToken token)
         {
             await publication.ApproveAsync(site, token);
@@ -282,7 +298,7 @@ public sealed class FilesController(
 
         // Measure the immutable bytes that this item will publish, subtracting a protected
         // overwrite target. An earlier Measure(path) can describe a different source file.
-        var ownership = new TransferOwnership(ResolveSiteOwnerAsync);
+        var ownership = new FileOwnership(ResolveSiteOwnerAsync);
         async Task Approve(SiteDto site, CancellationToken token)
         {
             await publication.ApproveAsync(site, token);
@@ -359,21 +375,29 @@ public sealed class FilesController(
         request = new ArchiveFileRequest { Path = request.Path, DestinationPath = request.DestinationPath, Overwrite = request.Overwrite };
         using var publication = await CapturePublicationAsync(string.IsNullOrWhiteSpace(request.DestinationPath)
             ? [request.Path] : [request.Path, request.DestinationPath], cancellationToken);
+        var ownership = new FileOwnership(ResolveSiteOwnerAsync);
+        async Task Approve(SiteDto site, CancellationToken token)
+        {
+            await publication.ApproveAsync(site, token);
+            await ownership.ValidateAsync(token);
+        }
 
         // EŞZAMANLILIK TAVANI KAPSAM DENETİMİNDEN SONRA: yer ayırmadan önce isteğin meşru olduğu
         // bilinmeli, yoksa kapsam dışı bir istek de kiracının bütçesini tüketirdi.
         using var kapsam = await AgirIseGirisAsync(cancellationToken, publication.Principal);
-        var workspace = await fileService.CompressAsync(request, publication.ApproveAsync,
+        var workspace = await fileService.CompressAsync(request, Approve,
             (bytes, token) => EnsureDiskQuotaAsync(
                 string.IsNullOrWhiteSpace(request.DestinationPath) ? request.Path : request.DestinationPath,
-                _ => Task.FromResult((bytes, string.Empty)), token, publication.Principal), cancellationToken);
+                _ => Task.FromResult((bytes, string.Empty)), token, publication.Principal, ownership), cancellationToken);
         await publication.RevalidateAsync(cancellationToken);
+        await ownership.ValidateAsync(cancellationToken);
         await WriteAuditAsync(
             "files.compressed",
             request.Path,
             $"Archived to '{(string.IsNullOrWhiteSpace(request.DestinationPath) ? "(default)" : request.DestinationPath)}'.",
             cancellationToken);
         await publication.RevalidateAsync(cancellationToken);
+        await ownership.ValidateAsync(cancellationToken);
         return Ok(ApiResponse<FileWorkspaceDto>.Ok(ProjectWorkspace(workspace, publication.Principal), "files.compressed"));
     }
 
@@ -383,17 +407,24 @@ public sealed class FilesController(
         request = new ArchiveFileRequest { Path = request.Path, DestinationPath = request.DestinationPath };
         using var publication = await CapturePublicationAsync(string.IsNullOrWhiteSpace(request.DestinationPath)
             ? [request.Path] : [request.Path, request.DestinationPath], cancellationToken);
+        var ownership = new FileOwnership(ResolveSiteOwnerAsync);
+        async Task Approve(SiteDto site, CancellationToken token)
+        {
+            await publication.ApproveAsync(site, token);
+            await ownership.ValidateAsync(token);
+        }
 
         // Tavan ÖLÇÜMDEN de önce alınır: kota ölçümü arşivin girdi listesini gezer, yani kendisi
         // de ağır bir iştir.
         using var kapsam = await AgirIseGirisAsync(cancellationToken, publication.Principal);
 
         // Ölçülen ZIP, kota beklemesi ve çıkarma boyunca hizmette aynı açık dosya olarak tutulur.
-        var workspace = await fileService.ExtractAsync(request, publication.ApproveAsync,
+        var workspace = await fileService.ExtractAsync(request, Approve,
             (bytes, token) => EnsureDiskQuotaAsync(
                 string.IsNullOrWhiteSpace(request.DestinationPath) ? request.Path : request.DestinationPath,
-                _ => Task.FromResult((bytes, string.Empty)), token, publication.Principal), cancellationToken);
+                _ => Task.FromResult((bytes, string.Empty)), token, publication.Principal, ownership), cancellationToken);
         await publication.RevalidateAsync(cancellationToken);
+        await ownership.ValidateAsync(cancellationToken);
 
         // Çıkarma, arşivin içeriğiyle var olan dosyaların ÜZERİNE yazabilir; yani içerik kaybının
         // sessiz yollarından biridir. Hedef de kayda geçer.
@@ -404,6 +435,7 @@ public sealed class FilesController(
             cancellationToken);
 
         await publication.RevalidateAsync(cancellationToken);
+        await ownership.ValidateAsync(cancellationToken);
         return Ok(ApiResponse<FileWorkspaceDto>.Ok(ProjectWorkspace(workspace, publication.Principal), "files.extracted"));
     }
 
@@ -513,7 +545,8 @@ public sealed class FilesController(
     private async Task EnsureDiskQuotaAsync(
         string? scopePath,
         Func<CancellationToken, Task<(long Bayt, string KesilmeSebebi)>> olcum,
-        CancellationToken cancellationToken, ClaimsPrincipal? acceptedPrincipal = null)
+        CancellationToken cancellationToken, ClaimsPrincipal? acceptedPrincipal = null,
+        FileOwnership? ownership = null)
     {
         var principal = acceptedPrincipal ?? User;
         Guid? quotaOwner = null;
@@ -523,10 +556,14 @@ public sealed class FilesController(
         }
         else if (CustomerAccess.IsReseller(principal))
         {
-            quotaOwner = await ResolveSiteOwnerAsync(scopePath, cancellationToken);
+            quotaOwner = ownership is null
+                ? await ResolveSiteOwnerAsync(scopePath, cancellationToken)
+                : await ownership.CaptureAsync(scopePath ?? string.Empty, cancellationToken);
         }
 
+        if (ownership is not null) await ownership.ValidateAsync(cancellationToken);
         await EnsureOwnerDiskQuotaAsync(quotaOwner, olcum, cancellationToken);
+        if (ownership is not null) await ownership.ValidateAsync(cancellationToken);
     }
 
     private async Task EnsureOwnerDiskQuotaAsync(Guid? quotaOwner,
@@ -564,7 +601,7 @@ public sealed class FilesController(
     /// decision bound to the assignment that produced it across subsequent async approvals.
     /// This is freshness checking, not a transaction against external ownership writers.
     /// </summary>
-    private sealed class TransferOwnership(Func<string?, CancellationToken, Task<Guid?>> readOwner)
+    private sealed class FileOwnership(Func<string?, CancellationToken, Task<Guid?>> readOwner)
     {
         private readonly Dictionary<string, Guid?> accepted = new(StringComparer.OrdinalIgnoreCase);
 

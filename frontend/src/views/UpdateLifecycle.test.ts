@@ -120,14 +120,14 @@ it.each([undefined, ""])("does not offer installation without a measured prepare
 it("does not claim a same-version reinstall succeeded before the new attempt finishes", async () => {
   initial = valid({ currentVersion: "0.8.76", isUpdateAvailable: false });
   const finished = { phase: "finished", isFinished: true, isFailed: false, error: "", errorKey: "", isDecidedByPanel: false, updatedAtUtc: new Date().toISOString(), installerExitCode: 0 };
-  initial.lastAttempt = finished; write = async config => response(config, { ...initial, isInstallScheduled: true });
+  initial.lastAttempt = finished; write = async config => response(config, { ...initial, isInstallScheduled: true, installScheduledAtUtc: new Date().toISOString(), checkedAtUtc: new Date().toISOString() });
   const { state } = await mount(); await state.installUpdate(); await vi.advanceTimersByTimeAsync(6500);
   expect(state.installPhase).not.toBe("done"); expect(reload).not.toHaveBeenCalled();
   initial = { ...initial, lastAttempt: { ...finished, updatedAtUtc: new Date().toISOString() } };
   await vi.advanceTimersByTimeAsync(5000); expect(state.installPhase).toBe("done"); expect(reload).toHaveBeenCalledOnce();
 });
 it("reports a new failed same-version reinstall rather than inferring success from the unchanged version", async () => {
-  initial = valid({ currentVersion: "0.8.76", isUpdateAvailable: false }); write = async config => response(config, { ...initial, isInstallScheduled: true });
+  initial = valid({ currentVersion: "0.8.76", isUpdateAvailable: false }); write = async config => response(config, { ...initial, isInstallScheduled: true, installScheduledAtUtc: new Date().toISOString(), checkedAtUtc: new Date().toISOString() });
   const { state } = await mount(); await state.installUpdate(); initial = { ...initial, lastAttempt: { phase: "failed", isFinished: true, isFailed: true, error: "", errorKey: "update.install_failed", isDecidedByPanel: false, updatedAtUtc: new Date().toISOString(), installerExitCode: 1 } };
   await vi.advanceTimersByTimeAsync(6500); expect(state.installPhase).toBe("failed"); expect(state.noticeError).toBe(true); expect(reload).not.toHaveBeenCalled();
 });

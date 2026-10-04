@@ -292,5 +292,6 @@
   "files.search_truncated_results": "The search reached its 100-result limit. More matches may exist; narrow your query or folder.",
   "files.owner_changed": "The site's subscription owner changed while the operation was waiting. Check the current site and try again.",
   "files.upload_too_large": "The uploaded file exceeds the 200 MiB limit.",
-  "files.upload_size_mismatch": "The uploaded content does not match the declared file size. Select the file again and retry."
+  "files.upload_size_mismatch": "The uploaded content does not match the declared file size. Select the file again and retry.",
+  "update.github_version_invalid": "The published version number could not be validated. Latest release information is unavailable."
 }

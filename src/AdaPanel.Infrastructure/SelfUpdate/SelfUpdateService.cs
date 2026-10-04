@@ -70,6 +70,7 @@ public sealed class SelfUpdateService : ISelfUpdateService
     }
 
     private const string ManifestPath = "config/update-manifest.json";
+    private const string CheckStatePath = "config/update-check.json";
     private const string GithubConfigPath = "config/update-github.json";
     private const string PendingUpdatePath = "updates/pending-update.json";
     private const string TrustConfigPath = "config/update-trust.json";
@@ -132,49 +133,8 @@ public sealed class SelfUpdateService : ISelfUpdateService
     public async Task<UpdateStatusDto> CheckForUpdateAsync(bool forceRefresh = false, CancellationToken cancellationToken = default)
     {
         var currentVersion = VersionInfo.Current;
-        var github = await fileStore.ReadAsync(GithubConfigPath, new GithubConfig { Repo = DefaultRepo }, cancellationToken);
-
-        // IZIN LISTESI OKUMA ANINDA DA UYGULANIR, yalnizca yazma ucunda degil. Sebep: yapilandirma
-        // diskte bir JSON dosyasidir. Yalnizca SetGithubRepoAsync denetlenirse, o dosyaya yazabilen
-        // biri panelin SYSTEM olarak calistiracagi exe'nin kaynagini yine belirleyebilir. Izinsiz
-        // deger SESSIZCE degil, VARSAYILANA DUSULEREK reddedilir: guncelleme yolu kapanmasin.
-        if (!UpdatePackageTrust.DepoIzinli(github.Repo))
-        {
-            github = new GithubConfig { Repo = DefaultRepo };
-        }
-
-        var fetchNote = string.Empty;
-
-        var cached = await fileStore.ReadAsync(ManifestPath, new UpdateManifest(), cancellationToken);
-        var isFresh = cached.FetchedAtUtc.HasValue &&
-                      DateTime.UtcNow - cached.FetchedAtUtc.Value < ManifestFreshness &&
-                      !string.IsNullOrWhiteSpace(cached.LatestVersion);
-
-        // GitHub deposu ayarlıysa en son Release'i ÇEK (sürüm + .exe indirme linki + SHA256) ve yerel manifeste
-        // önbelleğe yaz → indir/kur akışı yerel manifestle aynen çalışır. Hata olursa net not (UI gösterir), tab çökmiyor.
-        if (!string.IsNullOrWhiteSpace(github.Repo) && (forceRefresh || !isFresh))
-        {
-            try
-            {
-                var remote = await FetchGithubManifestAsync(github.Repo.Trim(), cancellationToken);
-                if (remote is not null)
-                {
-                    remote.FetchedAtUtc = DateTime.UtcNow;
-                    await fileStore.WriteAsync(ManifestPath, remote, cancellationToken);
-                }
-            }
-            catch (AppException appException)
-            {
-                fetchNote = appException.MessageKey;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-            catch
-            {
-                fetchNote = "update.github_fetch_failed";
-            }
-        }
-
-        var manifest = await fileStore.ReadAsync(ManifestPath, new UpdateManifest(), cancellationToken);
+        // The release-check gate is gone before the independent package/installer gate.
+        var (github, manifest, fetchNote) = await ReadCheckedManifestAsync(forceRefresh, cancellationToken);
         var latestVersion = string.IsNullOrWhiteSpace(manifest.LatestVersion) ? currentVersion : manifest.LatestVersion;
         using var pendingLease = await SelfUpdateLifecycle.EnterAsync(fileStore.ResolvePath(PendingUpdatePath), cancellationToken);
         var pendingUpdate = await fileStore.ReadAsync(PendingUpdatePath, new PendingUpdate(), cancellationToken);
@@ -230,6 +190,48 @@ public sealed class SelfUpdateService : ISelfUpdateService
             IsUpdateAvailable = IsNewerVersion(currentVersion, latestVersion),
             CheckedAtUtc = DateTime.UtcNow
         };
+    }
+
+    private async Task<(GithubConfig Github, UpdateManifest Manifest, string ErrorKey)> ReadCheckedManifestAsync(
+        bool forceRefresh, CancellationToken cancellationToken)
+    {
+        using var checkLease = await SelfUpdateCheckLifecycle.EnterAsync(fileStore.ResolvePath(ManifestPath), cancellationToken);
+        var github = await fileStore.ReadAsync(GithubConfigPath, new GithubConfig { Repo = DefaultRepo }, cancellationToken);
+        // Validate file-backed configuration too, not only the settings endpoint.
+        if (!UpdatePackageTrust.DepoIzinli(github.Repo)) github = new GithubConfig { Repo = DefaultRepo };
+        var repository = UpdatePackageTrust.DepoyuCozumle(github.Repo) is { } parsed
+            ? $"{parsed.Owner}/{parsed.Name}".ToLowerInvariant() : string.Empty;
+
+        var manifest = await fileStore.ReadAsync(ManifestPath, new UpdateManifest(), cancellationToken);
+        var lastCheck = await fileStore.ReadAsync(CheckStatePath, new UpdateCheckState(), cancellationToken);
+        var fetchNote = string.Equals(lastCheck.Repository, repository, StringComparison.OrdinalIgnoreCase)
+            ? lastCheck.ErrorKey : string.Empty;
+        var now = DateTime.UtcNow;
+        var isFresh = manifest.FetchedAtUtc is { } fetched && fetched <= now && now - fetched < ManifestFreshness &&
+                      !string.IsNullOrWhiteSpace(manifest.LatestVersion) && TryParseVersion(manifest.LatestVersion) is not null;
+        if (repository.Length != 0 && (forceRefresh || !isFresh))
+        {
+            try
+            {
+                var remote = await FetchGithubManifestAsync(github.Repo.Trim(), cancellationToken);
+                remote.FetchedAtUtc = DateTime.UtcNow;
+                await fileStore.WriteAsync(ManifestPath, remote, cancellationToken);
+                manifest = remote;
+                fetchNote = string.Empty;
+            }
+            catch (AppException appException) { fetchNote = appException.MessageKey; }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch { fetchNote = "update.github_fetch_failed"; }
+
+            // A failed manual refresh remains visible to later scoped readers.
+            // Keep the last verified manifest intact, and clear the error only on success.
+            cancellationToken.ThrowIfCancellationRequested();
+            await fileStore.WriteAsync(CheckStatePath, new UpdateCheckState
+            {
+                Repository = repository, ErrorKey = fetchNote
+            }, cancellationToken);
+        }
+        return (github, manifest, fetchNote);
     }
 
     /// <summary>
@@ -557,7 +559,7 @@ public sealed class SelfUpdateService : ISelfUpdateService
     // GitHub Releases API'sinden en son sürümü çevirir → UpdateManifest. owner/repo (ya da github.com URL'si) kabul eder.
     // .exe asset'inin indirme linki + SHA256'sı (asset 'digest' alanı veya '<exe>.sha256' asset'i) alınır. PUBLIC repo:
     // kimlik gerektirmez (User-Agent zorunlu). SHA256 bulunamazsa güvenlik gereği net hata (.sha256 ekleyin) verir.
-    private async Task<UpdateManifest?> FetchGithubManifestAsync(string repo, CancellationToken cancellationToken)
+    private async Task<UpdateManifest> FetchGithubManifestAsync(string repo, CancellationToken cancellationToken)
     {
         // TEK AYRISTIRICI: izin denetimi (UpdatePackageTrust.DepoIzinli) ile burasi ayni koda bakar.
         // Ikisi ayri ayristirici olsaydi biri "gecerli" digeri "gecersiz" diyebilir ve izin denetimi
@@ -592,6 +594,8 @@ public sealed class SelfUpdateService : ISelfUpdateService
 
         var tag = root.TryGetProperty("tag_name", out var tagElement) ? tagElement.GetString() ?? string.Empty : string.Empty;
         var version = tag.TrimStart('v', 'V').Trim();
+        if (string.IsNullOrWhiteSpace(version) || TryParseVersion(version) is null)
+            throw new AppException("update.github_version_invalid", 502, 502);
         var notes = root.TryGetProperty("body", out var bodyElement) ? bodyElement.GetString() ?? string.Empty : string.Empty;
 
         var downloadUrl = string.Empty;
@@ -1165,6 +1169,12 @@ public sealed class SelfUpdateService : ISelfUpdateService
 
         /// <summary>Bu manifest GitHub'dan en son NE ZAMAN alındı. Boşsa (eski kurulum) bayat sayılır.</summary>
         public DateTime? FetchedAtUtc { get; set; }
+    }
+
+    private sealed class UpdateCheckState
+    {
+        public string Repository { get; set; } = string.Empty;
+        public string ErrorKey { get; set; } = string.Empty;
     }
 
     private sealed class PendingUpdate

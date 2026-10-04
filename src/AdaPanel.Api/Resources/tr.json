@@ -292,5 +292,6 @@
   "files.search_truncated_results": "100 sonuç sınırına ulaşıldı. Başka eşleşmeler olabilir; arama ifadesini veya klasörü daraltın.",
   "files.owner_changed": "İşlem beklerken sitenin abonelik sahibi değişti. Güncel siteyi kontrol edip işlemi yeniden başlatın.",
   "files.upload_too_large": "Yüklenecek dosya 200 MiB sınırını aşıyor.",
-  "files.upload_size_mismatch": "Yüklenen içerik bildirilen dosya boyutuyla eşleşmiyor. Dosyayı yeniden seçip tekrar deneyin."
+  "files.upload_size_mismatch": "Yüklenen içerik bildirilen dosya boyutuyla eşleşmiyor. Dosyayı yeniden seçip tekrar deneyin.",
+  "update.github_version_invalid": "Yayımlanan sürüm numarası doğrulanamadı. Güncel sürüm bilgisi alınamadı."
 }
