@@ -61,7 +61,14 @@ public sealed record CustomerScope(
 /// okunamamasıdır (o durumun çevrilmiş bir anahtarı yok ve olmayan bir anahtar uydurmak,
 /// kullanıcının ekranda ham anahtar görmesi demekti).
 /// </param>
-public readonly record struct DiskUsage(long UsageMb, bool Measured, string TruncatedReasonKey);
+public readonly record struct DiskUsage(long UsageMb, bool Measured, string TruncatedReasonKey)
+{
+    /// <summary>
+    /// Observed bytes before conversion to MiB. This is still a lower bound when
+    /// Measured is false; null preserves compatibility with older measurement providers.
+    /// </summary>
+    public long? UsageBytes { get; init; }
+}
 
 /// <summary>
 /// Müşteri panelinin bölüm anahtarları (alt-kullanıcı izin matrisinin evreni).

@@ -428,7 +428,8 @@ public sealed class CustomerScopeService(
         // olabileceğini KULLANICIYA SÖYLÜYOR (UserSummaryDto/SubscriptionUsageDto.DiskMeasured).
         // Ölçek tabanı PanelUnits'ten: burada `1024 * 1024` yazmak, tabanı panelde BEŞİNCİ kez
         // elle tekrarlamaktı ve birini 1000'e çeviren düzenleme hiçbir yerde kırmızı yakmazdı.
-        return new DiskUsage(PanelUnits.BytesToMebibytes(totalBytes), olculdu, kesilmeSebebi);
+        return new DiskUsage(PanelUnits.BytesToMebibytes(totalBytes), olculdu, kesilmeSebebi)
+        { UsageBytes = totalBytes };
     }
 
     /// <summary>Birden çok sitenin kesilme sebebinden RAPOR EDİLECEK olanı seçer.</summary>

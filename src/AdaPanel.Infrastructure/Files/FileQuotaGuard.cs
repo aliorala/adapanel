@@ -60,7 +60,13 @@ public static class FileQuotaGuard
         // Taban PanelUnits'ten. `maxDiskMb`/`UsageMb` adları "Mb" der, değerleri MiB'dir —
         // bilinçli tel uyumu; üç maddelik gerekçe PanelUnits'te yazılı.
         var tavanBayt = PanelUnits.MebibytesToBytes(maxDiskMb);
-        var kullanilanBayt = PanelUnits.MebibytesToBytes(kullanim.UsageMb);
+        var eskiKullanilanBayt = kullanim.UsageMb > long.MaxValue / PanelUnits.BytesPerMebibyte
+            ? long.MaxValue : PanelUnits.MebibytesToBytes(kullanim.UsageMb);
+        // Keep fractional usage that the display's MiB conversion discards. Invalid
+        // optional metadata cannot lower the established legacy usage bound.
+        var kullanilanBayt = kullanim.UsageBytes is { } bayt && bayt >= 0
+            ? Math.Max(eskiKullanilanBayt, bayt) : eskiKullanilanBayt;
+        var eklenenBayt = Math.Max(0, gelenBayt);
 
         // ==========================================================================================
         // HESAP BAYT ÜZERİNDEN — ve bu, kapatılan İKİNCİ hatadır (aynı kök).
@@ -82,7 +88,7 @@ public static class FileQuotaGuard
         // müşteri kendi başına geri açamaz), buradaki ise TEK BİR YAZMAYI reddetmektir. Kesin bir
         // ihlali "ölçümüm eksikti" diye geçirmek, kotayı ölçüm bütçesini doldurabilen herkese
         // açardı.
-        if (kullanilanBayt + gelenBayt > tavanBayt)
+        if (kullanilanBayt > tavanBayt || eklenenBayt > tavanBayt - kullanilanBayt)
         {
             throw new AppException("files.quota_exceeded", 403, 403);
         }

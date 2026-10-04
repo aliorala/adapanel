@@ -1728,14 +1728,10 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         await using var input = new FileStream(archive.PhysicalPath, FileMode.Open, FileAccess.Read, FileShare.Read,
             81920, FileOptions.Asynchronous | FileOptions.RandomAccess);
         using var zip = OpenArchive(input);
-        var contentBytes = MeasureArchiveContentBytes(zip, cancellationToken);
-        if (beforeExtract is not null)
-        {
-            await beforeExtract(contentBytes, cancellationToken);
-            await ApproveTransferAsync(archive, destination, beforeMutation, cancellationToken);
-        }
-        EnsureNoReparsePoints(destination.SandboxRoot, destination.PhysicalPath);
-        Directory.CreateDirectory(destination.PhysicalPath);
+        // Validate every header before effects; quota below accounts for each published
+        // entry's net growth, including repeated names that replace an earlier entry.
+        _ = MeasureArchiveContentBytes(zip, cancellationToken);
+        var quotaChecked = false;
 
         foreach (var entry in zip.Entries)
         {
@@ -1755,19 +1751,42 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
 
             if (string.IsNullOrEmpty(entry.Name))
             {
+                if (!quotaChecked) await CheckGrowthAsync(0);
+                EnsureNoReparsePoints(destination.SandboxRoot, outputPath);
                 Directory.CreateDirectory(outputPath);
                 continue;
             }
 
+            // Keep the deducted destination length stable through quota, decompression
+            // and the final authority await, without holding a handle for every ZIP entry.
+            using var original = OpenCompressionDestination(outputPath, overwrite: true);
+            await CheckGrowthAsync(Math.Max(0, entry.Length - (original?.Length ?? 0)));
+            EnsureNoReparsePoints(destination.SandboxRoot, outputPath);
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
             await WriteAtomicallyAsync(destination with { PhysicalPath = outputPath },
                 (output, token) => CopyVerifiedArchiveEntryAsync(entry, output, token), cancellationToken,
                 token => ApproveTransferAsync(archive, destination, beforeMutation, token),
-                lastWriteTimeUtc: entry.LastWriteTime.UtcDateTime);
+                failIfExists: original is null,
+                lastWriteTimeUtc: entry.LastWriteTime.UtcDateTime,
+                releasePublicationRead: () => original?.Dispose());
         }
 
+        if (!quotaChecked)
+        {
+            // An empty archive still creates the selected directory, after approval.
+            await CheckGrowthAsync(0);
+            EnsureNoReparsePoints(destination.SandboxRoot, destination.PhysicalPath);
+            Directory.CreateDirectory(destination.PhysicalPath);
+        }
         await ApproveTransferAsync(archive, destination, beforeMutation, cancellationToken);
         return await ReadMutationWorkspaceAsync(destinationPath, beforeMutation, cancellationToken);
+
+        async Task CheckGrowthAsync(long growth)
+        {
+            if (beforeExtract is not null) await beforeExtract(growth, cancellationToken);
+            await ApproveTransferAsync(archive, destination, beforeMutation, cancellationToken);
+            quotaChecked = true;
+        }
     }
 
     private static ZipArchive OpenArchive(Stream input)

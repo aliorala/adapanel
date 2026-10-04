@@ -287,7 +287,9 @@ public sealed class FileArchiveIntegrityQuotaTests
         private async Task<DiskUsage> ReadUsage()
         {
             if (DiskUsageRead is { } read) await read();
-            return new DiskUsage(0, true, string.Empty);
+            var bytes = Directory.GetFiles(SiteRoot, "*", SearchOption.AllDirectories)
+                .Sum(path => new FileInfo(path).Length);
+            return new DiskUsage(PanelUnits.BytesToMebibytes(bytes), true, string.Empty) { UsageBytes = bytes };
         }
         public async Task<FileWorkspaceDto> Extract()
         {

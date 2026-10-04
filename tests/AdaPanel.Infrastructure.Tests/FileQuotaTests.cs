@@ -415,10 +415,15 @@ public sealed class FileQuotaTests : IDisposable
             DepoKoku(), "src", "AdaPanel.Api", "Controllers", "FilesController.cs"));
 
         var govde = GovdeAl(kaynak, "private async Task EnsureDiskQuotaAsync(");
+        var sahipGovdesi = GovdeAl(kaynak, "private async Task EnsureOwnerDiskQuotaAsync(");
 
-        Assert.Contains("FileQuotaGuard.EnsureRoom(", govde, StringComparison.Ordinal);
-        Assert.DoesNotContain("new DiskUsage(", govde, StringComparison.Ordinal);
-        Assert.DoesNotContain(".UsageMb", govde, StringComparison.Ordinal);
+        Assert.Contains("await EnsureOwnerDiskQuotaAsync(quotaOwner, olcum, cancellationToken)", govde, StringComparison.Ordinal);
+        Assert.Contains("FileQuotaGuard.EnsureRoom(", sahipGovdesi, StringComparison.Ordinal);
+        foreach (var ilgiliGovde in new[] { govde, sahipGovdesi })
+        {
+            Assert.DoesNotContain("new DiskUsage(", ilgiliGovde, StringComparison.Ordinal);
+            Assert.DoesNotContain(".UsageMb", ilgiliGovde, StringComparison.Ordinal);
+        }
     }
 
     // --- düzenek ---

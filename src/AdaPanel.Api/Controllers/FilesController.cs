@@ -211,16 +211,28 @@ public sealed class FilesController(
         request = new MoveFilesRequest { Paths = (request.Paths ?? []).ToArray(), DestinationPath = request.DestinationPath,
             NewName = request.NewName, Overwrite = request.Overwrite };
         using var publication = await CapturePublicationAsync([.. request.Paths, request.DestinationPath], cancellationToken);
-        var result = await fileService.MoveAsync(request, publication.ApproveAsync, async (source, target, measure, token) =>
+        var ownership = new TransferOwnership(ResolveSiteOwnerAsync);
+        async Task Approve(SiteDto site, CancellationToken token)
+        {
+            await publication.ApproveAsync(site, token);
+            await ownership.ValidateAsync(token);
+        }
+        var result = await fileService.MoveAsync(request, Approve, async (source, target, measure, token) =>
         {
             if (!CustomerAccess.IsScoped(publication.Principal)) return;
-            var sourceOwner = await ResolveSiteOwnerAsync(source, token);
-            var targetOwner = await ResolveSiteOwnerAsync(target, token);
+            var sourceOwner = await ownership.CaptureAsync(source, token);
+            var targetOwner = await ownership.CaptureAsync(target, token);
+            await ownership.ValidateAsync(token);
             // A rename or a move within one subscription does not add usage to that subscription.
             if (sourceOwner is not null && sourceOwner == targetOwner) return;
-            await EnsureDiskQuotaAsync(target, async ct => (await measure(ct), string.Empty), token, publication.Principal);
+            if (CustomerAccess.IsReseller(publication.Principal))
+                await EnsureOwnerDiskQuotaAsync(targetOwner, async ct => (await measure(ct), string.Empty), token);
+            else
+                await EnsureDiskQuotaAsync(target, async ct => (await measure(ct), string.Empty), token, publication.Principal);
+            await ownership.ValidateAsync(token);
         }, cancellationToken);
         await publication.RevalidateAsync(cancellationToken);
+        await ownership.ValidateAsync(cancellationToken);
 
         // Kayıt, kısmi başarısızlığı da yazar: "hepsi taşındı" diyen bir iz, taşınmayan dosyanın
         // nereye gittiğini soran kişiyi yanlış yönlendirirdi.
@@ -237,6 +249,7 @@ public sealed class FilesController(
             cancellationToken);
 
         await publication.RevalidateAsync(cancellationToken);
+        await ownership.ValidateAsync(cancellationToken);
         result.Workspace = ProjectWorkspace(result.Workspace, publication.Principal);
         return Ok(ApiResponse<MoveFilesResultDto>.Ok(result, "files.moved"));
     }
@@ -266,10 +279,30 @@ public sealed class FilesController(
 
         // Measure the immutable bytes that this item will publish, subtracting a protected
         // overwrite target. An earlier Measure(path) can describe a different source file.
-        var result = await fileService.CopyAsync(request, publication.ApproveAsync,
-            (_, target, measure, token) => EnsureDiskQuotaAsync(target,
-                async ct => (await measure(ct), string.Empty), token, publication.Principal), cancellationToken);
+        var ownership = new TransferOwnership(ResolveSiteOwnerAsync);
+        async Task Approve(SiteDto site, CancellationToken token)
+        {
+            await publication.ApproveAsync(site, token);
+            await ownership.ValidateAsync(token);
+        }
+        var result = await fileService.CopyAsync(request, Approve, async (_, target, measure, token) =>
+        {
+            if (CustomerAccess.IsReseller(publication.Principal))
+            {
+                var owner = await ownership.CaptureAsync(target, token);
+                await ownership.ValidateAsync(token);
+                await EnsureOwnerDiskQuotaAsync(owner, async ct => (await measure(ct), string.Empty), token);
+                await ownership.ValidateAsync(token);
+            }
+            else
+            {
+                // A customer/additional login spends its accepted parent subscription's
+                // quota. Do not replace that identity with the site's raw assignment row.
+                await EnsureDiskQuotaAsync(target, async ct => (await measure(ct), string.Empty), token, publication.Principal);
+            }
+        }, cancellationToken);
         await publication.RevalidateAsync(cancellationToken);
+        await ownership.ValidateAsync(cancellationToken);
 
         // Kayıt, kısmi başarısızlığı da yazar. İZ YALNIZCA YOL VE SEBEP tutar — dosya İÇERİĞİ asla:
         // denetim kaydı, kopyalanan dosyanın gizli verisinin ikinci bir kopyası olamaz.
@@ -286,6 +319,7 @@ public sealed class FilesController(
             cancellationToken);
 
         await publication.RevalidateAsync(cancellationToken);
+        await ownership.ValidateAsync(cancellationToken);
         result.Workspace = ProjectWorkspace(result.Workspace, publication.Principal);
         return Ok(ApiResponse<CopyFilesResultDto>.Ok(result, "files.copied"));
     }
@@ -489,6 +523,14 @@ public sealed class FilesController(
             quotaOwner = await ResolveSiteOwnerAsync(scopePath, cancellationToken);
         }
 
+        await EnsureOwnerDiskQuotaAsync(quotaOwner, olcum, cancellationToken);
+    }
+
+    private async Task EnsureOwnerDiskQuotaAsync(Guid? quotaOwner,
+        Func<CancellationToken, Task<(long Bayt, string KesilmeSebebi)>> olcum,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         if (quotaOwner is not { } ownerId)
         {
             return;
@@ -512,6 +554,41 @@ public sealed class FilesController(
         // KURALIN KENDİSİ ortak yerde ve bağımlılıksız (bkz. FileQuotaGuard): burada yalnız "kimin
         // kotası" sorusu cevaplanır, "sığıyor mu" sorusu değil.
         FileQuotaGuard.EnsureRoom(scope.MaxDiskMb, kullanim, gelenBayt, kesilmeSebebi);
+    }
+
+    /// <summary>
+    /// Site use pins protect the native generation, not assignment JSON. Keep each quota
+    /// decision bound to the assignment that produced it across subsequent async approvals.
+    /// This is freshness checking, not a transaction against external ownership writers.
+    /// </summary>
+    private sealed class TransferOwnership(Func<string?, CancellationToken, Task<Guid?>> readOwner)
+    {
+        private readonly Dictionary<string, Guid?> accepted = new(StringComparer.OrdinalIgnoreCase);
+
+        internal async Task<Guid?> CaptureAsync(string path, CancellationToken token)
+        {
+            var segments = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var sitePath = string.Join('/', segments.Take(2));
+            token.ThrowIfCancellationRequested();
+            var owner = await readOwner(sitePath, token);
+            token.ThrowIfCancellationRequested();
+            if (accepted.TryGetValue(sitePath, out var previous) && previous != owner)
+                throw new AdaPanel.Core.Common.AppException("files.owner_changed", 409, 409);
+            accepted.TryAdd(sitePath, owner);
+            return owner;
+        }
+
+        internal async Task ValidateAsync(CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            foreach (var (path, owner) in accepted)
+            {
+                var current = await readOwner(path, token);
+                token.ThrowIfCancellationRequested();
+                if (current != owner)
+                    throw new AdaPanel.Core.Common.AppException("files.owner_changed", 409, 409);
+            }
+        }
     }
 
     private Task<PublicationUse> CapturePublicationAsync(string[] paths, CancellationToken token) =>

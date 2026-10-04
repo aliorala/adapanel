@@ -21,7 +21,7 @@ function response(config: InternalAxiosRequestConfig, data: unknown, success = t
 function transfer(config: InternalAxiosRequestConfig) { const request = JSON.parse(String(config.data)), copied = config.url === "/files/copy", flag = copied ? "copied" : "moved"; return response(config, { [copied ? "copiedCount" : "movedCount"]: request.paths.length, failedCount: 0, items: request.paths.map((sourcePath: string) => ({ sourcePath, targetPath: `${request.destinationPath}/${request.newName || sourcePath.split("/").pop()}`, [flag]: true, errorKey: "" })), workspace: workspace(request.destinationPath) }); }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }
 async function flush() { for (let i = 0; i < 40; i++) await nextTick(); }
-type State = { workspace: FileWorkspace; workspaceLoad: { message: Ref<string> }; notice: string; noticeError: boolean; transferMode: "move" | "copy" | null; transferTarget: string; transferOverwrite: boolean; transferBusy: boolean; uploadDone: number; uploadBusy: boolean; selection: { selected: Ref<string[]>; toggle(path: string): void }; startTransfer(mode: "move" | "copy"): void; runTransfer(): Promise<void>; renamePath(entry: FileEntry): Promise<void>; uploadMany(files: File[], folders: string[]): Promise<void>; refresh(path?: string): Promise<unknown>; openPath(path: string): Promise<void>; };
+type State = { workspace: FileWorkspace; workspaceLoad: { message: Ref<string> }; notice: string; noticeError: boolean; transferMode: "move" | "copy" | null; transferTarget: string; transferOverwrite: boolean; transferBusy: boolean; uploadDone: number; uploadBusy: boolean; uploadOperation: { items: { error: string }[] } | null; selection: { selected: Ref<string[]>; toggle(path: string): void }; startTransfer(mode: "move" | "copy"): void; runTransfer(): Promise<void>; renamePath(entry: FileEntry): Promise<void>; uploadMany(files: File[], folders: string[]): Promise<void>; refresh(path?: string): Promise<unknown>; openPath(path: string): Promise<void>; };
 let app: App | undefined, calls: InternalAxiosRequestConfig[], write: (config: InternalAxiosRequestConfig) => Promise<AxiosResponse>, read: (config: InternalAxiosRequestConfig) => Promise<AxiosResponse>;
 const original = apiClient.defaults.adapter;
 beforeEach(() => {
@@ -89,7 +89,7 @@ it("upload does not count an unconfirmed file as successful and still attempts t
   const { state } = await mount(); let index = 0;
   write = async config => response(config, { path: `${rootPath}/${index++ === 0 ? "wrong" : "second"}.txt` });
   await state.uploadMany([new File(["a"], "first.txt"), new File(["b"], "second.txt")], []);
-  expect(state.uploadDone).toBe(1); expect(state.noticeError).toBe(true); expect(state.notice).toContain("panel.files.resultUnconfirmed"); expect(calls.filter(config => config.method === "post")).toHaveLength(2);
+  expect(state.uploadDone).toBe(1); expect(state.noticeError).toBe(true); expect(state.uploadOperation?.items[0]?.error).toBe("panel.files.resultUnconfirmed"); expect(calls.filter(config => config.method === "post")).toHaveLength(2);
 });
 it("a successful upload refresh failure cannot hide behind an all-uploaded message", async () => {
   const { state } = await mount(); write = async config => response(config, { path: `${rootPath}/first.txt` }); read = async () => { throw new Error("list failed"); };

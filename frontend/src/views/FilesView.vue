@@ -104,7 +104,7 @@
           <!-- ÇOKLU seçim: yirmi dosyayı tek tek seçtirmek Plesk'te de yok. Gönderim SIRAYLA
                (bkz. uploadSelectedFiles). -->
           <label class="upload-button" :class="{ disabled: fileMutationBusy || locked || loading || Boolean(workspaceLoad.message.value) || !workspace?.isDirectory }" :title="lockReason || undefined">
-            <input type="file" multiple v-bind="writeGate(fileMutationBusy || loading || Boolean(workspaceLoad.message.value) || !workspace?.isDirectory)" @change="uploadSelectedFiles" />
+            <input type="file" multiple aria-describedby="file-upload-policy" v-bind="writeGate(fileMutationBusy || loading || Boolean(workspaceLoad.message.value) || !workspace?.isDirectory)" @change="uploadSelectedFiles" />
             <span>{{ uploadBusy ? uploadProgressLabel : t("panel.files.upload") }}</span>
           </label>
           <!-- Oluşturma düğmeleri yalnız KLASÖR görünümünde anlamlı: bir dosya açıkken
@@ -118,6 +118,8 @@
           </button>
         </div>
       </div>
+
+      <p v-if="workspace?.isDirectory" id="file-upload-policy" class="meta file-upload-policy">{{ t('panel.files.uploadOverwriteHint') }}</p>
 
       <section v-if="archiveOperation && archiveOperation.status !== 'confirming'"
         class="archive-state" :class="{ 'is-error': Boolean(archiveOperation.error), 'is-success': archiveOperation.status === 'succeeded' }"
@@ -206,20 +208,67 @@
         </div>
       </section>
 
-      <!-- YÜKLEME İLERLEMESİ. Düğme metni zaten "3/20" diyor ama bir SAYI, kalan işin ne kadar
-           olduğunu bir bakışta anlatmaz; çubuk oranı gösterir. Ölçü DOSYA BAŞINADIR (uç bayt
-           ilerlemesi bildirmiyor), bu yüzden büyük tek dosyada çubuk uzun süre yerinde durur —
-           bunu bayt ilerlemesi gibi göstermek uydurma olurdu. -->
-      <div
-        v-if="uploadBusy"
-        class="upload-progress"
-        role="progressbar"
-        :aria-label="uploadProgressLabel"
-        :aria-valuenow="uploadDone"
-        aria-valuemin="0"
-        :aria-valuemax="uploadTotal">
-        <span class="progress-fill" :style="{ width: `${uploadPercent}%` }"></span>
-      </div>
+      <section v-if="uploadOperation" class="transfer-result upload-result" :class="`is-${uploadOperation.status}`"
+        aria-labelledby="upload-result-title" :aria-busy="uploadOperation.status === 'running' || uploadOperation.status === 'refreshing'">
+        <div class="transfer-result-head">
+          <div>
+            <p class="transfer-result-kind">{{ t('panel.files.uploadResultTitle') }}</p>
+            <h3 id="upload-result-title" role="status">{{ t(uploadOperation.status === 'running' ? 'panel.files.uploadResultRunning'
+              : uploadOperation.status === 'refreshing' ? 'panel.files.transferRefreshing'
+              : uploadOperation.status === 'succeeded' ? 'panel.files.uploadResultSucceeded'
+              : uploadOperation.status === 'partial' ? 'panel.files.uploadResultPartial'
+              : uploadOperation.status === 'stopped' ? 'panel.files.uploadResultStopped' : 'panel.files.uploadResultFailed') }}</h3>
+          </div>
+          <button v-if="uploadOperation.status !== 'running' && uploadOperation.status !== 'refreshing'" type="button" class="secondary compact"
+            :aria-label="t('panel.files.transferDismiss')" @click="dismissUploadOperation">×</button>
+        </div>
+        <dl class="transfer-result-scope">
+          <div><dt>{{ t('panel.files.destination') }}</dt><dd>{{ uploadOperation.destinationPath }}</dd></div>
+        </dl>
+        <p class="transfer-result-policy">{{ t('panel.files.uploadAcceptedCount', { count: uploadOperation.total }) }}</p>
+        <template v-if="uploadOperation.status === 'running' && uploadOperation.total > 0">
+          <p class="meta" role="status">{{ t('panel.files.uploadQueueProgress', { processed: uploadOperation.processed, total: uploadOperation.total }) }}</p>
+          <div class="upload-progress" role="progressbar" :aria-label="t('panel.files.uploadQueueProgress', { processed: uploadOperation.processed, total: uploadOperation.total })"
+            :aria-valuenow="uploadOperation.processed" aria-valuemin="0" :aria-valuemax="uploadOperation.total">
+            <span class="progress-fill" :style="{ width: `${Math.min(100, uploadOperation.processed / uploadOperation.total * 100)}%` }"></span>
+          </div>
+          <p class="meta">{{ t(uploadOperation.stopRequested ? 'panel.files.uploadStoppingHint' : 'panel.files.uploadQueueHint') }}</p>
+          <div class="transfer-result-actions">
+            <button type="button" class="secondary compact" :disabled="uploadOperation.stopRequested || !uploadOperation.items.some(item => item.status === 'queued')" @click="stopQueuedUploads">{{ t('panel.files.uploadStopQueued') }}</button>
+          </div>
+        </template>
+        <dl v-if="uploadOperation.total > 0" class="transfer-result-counts upload-result-counts">
+          <div class="is-ok"><dt>{{ t('panel.files.uploadDoneCount') }}</dt><dd>{{ uploadOperation.done }}</dd></div>
+          <div class="is-warning"><dt>{{ t('panel.files.uploadUnconfirmedCount') }}</dt><dd>{{ uploadOperation.unconfirmed }}</dd></div>
+          <div><dt>{{ t('panel.files.uploadSkippedCount') }}</dt><dd>{{ uploadOperation.skipped }}</dd></div>
+          <div><dt>{{ t('panel.files.uploadNotSentCount') }}</dt><dd>{{ uploadOperation.notSent }}</dd></div>
+        </dl>
+        <p v-if="uploadOperation.stopReason" class="transfer-result-refresh" role="status">{{ uploadOperation.stopReason }}</p>
+        <p v-if="uploadOperation.unconfirmed" class="transfer-result-refresh">{{ t('panel.files.uploadUnconfirmedHint') }}</p>
+        <p v-if="uploadOperation.refreshError" class="transfer-result-refresh" role="alert">{{ uploadOperation.refreshError }}</p>
+        <details v-if="uploadOperation.items.length" class="transfer-result-items" :open="uploadOperation.status === 'partial' || uploadOperation.status === 'failed' || uploadOperation.status === 'stopped'">
+          <summary>{{ t('panel.files.transferItemDetails', { count: uploadOperation.items.length }) }}</summary>
+          <ul>
+            <li v-for="item in uploadResultPager.items.value" :key="item.id" :class="{ 'is-warning': item.status === 'unconfirmed' }">
+              <div class="transfer-item-head"><strong>{{ item.name }}</strong><span :class="`upload-item-${item.status}`">{{ t(`panel.files.uploadItem.${item.status}`) }}</span></div>
+              <p class="transfer-item-target">{{ boyutMetni(item.size) }}</p>
+              <p v-if="item.path" class="transfer-item-target"><span>{{ t('panel.files.uploadSavedPath') }}</span> {{ item.path }}</p>
+              <p v-if="item.error" class="transfer-item-reason">{{ item.error }}</p>
+              <details v-if="item.detail" class="transfer-result-details"><summary>{{ t('panel.common.technicalDetails') }}</summary><pre>{{ item.detail }}</pre></details>
+            </li>
+          </ul>
+          <TablePager :state="uploadResultPager" />
+        </details>
+        <details v-if="uploadOperation.folders.length" class="upload-folder-results" open>
+          <summary>{{ t('panel.files.uploadFoldersSkipped', { count: uploadOperation.folders.length }) }}</summary>
+          <p class="meta">{{ t('panel.files.uploadFoldersHint') }}</p>
+          <ul><li v-for="(folder, index) in uploadFolderPager.items.value" :key="index">{{ folder }}</li></ul>
+          <TablePager :state="uploadFolderPager" />
+        </details>
+        <div v-if="uploadOperation.status !== 'running' && uploadOperation.status !== 'refreshing' && uploadOperation.total > 0" class="transfer-result-actions">
+          <button type="button" class="secondary compact" :disabled="fileMutationBusy || loading" @click="refreshUploadListing">{{ t('panel.files.archiveRefresh') }}</button>
+        </div>
+      </section>
 
       <section v-if="workspace?.isDirectory && !loading && !workspaceLoad.message.value" class="file-search">
         <form class="search-row" :aria-busy="searchBusy" @submit.prevent="runSearch">
@@ -763,11 +812,33 @@ const transferState = ref<TransferOperation | null>(null);
 let transferContext: (() => boolean) | null = null;
 const transferOperation = computed(() => transferState.value && transferContext?.() ? transferState.value : null);
 const transferResultPager = usePagination(computed(() => transferOperation.value?.items ?? []));
+type UploadOperation = {
+  status: 'running' | 'refreshing' | 'succeeded' | 'partial' | 'failed' | 'stopped';
+  destinationPath: string;
+  total: number;
+  processed: number;
+  done: number;
+  unconfirmed: number;
+  skipped: number;
+  notSent: number;
+  stopRequested: boolean;
+  stopReason: string;
+  items: { id: number; name: string; size: number; requestedPath: string; path: string;
+    status: 'queued' | 'running' | 'succeeded' | 'unconfirmed' | 'skipped' | 'not-sent'; error: string; detail: string }[];
+  folders: string[];
+  refreshError: string;
+};
+const uploadState = ref<UploadOperation | null>(null);
+let uploadContext: (() => boolean) | null = null;
+const uploadOperation = computed(() => uploadState.value && uploadContext?.() ? uploadState.value : null);
+const uploadResultPager = usePagination(computed(() => uploadOperation.value?.items ?? []));
+const uploadFolderPager = usePagination(computed(() => uploadOperation.value?.folders ?? []));
 watch(() => [authStore.session, authStore.session?.user?.id, authStore.session?.user?.role], () => {
   if (!isFileViewActive()) {
     archiveState.value = null;
     permissionState.value = null;
     transferState.value = null;
+    uploadState.value = null;
   }
 }, { flush: "sync" });
 let searchRequest = 0;
@@ -797,7 +868,7 @@ function beforeUnload(event: BeforeUnloadEvent) {
   if (isDirty.value || saving.value) { event.preventDefault(); event.returnValue = ""; }
 }
 onMounted(() => window.addEventListener("beforeunload", beforeUnload));
-onBeforeUnmount(() => { disposed = true; archiveState.value = null; permissionState.value = null; transferState.value = null; workspaceRequest++; window.removeEventListener("beforeunload", beforeUnload); });
+onBeforeUnmount(() => { disposed = true; archiveState.value = null; permissionState.value = null; transferState.value = null; uploadState.value = null; workspaceRequest++; window.removeEventListener("beforeunload", beforeUnload); });
 async function changeSite(event: Event) {
   if (!isFileViewActive()) return;
   const isCurrent = currentFileContext(false);
@@ -934,7 +1005,7 @@ const fileMutationBusy = computed(() => archiveBusy.value || uploadBusy.value ||
 const uploadDone = ref(0);
 const uploadTotal = ref(0);
 const uploadProgressLabel = computed(() =>
-  t("panel.files.uploadProgress", { done: uploadDone.value, total: uploadTotal.value }));
+  t("panel.files.uploadProgress", { done: uploadOperation.value?.processed ?? 0, total: uploadTotal.value }));
 
 /**
  * İlerleme çubuğunun doluluğu — DOSYA BAŞINA, bayt başına değil.
@@ -944,7 +1015,7 @@ const uploadProgressLabel = computed(() =>
  * bölüm `NaN` üretir ve çubuk genişliği `NaN%` ile hiç çizilmezdi.
  */
 const uploadPercent = computed(() =>
-  uploadTotal.value > 0 ? Math.round((uploadDone.value / uploadTotal.value) * 100) : 0);
+  uploadTotal.value > 0 ? Math.round(((uploadOperation.value?.processed ?? 0) / uploadTotal.value) * 100) : 0);
 
 /**
  * SATIR İÇİ İKİNCİL EYLEM ÇEKMECESİ — aynı anda YALNIZ BİR satır açık.
@@ -1013,6 +1084,7 @@ watch(selectedSiteName, async (siteName, previousSiteName) => {
   archiveState.value = null;
   permissionState.value = null;
   transferState.value = null;
+  uploadState.value = null;
   workspace.value = null;
   searchResults.value = [];
   searchRan.value = false;
@@ -1040,6 +1112,7 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
     archiveState.value = null;
     permissionState.value = null;
     transferState.value = null;
+    uploadState.value = null;
     requestedWorkspacePath = path;
     fileNavigationGeneration++;
   }
@@ -1060,6 +1133,7 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
     savedContent.value = fileContent.value;
     workspaceLoad.clear();
     if (transferOperation.value) transferOperation.value.refreshError = '';
+    if (uploadOperation.value) uploadOperation.value.refreshError = '';
     if (archiveOperation.value) {
       const operation = archiveOperation.value;
       operation.refreshError = "";
@@ -1075,6 +1149,10 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
     if (transferOperation.value) {
       transferOperation.value.refreshError = t('panel.files.refreshAfterOperationFailed');
       workspaceLoad.message.value = transferOperation.value.refreshError;
+    }
+    if (uploadOperation.value) {
+      uploadOperation.value.refreshError = t('panel.files.refreshAfterOperationFailed');
+      workspaceLoad.message.value = uploadOperation.value.refreshError;
     }
     if (archiveOperation.value) {
       archiveOperation.value.refreshError = t("panel.files.archiveRefreshFailed");
@@ -1128,7 +1206,7 @@ async function uploadSelectedFiles(event: Event) {
  * kopyalandığını sandığı bir klasörün hiç var olmaması demekti.
  */
 async function uploadMany(files: File[], folders: string[]) {
-  if (!isFileViewActive() || fileMutationBusy.value || !workspace.value?.isDirectory) {
+  if (!isFileViewActive() || fileMutationBusy.value || loading.value || workspaceLoad.message.value || !workspace.value?.isDirectory) {
     return;
   }
 
@@ -1139,41 +1217,121 @@ async function uploadMany(files: File[], folders: string[]) {
     return;
   }
 
-  if (files.length === 0) {
-    if (folders.length > 0) {
-      showNotice(t("panel.files.uploadFolderSkipped", { names: folders.join(", ") }), true);
-    }
-    return;
-  }
+  if (files.length === 0 && folders.length === 0) return;
 
   const hedef = workspace.value.path;
   const isCurrent = currentFileContext(false);
-  const isVisible = currentFileContext(false);
   files = [...files];
   folders = [...folders];
-  const failures: { name: string; reason: string }[] = [];
-  uploadBusy.value = true;
+  // Retire the previous result once, before this accepted selection. Later files must
+  // not clear their own batch's measured results or expose a new write opportunity.
+  dismissFileOperationResults();
+  uploadContext = isCurrent;
+  uploadState.value = { status: files.length ? 'running' : 'partial', destinationPath: hedef, total: files.length,
+    processed: 0, done: 0, unconfirmed: 0, skipped: 0, notSent: 0, stopRequested: false, stopReason: '',
+    items: files.map((file, id) => ({ id, name: file.name, size: file.size, requestedPath: `${hedef}/${file.name}`,
+      path: '', status: 'queued', error: '', detail: '' })), folders, refreshError: '' };
+  const operation = uploadState.value;
+  uploadResultPager.reset();
+  uploadFolderPager.reset();
   uploadDone.value = 0;
   uploadTotal.value = files.length;
+  if (files.length === 0) { reportUploadOperation(operation, true); return; }
+  uploadBusy.value = true;
+  const submittedPaths = new Set<string>();
 
   try {
-    for (const file of files) {
-      if (!isCurrent() || locked.value) return;
+    for (const [index, file] of files.entries()) {
+      if (!isCurrent()) return;
+      if (operation.stopRequested || locked.value) {
+        if (!operation.stopRequested) {
+          operation.stopRequested = true;
+          operation.stopReason = lockReason.value;
+        }
+        for (const item of operation.items) if (item.status === 'queued') {
+          item.status = 'not-sent';
+          operation.notSent++;
+        }
+        break;
+      }
+      const item = operation.items[index]!;
+      const key = filePathKey(item.requestedPath);
+      if (submittedPaths.has(key)) {
+        item.status = 'skipped';
+        item.error = t('panel.files.uploadDuplicateSkipped');
+        operation.skipped++;
+        operation.processed++;
+        continue;
+      }
+      // An uncertain first response is not permission to overwrite that target with
+      // a second file from the same selection.
+      submittedPaths.add(key);
+      item.status = 'running';
       try {
-        dismissFileOperationResults();
-        await uploadFile(hedef, file);
+        const result = await uploadFile(hedef, file);
         if (!isCurrent()) return;
+        item.path = result.path;
+        item.status = 'succeeded';
+        operation.done++;
         uploadDone.value += 1;
       } catch (error) {
         if (!isCurrent()) return;
-        failures.push({ name: file.name, reason: resolveApiMessage(error) });
+        item.status = 'unconfirmed';
+        item.error = t(extractApiMessage(error));
+        item.detail = extractApiDetails(error);
+        operation.unconfirmed++;
       }
+      operation.processed++;
     }
     if (!isCurrent()) return;
-    const refreshed = await refreshAfterFileOperation(hedef, isVisible);
-    if (!isVisible() || refreshed === undefined) return;
-    reportFileOperation(uploadOzeti(files.length, uploadDone.value, failures, folders), failures.length > 0 || folders.length > 0, refreshed);
+    await reconcileUploadOperation(operation, isCurrent);
   } finally { uploadBusy.value = false; }
+}
+
+function uploadTerminalStatus(operation: UploadOperation): UploadOperation['status'] {
+  if (operation.notSent > 0) return 'stopped';
+  if (operation.skipped > 0 || operation.folders.length > 0 || (operation.done > 0 && operation.unconfirmed > 0)) return 'partial';
+  return operation.unconfirmed > 0 ? 'failed' : 'succeeded';
+}
+
+function reportUploadOperation(operation: UploadOperation, refreshed: boolean) {
+  const message = operation.status === 'succeeded'
+    ? t('panel.files.uploadedAll', { total: operation.total })
+    : t('panel.files.uploadResultSummary', { total: operation.total, done: operation.done,
+      unconfirmed: operation.unconfirmed, skipped: operation.skipped, notSent: operation.notSent });
+  reportFileOperation(message, operation.status !== 'succeeded', refreshed);
+}
+
+async function reconcileUploadOperation(operation: UploadOperation, isCurrent: () => boolean) {
+  if (!isCurrent()) return;
+  const status = uploadTerminalStatus(operation);
+  operation.status = 'refreshing';
+  const refreshed = await refreshAfterFileOperation(operation.destinationPath, isCurrent);
+  if (!isCurrent() || uploadState.value !== operation) return;
+  operation.status = status;
+  // A newer neutral GET owns its own read result; uploaded item outcomes still settle.
+  if (refreshed === undefined) return;
+  operation.refreshError = refreshed ? '' : t('panel.files.refreshAfterOperationFailed');
+  reportUploadOperation(operation, refreshed);
+}
+
+function stopQueuedUploads() {
+  const operation = uploadOperation.value;
+  if (!operation || operation.status !== 'running' || operation.stopRequested || !operation.items.some(item => item.status === 'queued')) return;
+  operation.stopRequested = true;
+  operation.stopReason = t('panel.files.uploadStoppedByUser');
+}
+
+function dismissUploadOperation() {
+  if (uploadOperation.value && !['running', 'refreshing'].includes(uploadOperation.value.status)) uploadState.value = null;
+}
+
+async function refreshUploadListing() {
+  const operation = uploadOperation.value, isCurrent = uploadContext;
+  if (!operation || !isCurrent || fileMutationBusy.value || loading.value || ['running', 'refreshing'].includes(operation.status)) return;
+  uploadBusy.value = true;
+  try { await reconcileUploadOperation(operation, isCurrent); }
+  finally { uploadBusy.value = false; }
 }
 
 function reportFileOperation(message: string, failed: boolean, refreshed: boolean) {
@@ -1186,20 +1344,6 @@ async function refreshAfterFileOperation(path: string, isVisible: () => boolean)
     workspaceLoad.message.value = t("panel.files.refreshAfterOperationFailed");
   }
   return refreshed;
-}
-
-/** Yükleme özeti — "tamamlandı" yalnız GERÇEKTEN hepsi olduğunda yazılır. */
-function uploadOzeti(total: number, done: number, failures: { name: string; reason: string }[], folders: string[]) {
-  const lines = failures.map((satir) => t("panel.bulk.failedItem", { name: satir.name, reason: satir.reason }));
-  if (folders.length > 0) {
-    lines.push(t("panel.files.uploadFolderSkipped", { names: folders.join(", ") }));
-  }
-
-  if (lines.length === 0) {
-    return t("panel.files.uploadedAll", { total });
-  }
-
-  return [t("panel.files.uploadedPartial", { total, done, failed: failures.length }), ...lines].join("\n");
 }
 
 /** Sürüklenen şey DOSYA mı: metin/bağlantı sürüklerken bırakma alanı açılmamalı. */
@@ -1426,6 +1570,7 @@ async function runArchive(path: string, extracting: boolean) {
     archiveState.value!.status = "running";
     dismissPermissionOperation();
     dismissTransferOperation();
+    dismissUploadOperation();
     clearNotice();
     const result = await (extracting ? extractPath(path) : compressPath(path, "", collision));
     if (!isCurrent()) return;
@@ -1491,6 +1636,7 @@ function dismissFileOperationResults() {
   dismissArchiveOperation();
   dismissPermissionOperation();
   dismissTransferOperation();
+  dismissUploadOperation();
   // Called only at dispatch: cancelling a prompt keeps the previous outcome visible.
   clearNotice();
 }
@@ -2436,6 +2582,7 @@ async function restore(record: BackupRecord) {
 .transfer-result-scope dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 .transfer-result-policy { margin: 0; color: var(--text-muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .transfer-result-counts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-8); margin: 0; }
+.upload-result-counts { grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); }
 .transfer-result-counts > div { display: grid; gap: var(--sp-4); padding: var(--sp-12); border: 1px solid var(--panel-border); border-radius: var(--radius-sm); }
 .transfer-result-counts dd { margin: 0; font-size: var(--fs-xl); font-weight: 700; font-variant-numeric: tabular-nums; }
 .transfer-result-counts dt { color: var(--text-muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
@@ -2462,6 +2609,17 @@ async function restore(record: BackupRecord) {
 .transfer-item-reason { font-size: var(--fs-xs); }
 .transfer-result-details { min-width: 0; }
 .transfer-result-details pre { margin: var(--sp-8) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--fs-xs)/1.5 var(--font-mono); }
+.upload-result .upload-item-queued, .upload-result .upload-item-skipped, .upload-result .upload-item-not-sent { color: var(--text-muted); }
+.upload-result .upload-item-running { color: var(--accent-text); }
+.file-upload-policy { margin: 0; overflow-wrap: anywhere; }
+.upload-result .transfer-result-details { margin-top: var(--sp-8); }
+.upload-result .transfer-item-target span { display: block; margin-bottom: var(--sp-4); }
+.upload-result .transfer-result-details pre { max-height: 250px; overflow: auto; }
+.upload-folder-results { min-width: 0; }
+.upload-folder-results summary { cursor: pointer; font-weight: 600; color: var(--warn-text); }
+.upload-folder-results > p { margin-top: var(--sp-8); }
+.upload-folder-results ul { margin: var(--sp-8) 0 0; padding-left: var(--sp-20); }
+.upload-folder-results li { overflow-wrap: anywhere; }
 .transfer-result-actions { display: flex; flex-wrap: wrap; gap: var(--sp-8); }
 
 .permission-result {
