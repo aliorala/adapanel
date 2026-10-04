@@ -75,6 +75,7 @@
   "composer.components_required": "Composer and an installed PHP version are required.",
   "composer.completed": "The Composer operation completed.",
   "dns.zone_saved": "DNS zone settings were saved.",
+  "dns.shared_configuration_conflict": "Shared DNS zone settings conflict. Resolve the conflicting settings before publishing records.",
   "dns.record_saved": "DNS record was saved.",
   "dns.record_deleted": "DNS record was deleted.",
   "dns.record_not_found": "The requested DNS record could not be found.",

@@ -18,6 +18,10 @@ export type DnsZone = {
   zoneName: string;
   nameServers: string[];
   zoneTransferIps: string[];
+  /** Native zone settings are shared; record contributions remain site-specific. */
+  isSharedZone?: boolean;
+  modeConfigurationConflict?: boolean;
+  transferConfigurationConflict?: boolean;
   /** Bölge ikincil (slave) mi: kayıtların kaynağı panel değil, dış master sunucudur. */
   isSecondary: boolean;
   /** İkincil kipte bölgenin çekildiği master DNS sunucularının IP'leri. */
@@ -97,6 +101,7 @@ function measuredZone(envelope: ApiEnvelope<DnsZone>, siteName: string): DnsZone
       [row.siteName, row.zoneName, row.windowsZoneType, row.source, row.statusMessage].some(value => typeof value !== "string") ||
       !row.zoneName.trim() || row.siteName.trim().toLowerCase() !== siteName.trim().toLowerCase() ||
       [row.isSecondary, row.isWindowsDnsAvailable, row.isWindowsZonePresent, row.isDnssecSigned].some(value => typeof value !== "boolean") ||
+      [row.isSharedZone, row.modeConfigurationConflict, row.transferConfigurationConflict].some(value => value !== undefined && typeof value !== "boolean") ||
       [row.nameServers, row.zoneTransferIps, row.masterServers, row.effectiveNotifyServers, row.dnssecDsRecords].some(values => !Array.isArray(values) || values.some(value => typeof value !== "string")) ||
       !Array.isArray(row.records) || row.records.some(record => !record ||
         [record.id, record.type, record.host, record.value].some(value => typeof value !== "string") || !record.id.trim() || !record.type.trim() ||

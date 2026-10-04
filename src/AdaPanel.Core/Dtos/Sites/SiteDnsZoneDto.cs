@@ -53,6 +53,13 @@ public sealed class SiteDnsZoneDto
 
     public string StatusMessage { get; set; } = string.Empty;
 
+    /// <summary>Other panel sites share this native zone; their identities are not exposed.</summary>
+    public bool IsSharedZone { get; set; }
+
+    public bool ModeConfigurationConflict { get; set; }
+
+    public bool TransferConfigurationConflict { get; set; }
+
     /// <summary>Bölge Windows DNS'te DNSSEC ile imzalı mı (Plesk DNSSEC eşdeğeri).</summary>
     public bool IsDnssecSigned { get; set; }
 

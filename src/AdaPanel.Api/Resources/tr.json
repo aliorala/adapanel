@@ -75,6 +75,7 @@
   "composer.components_required": "Composer ve kurulu bir PHP sürümü gerekli.",
   "composer.completed": "Composer işlemi tamamlandı.",
   "dns.zone_saved": "DNS zone ayarları kaydedildi.",
+  "dns.shared_configuration_conflict": "Ortak DNS bölgesinin ayarları çelişiyor. Çelişen ayarları çözmeden kayıtlar yayımlanamaz.",
   "dns.record_saved": "DNS kaydı kaydedildi.",
   "dns.record_deleted": "DNS kaydı silindi.",
   "dns.record_not_found": "Istenen DNS kaydı bulunamadı.",

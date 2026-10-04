@@ -107,8 +107,8 @@ it("keeps the second software installation busy after the first finishes", async
   const store = software.useSoftwareStore(installedPinia()), first = deferred<ComponentInstallResult>(), second = deferred<ComponentInstallResult>(); let writes = 0;
   reply = config => config.method === "post" ? ++writes === 1 ? first.promise : second.promise : catalog("current");
   const older = store.installComponent("old"), newer = store.installComponent("new"); await reached("post /software/install", 2);
-  first.resolve(installed); await older; const busy = store.installingComponentId;
-  second.resolve(installed); await newer;
+  first.resolve({ ...installed, componentId: "old" }); await older; const busy = store.installingComponentId;
+  second.resolve({ ...installed, componentId: "new" }); await newer;
   expect(busy).toBe("new"); expect(store.installingComponentId).toBe(""); expect(store.loaded).toBe(true);
 });
 

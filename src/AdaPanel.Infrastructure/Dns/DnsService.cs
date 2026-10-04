@@ -139,7 +139,18 @@ public sealed partial class DnsService(
         return await ToDtoAsync(state, cancellationToken);
     }
 
-    public async Task<SiteDnsZoneDto> UpdateZoneAsync(string siteName, UpdateDnsZoneRequest request, CancellationToken cancellationToken = default)
+    public Task<SiteDnsZoneDto> UpdateZoneAsync(string siteName, UpdateDnsZoneRequest request, CancellationToken cancellationToken = default)
+        => UpdateZoneCoreAsync(siteName, request, null, cancellationToken);
+
+    public Task<SiteDnsZoneDto> UpdateZoneAsync(string siteName, UpdateDnsZoneRequest request,
+        Func<IReadOnlyList<string>, CancellationToken, Task> beforeConfigurationChange, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(beforeConfigurationChange);
+        return UpdateZoneCoreAsync(siteName, request, beforeConfigurationChange, cancellationToken);
+    }
+
+    private async Task<SiteDnsZoneDto> UpdateZoneCoreAsync(string siteName, UpdateDnsZoneRequest request,
+        Func<IReadOnlyList<string>, CancellationToken, Task>? beforeConfigurationChange, CancellationToken cancellationToken)
     {
         request = new UpdateDnsZoneRequest
         {
@@ -148,13 +159,34 @@ public sealed partial class DnsService(
         };
         using var zoneUse = await EnterZoneAsync(siteName, cancellationToken, additionalZone: request.ZoneName);
         var site = zoneUse.Site!;
-        var state = await GetOrCreateStateAsync(site, cancellationToken);
+        var saved = (await fileStore.ReadAsync(StatePath, Array.Empty<DnsZoneState>(), cancellationToken))
+            .FirstOrDefault(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase));
+        var previousZone = saved?.ZoneName ?? ResolveDefaultZoneName(site);
+        var requestedZone = NormalizeZoneName(string.IsNullOrWhiteSpace(request.ZoneName) ? previousZone : request.ZoneName);
+        Task ApproveAsync(CancellationToken token) => ApproveConfigurationAsync(siteName,
+            [previousZone, requestedZone], beforeConfigurationChange, token);
+        await ApproveAsync(cancellationToken);
+        // An explicit configuration edit must not publish an automatic defaults upgrade first.
+        var state = await GetOrCreateStateAsync(site, cancellationToken, persist: false);
         var oldZoneName = state.ZoneName;
+        var renaming = !SameNativeZone(oldZoneName, requestedZone);
+        if (renaming) EnsureSharedConfiguration(state);
         var oldGroups = state.PublishedGroups.Concat(DesiredGroups(state)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var serverAddress = await ResolvePreferredServerAddressAsync(cancellationToken);
-        state.ZoneName = NormalizeZoneName(string.IsNullOrWhiteSpace(request.ZoneName) ? state.ZoneName : request.ZoneName);
+        state.ZoneName = requestedZone;
         state.NameServers = NormalizeNameServers(request.NameServers, state.ZoneName);
         state.ZoneTransferIps = NormalizeZoneTransferIps(request.ZoneTransferIps);
+        if (renaming)
+        {
+            var requestedTransfer = IpSetKey(state.ZoneTransferIps);
+            var references = await fileStore.ReadAsync(StatePath, Array.Empty<DnsZoneState>(), cancellationToken);
+            // Joining an existing zone adopts that zone's policy. A different requested ACL
+            // needs an explicit edit there, rather than silently replacing peer settings.
+            ApplySharedConfiguration(state, references, newReference: true);
+            EnsureSharedConfiguration(state);
+            if (IpSetKey(state.ZoneTransferIps) != requestedTransfer)
+                throw new AppException(SharedConfigurationConflictKey, 409, 409);
+        }
 
         // İKİNCİL BÖLGEDE YÖNETİLEN KAYITLAR YENİDEN KURULMAZ.
         //
@@ -162,7 +194,7 @@ public sealed partial class DnsService(
         // panelin kendi kaydıdır ve birincile dönüldüğünde kullanılır. Ama varsayılan kayıt setini
         // yeniden üretmek, master'dan gelen içeriğin ÜSTÜNE panelin tahminini koymaya çalışmaktır;
         // senkron bunu zaten yazmaz, geriye yalnızca panelde yanlış görünen bir liste kalırdı.
-        if (!state.IsSecondary)
+        if (!state.IsSecondary && !state.ModeConfigurationConflict)
         {
             state.Records.RemoveAll(record => record.IsManaged);
             state.Records.AddRange(await BuildDefaultRecordsAsync(site, state.ZoneName, serverAddress, cancellationToken));
@@ -170,26 +202,31 @@ public sealed partial class DnsService(
             state.Records = SortRecords(state.Records).ToList();
         }
 
-        if (!SameNativeZone(oldZoneName, state.ZoneName))
+        await ApproveAsync(cancellationToken);
+        if (renaming)
         {
             // Publish the candidate first. Failed/canceled publication must not destroy
             // the working old contribution or move its persisted ownership to a new zone.
             state.PublishedGroups = [];
-            var outcome = await SyncContributionsAsync(state, cancellationToken, requireComplete: true);
+            var outcome = await SyncContributionsAsync(state, cancellationToken, requireComplete: true, beforeMutation: ApproveAsync);
             if (outcome != NotPublishedNoServerKey)
             {
                 if (!string.IsNullOrEmpty(outcome)) throw new AppException("dns.sync_failed", 500, 500, outcome);
-                await ReconcileDetachedZoneAsync(oldZoneName, state.SiteName, oldGroups, cancellationToken);
+                await ReconcileDetachedZoneAsync(oldZoneName, state.SiteName, oldGroups, cancellationToken, ApproveAsync);
             }
             // With no DNS role, keep the supported panel-only intent; the DTO reports unpublished.
-            await UpsertStateAsync(state, cancellationToken);
+            await UpsertStateAsync(state, cancellationToken, ApproveAsync);
         }
         else
         {
-            await UpsertStateAsync(state, cancellationToken);
-            await TrySyncWindowsDnsAsync(state, cancellationToken);
+            await SaveSharedConfigurationAsync(state, updateMode: false, updateTransfer: true, ApproveAsync, cancellationToken);
+            // Resolving transfer policy must not choose a side of a separate mode conflict.
+            if (!HasConfigurationConflict(state))
+                await SyncContributionsAsync(state, cancellationToken, beforeMutation: ApproveAsync);
         }
-        return await ToDtoAsync(state, cancellationToken);
+        var result = await ToDtoAsync(state, cancellationToken);
+        await ApproveAsync(cancellationToken);
+        return result;
     }
 
     public async Task<SiteDnsZoneDto> ResetDefaultsAsync(string siteName, CancellationToken cancellationToken = default)
@@ -217,7 +254,7 @@ public sealed partial class DnsService(
         request = new SetDnsZoneModeRequest { Secondary = request.Secondary, MasterServers = [.. (request.MasterServers ?? [])] };
         using var zoneUse = await EnterZoneAsync(siteName, cancellationToken);
         var site = zoneUse.Site!;
-        var state = await GetOrCreateStateAsync(site, cancellationToken);
+        var state = await GetOrCreateStateAsync(site, cancellationToken, persist: false);
 
         if (request.Secondary)
         {
@@ -240,11 +277,11 @@ public sealed partial class DnsService(
             // yazmak zorunda kalmasın. Birincil kipte hiçbir yerde kullanılmaz.
         }
 
-        await UpsertStateAsync(state, cancellationToken);
+        await SaveSharedConfigurationAsync(state, updateMode: true, updateTransfer: false, null, cancellationToken);
 
         // Windows DNS yoksa kip yine de KAYDEDİLİR (panel durumu doğrudur), ama sessiz kalmayız:
         // senkron hatası çağırana AppException olarak çıkar.
-        await TrySyncWindowsDnsAsync(state, cancellationToken);
+        if (!HasConfigurationConflict(state)) await TrySyncWindowsDnsAsync(state, cancellationToken);
         return await ToDtoAsync(state, cancellationToken);
     }
 
@@ -253,6 +290,7 @@ public sealed partial class DnsService(
         using var zoneUse = await EnterZoneAsync(siteName, cancellationToken);
         var site = zoneUse.Site!;
         var state = await GetOrCreateStateAsync(site, cancellationToken);
+        EnsureSharedConfiguration(state);
 
         // Birincil bölgede AXFR başlatmak anlamsızdır (çekilecek bir master yok) ve Windows da
         // reddeder. "Hiçbir şey olmadı" yerine sebebi söylüyoruz.
@@ -292,6 +330,7 @@ public sealed partial class DnsService(
     /// </remarks>
     private static void EnsureZoneIsWritable(DnsZoneState state)
     {
+        EnsureSharedConfiguration(state);
         if (state.IsSecondary)
         {
             throw new AppException("dns.zone_is_secondary", 409, 409);
@@ -306,6 +345,11 @@ public sealed partial class DnsService(
         using var zoneUse = applyChanges ? await EnterZoneAsync(siteName, cancellationToken) : null;
         var site = zoneUse?.Site ?? await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var state = await GetOrCreateStateAsync(site, cancellationToken, persist: applyChanges);
+        if (HasConfigurationConflict(state))
+        {
+            if (applyChanges) EnsureSharedConfiguration(state);
+            return [];
+        }
 
         // İKİNCİL BÖLGEDE ONARILACAK BİR ŞEY YOK — ve hata da FIRLATILMAZ.
         //
@@ -416,6 +460,7 @@ public sealed partial class DnsService(
         using var zoneUse = await EnterZoneAsync(siteName, cancellationToken);
         var site = zoneUse.Site!;
         var state = await GetOrCreateStateAsync(site, cancellationToken);
+        EnsureSharedConfiguration(state);
 
         // IKINCIL BOLGE: OTOMASYON DURDURULMAZ, yalnizca bolgeye YAZILMAZ.
         //
@@ -598,6 +643,9 @@ public sealed partial class DnsService(
             return new SubdomainRecordResult { ZoneMissing = true };
         }
 
+        ApplySharedConfiguration(state, states);
+        EnsureSharedConfiguration(state);
+
         // ÜST BÖLGE İKİNCİLSE KAYIT YAZILAMAZ. Sonuç nesnesiyle bildiriliyor, fırlatılmıyor:
         // alt alan adı sitesinin kurulması bu yüzden yarıda kalmamalı — kullanıcı kaydı master'da
         // açacaktır, ama bunu BİLMESİ gerekir (sessiz sonuç, aranamayan bir arıza demektir).
@@ -689,7 +737,7 @@ public sealed partial class DnsService(
     }
 
     private async Task ReconcileDetachedZoneAsync(string zoneName, string departingSite, IReadOnlyCollection<string> oldGroups,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, Func<CancellationToken, Task>? beforeMutation = null)
     {
         var remaining = (await fileStore.ReadAsync(StatePath, Array.Empty<DnsZoneState>(), cancellationToken))
             .Where(item => !string.Equals(item.SiteName, departingSite, StringComparison.OrdinalIgnoreCase) && SameNativeZone(item.ZoneName, zoneName))
@@ -698,7 +746,8 @@ public sealed partial class DnsService(
         {
             // Detaching a site edits record contributions, not the shared zone's mode or ACL.
             // No-server leaves native state untouched and permits panel-only reference removal.
-            await SyncContributionsAsync(remaining[0], cancellationToken, departingSite, oldGroups, applyZoneConfiguration: false);
+            await SyncContributionsAsync(remaining[0], cancellationToken, departingSite, oldGroups,
+                applyZoneConfiguration: false, beforeMutation: beforeMutation);
             return;
         }
 
@@ -709,6 +758,7 @@ public sealed partial class DnsService(
                 $"$zoneName = '{EscapePowerShellLiteral(NormalizeZoneName(zoneName))}'\n" +
                 "if (Get-DnsServerZone -Name $zoneName -ErrorAction SilentlyContinue) { Remove-DnsServerZone -Name $zoneName -Force -ErrorAction Stop }\n" +
                 "if (Get-DnsServerZone -Name $zoneName -ErrorAction SilentlyContinue) { throw 'DNS zone removal was not confirmed.' }";
+            await ApproveNativeConfigurationAsync(beforeMutation, cancellationToken);
             var result = await NativeCommand(script, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             if (!result.Success) throw new AppException("dns.sync_failed", 500, 500, BuildCommandDetails(result));
@@ -727,7 +777,8 @@ public sealed partial class DnsService(
             state.ZoneTransferIps = NormalizeZoneTransferIps(state.ZoneTransferIps?.ToArray());
             state.MasterServers = NormalizeIpList(state.MasterServers?.ToArray(), "dns.invalid_master_ip");
             state.Records = SortRecords(state.Records.Select(record => NormalizeRecord(record, state.ZoneName))).ToList();
-            if (persist && state.DefaultsVersion < CurrentDefaultsVersion)
+            ApplySharedConfiguration(state, states);
+            if (persist && !HasConfigurationConflict(state) && state.DefaultsVersion < CurrentDefaultsVersion)
             {
                 MergeMissingDefaults(state.Records, await BuildDefaultRecordsAsync(site, state.ZoneName, serverAddress, cancellationToken));
                 state.DefaultsVersion = CurrentDefaultsVersion;
@@ -749,7 +800,8 @@ public sealed partial class DnsService(
             Records = defaultRecords,
             DefaultsVersion = CurrentDefaultsVersion
         };
-        if (persist)
+        ApplySharedConfiguration(state, states, newReference: true);
+        if (persist && !HasConfigurationConflict(state))
         {
             await UpsertStateAsync(state, cancellationToken);
             await TrySyncWindowsDnsAsync(state, cancellationToken);
@@ -798,11 +850,12 @@ public sealed partial class DnsService(
     private static bool SameNativeZone(string first, string second)
         => string.Equals(NormalizeZoneName(first), NormalizeZoneName(second), StringComparison.Ordinal);
 
-    private Task UpsertStateAsync(DnsZoneState state, CancellationToken cancellationToken)
+    private Task UpsertStateAsync(DnsZoneState state, CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforePublication = null)
     {
         return fileStore.UpdateAsync(StatePath, Array.Empty<DnsZoneState>(), current => current
             .Where(item => !string.Equals(item.SiteName, state.SiteName, StringComparison.OrdinalIgnoreCase))
-            .Append(state).OrderBy(item => item.SiteName, StringComparer.OrdinalIgnoreCase).ToArray(), cancellationToken);
+            .Append(state).OrderBy(item => item.SiteName, StringComparer.OrdinalIgnoreCase).ToArray(), beforePublication, cancellationToken);
     }
 
     private async Task<SiteDnsZoneDto> ToDtoAsync(DnsZoneState state, CancellationToken cancellationToken)
@@ -836,7 +889,10 @@ public sealed partial class DnsService(
             IsWindowsDnsAvailable = isDnsAvailable,
             IsWindowsZonePresent = isZonePresent,
             Source = isDnsAvailable ? "windows-dns" : "panel-managed",
-            StatusMessage = ResolveStatusMessage(state, isDnsAvailable, isZonePresent, windowsZoneType),
+            StatusMessage = HasConfigurationConflict(state) ? SharedConfigurationConflictKey : ResolveStatusMessage(state, isDnsAvailable, isZonePresent, windowsZoneType),
+            IsSharedZone = state.IsSharedZone,
+            ModeConfigurationConflict = state.ModeConfigurationConflict,
+            TransferConfigurationConflict = state.TransferConfigurationConflict,
             IsDnssecSigned = isSigned,
             DnssecDsRecords = dsRecords
         };
@@ -1644,8 +1700,13 @@ public sealed partial class DnsService(
 
     private async Task<string> SyncContributionsAsync(DnsZoneState state, CancellationToken cancellationToken,
         string? excludedSite = null, IReadOnlyCollection<string>? additionalCleanupGroups = null,
-        bool applyZoneConfiguration = true, bool requireComplete = false)
+        bool applyZoneConfiguration = true, bool requireComplete = false,
+        Func<CancellationToken, Task>? beforeMutation = null)
     {
+        var references = (await fileStore.ReadAsync(StatePath, Array.Empty<DnsZoneState>(), cancellationToken))
+            .Where(item => !string.Equals(item.SiteName, excludedSite, StringComparison.OrdinalIgnoreCase)).ToArray();
+        ApplySharedConfiguration(state, references);
+        EnsureSharedConfiguration(state);
         if (!await IsWindowsDnsAvailableAsync(cancellationToken))
         {
             // Bilgi seviyesi, uyarı DEĞİL: rolün kurulu olmaması beklenen bir kurulum biçimidir.
@@ -1677,6 +1738,7 @@ public sealed partial class DnsService(
                 return NotPublishedSecondaryNoMasterKey;
             }
 
+            await ApproveNativeConfigurationAsync(beforeMutation, cancellationToken);
             var secondaryResult = await NativeCommand(
                 BuildSecondaryZoneScript(state.ZoneName, state.MasterServers),
                 cancellationToken);
@@ -1694,7 +1756,7 @@ public sealed partial class DnsService(
                 "Secondary", StringComparison.OrdinalIgnoreCase)) return string.Empty;
 
         var zoneName = NormalizeZoneName(state.ZoneName);
-        var members = (await fileStore.ReadAsync(StatePath, Array.Empty<DnsZoneState>(), cancellationToken))
+        var members = references
             .Where(item => SameNativeZone(item.ZoneName, zoneName) &&
                 !string.Equals(item.SiteName, excludedSite, StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(item.SiteName, state.SiteName, StringComparison.OrdinalIgnoreCase))
@@ -1716,6 +1778,7 @@ public sealed partial class DnsService(
             ? MergeNotifyTargets(state.ZoneTransferIps, await ReadServerWideSecondariesAsync(cancellationToken))
             : [];
         var script = BuildSyncScriptCore(publication, targets, applyZoneConfiguration);
+        await ApproveNativeConfigurationAsync(beforeMutation, cancellationToken);
         var result = await NativeCommand(script, cancellationToken);
         if (!result.Success)
         {
@@ -1733,7 +1796,7 @@ public sealed partial class DnsService(
         }
 
         // Long TXT uses separate native commands, while the shared publication lease remains held.
-        await WriteLongTxtRecordsAsync(publication, cancellationToken, requireComplete);
+        await WriteLongTxtRecordsAsync(publication, cancellationToken, requireComplete, beforeMutation);
 
         // Yazma BASARILI olduktan sonra kaydedilir: basarisiz bir senkrondan sonra listeyi
         // guncellemek, aslinda yazilmamis gruplari "yazilmis" saymak olurdu.
@@ -1743,7 +1806,7 @@ public sealed partial class DnsService(
                          !string.Equals(item.SiteName, excludedSite, StringComparison.OrdinalIgnoreCase)))
                 member.PublishedGroups = DesiredGroups(member).ToList();
             return current;
-        }, cancellationToken);
+        }, beforeMutation, cancellationToken);
         state.PublishedGroups = DesiredGroups(state).ToList();
 
         return string.Empty;
@@ -1787,7 +1850,7 @@ public sealed partial class DnsService(
     /// </para>
     /// </summary>
     private async Task WriteLongTxtRecordsAsync(DnsZoneState state, CancellationToken cancellationToken,
-        bool requireComplete = false)
+        bool requireComplete = false, Func<CancellationToken, Task>? beforeMutation = null)
     {
         var uzunlar = state.Records
             .Where(record => string.Equals(record.Type, "TXT", StringComparison.OrdinalIgnoreCase)
@@ -1801,6 +1864,7 @@ public sealed partial class DnsService(
                 $"$zoneName = '{EscapePowerShellLiteral(state.ZoneName)}'" + Environment.NewLine +
                 BuildTxtLine(EscapePowerShellLiteral(record.Host), record.Value, Math.Clamp(record.Ttl, 60, 86400));
 
+            await ApproveNativeConfigurationAsync(beforeMutation, cancellationToken);
             var result = await NativeCommand(script, cancellationToken);
             if (!result.Success)
             {
@@ -2667,6 +2731,12 @@ public sealed partial class DnsService(
 
     private sealed class DnsZoneState
     {
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool IsSharedZone { get; set; }
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool ModeConfigurationConflict { get; set; }
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool TransferConfigurationConflict { get; set; }
         public string SiteName { get; set; } = string.Empty;
 
         public string ZoneName { get; set; } = string.Empty;

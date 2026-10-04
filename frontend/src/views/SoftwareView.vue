@@ -30,6 +30,23 @@
       <pre>{{ noticeDetails }}</pre>
     </details>
 
+    <section v-if="installationResult" class="installation-result" :aria-label="t('panel.software.installationResult')">
+      <h3>{{ t("panel.software.installationResult") }}</h3>
+      <p v-if="installationResult.refreshError" class="result-refresh-warning" role="status">{{ installationResult.refreshError }}</p>
+      <article v-for="result in installationResult.results" :key="result.componentId" class="installation-result-row">
+        <div class="result-identity">
+          <strong>{{ result.displayName }}</strong>
+          <span>{{ result.version || t("panel.software.installedVersionUnknown") }}</span>
+        </div>
+        <span :class="['status-pill', statusClass(result.status)]">{{ formatStatus(result.status) }}</span>
+        <p v-if="result.message" class="result-message">{{ translate(result.message) }}</p>
+        <label v-if="result.generatedPassword" class="result-password">
+          <span>{{ t("panel.software.generatedPassword") }}</span>
+          <input :value="result.generatedPassword" readonly autocomplete="off" spellcheck="false" />
+        </label>
+      </article>
+    </section>
+
     <!-- SAYFA YENİLENDİĞİNDE "KURULUM SÜRÜYOR" KAYBOLMUYOR.
          Aşağıdaki adım listesi `IOperationProgressService`'ten gelir ve o servis yalnız
          BELLEKTEDİR: panel yeniden başlarsa (ya da sayfa yenilenirse) adımlar yok olur ve ekran,
@@ -86,6 +103,15 @@
     <AppStoreView v-if="activeWorkspace === 'applications'" />
 
     <template v-else>
+    <div v-if="!softwareStore.loaded && !softwareStore.loading" class="catalog-unconfirmed" role="status">
+      <div>
+        <strong>{{ t("panel.software.catalogUnconfirmed") }}</strong>
+        <p>{{ t(softwareStore.catalog ? "panel.software.catalogLastKnown" : "panel.software.catalogRetryHint") }}</p>
+      </div>
+      <button type="button" class="secondary compact" :disabled="actionsBusy" @click="refreshCatalog">
+        {{ t("panel.software.scanSystem") }}
+      </button>
+    </div>
     <section class="software-toolbar">
       <div class="category-tabs" role="tablist">
         <!-- Seçili sekme GÖRSEL olarak yalnız renkle belliydi; `aria-selected` olmadan ekran
@@ -223,7 +249,7 @@
            kalıyor, ekran KESİN bir cümle kuruyordu. Artık liste ancak BAŞARIYLA okunduktan
            sonra "yok" der (bkz. stores/software.ts `loaded`). -->
       <p v-else-if="!softwareStore.loaded" class="empty-state" role="status" aria-live="polite">
-        {{ t("panel.common.loading") }}
+        {{ t(softwareStore.loading ? "panel.common.loading" : "panel.software.catalogUnavailable") }}
       </p>
 
       <p v-else class="empty-state">
@@ -262,7 +288,7 @@
 
       <!-- Aynı yalan kurulu bileşen şeridinde de vardı. -->
       <p v-else-if="!softwareStore.loaded" class="empty-state" role="status" aria-live="polite">
-        {{ t("panel.common.loading") }}
+        {{ t(softwareStore.loading ? "panel.common.loading" : "panel.software.catalogUnavailable") }}
       </p>
 
       <p v-else class="empty-state">
@@ -289,11 +315,12 @@ import { useConfirm } from "../components/ConfirmDialog.vue";
 import RunningTaskBanner from "../components/RunningTaskBanner.vue";
 import { runningJobLabel, useServerRunningTask } from "../composables/useRunningTask";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
-import { useSoftwareStore, SoftwareRemovalIncompleteError, SoftwareRemovalRefreshError, type ComponentManifestItem, type InstalledComponent, type ComponentInstallResult } from "../stores/software";
+import { useSoftwareStore, SoftwareInstallationIncompleteError, SoftwareInstallationRefreshError, SoftwareRemovalIncompleteError, SoftwareRemovalRefreshError, type ComponentManifestItem, type InstalledComponent, type ComponentInstallResult } from "../stores/software";
 
 type CategoryKey = "all" | "installed" | "runtime" | "database" | "services" | "tools";
 type WorkspaceKey = "applications" | "components";
 type ManifestRow = ComponentManifestItem & { installed: InstalledComponent | null };
+type InstallationResult = { kind: "install" | "update" | "defaults"; results: ComponentInstallResult[]; refreshError: string };
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -304,6 +331,7 @@ const subscription = useSubscriptionStore();
 const notice = ref("");
 const noticeDetails = ref("");
 const noticeError = ref(false);
+const installationResult = ref<InstallationResult | null>(null);
 const search = ref("");
 const activeCategory = ref<CategoryKey>("all");
 const activeWorkspace = ref<WorkspaceKey>("applications");
@@ -321,15 +349,17 @@ const canWrite = computed(() => softwareStore.loaded && !subscription.isSuspende
 const mayStart = (write = true) => contextCurrent() && !actionsBusy.value && (!write || canWrite.value);
 watch(() => [auth.session, auth.session?.user?.id, auth.session?.user?.role, auth.session?.isAuthenticated], () => {
   generation++; stopProgress?.(); liveProgress.value = null;
+  installationResult.value = null;
   verificationRequired.value = true;
   showNotice("", false);
 }, { flush: "sync" });
 watch(activeWorkspace, () => {
   generation++; stopProgress?.(); liveProgress.value = null;
+  installationResult.value = null;
   showNotice("", false);
   if (activeWorkspace.value === "components" && !softwareStore.loaded) void refreshCatalog();
 }, { flush: "sync" });
-onScopeDispose(() => { disposed = true; generation++; stopProgress?.(); });
+onScopeDispose(() => { disposed = true; generation++; stopProgress?.(); installationResult.value = null; });
 
 const manifestRows = computed<ManifestRow[]>(() => {
   const installedMap = new Map((softwareStore.catalog?.installed ?? []).map((item) => [item.componentId, item]));
@@ -498,6 +528,7 @@ async function refreshCatalog() {
     if (!contextCurrent(context)) return;
     if (!softwareStore.loaded) { reportUnconfirmed(); return; }
     verificationRequired.value = false;
+    if (installationResult.value) installationResult.value.refreshError = "";
     showNotice(t("panel.software.refreshed"), false);
   } catch (error) {
     if (contextCurrent(context)) showApiError(error);
@@ -584,16 +615,42 @@ function installationConfirmed(result: ComponentInstallResult, componentId: stri
 }
 
 async function runInstall(componentId: string, force: boolean, context: number) {
+  installationResult.value = null;
+  showNotice("", false);
   try {
     const work = force ? softwareStore.installComponent(componentId, true) : softwareStore.installComponent(componentId);
     const result = await pollProgressWhile(work, context);
     if (!contextCurrent(context)) return;
-    if (result.status.toLowerCase() === "failed") { showNotice(translate(result.message), true); return; }
-    if (!installationConfirmed(result, componentId)) { reportUnconfirmed(); return; }
-    showNotice(translate(result.message), false);
+    showInstallationResult(force ? "update" : "install", [result]);
   } catch (error) {
-    if (contextCurrent(context)) { verificationRequired.value = true; showApiError(error); }
+    if (contextCurrent(context)) handleInstallationError(error, force ? "update" : "install");
   }
+}
+
+function showInstallationResult(kind: InstallationResult["kind"], results: ComponentInstallResult[], refreshFailed = false) {
+  if (!results.length) { reportUnconfirmed(); return; }
+  const refreshError = refreshFailed ? t("panel.software.refreshAfterInstallFailed") : "";
+  installationResult.value = { kind, results: results.map(result => ({ ...result })), refreshError };
+  const failed = results.filter(result => result.status.toLowerCase() === "failed");
+  const incomplete = results.some(result => result.status.toLowerCase() !== "installed");
+  if (refreshFailed) verificationRequired.value = true;
+  if (failed.length) {
+    showNotice([kind === "defaults" ? t("panel.software.defaultsPartial", { failed: failed.length, total: results.length }) :
+      translate(failed[0].message || "software.install_failed"), refreshError].filter(Boolean).join(" "), true);
+  } else if (incomplete) {
+    verificationRequired.value = true;
+    showNotice([t("panel.software.resultUnconfirmed"), refreshError].filter(Boolean).join(" "), true);
+  } else if (!refreshFailed && !results.every(result => installationConfirmed(result, result.componentId))) {
+    reportUnconfirmed();
+  } else {
+    showNotice([kind === "defaults" ? t("software.defaults.completed") : translate(results[0].message), refreshError].filter(Boolean).join(" "), refreshFailed);
+  }
+}
+
+function handleInstallationError(error: unknown, kind: InstallationResult["kind"]) {
+  if (error instanceof SoftwareInstallationRefreshError) showInstallationResult(kind, error.results, true);
+  else if (error instanceof SoftwareInstallationIncompleteError) showInstallationResult(kind, error.results);
+  else { verificationRequired.value = true; showApiError(error); }
 }
 
 // Servisi olan bileşenler (veritabanı motorları, mail, önbellek) yükseltme sırasında KISA SÜRE DURUR.
@@ -642,26 +699,15 @@ function canUpdate(item: ManifestRow): boolean {
 async function installDefaultStack() {
   if (!mayStart() || !softwareStore.catalog?.defaults.length) return;
   const context = generation;
-  const defaults = softwareStore.catalog.defaults.map(item => item.id);
   busy.value = true;
+  installationResult.value = null;
+  showNotice("", false);
   try {
     const results = await pollProgressWhile(softwareStore.installDefaultStack(), context);
     if (!contextCurrent(context)) return;
-    const failed = results.filter((result) => result.status.toLowerCase() === "failed");
-    if (failed.length > 0) {
-      showNotice(
-        t("panel.software.defaultsPartial", { failed: failed.length, total: results.length }),
-        true,
-        failed.map((result) => `${result.displayName}: ${translate(result.message)}`).join("\n\n")
-      );
-      return;
-    }
-
-    if (!defaults.every(id => results.some(result => installationConfirmed(result, id))) ||
-      !results.every(result => installationConfirmed(result, result.componentId))) { reportUnconfirmed(); return; }
-    showNotice(t("software.defaults.completed"), false);
+    showInstallationResult("defaults", results);
   } catch (error) {
-    if (contextCurrent(context)) { verificationRequired.value = true; showApiError(error); }
+    if (contextCurrent(context)) handleInstallationError(error, "defaults");
   } finally {
     busy.value = false;
   }
@@ -708,6 +754,7 @@ async function removeComponent(componentId: string) {
       if (invoked || !contextCurrent(context) || !canWrite.value || storeBusy.value || serverSoftware.running.value ||
         catalog !== softwareStore.catalog || fingerprint !== JSON.stringify(installedRows.value.find(row => row.componentId === componentId))) return;
       invoked = true;
+      installationResult.value = null;
       try {
         const result = await softwareStore.removeComponent(componentId);
         if (!contextCurrent(context)) return;
@@ -828,6 +875,47 @@ function formatDetectionSource(source: string): string {
 .software-panel {
   gap: var(--sp-12);
 }
+
+.catalog-unconfirmed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-12);
+  padding: var(--sp-12);
+  border: 1px solid color-mix(in srgb, var(--warn-1) 35%, var(--panel-border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--warn-1) 7%, var(--surface-1));
+}
+.catalog-unconfirmed > div { flex: 1 1 240px; min-width: 0; }
+.catalog-unconfirmed strong { color: var(--text-strong); }
+.catalog-unconfirmed p { margin: var(--sp-6) 0 0; color: var(--text-soft); line-height: 1.6; }
+
+.installation-result {
+  display: grid;
+  gap: var(--sp-12);
+  padding: var(--sp-12);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
+.installation-result h3 { margin: 0; }
+.installation-result-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--sp-8) var(--sp-12);
+  padding: var(--sp-12);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-0);
+}
+.result-identity { display: grid; gap: var(--sp-4); min-width: 0; overflow-wrap: anywhere; }
+.result-identity > span { color: var(--text-soft); font-size: var(--fs-sm); }
+.result-message, .result-password { grid-column: 1 / -1; margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.result-password { display: grid; gap: var(--sp-6); color: var(--text-soft); font-size: var(--fs-sm); }
+.result-password input { width: 100%; min-width: 0; }
+.result-refresh-warning { margin: 0; line-height: 1.6; color: var(--text-strong); padding-left: var(--sp-12); border-left: 3px solid var(--warn-1); }
 
 /* `.section-head` BU İKİ LİSTEDEN ÇIKARILDI: ortak tanım base.css'te ve aynı üç bildirimi
    (flex / space-between / flex-start) `--sp-12` boşlukla zaten veriyor. Kopyanın tek EKSİĞİ

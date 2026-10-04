@@ -14,6 +14,16 @@ public interface IDnsService
 
     Task<SiteDnsZoneDto> UpdateZoneAsync(string siteName, UpdateDnsZoneRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Updates a zone only after approving every affected site under the service's native-zone
+    /// leases. Approval must be repeated after awaited preparation and before configuration
+    /// publication/native changes; it must not acquire the same DNS leases again.
+    /// </summary>
+    Task<SiteDnsZoneDto> UpdateZoneAsync(string siteName, UpdateDnsZoneRequest request,
+        Func<IReadOnlyList<string>, CancellationToken, Task> beforeConfigurationChange,
+        CancellationToken cancellationToken)
+        => throw new NotSupportedException("Authorized DNS configuration updates are not implemented.");
+
     Task<SiteDnsZoneDto> ResetDefaultsAsync(string siteName, CancellationToken cancellationToken = default);
 
     /// <summary>

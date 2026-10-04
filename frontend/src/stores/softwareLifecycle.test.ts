@@ -28,7 +28,7 @@ beforeEach(() => {
   vi.stubGlobal("window", { location: { pathname: "/entry" } });
   invalidateSessionRequests();
   vi.spyOn(apiClient, "get").mockImplementation(async url => response(url!.includes("progress") ? progress("current") : catalog("current")));
-  vi.spyOn(apiClient, "post").mockImplementation(async url => response(url.includes("updates/check") ? catalog("checked") : url.includes("install-defaults") ? [installed] : installed));
+  vi.spyOn(apiClient, "post").mockImplementation(async (url, data) => response(url.includes("updates/check") ? catalog("checked") : url.includes("install-defaults") ? [installed] : { ...installed, componentId: (data as { componentId: string }).componentId }));
   vi.spyOn(apiClient, "delete").mockImplementation(async url => response({ componentId: decodeURIComponent(url.split("/").slice(-1)[0]!), warnings: [] }));
 });
 afterEach(() => {
@@ -59,7 +59,7 @@ for (const action of actions) {
         const second = action.run(store, "next");
         old.reject(reset ? new axios.CanceledError("Session changed") : new Error("earlier failed")); await first;
         expect(store[action.busy]).toBe(action.busy.endsWith("Id") ? "next" : true);
-        next.resolve(response(action.value)); await second;
+        next.resolve(response(action.name === "install" ? { ...installed, componentId: "next" } : action.value)); await second;
         expect(store[action.busy]).toBe(action.busy.endsWith("Id") ? "" : false);
       });
     }
@@ -103,7 +103,7 @@ it("does not apply a progress poll that belongs to the previous install context"
   vi.mocked(apiClient.get).mockReturnValueOnce(old.promise); vi.mocked(apiClient.post).mockReturnValueOnce(install.promise);
   const poll = store.fetchOperationProgress(); const work = store.installComponent("next");
   old.resolve(response(progress("previous install"))); await poll; expect(store.liveProgress).toBeNull();
-  install.resolve(response(installed)); await work;
+  install.resolve(response({ ...installed, componentId: "next" })); await work;
 });
 
 it("an update result invalidates a catalog read that started before it", async () => {
@@ -130,7 +130,7 @@ it("reconciles an update snapshot that overlaps an install instead of undoing th
 for (const action of actions.filter(a => a.name === "install" || a.name === "defaults")) {
   it(`does not retry a successful ${action.name} follow-up read after that read fails`, async () => {
     const error = new Error("catalog unavailable"); vi.mocked(apiClient.get).mockRejectedValue(error);
-    await expect(action.run(useSoftwareStore(), "fixture")).rejects.toBe(error);
+    await expect(action.run(useSoftwareStore(), "fixture")).rejects.toMatchObject({ results: [installed], refreshError: error });
     expect(apiClient.post).toHaveBeenCalledOnce(); expect(apiClient.get).toHaveBeenCalledOnce();
   });
 }
@@ -144,6 +144,7 @@ it("preserves a failed install's original error while refreshing its failed reco
 
 it("preserves normal successful installs and removal payloads", async () => {
   const store = useSoftwareStore(); expect(await store.installComponent("fixture")).toEqual(installed);
+  store.catalog!.defaults = [{ id: "fixture" } as SoftwareCatalog["defaults"][number]];
   expect(await store.installDefaultStack()).toEqual([installed]); await store.removeComponent("fixture + version");
   expect(apiClient.delete).toHaveBeenCalledExactlyOnceWith("/software/fixture%20%2B%20version");
   expect(store.catalog).toEqual(catalog("current")); expect(store.removingComponentId).toBe("");

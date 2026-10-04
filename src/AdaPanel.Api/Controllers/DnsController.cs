@@ -1,4 +1,6 @@
 ﻿using AdaPanel.Api.Security;
+using System.Security.Claims;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
@@ -39,16 +41,40 @@ public sealed class DnsController(
         [FromServices] ILogger<DnsController> logger,
         CancellationToken cancellationToken)
     {
-        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        var principal = new ClaimsPrincipal(User.Identities.Select(identity => new ClaimsIdentity(identity)));
+        request = new UpdateDnsZoneRequest
+        {
+            ZoneName = request.ZoneName,
+            NameServers = [.. (request.NameServers ?? [])],
+            ZoneTransferIps = [.. (request.ZoneTransferIps ?? [])]
+        };
+        await CustomerAccess.EnsureSiteAsync(customerScopes, principal, siteName, cancellationToken);
 
         // GÜVENLİK (çapraz-kiracı): site kapsamı doğrulanıyordu ama BÖLGE ADI serbestti
         // (DnsService: state.ZoneName = request.ZoneName). Kendi sitesinin bölge adını
         // "kurban.com" yapan bir kiracı, kurbanın alan adının DNS kayıtlarını yönetir hâle
         // geliyordu — A kaydını istediği yere çevirmek, sertifika almak dahil.
         await CustomerAccess.EnsureDomainClaimAsync(
-            customerScopes, iisSiteService, mailService, User, request.ZoneName, siteName, logger, cancellationToken);
+            customerScopes, iisSiteService, mailService, principal, request.ZoneName, siteName, logger, cancellationToken);
 
-        var zone = await dnsService.UpdateZoneAsync(siteName, request, cancellationToken);
+        async Task ApproveConfigurationAsync(IReadOnlyList<string> affectedSites, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            // The IIS/domain preflight cannot discover administrator-assigned shared DNS
+            // membership. The service supplies that current membership while holding its
+            // zone leases; the reseller's scope is read again at each publication boundary.
+            var names = affectedSites.Prepend(siteName).Select(name => name?.Trim() ?? string.Empty)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (principal.IsInRole("Administrator")) return;
+            if (!principal.IsInRole("Reseller")) throw new AppException("auth.site_forbidden", 403, 403);
+            var allowed = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, principal, token);
+            token.ThrowIfCancellationRequested();
+            if (allowed is null || names.Any(name => name.Length == 0 || !allowed.Contains(name, StringComparer.OrdinalIgnoreCase)))
+                // Do not disclose the names or owners of peers outside the caller's scope.
+                throw new AppException("auth.site_forbidden", 403, 403);
+        }
+
+        var zone = await dnsService.UpdateZoneAsync(siteName, request, ApproveConfigurationAsync, cancellationToken);
 
         await auditService.AuditAsync(
             HttpContext,

@@ -3,7 +3,8 @@ import { toRaw } from "vue";
 import { CanceledError } from "axios";
 import { apiClient, getSessionEpoch } from "../api/client";
 import type { OperationProgress } from "./setup";
-import { removeSoftwareComponent, type ComponentRemovalResult } from "../api/software";
+import { installSoftwareComponent, installSoftwareDefaults, removeSoftwareComponent, type ComponentInstallResult, type ComponentRemovalResult } from "../api/software";
+export type { ComponentInstallResult } from "../api/software";
 import { UserFacingError } from "../utils/apiError";
 
 // A measured DELETE result survives a failed follow-up read, while existing callers
@@ -17,6 +18,21 @@ export class SoftwareRemovalRefreshError extends UserFacingError {
 export class SoftwareRemovalIncompleteError extends UserFacingError {
   constructor(public readonly result: ComponentRemovalResult) {
     super("software.remove.partial");
+  }
+}
+
+// Keep measured POST outcomes separate from the follow-up catalog measurement.
+// Shared callers still receive an error instead of assuming an unconfirmed install succeeded.
+export class SoftwareInstallationRefreshError extends UserFacingError {
+  constructor(public readonly results: ComponentInstallResult[], public readonly refreshError: unknown) {
+    super("panel.software.refreshAfterInstallFailed");
+  }
+}
+
+export class SoftwareInstallationIncompleteError extends UserFacingError {
+  constructor(public readonly results: ComponentInstallResult[]) {
+    super(results.length === 1 && results[0].status.toLowerCase() === "failed"
+      ? results[0].message || "software.install_failed" : "panel.software.resultUnconfirmed");
   }
 }
 
@@ -68,17 +84,6 @@ export type SoftwareCatalog = {
   manifest: ComponentManifestItem[];
   defaults: ComponentManifestItem[];
   installed: InstalledComponent[];
-};
-
-export type ComponentInstallResult = {
-  componentId: string;
-  displayName: string;
-  version: string;
-  status: string;
-  installDir: string;
-  serviceName: string;
-  generatedPassword: string;
-  message: string;
 };
 
 type BusyKey = "loading" | "checkingUpdates" | "installingComponentId" | "installingDefaults" | "removingComponentId";
@@ -165,6 +170,9 @@ export const useSoftwareStore = defineStore("software", {
       try {
         const response = await apiClient.get<ApiEnvelope<SoftwareCatalog>>("/software");
         assertCurrentSession(request);
+        if (response.data?.success !== true || !response.data.data ||
+          !Array.isArray(response.data.data.manifest) || !Array.isArray(response.data.data.defaults) ||
+          !Array.isArray(response.data.data.installed)) throw new UserFacingError("panel.software.resultUnconfirmed");
         // Yalnız BAŞARIDA: hata fırlarsa bayrak false kalır, ekran "bileşen yok" demez.
         if (request.requests.catalogReadId === request.id && request.requests.revision === request.revision) {
           this.catalog = response.data.data;
@@ -215,7 +223,7 @@ export const useSoftwareStore = defineStore("software", {
       this.installingComponentId = componentId;
 
       try {
-        const response = await apiClient.post<ApiEnvelope<ComponentInstallResult>>("/software/install", { componentId, force }).catch(async error => {
+        const result = await installSoftwareComponent(componentId, force).catch(async error => {
           // Failed attempts can alter server records. Refresh once, only in their
           // originating session, while preserving the original install failure.
           finishCatalogWrite(request);
@@ -224,28 +232,39 @@ export const useSoftwareStore = defineStore("software", {
           throw error;
         });
         finishCatalogWrite(request);
-        await this.fetchCatalog();
+        try { await this.fetchCatalog(); }
+        catch (error) {
+          assertCurrentSession(request);
+          throw new SoftwareInstallationRefreshError([result], error);
+        }
         assertCurrentSession(request);
-        return response.data.data;
+        if (result.status.toLowerCase() !== "installed") throw new SoftwareInstallationIncompleteError([result]);
+        return result;
       } finally {
         if (ownsBusy(request, "installingComponentId")) this.installingComponentId = "";
       }
     },
     async installDefaultStack() {
       const request = beginRequest(this, "installingDefaults", true);
+      const expectedIds = this.catalog?.defaults.map(item => item.id);
       this.installingDefaults = true;
 
       try {
-        const response = await apiClient.post<ApiEnvelope<ComponentInstallResult[]>>("/software/install-defaults", {}).catch(async error => {
+        const results = await installSoftwareDefaults(expectedIds).catch(async error => {
           finishCatalogWrite(request);
           await this.fetchCatalog().catch(() => undefined);
           assertCurrentSession(request);
           throw error;
         });
         finishCatalogWrite(request);
-        await this.fetchCatalog();
+        try { await this.fetchCatalog(); }
+        catch (error) {
+          assertCurrentSession(request);
+          throw new SoftwareInstallationRefreshError(results, error);
+        }
         assertCurrentSession(request);
-        return response.data.data;
+        if (results.some(result => result.status.toLowerCase() !== "installed")) throw new SoftwareInstallationIncompleteError(results);
+        return results;
       } finally {
         if (ownsBusy(request, "installingDefaults")) this.installingDefaults = false;
       }

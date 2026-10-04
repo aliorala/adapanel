@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { createRenderer, h, nextTick, ssrContextKey, type App, type Component } from "vue";
 import NginxView from "./NginxView.vue";
 import { configureNginx, getNginxStatus, startNginx, stopNginx, reloadNginx, testNginxConfiguration, type NginxStatus, type NginxConfiguration } from "../api/nginx";
-import { SoftwareRemovalIncompleteError, useSoftwareStore, type SoftwareCatalog } from "../stores/software";
+import { SoftwareInstallationIncompleteError, SoftwareInstallationRefreshError, SoftwareRemovalIncompleteError, useSoftwareStore, type SoftwareCatalog } from "../stores/software";
 const shared = vi.hoisted(() => ({ confirm: vi.fn(), epoch: 0 }));
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock("../components/ConfirmDialog.vue", () => ({ useConfirm: () => ({ confirm: shared.confirm }) }));
@@ -33,6 +33,17 @@ it("preserves partial removal instead of announcing nginx was removed", async ()
   vi.mocked(software.removeComponent).mockRejectedValueOnce(new SoftwareRemovalIncompleteError({ componentId: "nginx", warnings: ["locked runtime"] }));
   await state.remove();
   expect(software.removeComponent).toHaveBeenCalledExactlyOnceWith("nginx"); expect(state.notice).toBe("software.remove.partial");
+});
+it.each([false, true])("does not convert a shared-store install outcome into nginx success (refresh=%s)", async refreshFailed => {
+  vi.mocked(getNginxStatus).mockResolvedValueOnce(measured({ isInstalled: false }));
+  const { state, software } = await mount();
+  const results = [{ componentId: "nginx", displayName: "Nginx", version: "1", status: refreshFailed ? "Installed" : "Failed", installDir: "fixture", serviceName: "", generatedPassword: "", message: "software.install_failed" }];
+  vi.mocked(software.installComponent).mockRejectedValueOnce(refreshFailed
+    ? new SoftwareInstallationRefreshError(results, new Error("fixture catalog failure")) : new SoftwareInstallationIncompleteError(results));
+  await state.install();
+  expect(software.installComponent).toHaveBeenCalledExactlyOnceWith("nginx");
+  expect(state.notice).toBe(refreshFailed ? "panel.software.refreshAfterInstallFailed" : "software.install_failed");
+  expect(getNginxStatus).toHaveBeenCalledOnce();
 });
 it("does not save defaults while the server configuration is unread", async () => {
   const pending = deferred<NginxStatus>(); vi.mocked(getNginxStatus).mockReturnValueOnce(pending.promise); const { state } = await mount(); await state.save(); expect(configureNginx).not.toHaveBeenCalled(); pending.resolve(measured()); await flush();

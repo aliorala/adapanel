@@ -8,7 +8,7 @@ import { apiClient } from "../api/client";
 import { useAuthStore } from "../stores/auth";
 
 vi.mock("../api/client", () => ({ apiClient: { post: vi.fn(), get: vi.fn() }, getSessionEpoch: () => 0 }));
-vi.mock("../api/software", () => ({ getSoftwareRunningJobs: vi.fn(async () => ({ running: [], interrupted: [] })) }));
+vi.mock("../api/software", async original => ({ ...await original<object>(), getSoftwareRunningJobs: vi.fn(async () => ({ running: [], interrupted: [] })) }));
 vi.mock("../stores/auth", async original => ({ ...await original<object>(), extractApiMessage: () => "failed", extractApiDetails: () => "" }));
 vi.mock("../components/ConfirmDialog.vue", () => ({ useConfirm: () => ({ confirm: vi.fn() }) }));
 vi.mock("./AppStoreView.vue", () => ({ default: { render: () => null } }));
@@ -113,7 +113,7 @@ it.each([false, true])("refreshes failed install records immediately (default st
   const error = new Error("installation failed");
   vi.mocked(apiClient.post).mockRejectedValue(error);
   const failed = { ...store.catalog!, installed: [{ ...store.catalog!.installed[0], status: "Failed" }] };
-  vi.mocked(apiClient.get).mockResolvedValue({ data: { data: failed } });
+  vi.mocked(apiClient.get).mockResolvedValue({ data: { success: true, data: failed } });
   await expect(defaults ? store.installDefaultStack() : store.installComponent("test", true)).rejects.toBe(error);
   expect(store.failedCount).toBe(1);
   expect(store.installingComponentId).toBe("");

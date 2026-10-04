@@ -16,6 +16,7 @@ vi.mock("./AppStoreView.vue", () => ({ default: { render: () => null } }));
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string, args?: object) => key + (args ? JSON.stringify(args) : "") }) }));
 type Row = ComponentManifestItem & { installed: InstalledComponent | null };
 type State = { activeWorkspace: string; notice: string; noticeError: boolean; noticeDetails: string; manifestRows: Row[]; liveProgress: OperationProgress | null;
+  installationResult: { results: ComponentInstallResult[] } | null;
   refreshCatalog(): Promise<void>; checkForUpdates(): Promise<void>; installComponent(id: string): Promise<void>; updateComponent(item: Row): Promise<void>; installDefaultStack(): Promise<void>; removeComponent(id: string): Promise<void>; showInstallButton(item: Row): boolean };
 let app: App | undefined;
 const manifest = (id: string): ComponentManifestItem => ({ id, displayName: id, version: "2.0", type: "zip", downloadUrl: "", sha256: "", installDir: `fixture/${id}`, postInstall: [], dependencies: [], serviceName: "", silentArgs: "", note: "", default: id === "php-8.3" });
@@ -117,7 +118,8 @@ it("requires a successful scan before retrying an unconfirmed result", async () 
 });
 it("preserves failed-default diagnostics instead of reporting total success", async () => {
   const { state, store } = await mount(); vi.mocked(store.installDefaultStack).mockResolvedValueOnce([result("php-8.3"), result("mysql-8", "Failed")]); await finish(state.installDefaultStack());
-  expect(state.notice).toContain('defaultsPartial{"failed":1,"total":2}'); expect(state.noticeDetails).toContain("mysql-8: fixture.failed"); expect(state.noticeError).toBe(true);
+  expect(state.notice).toContain('defaultsPartial{"failed":1,"total":2}');
+  expect(state.installationResult?.results).toContainEqual(result("mysql-8", "Failed")); expect(state.noticeError).toBe(true);
 });
 it.each(["install", "update", "defaults", "remove"])("preserves verified normal %s success", async action => {
   const { state } = await mount(); await finish(action === "install" ? state.installComponent("php-8.3") : action === "update" ? state.updateComponent(state.manifestRows[1]) : action === "defaults" ? state.installDefaultStack() : state.removeComponent("nginx"));

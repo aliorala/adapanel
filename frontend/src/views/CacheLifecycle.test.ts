@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { createRenderer, h, nextTick, ssrContextKey, type App, type Component } from "vue";
 import CacheView from "./CacheView.vue";
 import { getCacheStatus, startMemcached, startRedis, stopMemcached, stopRedis, type CacheRuntime, type CacheStatus } from "../api/cache";
-import { SoftwareRemovalIncompleteError, useSoftwareStore } from "../stores/software";
+import { SoftwareInstallationIncompleteError, SoftwareInstallationRefreshError, SoftwareRemovalIncompleteError, useSoftwareStore } from "../stores/software";
 import { invalidateSessionRequests } from "../api/client";
 import { useSubscriptionStore } from "../stores/subscription";
 import type { SubscriptionUsage } from "../api/subscriptions";
@@ -47,6 +47,18 @@ it("keeps a partial component removal warning instead of claiming cache removal 
   await state.remove("redis");
   expect(useSoftwareStore().removeComponent).toHaveBeenCalledExactlyOnceWith("redis");
   expect(state.notice).toBe("software.remove.partial"); expect(state.noticeError).toBe(true);
+});
+
+it.each([false, true])("keeps an unconfirmed cache install from the shared store out of the success path (refresh=%s)", async refreshFailed => {
+  vi.mocked(getCacheStatus).mockResolvedValue({ redis: runtime("redis", "Stopped", false), memcached: runtime("memcached") });
+  const state = await mount();
+  const results = [{ componentId: "redis", displayName: "Redis", version: "1", status: refreshFailed ? "Installed" : "Failed", installDir: "fixture", serviceName: "", generatedPassword: "", message: "software.install_failed" }];
+  vi.mocked(useSoftwareStore().installComponent).mockRejectedValueOnce(refreshFailed
+    ? new SoftwareInstallationRefreshError(results, new Error("fixture catalog failure")) : new SoftwareInstallationIncompleteError(results));
+  await state.install("redis");
+  expect(useSoftwareStore().installComponent).toHaveBeenCalledExactlyOnceWith("redis");
+  expect(state.notice).toBe(refreshFailed ? "panel.software.refreshAfterInstallFailed" : "software.install_failed");
+  expect(state.noticeError).toBe(true); expect(getCacheStatus).toHaveBeenCalledOnce();
 });
 
 it("does not present unread cache counts as measured zeroes", async () => {

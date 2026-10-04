@@ -11,6 +11,54 @@ type ApiEnvelope<T> = {
 
 export type ComponentRemovalResult = { componentId: string; warnings: string[] };
 
+export type ComponentInstallResult = {
+  componentId: string;
+  displayName: string;
+  version: string;
+  versionMeasured?: boolean;
+  status: string;
+  installDir: string;
+  serviceName: string;
+  generatedPassword: string;
+  message: string;
+};
+
+function installResult(value: unknown): ComponentInstallResult {
+  const result = value as Partial<ComponentInstallResult> | null;
+  const fields = ["componentId", "displayName", "version", "status", "installDir", "serviceName", "generatedPassword", "message"] as const;
+  if (!result || fields.some(field => typeof result[field] !== "string") || !result.componentId!.trim() ||
+    !result.displayName!.trim() || !["installed", "failed", "pending", "skipped"].includes(result.status!.toLowerCase()) ||
+    (result.versionMeasured !== undefined && typeof result.versionMeasured !== "boolean")) {
+    throw new UserFacingError("panel.software.resultUnconfirmed");
+  }
+  return {
+    componentId: result.componentId!, displayName: result.displayName!, version: result.version!, status: result.status!,
+    installDir: result.installDir!, serviceName: result.serviceName!, generatedPassword: result.generatedPassword!, message: result.message!,
+    ...(result.versionMeasured === undefined ? {} : { versionMeasured: result.versionMeasured })
+  };
+}
+
+export async function installSoftwareComponent(componentId: string, force = false): Promise<ComponentInstallResult> {
+  const response = await apiClient.post<ApiEnvelope<unknown>>("/software/install", { componentId, force });
+  if (response.data?.success !== true) throw new UserFacingError("panel.software.resultUnconfirmed");
+  const result = installResult(response.data.data);
+  if (result.componentId !== componentId) throw new UserFacingError("panel.software.resultUnconfirmed");
+  return result;
+}
+
+export async function installSoftwareDefaults(expectedIds?: readonly string[]): Promise<ComponentInstallResult[]> {
+  const response = await apiClient.post<ApiEnvelope<unknown>>("/software/install-defaults", {});
+  if (response.data?.success !== true || !Array.isArray(response.data.data) || !response.data.data.length) {
+    throw new UserFacingError("panel.software.resultUnconfirmed");
+  }
+  const results = response.data.data.map(installResult);
+  const ids = new Set(results.map(result => result.componentId));
+  if (ids.size !== results.length || (expectedIds && (expectedIds.length !== results.length || expectedIds.some(id => !ids.has(id))))) {
+    throw new UserFacingError("panel.software.resultUnconfirmed");
+  }
+  return results;
+}
+
 export async function removeSoftwareComponent(componentId: string): Promise<ComponentRemovalResult> {
   const response = await apiClient.delete<ApiEnvelope<unknown>>(`/software/${encodeURIComponent(componentId)}`);
   const envelope = response.data;

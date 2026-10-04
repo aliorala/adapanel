@@ -19,13 +19,26 @@
     <template v-else-if="canReadZone">
       <SectionLoadError v-if="loadError" :message="loadError" :busy="!canReload" @retry="load()" />
       <p v-if="zone && !zoneConfirmed" class="dns-last-known" role="status">{{ t("panel.dns.lastKnownZone") }}</p>
+      <div v-if="zone?.isSharedZone" class="dns-info dns-shared-note" role="status">
+        <strong>{{ t("panel.dns.sharedZoneTitle") }}</strong>
+        <p>{{ t("panel.dns.sharedZoneHint") }}</p>
+      </div>
+      <div v-if="hasConfigurationConflict" class="dns-last-known dns-policy-conflict" role="alert">
+        <strong>{{ t("panel.dns.configurationConflictTitle") }}</strong>
+        <p>{{ t(isAdmin ? "panel.dns.configurationConflictAdminHint" : "panel.dns.configurationConflictResellerHint") }}</p>
+        <ul>
+          <li v-if="zone?.modeConfigurationConflict">{{ t("panel.dns.modeConfigurationConflict") }}</li>
+          <li v-if="zone?.transferConfigurationConflict">{{ t("panel.dns.transferConfigurationConflict") }}</li>
+        </ul>
+        <button v-if="activeTab !== 'settings'" type="button" class="secondary compact" @click="activeTab = 'settings'">{{ t("panel.dns.zoneSettings") }}</button>
+      </div>
       <div class="module-toolbar">
         <div class="segmented-tabs" role="tablist">
           <button role="tab" :aria-selected="activeTab === 'records'" :class="{ active: activeTab === 'records' }" @click="activeTab = 'records'">{{ t("panel.dns.records") }}</button>
           <button role="tab" :aria-selected="activeTab === 'settings'" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">{{ t("panel.dns.zoneSettings") }}</button>
         </div>
         <div class="toolbar-group">
-          <span :class="['status-pill', zoneConfirmed && zone?.isWindowsZonePresent && zone.statusMessage !== 'dns.zone_type_mismatch' ? 'ok' : 'warn']">{{ zoneStatus }}</span>
+          <span :class="['status-pill', zoneConfirmed && zone?.isWindowsZonePresent && !hasConfigurationConflict && zone.statusMessage !== 'dns.zone_type_mismatch' ? 'ok' : 'warn']">{{ zoneStatus }}</span>
           <button
             v-if="isAdmin && zone && !zone.isWindowsDnsAvailable"
             class="secondary compact"
@@ -265,8 +278,8 @@
             <h4>{{ t("panel.dns.zoneTypeTitle") }}</h4>
             <p class="meta">{{ t("panel.dns.zoneTypeHint") }}</p>
           </div>
-          <span :class="['status-pill', zoneConfirmed && !isSecondary ? 'ok' : 'warn']">
-            {{ isSecondary ? t("panel.dns.zoneTypeSecondary") : t("panel.dns.zoneTypePrimary") }}
+          <span :class="['status-pill', zoneConfirmed && !isSecondary && !hasConfigurationConflict ? 'ok' : 'warn']">
+            {{ zone.modeConfigurationConflict ? t("panel.dns.configurationConflictTitle") : isSecondary ? t("panel.dns.zoneTypeSecondary") : t("panel.dns.zoneTypePrimary") }}
           </span>
         </div>
 
@@ -277,13 +290,10 @@
         </p>
 
         <template v-if="isSecondary">
-          <p class="field-hint">{{ t("panel.dns.secondaryActiveHint", { masters: zone.masterServers.join(", ") || "—" }) }}</p>
+          <p v-if="!zone.modeConfigurationConflict" class="field-hint">{{ t("panel.dns.secondaryActiveHint", { masters: zone.masterServers.join(", ") || "—" }) }}</p>
           <div class="row-actions">
-            <button v-if="isAdmin" class="secondary compact" v-bind="writeGate(!canManageDnsServer)" @click="transferNow">
+            <button v-if="isAdmin" class="secondary compact" v-bind="writeGate(!canManageDnsServer || hasConfigurationConflict)" @click="transferNow">
               {{ modeBusy ? t("panel.dns.zoneTypeWorking") : t("panel.dns.transferNow") }}
-            </button>
-            <button v-if="isAdmin" class="secondary compact" v-bind="writeGate(!canManageDnsServer)" @click="switchToPrimary">
-              {{ modeBusy ? t("panel.dns.zoneTypeWorking") : t("panel.dns.switchToPrimary") }}
             </button>
           </div>
         </template>
@@ -291,13 +301,18 @@
         <template v-else>
           <!-- Sunucu geneli listeden gelen IP'ler de burada gösterilir: bölgede tek IP görünürken
                transferi fiilen üç sunucunun alabiliyor olması, okunamayan bir güvenlik ayarıdır. -->
-          <p v-if="zone.effectiveNotifyServers.length" class="field-hint">
+          <p v-if="!zone.transferConfigurationConflict && zone.effectiveNotifyServers.length" class="field-hint">
             {{ t("panel.dns.effectiveNotifyHint", { list: zone.effectiveNotifyServers.join(", ") }) }}
           </p>
         </template>
 
-        <!-- İkincile geçiş formu birincil kipte gösterilir; master listesi kipten bağımsız saklanır. -->
-        <form v-if="isAdmin && !isSecondary" class="mode-form" @submit.prevent="switchToSecondary">
+        <div v-if="isAdmin && (isSecondary || zone.modeConfigurationConflict)" class="row-actions">
+          <button class="secondary compact" v-bind="writeGate(!canManageDnsServer)" @click="switchToPrimary">
+            {{ modeBusy ? t("panel.dns.zoneTypeWorking") : t("panel.dns.switchToPrimary") }}
+          </button>
+        </div>
+        <!-- Keep both explicit mode choices available while resolving a shared conflict. -->
+        <form v-if="isAdmin" class="mode-form" @submit.prevent="switchToSecondary">
           <label class="stacked-field" for="dns-master-servers">
             <span class="field-label">
               {{ t("panel.dns.masterServers") }}
@@ -306,7 +321,7 @@
             <textarea id="dns-master-servers" v-model="masterServersText" rows="2" placeholder="192.0.2.53&#10;2001:db8::53"></textarea>
           </label>
           <button class="secondary compact danger" v-bind="writeGate(!canManageDnsServer)">
-            {{ modeBusy ? t("panel.dns.zoneTypeWorking") : t("panel.dns.switchToSecondary") }}
+            {{ modeBusy ? t("panel.dns.zoneTypeWorking") : t(isSecondary ? "panel.dns.saveSecondarySettings" : "panel.dns.switchToSecondary") }}
           </button>
         </form>
       </div>
@@ -324,10 +339,10 @@
         <p v-if="!zone.isWindowsDnsAvailable" class="field-hint">{{ t("panel.dns.dnssecRequiresWindows") }}</p>
         <template v-else>
           <div v-if="isAdmin" class="row-actions">
-            <button v-if="!zone.isDnssecSigned" class="compact" v-bind="writeGate(!canManageDnsServer)" @click="toggleDnssec(true)">
+            <button v-if="!zone.isDnssecSigned" class="compact" v-bind="writeGate(!canManageDnsServer || hasConfigurationConflict)" @click="toggleDnssec(true)">
               {{ dnssecBusy ? t("panel.dns.dnssecWorking") : t("panel.dns.dnssecEnable") }}
             </button>
-            <button v-else class="secondary compact danger" v-bind="writeGate(!canManageDnsServer)" @click="toggleDnssec(false)">
+            <button v-else class="secondary compact danger" v-bind="writeGate(!canManageDnsServer || hasConfigurationConflict)" @click="toggleDnssec(false)">
               {{ dnssecBusy ? t("panel.dns.dnssecWorking") : t("panel.dns.dnssecDisable") }}
             </button>
           </div>
@@ -426,7 +441,8 @@ const canReadZone = computed(() => authStore.session?.isAuthenticated === true &
   (isAdmin.value || authStore.session?.user?.role === "Reseller"));
 const canReload = computed(() => canReadZone.value && !!siteName.value && !busy.value && !actionBusy.value);
 const canWriteZone = computed(() => canReadZone.value && zoneConfirmed.value && !!siteName.value && !locked.value && !busy.value && !actionBusy.value);
-const canWriteRecords = computed(() => canWriteZone.value && !isSecondary.value);
+const hasConfigurationConflict = computed(() => zone.value?.modeConfigurationConflict === true || zone.value?.transferConfigurationConflict === true || zone.value?.statusMessage === "dns.shared_configuration_conflict");
+const canWriteRecords = computed(() => canWriteZone.value && !isSecondary.value && !hasConfigurationConflict.value);
 const canManageDnsServer = computed(() => canWriteZone.value && isAdmin.value);
 const canInstallWindowsDns = computed(() => canManageDnsServer.value && zone.value?.isWindowsDnsAvailable === false);
 
@@ -796,15 +812,15 @@ async function switchToSecondary() {
   await mutateZone(site => setDnsZoneMode(site, true, masters), "panel.dns.secondaryEnabledMsg", modeBusy, undefined,
     { administrator: true, expected: result => result.isSecondary && result.masterServers.length > 0,
       drafts: captureDrafts(false, true), confirmation: {
-    title: t("panel.dns.confirmSecondaryTitle"),
-    message: t("panel.dns.confirmSecondaryMessage", { zone: zone.value?.zoneName || siteName.value }),
+    title: t(isSecondary.value ? "panel.dns.saveSecondarySettings" : "panel.dns.confirmSecondaryTitle"),
+    message: t(isSecondary.value ? "panel.dns.confirmSecondarySettingsMessage" : "panel.dns.confirmSecondaryMessage", { zone: zone.value?.zoneName || siteName.value }),
     impact: [
       `${t("panel.dns.zone")}: ${zone.value?.zoneName || siteName.value}`,
       `${t("panel.dns.masterServers")}: ${masters.join(", ")}`,
       `${t("panel.dns.records")}: ${zone.value?.records.length ?? 0}`
     ],
     requireText: zone.value?.zoneName || siteName.value,
-    confirmLabel: t("panel.dns.switchToSecondary")
+    confirmLabel: t(isSecondary.value ? "panel.dns.saveSecondarySettings" : "panel.dns.switchToSecondary")
   } });
 }
 
@@ -822,14 +838,14 @@ async function switchToPrimary() {
 
 /** Master'dan tam transferi (AXFR) hemen başlatır; onay istemez çünkü yıkıcı değildir. */
 async function transferNow() {
-  if (!canManageDnsServer.value || !isSecondary.value) return;
+  if (!canManageDnsServer.value || !isSecondary.value || hasConfigurationConflict.value) return;
   await mutateZone(transferDnsZoneNow, "panel.dns.transferStartedMsg", modeBusy, undefined, { administrator: true });
 }
 
 async function mutateZone(action: (site: string) => Promise<DnsZone>, successKey: string | (() => string), flag: Ref<boolean> = busy, onSuccess?: () => void,
     options: { confirmation?: ConfirmOptions; administrator?: boolean; records?: boolean; drafts?: ReturnType<typeof captureDrafts>; expected?: (result: DnsZone) => boolean } = {}) {
   const context = zoneContext();
-  if (!context.current() || !canWriteZone.value || (options.administrator && !isAdmin.value) || (options.records && isSecondary.value)) return;
+  if (!context.current() || !canWriteZone.value || (options.administrator && !isAdmin.value) || (options.records && (isSecondary.value || hasConfigurationConflict.value))) return;
   const token = Symbol("dns-mutation"), draft = options.drafts ?? captureDrafts();
   mutationToken.value = token;
   flag.value = true;
@@ -843,7 +859,8 @@ async function mutateZone(action: (site: string) => Promise<DnsZone>, successKey
     const messageKey = typeof successKey === "function" ? successKey() : successKey;
     applyZone(result, draft);
     onSuccess?.();
-    showNotice(t(messageKey), false);
+    if (hasConfigurationConflict.value) showNotice(t("dns.shared_configuration_conflict"), true);
+    else showNotice(t(messageKey), false);
   } catch (error) {
     if (context.current()) {
       zoneConfirmed.value = false;
@@ -862,7 +879,7 @@ async function installWindowsDns() {
 }
 
 async function toggleDnssec(enable: boolean) {
-  if (!canManageDnsServer.value || isSecondary.value || !zone.value?.isWindowsDnsAvailable) return;
+  if (!canManageDnsServer.value || isSecondary.value || hasConfigurationConflict.value || !zone.value?.isWindowsDnsAvailable) return;
 
   // KAPATMAK yıkıcıdır: bölgenin imzası kalkar, üst kayıttaki DS kaydı geçersizleşir ve
   // doğrulayan çözümleyiciler alan adını GEÇİCİ OLARAK ÇÖZEMEZ. Onaysız yapılmaz.
@@ -929,6 +946,9 @@ function showNotice(message: string, isError: boolean) {
 .dns-last-known {
   border-inline-start: 3px solid var(--warn-1);
 }
+.dns-shared-note strong, .dns-policy-conflict strong { color: var(--text-strong); }
+.dns-shared-note p, .dns-policy-conflict p { margin: var(--sp-6) 0 0; }
+.dns-policy-conflict ul { margin: var(--sp-8) 0; padding-inline-start: var(--sp-20); }
 
 /* `.section-head` KOPYASI SİLİNDİ: ortak tanım base.css'te. Aradaki tek fark boşluktu
    (`--sp-10` -> `--sp-12`); hizalama (`start` = `flex-start`) ve `flex-wrap` zaten aynıydı.
