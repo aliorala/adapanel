@@ -519,7 +519,11 @@
       <label v-else-if="workspace" class="stacked-field">
         <span class="field-label">{{ t("panel.files.editor") }}</span>
         <span v-if="!canEditFile" id="file-content-state" class="field-hint" role="status">{{ t(workspace.contentUnavailableReasonKey || 'panel.files.contentUnmeasured') }}</span>
-        <textarea v-model="fileContent" :disabled="fileMutationBusy || loading || !canEditFile" :aria-describedby="!canEditFile ? 'file-content-state' : undefined" rows="18" spellcheck="false" class="file-editor"></textarea>
+        <span v-if="locked" id="file-editor-readonly" class="editor-readonly-hint" role="status">
+          <strong>{{ lockReason }}</strong>
+          <span>{{ t('panel.files.editorReadOnlyHint') }}</span>
+        </span>
+        <textarea v-model="fileContent" :readonly="locked" :disabled="fileMutationBusy || loading || !canEditFile" :aria-describedby="[!canEditFile ? 'file-content-state' : '', locked ? 'file-editor-readonly' : ''].filter(Boolean).join(' ') || undefined" rows="18" spellcheck="false" class="file-editor"></textarea>
       </label>
 
       <!-- Kaydet BİRİNCİL, indir ikincil. Eskiden ikisi `action-row` içindeydi ve o sınıf
@@ -852,14 +856,18 @@ useNavigationGuard(() => {
   if (!isDirty.value) return true;
   return (async () => {
   const isCurrent = currentFileContext(false);
+  const readOnly = locked.value;
   let proceed = false;
+  const discard = () => { if (isCurrent()) { fileContent.value = savedContent.value; proceed = true; } };
   await confirm({
-    title: t("panel.files.unsaved"), message: t("panel.files.unsavedHint"), tone: "neutral",
+    title: t("panel.files.unsaved"),
+    message: readOnly ? `${lockReason.value} ${t("panel.files.unsavedReadOnlyHint")}` : t("panel.files.unsavedHint"),
+    tone: "neutral",
     impact: [workspace.value!.path],
-    cancelLabel: t("panel.files.stay"), confirmLabel: t("panel.files.save"),
-    alternativeLabel: t("panel.files.discard"),
-    alternativeAction: () => { if (isCurrent()) { fileContent.value = savedContent.value; proceed = true; } },
-    action: async () => { proceed = await saveCurrentFile(); }
+    cancelLabel: t("panel.files.stay"), confirmLabel: t(readOnly ? "panel.files.discard" : "panel.files.save"),
+    alternativeLabel: readOnly ? undefined : t("panel.files.discard"),
+    alternativeAction: readOnly ? undefined : discard,
+    action: async () => { if (readOnly) discard(); else proceed = await saveCurrentFile(); }
   });
   return proceed;
   })();
@@ -2033,7 +2041,8 @@ async function removeSelected() {
 }
 
 async function saveCurrentFile(): Promise<boolean> {
-  if (!isFileViewActive() || !workspace.value || !canEditFile.value || fileMutationBusy.value || loading.value || locked.value) return false;
+  if (!isFileViewActive() || !workspace.value || !canEditFile.value || fileMutationBusy.value || loading.value) return false;
+  if (locked.value) { showNotice(lockReason.value, true); return false; }
   const path = workspace.value.path;
   const content = fileContent.value;
   const isCurrent = currentFileContext(false);
@@ -2657,6 +2666,19 @@ async function restore(record: BackupRecord) {
   font: 0.86rem/1.55 "Cascadia Code", "Consolas", monospace;
   tab-size: 4;
 }
+.editor-readonly-hint {
+  display: grid;
+  gap: var(--sp-4);
+  padding: var(--sp-12) var(--sp-16);
+  border-left: 3px solid var(--warn-1);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warn-1) 7%, var(--surface-1));
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.editor-readonly-hint strong { color: var(--text-strong); font-weight: 600; }
 
 /*
  * BAĞLANTI GİBİ DÜĞME — global `button` kuralının MİRASI KESİLİYOR.

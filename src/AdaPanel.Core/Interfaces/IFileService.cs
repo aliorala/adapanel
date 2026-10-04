@@ -128,6 +128,11 @@ public interface IFileService
         Func<SiteDto, CancellationToken, Task> beforePublication, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Authorized file publication is not implemented.");
 
+    Task<string> SaveUploadAsync(string path, Stream stream, long expectedLength, long maximumBytes,
+        Func<SiteDto, CancellationToken, Task> beforePublication,
+        Func<long, CancellationToken, Task> beforeWrite, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Measured upload publication is not implemented.");
+
     /// <summary>
     /// İndirilecek dosyanın FİZİKSEL YOLUNU döndürür — içeriğini değil.
     /// <para>

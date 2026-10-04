@@ -290,5 +290,7 @@
   "ftp.user_status_unknown": "Windows FTP hesabının durumu doğrulanamadı. İşlem tamamlanmadı; yeniden deneyin.",
   "files.search_truncated_files": "5.000 dosyalık tarama sınırına ulaşıldı. Arama tamamlanmamış olabilir; daha dar bir klasörde yeniden arayın.",
   "files.search_truncated_results": "100 sonuç sınırına ulaşıldı. Başka eşleşmeler olabilir; arama ifadesini veya klasörü daraltın.",
-  "files.owner_changed": "İşlem beklerken sitenin abonelik sahibi değişti. Güncel siteyi kontrol edip işlemi yeniden başlatın."
+  "files.owner_changed": "İşlem beklerken sitenin abonelik sahibi değişti. Güncel siteyi kontrol edip işlemi yeniden başlatın.",
+  "files.upload_too_large": "Yüklenecek dosya 200 MiB sınırını aşıyor.",
+  "files.upload_size_mismatch": "Yüklenen içerik bildirilen dosya boyutuyla eşleşmiyor. Dosyayı yeniden seçip tekrar deneyin."
 }

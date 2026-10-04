@@ -53,17 +53,18 @@ public sealed class FileUploadQuotaTests
         var saved = false;
         var files = Stub<IFileService>((method, args) => method switch
         {
-            nameof(IFileService.MeasureAsync) => Measure((string[])args![0]!),
-            nameof(IFileService.SaveUploadAsync) => Save((string)args![0]!, (Func<SiteDto, CancellationToken, Task>)args[2]!, (CancellationToken)args[3]!),
+            nameof(IFileService.SaveUploadAsync) => Save((string)args![0]!, (long)args[2]!,
+                (Func<SiteDto, CancellationToken, Task>)args[4]!,
+                (Func<long, CancellationToken, Task>)args[5]!, (CancellationToken)args[6]!),
             _ => throw new NotSupportedException(method)
         });
-        Task<DirectorySizeDto> Measure(string[] paths)
+        async Task<string> Save(string path, long expectedLength, Func<SiteDto, CancellationToken, Task> approve,
+            Func<long, CancellationToken, Task> beforeWrite, CancellationToken token)
         {
-            measured.AddRange(paths);
-            return Task.FromResult(new DirectorySizeDto { TotalBytes = existing });
-        }
-        async Task<string> Save(string path, Func<SiteDto, CancellationToken, Task> approve, CancellationToken token)
-        {
+            await approve(site, token);
+            measured.Add(path);
+            Assert.Equal(incoming, expectedLength);
+            await beforeWrite(Math.Max(0, expectedLength - existing), token);
             await approve(site, token);
             Assert.Equal(target, path); saved = true; return path;
         }

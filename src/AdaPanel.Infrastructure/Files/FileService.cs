@@ -79,6 +79,9 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     internal Func<string> TransferStagingPath { get; set; } = static () =>
         SecureTempFile.BuildPath("adapanel-transfer", ".tmp");
 
+    internal Func<string> UploadStagingPath { get; set; } = static () =>
+        SecureTempFile.BuildPath("adapanel-upload", ".tmp");
+
     // Per-instance observation boundaries keep lifecycle tests on real temp files.
     internal Func<string, CancellationToken, Task>? TransferItemReady { get; set; }
     internal Action<string>? CopyEntryReady { get; set; }
@@ -204,8 +207,12 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         EnsureSiteTarget(target);
         EnsureNotSiteRoot(target);
         await ApprovePublicationAsync(target, beforePublication, cancellationToken);
-        var original = !failIfExists && File.Exists(target.PhysicalPath)
-            ? await ReadFileContentAsync(target.PhysicalPath, cancellationToken) : FileTextContent.NewFile;
+        // Keep the same original open through quota and final approval: both its
+        // codec and deducted length must still describe the file being replaced.
+        await using var originalRead = !failIfExists && File.Exists(target.PhysicalPath)
+            ? OpenWorkspaceFile(target.PhysicalPath) : null;
+        var original = originalRead is not null
+            ? await FileTextContent.ReadAsync(originalRead, cancellationToken) : FileTextContent.NewFile;
         // The quota and publication use this exact encoded snapshot. Do not reread the codec
         // after an awaited quota check and publish a different byte count or preamble.
         var encoded = original.Encode(content);
@@ -300,7 +307,9 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             await WriteAtomicallyAsync(target, async (stream, token) =>
             {
                 await stream.WriteAsync(encoded, token);
-            }, cancellationToken, token => ApprovePublicationAsync(target, beforePublication, token), failIfExists);
+            }, cancellationToken, token => ApprovePublicationAsync(target, beforePublication, token),
+                failIfExists: failIfExists || originalRead is null,
+                releasePublicationRead: () => originalRead?.Dispose());
         }
 
         return await ReadMutationWorkspaceAsync(normalizedPath, beforePublication, cancellationToken);
@@ -1423,6 +1432,91 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     {
         ArgumentNullException.ThrowIfNull(beforePublication);
         return SaveUploadCoreAsync(path, stream, beforePublication, cancellationToken);
+    }
+
+    public async Task<string> SaveUploadAsync(string path, Stream stream, long expectedLength, long maximumBytes,
+        Func<SiteDto, CancellationToken, Task> beforePublication,
+        Func<long, CancellationToken, Task> beforeWrite, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(beforePublication);
+        ArgumentNullException.ThrowIfNull(beforeWrite);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (expectedLength < 0 || maximumBytes < 0)
+            throw new AppException("files.upload_size_mismatch", 400, 400);
+        if (expectedLength > maximumBytes) throw new AppException("files.upload_too_large", 413, 413);
+
+        var normalizedPath = NormalizeVirtualPath(path);
+        var target = await ResolveTargetAsync(normalizedPath, cancellationToken);
+        EnsureSiteTarget(target);
+        EnsureNotSiteRoot(target);
+        await ApprovePublicationAsync(target, beforePublication, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureTransferPath(target);
+
+        // Private staging is outside the site's disk usage. The stream is fully
+        // measured before either a quota decision or any site-file publication.
+        var stagingPath = UploadStagingPath();
+        var created = false;
+        try
+        {
+            await using (var output = SecureTempFile.Create(stagingPath))
+            {
+                created = true;
+                await CopyUploadPayloadAsync(stream, output, expectedLength, maximumBytes, cancellationToken);
+                await output.FlushAsync(cancellationToken);
+            }
+            await using var payload = new FileStream(stagingPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            await ApprovePublicationAsync(target, beforePublication, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureTransferPath(target);
+            using var original = OpenCompressionDestination(target.PhysicalPath, overwrite: true);
+            var growth = Math.Max(0, payload.Length - (original?.Length ?? 0));
+            await beforeWrite(growth, cancellationToken);
+            await ApprovePublicationAsync(target, beforePublication, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureTransferPath(target);
+            Directory.CreateDirectory(Path.GetDirectoryName(target.PhysicalPath) ?? target.SandboxRoot);
+            await WriteAtomicallyAsync(target,
+                (destination, token) => CopyExactTransferBytesAsync(payload, destination, expectedLength, token),
+                cancellationToken, async token =>
+                {
+                    await ApprovePublicationAsync(target, beforePublication, token);
+                    token.ThrowIfCancellationRequested();
+                    EnsureTransferPath(target);
+                }, failIfExists: original is null, releasePublicationRead: () => original?.Dispose());
+            return normalizedPath;
+        }
+        finally
+        {
+            if (created) TryDeleteTransferPayload(stagingPath);
+        }
+    }
+
+    private static async Task CopyUploadPayloadAsync(Stream source, Stream destination,
+        long expectedLength, long maximumBytes, CancellationToken token)
+    {
+        var buffer = new byte[81920];
+        long total = 0;
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            // Read one byte beyond the declared length to prove exact EOF, without
+            // trusting Length/CanSeek or an overridden CopyToAsync implementation.
+            var count = (int)Math.Min(buffer.Length - 1L, expectedLength - total) + 1;
+            var read = await source.ReadAsync(buffer.AsMemory(0, count), token);
+            token.ThrowIfCancellationRequested();
+            if (read == 0)
+            {
+                if (total != expectedLength) throw new AppException("files.upload_size_mismatch", 400, 400);
+                return;
+            }
+            total += read;
+            if (total > maximumBytes) throw new AppException("files.upload_too_large", 413, 413);
+            if (total > expectedLength) throw new AppException("files.upload_size_mismatch", 400, 400);
+            await destination.WriteAsync(buffer.AsMemory(0, read), token);
+        }
     }
 
     private async Task<string> SaveUploadCoreAsync(string path, Stream stream,

@@ -4281,7 +4281,7 @@
   "panel.alias.confirmRemoveMessage": "'{host}' bağlaması silinecek; bu alan adından gelen ziyaretçiler siteye ulaşamaz.",
   "panel.subscription.confirmSuspendTitle": "Abonelik askıya alınsın mı?",
   "panel.subscription.confirmSuspendMessage": "Kullanıcının siteleri durdurulacak ve ziyaretçiler siteye ulaşamayacak. Posta ve veritabanları silinmez; 'Devam ettir' ile geri açılır.",
-  "panel.subscription.readOnlyAction": "Aboneliginiz askida — panel salt okunur oldugu icin bu islem yapilamiyor.",
+  "panel.subscription.readOnlyAction": "Aboneliğiniz askıda. Panel salt okunur olduğu için bu işlem yapılamıyor.",
   "panel.dns.confirmDnssecDisableTitle": "DNSSEC kapatılsın mı?",
   "panel.dns.confirmDnssecDisableMessage": "'{zone}' bölgesinin imzası kaldırılacak. Üst bölgedeki DS kaydı silinene kadar doğrulama yapan çözümleyiciler alan adını ÇÖZEMEZ — site ve posta geçici olarak erişilemez olabilir.",
   "panel.toolkit.queue.statusUnknown": "Durum okunamadı",
@@ -5371,6 +5371,8 @@
   "panel.migration.trust.reasons.unknown_host_key": "host key daha önce onaylanmamış",
   "panel.files.unsaved": "Kaydedilmemiş değişiklikler",
   "panel.files.unsavedHint": "Bu dosyada yaptığınız değişiklikleri kaydedebilir, bırakabilir veya düzenlemeye devam edebilirsiniz.",
+  "panel.files.unsavedReadOnlyHint": "Kaydedilmemiş değişiklikler bu sekmede duruyor. Dosyada kalabilir veya değişiklikleri atıp ayrılabilirsiniz.",
+  "panel.files.editorReadOnlyHint": "Dosya içeriğini ve varsa taslağınızı seçip kopyalayabilirsiniz. Kaydetmek için abonelikteki yazma kısıtlamasının kaldırılması gerekiyor.",
   "panel.files.stay": "Sayfada kal",
   "panel.files.discard": "Değişiklikleri bırak",
   "panel.backup.manageScoped": "Yedekleri yönet ve dosya seçerek geri yükle",
@@ -5667,5 +5669,7 @@
   "panel.files.uploadItem.unconfirmed": "Doğrulanamadı",
   "panel.files.uploadItem.skipped": "Atlandı",
   "panel.files.uploadItem.not-sent": "Gönderilmedi",
-  "files.owner_changed": "İşlem beklerken sitenin abonelik sahibi değişti. Güncel siteyi kontrol edip işlemi yeniden başlatın."
+  "files.owner_changed": "İşlem beklerken sitenin abonelik sahibi değişti. Güncel siteyi kontrol edip işlemi yeniden başlatın.",
+  "files.upload_too_large": "Yüklenecek dosya 200 MiB sınırını aşıyor.",
+  "files.upload_size_mismatch": "Yüklenen içerik bildirilen dosya boyutuyla eşleşmiyor. Dosyayı yeniden seçip tekrar deneyin."
 }

@@ -5371,6 +5371,8 @@
   "panel.migration.trust.reasons.unknown_host_key": "host key has not been approved before",
   "panel.files.unsaved": "Unsaved changes",
   "panel.files.unsavedHint": "Save your changes, discard them, or keep editing this file.",
+  "panel.files.unsavedReadOnlyHint": "Your unsaved changes remain in this tab. Stay in the file, or discard the changes and leave.",
+  "panel.files.editorReadOnlyHint": "You can select and copy the file content, including any draft. Saving requires the subscription's write restriction to be lifted.",
   "panel.files.stay": "Stay on page",
   "panel.files.discard": "Discard changes",
   "panel.backup.manageScoped": "Manage backups and restore selected files",
@@ -5667,5 +5669,7 @@
   "panel.files.uploadItem.unconfirmed": "Unconfirmed",
   "panel.files.uploadItem.skipped": "Skipped",
   "panel.files.uploadItem.not-sent": "Not sent",
-  "files.owner_changed": "The site's subscription owner changed while the operation was waiting. Check the current site and try again."
+  "files.owner_changed": "The site's subscription owner changed while the operation was waiting. Check the current site and try again.",
+  "files.upload_too_large": "The uploaded file exceeds the 200 MiB limit.",
+  "files.upload_size_mismatch": "The uploaded content does not match the declared file size. Select the file again and retry."
 }

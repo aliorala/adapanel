@@ -1,6 +1,7 @@
 ﻿using AdaPanel.Api.Extensions;
 using AdaPanel.Api.Security;
 using System.Security.Claims;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Files;
 using AdaPanel.Core.Dtos.Sites;
@@ -125,17 +126,19 @@ public sealed class FilesController(
     {
         var virtualPath = $"{(path ?? string.Empty).TrimEnd('/', '\\')}/{file.FileName}".TrimStart('/', '\\');
         var length = file.Length;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (length < 0) throw new AppException("files.upload_size_mismatch", 400, 400);
+        if (length > PanelServerLimits.FileUploadMaxBytes)
+            throw new AppException("files.upload_too_large", 413, 413);
         using var publication = await CapturePublicationAsync([path ?? string.Empty, virtualPath], cancellationToken);
-        // Üzerine yükleme mevcut dosyayı değiştirir: kota yalnız net büyümeyi sayar.
-        // Aksi halde kotası dolmuş müşteri aynı dosyayı küçülterek bile onaramaz.
-        await EnsureDiskQuotaAsync(path, async ct =>
-        {
-            var existing = await fileService.MeasureAsync([virtualPath], ct);
-            return (Math.Max(0, length - existing.TotalBytes), string.Empty);
-        }, cancellationToken, publication.Principal);
-
+        cancellationToken.ThrowIfCancellationRequested();
         await using var stream = file.OpenReadStream();
-        var savedPath = await fileService.SaveUploadAsync(virtualPath, stream, publication.ApproveAsync, cancellationToken);
+        // The service measures the complete private payload and keeps the original
+        // target open through quota and publication, so the deduction cannot go stale.
+        var savedPath = await fileService.SaveUploadAsync(virtualPath, stream, length,
+            PanelServerLimits.FileUploadMaxBytes, publication.ApproveAsync,
+            (growth, token) => EnsureDiskQuotaAsync(path,
+                _ => Task.FromResult((growth, string.Empty)), token, publication.Principal), cancellationToken);
         await publication.RevalidateAsync(cancellationToken);
         await WriteAuditAsync("files.uploaded", savedPath, $"File uploaded ({length} bytes).", cancellationToken);
         await publication.RevalidateAsync(cancellationToken);

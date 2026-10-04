@@ -422,10 +422,23 @@ public sealed class FilePublicationAuthorityTests
     private sealed class BarrierStream : MemoryStream
     {
         private readonly Func<CancellationToken, Task> boundary;
+        private bool entered;
         public BarrierStream(byte[] content, Func<CancellationToken, Task> boundary) : base(content) { this.boundary = boundary; }
         public override async Task CopyToAsync(Stream destination, int bufferSize, CancellationToken token)
         {
             await base.CopyToAsync(destination, bufferSize, token);
+            await EnterBoundary(token);
+        }
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken token = default)
+        {
+            var read = await base.ReadAsync(buffer, token);
+            if (Position == Length) await EnterBoundary(token);
+            return read;
+        }
+        private async Task EnterBoundary(CancellationToken token)
+        {
+            if (entered) return;
+            entered = true;
             await boundary(token);
         }
     }
