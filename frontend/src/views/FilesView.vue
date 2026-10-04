@@ -567,13 +567,14 @@ useNavigationGuard(() => {
   if (saving.value) return false;
   if (!isDirty.value) return true;
   return (async () => {
+  const isCurrent = currentFileContext(false);
   let proceed = false;
   await confirm({
     title: t("panel.files.unsaved"), message: t("panel.files.unsavedHint"), tone: "neutral",
     impact: [workspace.value!.path],
     cancelLabel: t("panel.files.stay"), confirmLabel: t("panel.files.save"),
     alternativeLabel: t("panel.files.discard"),
-    alternativeAction: () => { fileContent.value = savedContent.value; proceed = true; },
+    alternativeAction: () => { if (isCurrent()) { fileContent.value = savedContent.value; proceed = true; } },
     action: async () => { proceed = await saveCurrentFile(); }
   });
   return proceed;
@@ -585,10 +586,12 @@ function beforeUnload(event: BeforeUnloadEvent) {
 onMounted(() => window.addEventListener("beforeunload", beforeUnload));
 onBeforeUnmount(() => { disposed = true; workspaceRequest++; window.removeEventListener("beforeunload", beforeUnload); });
 async function changeSite(event: Event) {
+  if (!isFileViewActive()) return;
+  const isCurrent = currentFileContext(false);
   const select = event.target as HTMLSelectElement;
   const next = select.value;
   select.value = selectedSiteName.value;
-  if (await allowNavigation()) {
+  if (await allowNavigation() && isCurrent()) {
     sitesStore.selectSite(next);
     await router.push({ query: { section: "files", site: next } });
   }
@@ -819,7 +822,7 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
 }
 
 async function openPath(path: string) {
-  if (!await allowNavigation()) return;
+  if (!isFileViewActive() || !await allowNavigation() || !isFileViewActive()) return;
   if (!siteRootPath.value || !(path === siteRootPath.value || path.startsWith(`${siteRootPath.value}/`))) {
     return;
   }

@@ -7,11 +7,20 @@ public interface IFileService
 {
     Task<FileWorkspaceDto> GetWorkspaceAsync(string path, CancellationToken cancellationToken = default);
 
+    Task<FileWorkspaceDto> GetWorkspaceAsync(string path,
+        Func<SiteDto?, CancellationToken, Task> beforeRead, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Authorized file reading is not implemented.");
+
     Task<FileWorkspaceDto> WriteAsync(WriteFileRequest request, CancellationToken cancellationToken = default);
 
     Task<FileWorkspaceDto> WriteAsync(WriteFileRequest request,
         Func<SiteDto, CancellationToken, Task> beforePublication, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Authorized file publication is not implemented.");
+
+    Task<FileWorkspaceDto> WriteAsync(WriteFileRequest request,
+        Func<SiteDto, CancellationToken, Task> beforePublication,
+        Func<long, CancellationToken, Task> beforeWrite, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Measured file publication is not implemented.");
 
     Task<FileWorkspaceDto> DeleteAsync(DeleteFileRequest request, CancellationToken cancellationToken = default);
 
@@ -111,6 +120,11 @@ public interface IFileService
     /// </para>
     /// </summary>
     Task<(string FileName, string ContentType, string PhysicalPath)> DownloadAsync(string path, CancellationToken cancellationToken = default);
+
+    /// <summary>Returns the verified open file. The caller owns and must dispose the stream.</summary>
+    Task<(string FileName, string ContentType, Stream Content)> OpenDownloadAsync(string path,
+        Func<SiteDto, CancellationToken, Task> beforeRead, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Authorized file downloading is not implemented.");
 
     Task<FileWorkspaceDto> CompressAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default);
 

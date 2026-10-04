@@ -7,6 +7,9 @@ public interface IFtpService
 {
     Task<FtpServerStatusDto> EnsureServerAsync(CancellationToken cancellationToken = default);
 
+    Task<FtpServerStatusDto> EnsureServerAsync(Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken) => throw new NotSupportedException();
+
     /// <summary>
     /// FTP'nin O ANKİ gerçek durumunu ÖLÇER; hiçbir şeyi kurmaz/değiştirmez.
     /// </summary>
@@ -47,4 +50,7 @@ public interface IFtpService
     /// diyordu. Bir güvenlik denetiminin yürürlükte olduğunu söylemek için ölçmek gerekir.
     /// </remarks>
     Task<FtpTlsMeasurement> SetRequireSslAsync(bool requireSsl, CancellationToken cancellationToken = default);
+
+    Task<FtpTlsMeasurement> SetRequireSslAsync(bool requireSsl, Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken) => throw new NotSupportedException();
 }

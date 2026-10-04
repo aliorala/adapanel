@@ -100,13 +100,26 @@
       @retry="loadTls" />
 
     <!-- FTPS anahtarı sunucudan okunmadan kapalı görünüyordu; TLS zorunluyken kapalı sanılıyordu. -->
-    <label v-if="isAdmin && !siteName && tlsLoaded" class="form-surface ftp-tls-bar">
-      <input type="checkbox" :checked="requireSsl" :disabled="tlsSaving" @change="toggleTls(($event.target as HTMLInputElement).checked)" />
-      <span class="ftp-tls-text">
-        <strong>{{ t("panel.ftp.requireTls") }}</strong>
-        <small>{{ t("panel.ftp.requireTlsHint") }}</small>
-      </span>
-    </label>
+    <section v-if="isAdmin && !siteName && tlsLoaded" class="form-surface ftp-tls-section" aria-labelledby="ftp-tls-heading" :aria-busy="tlsSaving">
+      <div class="section-head">
+        <h3 id="ftp-tls-heading">{{ t('panel.ftp.tlsTitle') }}</h3>
+        <span :class="['status-pill', tlsVerification === true && !tlsSaving ? 'ok' : 'warn']" role="status">{{ tlsVerificationLabel }}</span>
+      </div>
+      <label class="ftp-tls-bar">
+        <input type="checkbox" :checked="requireSsl" :disabled="tlsSaving" @change="requestTlsChange" />
+        <span class="ftp-tls-text">
+          <strong>{{ t("panel.ftp.requireTls") }}</strong>
+          <small>{{ t("panel.ftp.requireTlsHint") }}</small>
+        </span>
+      </label>
+      <div class="ftp-tls-summary">
+        <div><span>{{ t('panel.ftp.tlsSavedPolicy') }}</span><strong>{{ t(requireSsl ? 'panel.ftp.tlsPolicyRequired' : 'panel.ftp.tlsPolicyOptional') }}</strong></div>
+        <p :class="{ 'ftp-tls-warning': tlsAttempted && tlsVerification !== true }" :role="tlsAttempted && tlsVerification !== true ? 'alert' : undefined">{{ tlsVerificationHint }}</p>
+      </div>
+      <details v-if="tlsDetails" class="technical-details">
+        <summary>{{ t('panel.common.technicalDetails') }}</summary><pre>{{ tlsDetails }}</pre>
+      </details>
+    </section>
 
     <section v-if="showCreateForm" class="form-surface ftp-create">
       <div class="section-head compact-head">
@@ -274,6 +287,16 @@ const showCreateForm = ref(false);
 // M5: FTPS zorunlu mu (yalnız admin + standalone FTP sayfasında gösterilir).
 const requireSsl = ref(false);
 const tlsSaving = ref(false);
+const tlsVerification = ref<boolean | null>(null);
+const tlsAttempted = ref(false);
+const tlsDetails = ref('');
+const tlsVerificationLabel = computed(() => t(tlsSaving.value ? 'panel.ftp.tlsApplying'
+  : tlsVerification.value === true ? 'panel.ftp.tlsVerifiedLabel'
+  : tlsVerification.value === false ? 'panel.ftp.tlsFailedLabel' : 'panel.ftp.tlsUnverifiedLabel'));
+const tlsVerificationHint = computed(() => t(tlsSaving.value ? 'panel.ftp.tlsApplyingHint'
+  : !tlsAttempted.value ? 'panel.ftp.tlsSavedOnlyHint'
+  : tlsVerification.value === true ? 'panel.ftp.tlsVerifiedHint'
+  : tlsVerification.value === false ? 'panel.ftp.tlsFailedHint' : 'panel.ftp.tlsUnknownHint'));
 let disposed = false;
 let mountedReady = false;
 let scopeVersion = 0;
@@ -373,6 +396,9 @@ watch(
     showNotice("", false);
     tlsLoaded.value = false;
     tlsSaving.value = false;
+    tlsVerification.value = null;
+    tlsAttempted.value = false;
+    tlsDetails.value = '';
     requireSsl.value = false;
     tlsLoad.clear();
     serverStatus.value = null;
@@ -411,6 +437,9 @@ async function loadTls() {
     const result = await getFtpTls();
     if (!context.current() || request !== tlsRequest) return;
     requireSsl.value = result.requireSsl;
+    tlsVerification.value = null;
+    tlsAttempted.value = false;
+    tlsDetails.value = '';
     tlsLoaded.value = true;
     tlsLoad.clear();
   } catch (error) {
@@ -421,15 +450,28 @@ async function loadTls() {
   }
 }
 
+async function requestTlsChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const requested = input.checked;
+  // Keep the native checkbox controlled even when a failed response leaves the saved value unchanged.
+  input.checked = requireSsl.value;
+  await toggleTls(requested);
+}
+
 async function toggleTls(value: boolean) {
   if (disposed || !isAdmin.value || props.siteName || !tlsLoaded.value || tlsSaving.value) return;
   const context = ftpContext();
   tlsRequest++;
   tlsSaving.value = true;
+  tlsVerification.value = null;
+  tlsAttempted.value = true;
+  tlsDetails.value = '';
   try {
     const sonuc = await setFtpTls(value);
     if (!context.current()) return;
     requireSsl.value = sonuc.requireSsl;
+    tlsVerification.value = sonuc.verified ?? null;
+    tlsDetails.value = sonuc.detail ?? '';
 
     // "FTPS artık zorunlu; düz FTP bağlantıları reddedilecek" bir GÜVENLİK İDDİASIDIR ve eskiden
     // ISTENEN bayraktan yazılıyordu — IIS'e hiç bakmadan. Artık üç durum ayrı gösterilir; uyarı
@@ -442,7 +484,7 @@ async function toggleTls(value: boolean) {
       showNotice(t("panel.ftp.tlsUnverified"), true);
     }
   } catch (error) {
-    if (context.current()) showApiError(error);
+    if (context.current()) { tlsDetails.value = extractApiDetails(error); showApiError(error); }
   } finally {
     if (context.current()) tlsSaving.value = false;
   }
@@ -697,6 +739,7 @@ function readErrorMessage(prefix: string, error: string) {
 
 .ftp-tls-bar input {
   width: auto;
+  flex-shrink: 0;
   /* Kutu, yanindaki KALIN metnin govde cizgisine otursun (metin satir yuksekligi 19.6px, kutu
      ~13px): 2px'lik tek adim yeterli, --sp-4 kutuyu metnin altina dusururdu. */
   margin-top: var(--sp-2);
@@ -704,6 +747,7 @@ function readErrorMessage(prefix: string, error: string) {
 
 .ftp-tls-text {
   display: grid;
+  min-width: 0;
   gap: var(--sp-2);
 }
 
@@ -761,7 +805,16 @@ function readErrorMessage(prefix: string, error: string) {
   }
 }
 
+.ftp-tls-section { display: grid; gap: var(--sp-12); min-width: 0; }
+.ftp-tls-section h3 { margin: 0; }
+.ftp-tls-summary { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(0, 1.3fr); gap: var(--sp-12); padding-top: var(--sp-12); border-top: 1px solid var(--panel-border); }
+.ftp-tls-summary > div { display: grid; gap: var(--sp-4); align-content: start; }
+.ftp-tls-summary > div > span { color: var(--text-muted); font-size: var(--fs-xs); }
+.ftp-tls-summary p { margin: 0; color: var(--text-muted); overflow-wrap: anywhere; }
+.ftp-tls-summary p.ftp-tls-warning { color: var(--warn-1); }
+
 @container ftp-workspace (max-width: 880px) {
+  .ftp-tls-summary { grid-template-columns: 1fr; }
   .ftp-row { grid-template-columns: 1fr; min-width: 0; gap: var(--sp-8); }
   .ftp-row.table-head { position: absolute; width: 1px; height: 1px; padding: 0; clip-path: inset(50%); overflow: hidden; white-space: nowrap; }
   .ftp-row > [role="cell"] { display: grid; justify-items: start; gap: var(--sp-2); }

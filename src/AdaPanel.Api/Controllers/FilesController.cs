@@ -63,14 +63,19 @@ public sealed class FilesController(
     [HttpGet]
     public async Task<ActionResult<ApiResponse<FileWorkspaceDto>>> GetWorkspaceAsync([FromQuery] string? path, CancellationToken cancellationToken)
     {
-        await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, path, allowRoot: true, cancellationToken);
+        path ??= string.Empty;
+        using var read = await CaptureFileUseAsync([path], readOnly: true, cancellationToken);
 
         // Customer/Reseller için kök listesi yalnızca etkin sitelerini gösterir (diğer site adları sızmaz).
         var normalized = (path ?? string.Empty).Replace('\\', '/').Trim('/');
-        var scopedSites = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, User, cancellationToken);
+        var scopedSites = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, read.Principal, cancellationToken);
         if (scopedSites is not null
             && (normalized.Length == 0 || string.Equals(normalized, "sites", StringComparison.OrdinalIgnoreCase)))
         {
+            // Re-read the scope after initial actor/scope waits. The first snapshot must not
+            // disclose site names removed while this request was queued.
+            scopedSites = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, read.Principal, cancellationToken) ?? [];
+            await read.RevalidateAsync(cancellationToken);
             var workspace = new FileWorkspaceDto
             {
                 Path = "sites",
@@ -90,18 +95,24 @@ public sealed class FilesController(
             return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace));
         }
 
-        var result = await fileService.GetWorkspaceAsync(path ?? string.Empty, cancellationToken);
-        return Ok(ApiResponse<FileWorkspaceDto>.Ok(result));
+        var result = await fileService.GetWorkspaceAsync(path, read.ApproveAsync, cancellationToken);
+        await read.RevalidateAsync(cancellationToken);
+        return Ok(ApiResponse<FileWorkspaceDto>.Ok(ProjectWorkspace(result, read.Principal)));
     }
 
     [HttpGet("download")]
     public async Task<IActionResult> DownloadAsync([FromQuery] string path, CancellationToken cancellationToken)
     {
-        await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, path, allowRoot: false, cancellationToken);
-        var (fileName, contentType, physicalPath) = await fileService.DownloadAsync(path, cancellationToken);
-
-        // PhysicalFile: dosya AKIŞ hâlinde verilir, belleğe alınmaz. Gerekçe IFileService'te.
-        return PhysicalFile(physicalPath, contentType, fileName);
+        using var read = await CaptureFileUseAsync([path], readOnly: true, cancellationToken);
+        var (fileName, contentType, content) = await fileService.OpenDownloadAsync(path, read.ApproveAsync, cancellationToken);
+        try
+        {
+            await read.RevalidateAsync(cancellationToken);
+            // MVC owns the verified open handle, so response execution cannot reopen a different
+            // object at this path. An interrupted response also disposes the stream.
+            return File(content, contentType, fileName);
+        }
+        catch { await content.DisposeAsync(); throw; }
     }
 
     [HttpPost("upload")]
@@ -139,17 +150,9 @@ public sealed class FilesController(
         // duran dosya), gelen içeriğin tamamı değil — aksi hâlde kotası dolmuş bir kullanıcı,
         // sitesini onarmak için bir dosyayı KÜÇÜLTMEK istediğinde bile reddedilirdi ve panelden
         // çıkışı olmayan bir kilide girerdi. Hedef yoksa ölçüm 0 döner (yeni dosya).
-        await EnsureDiskQuotaAsync(
-            request.Path,
-            async ct =>
-            {
-                var yeniBayt = System.Text.Encoding.UTF8.GetByteCount(request.Content ?? string.Empty);
-                var mevcut = await fileService.MeasureAsync([request.Path], ct);
-                return (Math.Max(0, yeniBayt - mevcut.TotalBytes), string.Empty);
-            },
-            cancellationToken);
-
-        var workspace = await fileService.WriteAsync(request, publication.ApproveAsync, cancellationToken);
+        var workspace = await fileService.WriteAsync(request, publication.ApproveAsync,
+            (growth, token) => EnsureDiskQuotaAsync(request.Path,
+                _ => Task.FromResult((growth, string.Empty)), token), cancellationToken);
 
         // İÇERİK YAZILMAZ, yalnız boyutu: bir dosyanın gövdesi (yapılandırma, bağlantı dizesi,
         // müşteri verisi) denetim kaydına kopyalanırsa kayıt, korumaya çalıştığı sırların ikinci
@@ -485,7 +488,10 @@ public sealed class FilesController(
         FileQuotaGuard.EnsureRoom(scope.MaxDiskMb, kullanim, gelenBayt, kesilmeSebebi);
     }
 
-    private async Task<PublicationUse> CapturePublicationAsync(string[] paths, CancellationToken token)
+    private Task<PublicationUse> CapturePublicationAsync(string[] paths, CancellationToken token) =>
+        CaptureFileUseAsync(paths, readOnly: false, token);
+
+    private async Task<PublicationUse> CaptureFileUseAsync(string[] paths, bool readOnly, CancellationToken token)
     {
         var principal = new ClaimsPrincipal(User.Identities.Select(identity => new ClaimsIdentity(identity)));
         var services = HttpContext.RequestServices;
@@ -500,21 +506,26 @@ public sealed class FilesController(
             var names = paths.Select(path => (path ?? string.Empty).Replace('\\', '/')
                     .Split('/', StringSplitOptions.RemoveEmptyEntries))
                 .Select(segments => segments.Length >= 2 && string.Equals(segments[0], "sites", StringComparison.OrdinalIgnoreCase)
-                    ? segments[1] : throw new AdaPanel.Core.Common.AppException("files.site_required", 400, 400))
+                    ? segments[1] : readOnly && (segments.Length == 0 || segments.Length == 1 && string.Equals(segments[0], "sites", StringComparison.OrdinalIgnoreCase))
+                        ? null : throw new AdaPanel.Core.Common.AppException(
+                            readOnly && CustomerAccess.IsScoped(principal) ? "auth.site_forbidden" : "files.site_required",
+                            readOnly && CustomerAccess.IsScoped(principal) ? 403 : 400,
+                            readOnly && CustomerAccess.IsScoped(principal) ? 403 : 400))
+                .OfType<string>()
                 .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase);
             // Capture the requested generation before actor/scope database waits. A replacement
             // during those waits must not become the newly approved destination of this request.
             foreach (var name in names)
                 targets.Add(name, await SiteMutationGuard.CaptureAsync(sites, gates, name, token));
-            var actor = await FileActorAuthority.CaptureAsync(db, customerScopes, sessions, principal, token);
+            var actor = await FileActorAuthority.CaptureAsync(db, customerScopes, sessions, principal, token, readOnly);
             async Task Revalidate(CancellationToken currentToken)
             {
                 await actor.RevalidateAsync(db, customerScopes, sessions, principal, currentToken);
                 foreach (var path in paths)
-                    await CustomerAccess.EnsureFilesPathAsync(customerScopes, principal, path, allowRoot: false, currentToken);
+                    await CustomerAccess.EnsureFilesPathAsync(customerScopes, principal, path, allowRoot: readOnly, currentToken);
                 currentToken.ThrowIfCancellationRequested();
             }
-            use = new PublicationUse(targets, Revalidate);
+            use = new PublicationUse(targets, Revalidate, principal);
             await Revalidate(token);
             foreach (var target in use.Targets.Values)
                 use.Pins.Add(await target.ReserveAsync((_, currentToken) => Revalidate(currentToken), token));
@@ -529,12 +540,16 @@ public sealed class FilesController(
     }
 
     private sealed class PublicationUse(Dictionary<string, SiteMutationGuard.Target> targets,
-        Func<CancellationToken, Task> revalidate) : IDisposable
+        Func<CancellationToken, Task> revalidate, ClaimsPrincipal principal) : IDisposable
     {
         internal Dictionary<string, SiteMutationGuard.Target> Targets { get; } = targets;
+        internal ClaimsPrincipal Principal { get; } = principal;
         internal List<IDisposable> Pins { get; } = [];
-        public Task ApproveAsync(SiteDto measured, CancellationToken token)
+        internal Task RevalidateAsync(CancellationToken token) => revalidate(token);
+        public Task ApproveAsync(SiteDto? measured, CancellationToken token)
         {
+            if (measured is null && Targets.Count == 0) return revalidate(token);
+            if (measured is null) throw new AdaPanel.Core.Common.AppException("auth.site_forbidden", 403, 403);
             if (!Targets.TryGetValue(measured.Name, out var target))
                 throw new AdaPanel.Core.Common.AppException("auth.site_forbidden", 403, 403);
             return target.RunAsync(async _ =>
@@ -552,6 +567,14 @@ public sealed class FilesController(
             foreach (var target in Targets.Values.Reverse()) target.Dispose();
         }
     }
+
+    private static FileWorkspaceDto ProjectWorkspace(FileWorkspaceDto source, ClaimsPrincipal principal) => new()
+    {
+        Path = source.Path, ParentPath = source.ParentPath, DisplayName = source.DisplayName,
+        PhysicalPath = CustomerAccess.IsScoped(principal) ? string.Empty : source.PhysicalPath,
+        IsDirectory = source.IsDirectory, Content = source.Content, ContentLoaded = source.ContentLoaded,
+        ContentUnavailableReasonKey = source.ContentUnavailableReasonKey, Entries = source.Entries
+    };
 
     /// <summary>
     /// Bu denetleyicideki denetim kaydı yazmanın TEK yolu.

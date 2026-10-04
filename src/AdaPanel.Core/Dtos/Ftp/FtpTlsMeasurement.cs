@@ -59,6 +59,12 @@ public sealed record FtpTlsMeasurement(
     FtpTlsPolicyState Certificate,
     string Detail)
 {
+    /// <summary>The durable preference measured under the same lease as the attempted change.</summary>
+    public bool? SavedRequireSsl { get; init; }
+
+    /// <summary>Required FTPS also needs a positively measured certificate.</summary>
+    public bool CertificateRequired { get; init; }
+
     /// <summary>Betiğin STDOUT'a bastığı damga. Damga yoksa geri okuma HİÇ çalışmamıştır.</summary>
     public const string Stamp = "ADAPANEL-FTP-TLS=";
 
@@ -72,7 +78,7 @@ public sealed record FtpTlsMeasurement(
     /// </summary>
     public bool Enforced => ControlChannel == FtpTlsPolicyState.Applied
         && DataChannel == FtpTlsPolicyState.Applied
-        && Certificate != FtpTlsPolicyState.NotApplied;
+        && (CertificateRequired ? Certificate == FtpTlsPolicyState.Applied : Certificate != FtpTlsPolicyState.NotApplied);
 
     /// <summary>Ölçüm bir yerde "uygulanmadı" dedi mi (kesin kötü haber).</summary>
     public bool Failed => ControlChannel == FtpTlsPolicyState.NotApplied
@@ -116,7 +122,7 @@ public sealed record FtpTlsMeasurement(
         var detay = $"controlChannelPolicy='{ham[0]}', dataChannelPolicy='{ham[1]}', "
             + $"serverCertHash='{(string.IsNullOrEmpty(ham[2]) ? "(okunamadi)" : ham[2])}', beklenen='{beklenenSayi}/{beklenenAd}'";
 
-        return new FtpTlsMeasurement(control, data, certificate, detay);
+        return new FtpTlsMeasurement(control, data, certificate, detay) { CertificateRequired = requireSsl };
     }
 
     private static string? DamgaSatiri(string? output)

@@ -75,18 +75,41 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     internal Func<string, CancellationToken, Task>? TransferItemReady { get; set; }
     internal Action<string>? CopyEntryReady { get; set; }
 
-    public async Task<FileWorkspaceDto> GetWorkspaceAsync(string path, CancellationToken cancellationToken = default)
+    internal Func<string, Stream> OpenWorkspaceFile { get; set; } = static path =>
+        new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+    public Task<FileWorkspaceDto> GetWorkspaceAsync(string path, CancellationToken cancellationToken = default) =>
+        GetWorkspaceCoreAsync(path, null, cancellationToken);
+
+    public Task<FileWorkspaceDto> GetWorkspaceAsync(string path,
+        Func<SiteDto?, CancellationToken, Task> beforeRead, CancellationToken cancellationToken) =>
+        GetWorkspaceCoreAsync(path, beforeRead ?? throw new ArgumentNullException(nameof(beforeRead)), cancellationToken);
+
+    private async Task<FileWorkspaceDto> GetWorkspaceCoreAsync(string path,
+        Func<SiteDto?, CancellationToken, Task>? beforeRead, CancellationToken cancellationToken)
     {
         var normalizedPath = NormalizeVirtualPath(path);
         var target = await ResolveTargetAsync(normalizedPath, cancellationToken);
+        async Task Approve()
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (beforeRead is not null) await beforeRead(target.Site, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!target.IsVirtualRoot) EnsureInsideSandbox(target);
+        }
+        await Approve();
         if (target.IsVirtualRoot)
         {
-            return await BuildVirtualRootWorkspaceAsync(normalizedPath, cancellationToken);
+            var root = await BuildVirtualRootWorkspaceAsync(normalizedPath, cancellationToken);
+            await Approve();
+            return root;
         }
 
         if (File.Exists(target.PhysicalPath))
         {
             var content = await ReadFileContentAsync(target.PhysicalPath, cancellationToken);
+            await Approve();
             return new FileWorkspaceDto
             {
                 Path = normalizedPath,
@@ -96,13 +119,14 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                 IsDirectory = false,
                 Content = content.Content,
                 ContentLoaded = content.Loaded,
-                ContentUnavailableReasonKey = content.Loaded ? string.Empty : "files.content_too_large"
+                ContentUnavailableReasonKey = content.Reason
             };
         }
 
-        Directory.CreateDirectory(target.PhysicalPath);
+        if (beforeRead is null) Directory.CreateDirectory(target.PhysicalPath);
+        else if (!Directory.Exists(target.PhysicalPath)) throw new AppException("files.not_found", 404, 404);
         var directoryInfo = new DirectoryInfo(target.PhysicalPath);
-        return new FileWorkspaceDto
+        var workspace = new FileWorkspaceDto
         {
             Path = normalizedPath,
             ParentPath = BuildParentPath(normalizedPath),
@@ -124,6 +148,8 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                 })
                 .ToArray()
         };
+        await Approve();
+        return workspace;
     }
 
     public Task<FileWorkspaceDto> WriteAsync(WriteFileRequest request, CancellationToken cancellationToken = default) =>
@@ -136,8 +162,18 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         return WriteCoreAsync(request, beforePublication, cancellationToken);
     }
 
+    public Task<FileWorkspaceDto> WriteAsync(WriteFileRequest request,
+        Func<SiteDto, CancellationToken, Task> beforePublication,
+        Func<long, CancellationToken, Task> beforeWrite, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(beforePublication);
+        ArgumentNullException.ThrowIfNull(beforeWrite);
+        return WriteCoreAsync(request, beforePublication, cancellationToken, beforeWrite);
+    }
+
     private async Task<FileWorkspaceDto> WriteCoreAsync(WriteFileRequest request,
-        Func<SiteDto, CancellationToken, Task>? beforePublication, CancellationToken cancellationToken)
+        Func<SiteDto, CancellationToken, Task>? beforePublication, CancellationToken cancellationToken,
+        Func<long, CancellationToken, Task>? beforeWrite = null)
     {
         var normalizedPath = NormalizeVirtualPath(request.Path);
         var content = request.Content ?? string.Empty;
@@ -145,6 +181,14 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         var target = await ResolveTargetAsync(normalizedPath, cancellationToken);
         EnsureSiteTarget(target);
         EnsureNotSiteRoot(target);
+        await ApprovePublicationAsync(target, beforePublication, cancellationToken);
+        var original = !failIfExists && File.Exists(target.PhysicalPath)
+            ? await ReadFileContentAsync(target.PhysicalPath, cancellationToken) : FileTextContent.NewFile;
+        // The quota and publication use this exact encoded snapshot. Do not reread the codec
+        // after an awaited quota check and publish a different byte count or preamble.
+        var encoded = original.Encode(content);
+        if (beforeWrite is not null)
+            await beforeWrite(Math.Max(0, encoded.LongLength - original.OriginalLength), cancellationToken);
         await ApprovePublicationAsync(target, beforePublication, cancellationToken);
         Directory.CreateDirectory(Path.GetDirectoryName(target.PhysicalPath) ?? target.SandboxRoot);
 
@@ -202,8 +246,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             {
                 await using (akis)
                 {
-                    await using var yazici = new StreamWriter(akis, new UTF8Encoding(false));
-                    await yazici.WriteAsync(content.AsMemory(), cancellationToken);
+                    await akis.WriteAsync(encoded, cancellationToken);
                 }
             }
             catch
@@ -234,11 +277,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         {
             await WriteAtomicallyAsync(target, async (stream, token) =>
             {
-                // PHP ve benzeri kaynak dosyalarına içerikte olmayan bir BOM ekleme.
-                // Kota hesabı da yalnız içeriğin UTF-8 baytlarını ölçer.
-                await using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true);
-                await writer.WriteAsync(content.AsMemory(), token);
-                await writer.FlushAsync(token);
+                await stream.WriteAsync(encoded, token);
             }, cancellationToken, token => ApprovePublicationAsync(target, beforePublication, token), failIfExists);
         }
 
@@ -1046,6 +1085,26 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         return (Path.GetFileName(target.PhysicalPath), "application/octet-stream", target.PhysicalPath);
     }
 
+    public async Task<(string FileName, string ContentType, Stream Content)> OpenDownloadAsync(string path,
+        Func<SiteDto, CancellationToken, Task> beforeRead, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(beforeRead);
+        var target = await ResolveTargetAsync(NormalizeVirtualPath(path), cancellationToken);
+        EnsureSiteTarget(target);
+        await ApprovePublicationAsync(target, beforeRead, cancellationToken);
+        EnsureInsideSandbox(target);
+        if (!File.Exists(target.PhysicalPath)) throw new AppException("files.not_found", 404, 404);
+        var input = new FileStream(target.PhysicalPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+            81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        try
+        {
+            await ApprovePublicationAsync(target, beforeRead, cancellationToken);
+            EnsureInsideSandbox(target);
+            return (Path.GetFileName(target.PhysicalPath), "application/octet-stream", input);
+        }
+        catch { await input.DisposeAsync(); throw; }
+    }
+
     public Task<FileWorkspaceDto> CompressAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default) =>
         CompressCoreAsync(request, null, cancellationToken);
 
@@ -1719,16 +1778,13 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         }
     }
 
-    private static async Task<(string Content, bool Loaded)> ReadFileContentAsync(string path, CancellationToken cancellationToken)
+    private async Task<FileTextContent> ReadFileContentAsync(string path, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         // Measure and read the same handle; a concurrently growing file must not turn a
         // bounded preview into an unbounded read. An unloaded file never impersonates text.
-        await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
-            81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        if (input.Length > 1024 * 1024) return (string.Empty, false);
-        using var reader = new StreamReader(input, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        return (await reader.ReadToEndAsync(cancellationToken), true);
+        await using var input = OpenWorkspaceFile(path);
+        return await FileTextContent.ReadAsync(input, cancellationToken);
     }
 
     private static string NormalizeVirtualPath(string? path)

@@ -438,6 +438,7 @@ public class FileCreateTests : IDisposable
 
         // Yazma bu blokta OLMAMALI: olduğu anda süzgeç koşulsuzlaşır ve gerçek sebep kaybolur.
         Assert.DoesNotContain("yazici.WriteAsync(", korunanBlok, StringComparison.Ordinal);
+        Assert.DoesNotContain("akis.WriteAsync(", korunanBlok, StringComparison.Ordinal);
         Assert.DoesNotContain("StreamWriter", korunanBlok, StringComparison.Ordinal);
 
         // Ve geri sarma GERÇEKTEN var: yazma patlarsa yarattığımız dosya silinir.

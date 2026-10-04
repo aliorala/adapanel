@@ -34,7 +34,27 @@ export async function getFileWorkspace(path = "") {
     params: { path }
   });
 
-  return response.data.data;
+  // Scoped accounts see the sites listing directly when they request the virtual root.
+  const responsePath = response.data?.data?.path;
+  const expectedPath = !filePathIdentity(path) && typeof responsePath === "string" && filePathIdentity(responsePath) === "sites" ? "sites" : path;
+  const result = measuredWorkspace(response.data, expectedPath);
+  const rows = new Set<string>();
+  const validEntries = result.entries.every(entry => {
+    if (typeof entry.name !== "string" || !entry.name.trim() || /[\\/]/.test(entry.name) || entry.name === "." || entry.name === ".." ||
+      typeof entry.isDirectory !== "boolean" || typeof entry.size !== "number" || !Number.isFinite(entry.size) || entry.size < 0 ||
+      typeof entry.extension !== "string" || (entry.lastModifiedUtc !== null && typeof entry.lastModifiedUtc !== "string")) return false;
+    const key = filePathIdentity(entry.path);
+    if (key !== filePathIdentity(`${result.path}/${entry.name}`) || rows.has(key)) return false;
+    rows.add(key);
+    return true;
+  });
+  if (!validEntries || [result.parentPath, result.displayName, result.physicalPath].some(value => typeof value !== "string") ||
+    (result.contentLoaded !== undefined && typeof result.contentLoaded !== "boolean") ||
+    (result.contentUnavailableReasonKey !== undefined && typeof result.contentUnavailableReasonKey !== "string") ||
+    (!result.isDirectory && result.entries.length > 0)) {
+    throw new UserFacingError("panel.files.resultUnconfirmed");
+  }
+  return result;
 }
 
 export async function saveFile(path: string, content: string) {

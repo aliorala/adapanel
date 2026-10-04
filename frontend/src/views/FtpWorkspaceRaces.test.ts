@@ -28,6 +28,8 @@ function deferred<T>() { let resolve!: (value: T) => void, reject!: (error: unkn
 type State = {
   users: FtpUser[]; usersLoaded: boolean; notice: string; noticeError: boolean; creating: boolean; changingPassword: string; deletingUser: string;
   requireSsl: boolean; tlsLoaded: boolean; tlsSaving: boolean; showCreateForm: boolean;
+  tlsVerification: boolean | null; tlsAttempted: boolean; tlsDetails: string;
+  requestTlsChange(event: Event): Promise<void>;
   serverStatus: FtpServerStatus | null;
   serverReady: boolean; serverStateLabel: string; usersLoad: { message: { value: string } }; statusLoad: { message: { value: string } };
   formatCreatedAt(value: string): string;
@@ -114,6 +116,35 @@ it("keeps a TLS write from being overwritten by an older TLS read", async () => 
 it("rejects duplicate TLS writes", async () => {
   site.value = undefined; const state = await mount(), pending = deferred<{ requireSsl: boolean }>(); vi.mocked(setFtpTls).mockReturnValueOnce(pending.promise);
   const first = state.toggleTls(true); await state.toggleTls(false); expect(setFtpTls).toHaveBeenCalledOnce(); pending.resolve({ requireSsl: true }); await first;
+});
+
+it("does not present the saved TLS preference as a verified native policy", async () => {
+  site.value = undefined; const state = await mount();
+  expect(state.tlsVerification).toBeNull(); expect(state.tlsAttempted).toBe(false);
+});
+it("keeps the measured TLS warning after its transient notice is dismissed", async () => {
+  site.value = undefined; const state = await mount();
+  vi.mocked(setFtpTls).mockResolvedValueOnce({requireSsl:false,verified:false,detail:'certificate missing'});
+  await state.toggleTls(true); state.notice='';
+  expect(state.requireSsl).toBe(false); expect(state.tlsVerification).toBe(false); expect(state.tlsAttempted).toBe(true); expect(state.tlsDetails).toBe('certificate missing');
+});
+it("invalidates a previous TLS success when the next write fails", async () => {
+  site.value = undefined; const state = await mount();
+  vi.mocked(setFtpTls).mockResolvedValueOnce({requireSsl:true,verified:true}); await state.toggleTls(true);
+  vi.mocked(setFtpTls).mockRejectedValueOnce(new Error('offline')); await state.toggleTls(false);
+  expect(state.requireSsl).toBe(true); expect(state.tlsVerification).toBeNull(); expect(state.tlsAttempted).toBe(true);
+});
+it("keeps the native checkbox at the saved policy while its requested change is pending or fails", async () => {
+  site.value = undefined; const state = await mount(), pending = deferred<{requireSsl:boolean;verified:boolean}>();
+  vi.mocked(setFtpTls).mockReturnValueOnce(pending.promise); const input={checked:true};
+  const changing=state.requestTlsChange({target:input} as unknown as Event); expect(input.checked).toBe(false);
+  pending.reject(new Error('offline')); await changing; expect(input.checked).toBe(false);
+});
+it("resets native TLS verification when only saved preferences are reloaded", async () => {
+  site.value = undefined; const state = await mount();
+  vi.mocked(setFtpTls).mockResolvedValueOnce({requireSsl:true,verified:true}); await state.toggleTls(true);
+  vi.mocked(getFtpTls).mockResolvedValueOnce({requireSsl:true}); await state.loadTls();
+  expect(state.tlsVerification).toBeNull(); expect(state.tlsAttempted).toBe(false);
 });
 it("preserves successful account creation, password change and deletion", async () => {
   const state = await mount(); fill(state); vi.mocked(createFtpUser).mockResolvedValueOnce(user()); await state.createUser();

@@ -76,7 +76,7 @@ public sealed partial class ScopedBackupExtractionAccessTests
 
         var visibleFiles = await fixture.DownloadableFiles();
         Assert.NotEmpty(initialFiles);
-        Assert.DoesNotContain(visibleFiles, file => string.Equals(file.FileName, extracted, StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(visibleFiles, file => file.Content.Contains("mysql:private_ledger", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -89,7 +89,7 @@ public sealed partial class ScopedBackupExtractionAccessTests
         using var fixture = await Fixture.Create(role, type);
         var files = await fixture.DownloadableFiles();
         var original = Assert.Single(files);
-        Assert.Equal("owned site contents", await File.ReadAllTextAsync(original.FileName));
+        Assert.Equal("owned site contents", original.Content);
         var archiveResult = Assert.IsType<PhysicalFileResult>(await fixture.Backups.DownloadAsync(fixture.Record.Id, default));
         Assert.Equal(fixture.Record.Path, archiveResult.FileName);
         using var zip = ZipFile.OpenRead(archiveResult.FileName);
@@ -114,6 +114,7 @@ public sealed partial class ScopedBackupExtractionAccessTests
         internal string SessionId { get; } = SessionRevocationStore.NewSessionId();
         internal SessionRevocationStore Sessions { get; }
         private readonly ServiceProvider services;
+        private readonly FilePublicationAuthorityTests.LocalGate fileGates = new();
         internal string SiteRoot => Path.Combine(Backup.Root, "www");
         internal BackupRecordDto Record { get; private set; } = null!;
         internal string SelectedEntry { get; private set; } = string.Empty;
@@ -147,10 +148,7 @@ public sealed partial class ScopedBackupExtractionAccessTests
                 new Claim(SessionRevocationStore.SessionIdClaim, SessionId)
             }, CookieAuthenticationDefaults.AuthenticationScheme));
             Sessions = new SessionRevocationStore(Backup.Store);
-            services = new ServiceCollection().AddSingleton(Db).AddSingleton(Sessions).BuildServiceProvider();
             var audit = new AuditService(Db, Backup.Scopes, Backup.Store);
-            Backups = new BackupController(Backup.Service, Backup.Scopes, Backup.Ownership, null!, new Jobs(), audit, Db)
-            { ControllerContext = Context(principal) };
             var site = new SiteDto { Id = 18, Name = F.Site, PhysicalPath = SiteRoot, ApplicationPoolName = "owned-pool" };
             var iis = DispatchProxy.Create<IIisSiteService, SubscriptionMeasurementProxy>();
             ((SubscriptionMeasurementProxy)(object)iis).Handler = (method, args) => method.Name switch
@@ -159,6 +157,10 @@ public sealed partial class ScopedBackupExtractionAccessTests
                 "GetSitesAsync" => Task.FromResult<IReadOnlyCollection<SiteDto>>([site]),
                 _ => throw new NotSupportedException(method.Name)
             };
+            services = new ServiceCollection().AddSingleton(Db).AddSingleton(Sessions)
+                .AddSingleton<IIisSiteService>(iis).AddSingleton<IConcurrencyLock>(fileGates).BuildServiceProvider();
+            Backups = new BackupController(Backup.Service, Backup.Scopes, Backup.Ownership, null!, new Jobs(), audit, Db)
+            { ControllerContext = Context(principal) };
             Files = new FilesController(new FileService(iis), Backup.Scopes, audit, new ConcurrentWorkGate())
             { ControllerContext = Context(principal) };
         }
@@ -180,9 +182,9 @@ public sealed partial class ScopedBackupExtractionAccessTests
             return fixture;
         }
 
-        internal async Task<List<PhysicalFileResult>> DownloadableFiles()
+        internal async Task<List<(string Path, string Content)>> DownloadableFiles()
         {
-            var files = new List<PhysicalFileResult>();
+            var files = new List<(string Path, string Content)>();
             var directories = new Queue<string>();
             directories.Enqueue(string.Empty);
             // The actual workspace supplies every virtual path; the test invents none.
@@ -194,7 +196,13 @@ public sealed partial class ScopedBackupExtractionAccessTests
                 var workspace = Data(await Files.GetWorkspaceAsync(directory, default));
                 foreach (var entry in workspace.Entries)
                     if (entry.IsDirectory) directories.Enqueue(entry.Path);
-                    else files.Add(Assert.IsType<PhysicalFileResult>(await Files.DownloadAsync(entry.Path, default)));
+                    else
+                    {
+                        var response = Assert.IsType<FileStreamResult>(await Files.DownloadAsync(entry.Path, default));
+                        await using var stream = response.FileStream;
+                        using var reader = new StreamReader(stream, leaveOpen: true);
+                        files.Add((entry.Path, await reader.ReadToEndAsync()));
+                    }
             }
             return files;
         }
@@ -219,7 +227,7 @@ public sealed partial class ScopedBackupExtractionAccessTests
         }
         private ControllerContext Context(ClaimsPrincipal principal) => new()
         { HttpContext = new DefaultHttpContext { User = principal, RequestServices = services } };
-        public void Dispose() { services.Dispose(); Db.Dispose(); connection.Dispose(); Backup.Dispose(); }
+        public void Dispose() { services.Dispose(); fileGates.Dispose(); Db.Dispose(); connection.Dispose(); Backup.Dispose(); }
     }
 
     private sealed class Jobs : IRunningJobService

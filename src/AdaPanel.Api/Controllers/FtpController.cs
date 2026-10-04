@@ -34,7 +34,11 @@ public sealed class FtpController(
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<FtpServerStatusDto>>> EnsureServerAsync(CancellationToken cancellationToken)
     {
-        var status = await ftpService.EnsureServerAsync(cancellationToken);
+        var actor = new FtpActorAuthority(User);
+        if (!actor.Principal.IsInRole("Administrator")) throw new AppException("auth.forbidden", 403, 403);
+        await ValidateActorAsync(actor, cancellationToken);
+        var status = await ftpService.EnsureServerAsync(token => ValidateActorAsync(actor, token), cancellationToken);
+        await ValidateActorAsync(actor, cancellationToken);
         await auditService.AuditAsync(HttpContext, "ftp.server.ensured", "ftp-server", "FTP server installation/configuration ensured.");
 
         // MESAJ ÖLÇÜLEN DURUMDAN GELİR. Burada sabit "ftp.server_ready" yazıyordu: kurulum betiği
@@ -85,11 +89,17 @@ public sealed class FtpController(
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<FtpTlsStatusDto>>> SetTlsAsync([FromBody] FtpTlsRequest request, CancellationToken cancellationToken)
     {
+        var requested = request.RequireSsl;
+        var actor = new FtpActorAuthority(User);
+        if (!actor.Principal.IsInRole("Administrator")) throw new AppException("auth.forbidden", 403, 403);
+        await ValidateActorAsync(actor, cancellationToken);
         // ÖLÇÜLEN sonuç. Eskiden burası servisin döndürdüğü ISTENEN bayraktan besleniyordu ve
         // kullanıcıya "FTPS artık zorunlu; düz FTP bağlantıları reddedilecek" deniyordu —
         // IIS'e hiç bakmadan. Gerekçe: FtpTlsMeasurement.
-        var olcum = await ftpService.SetRequireSslAsync(request.RequireSsl, cancellationToken);
-        var requireSsl = request.RequireSsl;
+        var olcum = await ftpService.SetRequireSslAsync(requested, token => ValidateActorAsync(actor, token), cancellationToken);
+        await ValidateActorAsync(actor, cancellationToken);
+        var requireSsl = olcum.SavedRequireSsl
+            ?? throw new AppException("ftp.tls_unverified", 500, 500);
 
         // FTPS zorunluluğunun KAPATILMASI, bütün müşterilerin parolasını düz metne indirir —
         // sunucu genelinde güvenlik seviyesini düşüren bir karardır ve kim aldığı bilinmelidir.
@@ -108,7 +118,7 @@ public sealed class FtpController(
             HttpContext,
             "ftp.tls.updated",
             "ftp-server",
-            $"FTPS requirement set to {requireSsl}: {durum}. {olcum.Detail}".TrimEnd());
+            $"FTPS requirement requested {requested}, saved {requireSsl}: {durum}. {olcum.Detail}".TrimEnd());
 
         var status = new FtpTlsStatusDto
         {

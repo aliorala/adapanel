@@ -162,6 +162,13 @@ async function refresh(force = true) {
     if (!current() || revision !== statusRevision) return;
     status.value = next;
     statusConfirmed.value = true;
+    // A fresh measurement replaces a finished watch; any still-scheduled
+    // installation remains represented by the returned server status.
+    if (installPhase.value === "failed" || installPhase.value === "timeout") {
+      installPhase.value = "";
+      installElapsedSeconds.value = 0;
+      installAttempt.value = null;
+    }
     notice.value = "";
   } catch (error) {
     if (current() && revision === statusRevision) { statusConfirmed.value = false; showNotice(resolveApiMessage(error), true); }

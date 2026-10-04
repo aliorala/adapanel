@@ -6,6 +6,7 @@ import UpdateView from "./UpdateView.vue";
 import { apiClient, invalidateSessionRequests } from "../api/client";
 import type { UpdateStatus } from "../api/update";
 import { useAuthStore } from "../stores/auth";
+import { describeUpdateState } from "../utils/updatePresentation";
 
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 const { confirm } = vi.hoisted(() => ({ confirm: vi.fn() }));
@@ -129,4 +130,61 @@ it("reports a new failed same-version reinstall rather than inferring success fr
   initial = valid({ currentVersion: "0.8.76", isUpdateAvailable: false }); write = async config => response(config, { ...initial, isInstallScheduled: true });
   const { state } = await mount(); await state.installUpdate(); initial = { ...initial, lastAttempt: { phase: "failed", isFinished: true, isFailed: true, error: "", errorKey: "update.install_failed", isDecidedByPanel: false, updatedAtUtc: new Date().toISOString(), installerExitCode: 1 } };
   await vi.advanceTimersByTimeAsync(6500); expect(state.installPhase).toBe("failed"); expect(state.noticeError).toBe(true); expect(reload).not.toHaveBeenCalled();
+});
+
+async function finishObservedInstallation(phase: "failed" | "timeout") {
+  const { state } = await mount();
+  await state.installUpdate();
+  if (phase === "failed") {
+    initial = valid({ lastAttempt: { phase: "failed", isFinished: true, isFailed: true,
+      error: "", errorKey: "update.install_failed", isDecidedByPanel: false,
+      updatedAtUtc: new Date().toISOString(), installerExitCode: 1 } });
+    await vi.advanceTimersByTimeAsync(5000);
+  } else {
+    read = async () => { throw new Error("panel restarting"); };
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+  }
+  expect(state.installPhase).toBe(phase);
+  return state;
+}
+
+it.each(["failed", "timeout"] as const)("shows newly verified current status after a %s installation and manual check", async phase => {
+  const state = await finishObservedInstallation(phase);
+  read = async config => response(config, valid({ currentVersion: "0.8.76", isUpdateAvailable: false,
+    isPackageReady: false, preparedVersion: "", preparedPackageSha256: "", packagePath: "" }));
+  await state.refresh(true);
+  expect(describeUpdateState(state.status, state.statusConfirmed, state.refreshing, state.installPhase)).toMatchObject({ state: "current", tone: "ok" });
+  expect(state.installPhase).toBe("");
+  expect(state.notice).toBe("");
+  expect(reload).not.toHaveBeenCalled();
+});
+
+it.each(["failed", "timeout"] as const)("keeps the %s outcome when its manual status check fails", async phase => {
+  const state = await finishObservedInstallation(phase);
+  read = async () => { throw new Error("still offline"); };
+  await state.refresh(true);
+  expect(state.installPhase).toBe(phase);
+  expect(state.statusConfirmed).toBe(false);
+  expect(state.noticeError).toBe(true);
+});
+
+it("shows a freshly confirmed scheduled installation instead of the old timeout", async () => {
+  const state = await finishObservedInstallation("timeout");
+  read = async config => response(config, valid({ isInstallScheduled: true, installScheduledAtUtc: new Date().toISOString() }));
+  await state.refresh(true);
+  expect(state.status?.isInstallScheduled).toBe(true);
+  expect(describeUpdateState(state.status, state.statusConfirmed, state.refreshing, state.installPhase).state).toBe("installing");
+  await state.installUpdate();
+  expect(posts()).toHaveLength(1);
+});
+
+it("does not replace active installation monitoring with a manual check", async () => {
+  const { state } = await mount(); await state.installUpdate();
+  const reads = gets().length;
+  await state.refresh(true);
+  expect(gets()).toHaveLength(reads);
+  expect(state.installPhase).toBe("scheduled");
+  read = async config => response(config, valid({ currentVersion: "0.8.76", isUpdateAvailable: false }));
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(state.installPhase).toBe("done");
 });

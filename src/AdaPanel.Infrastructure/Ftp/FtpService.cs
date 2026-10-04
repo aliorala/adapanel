@@ -20,8 +20,12 @@ public sealed partial class FtpService(
     JsonFileStore fileStore,
     IPanelPreferencesService panelPreferencesService,
     IOptions<PanelRuntimeOptions> runtimeOptions,
-    ILogger<FtpService>? logger = null) : IFtpService
+    ILogger<FtpService>? logger = null,
+    IConcurrencyLock? serverConcurrency = null) : IFtpService
 {
+    // Shared by ensure, TLS updates and account creation's infrastructure preparation.
+    internal IConcurrencyLock InfrastructureLock { get; } = serverConcurrency ?? new ConcurrencyLock();
+    private const string InfrastructureLockKey = "ftp-infrastructure";
     private const string StatePath = "config/ftp-users.json";
     private const string TlsStatePath = "config/ftp-tls.json";
     private const string InfraStatePath = "config/ftp-infra.json";
@@ -48,14 +52,27 @@ public sealed partial class FtpService(
         NativeScript is { } command ? command(script, true, cancellationToken)
             : ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
 
-    public async Task<FtpServerStatusDto> EnsureServerAsync(CancellationToken cancellationToken = default)
+    public Task<FtpServerStatusDto> EnsureServerAsync(CancellationToken cancellationToken = default) =>
+        EnsureServerCoreAsync(null, cancellationToken);
+
+    public Task<FtpServerStatusDto> EnsureServerAsync(Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken)
     {
-        await EnsureFtpInfrastructureAsync(false, cancellationToken);
+        ArgumentNullException.ThrowIfNull(beforeMutation);
+        return EnsureServerCoreAsync(beforeMutation, cancellationToken);
+    }
+
+    private Task<FtpServerStatusDto> EnsureServerCoreAsync(Func<CancellationToken, Task>? beforeMutation,
+        CancellationToken cancellationToken) => InfrastructureLock.RunExclusiveAsync(InfrastructureLockKey, async () =>
+    {
+        await EnsureFtpInfrastructureCoreAsync(false, cancellationToken, beforeMutation);
 
         // KURULUMDAN SONRA DURUM ÖLÇÜLÜR, VARSAYILMAZ. Buraya eskiden `IsConfigured = true,
         // StatusMessage = "ftp.server_ready"` sabitleri yazılıyordu; gerekçe FtpServerStatusDto'da.
-        return await GetServerStatusAsync(cancellationToken);
-    }
+        var status = await GetServerStatusAsync(cancellationToken);
+        await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
+        return status;
+    }, cancellationToken);
 
     public async Task<FtpServerStatusDto> GetServerStatusAsync(CancellationToken cancellationToken = default)
     {
@@ -350,7 +367,7 @@ public sealed partial class FtpService(
     }
 
     /// <summary>
-    /// FTPS zorunluluğunu yazar, IIS'e uygular ve UYGULANDIĞINI GERİ OKUR.
+    /// FTPS zorunluluğunu IIS'e uygular; ölçüm doğrularsa kalıcı tercihi yayımlar.
     /// </summary>
     /// <remarks>
     /// Eskiden ISTENEN bayrağı döndürüyordu ve uç de o bayraktan beslenip kullanıcıya "FTPS artık
@@ -359,13 +376,37 @@ public sealed partial class FtpService(
     /// okuma betiğin İÇİNDE zaten vardı ama yalnız <c>Write-Warning</c> yazıyor ve C# tarafı
     /// çıktıya hiç bakmıyordu — ölçüm yapılıp atılıyordu.
     /// </remarks>
-    public async Task<FtpTlsMeasurement> SetRequireSslAsync(bool requireSsl, CancellationToken cancellationToken = default)
-    {
-        await fileStore.WriteAsync(TlsStatePath, new FtpTlsState { RequireSsl = requireSsl }, cancellationToken);
+    public Task<FtpTlsMeasurement> SetRequireSslAsync(bool requireSsl, CancellationToken cancellationToken = default) =>
+        SetRequireSslCoreAsync(requireSsl, null, cancellationToken);
 
-        // SSL politikası değişti → tam yeniden kur (controlChannelPolicy 0/1 + FTPSVC restart).
-        return await EnsureFtpInfrastructureAsync(true, cancellationToken);
+    public Task<FtpTlsMeasurement> SetRequireSslAsync(bool requireSsl, Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(beforeMutation);
+        return SetRequireSslCoreAsync(requireSsl, beforeMutation, cancellationToken);
     }
+
+    private Task<FtpTlsMeasurement> SetRequireSslCoreAsync(bool requireSsl,
+        Func<CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken) =>
+        InfrastructureLock.RunExclusiveAsync(InfrastructureLockKey, async () =>
+        {
+            await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
+            var saved = await GetRequireSslAsync(cancellationToken);
+            // The requested value stays local until native application has been measured. Other
+            // ensure/create requests cannot read or apply an unfinished preference change.
+            var measurement = await EnsureFtpInfrastructureCoreAsync(true, cancellationToken,
+                beforeMutation, requireSsl, publishReady: false);
+            if (measurement.Verified == true)
+            {
+                await fileStore.UpdateAsync(TlsStatePath, new FtpTlsState(),
+                    _ => new FtpTlsState { RequireSsl = requireSsl },
+                    token => ApproveInfrastructureAsync(beforeMutation, token), cancellationToken);
+                saved = requireSsl;
+                await PublishInfrastructureReadyAsync(beforeMutation, cancellationToken);
+            }
+            await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
+            return measurement with { SavedRequireSsl = saved };
+        }, cancellationToken);
 
     private sealed class FtpTlsState
     {
@@ -902,15 +943,31 @@ public sealed partial class FtpService(
         return onarilan;
     }
 
-    private async Task<FtpTlsMeasurement> EnsureFtpInfrastructureAsync(bool forceReconfigure, CancellationToken cancellationToken,
-        Func<CancellationToken, Task>? beforeMutation = null)
+    private Task<FtpTlsMeasurement> EnsureFtpInfrastructureAsync(bool forceReconfigure, CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeMutation = null) =>
+        InfrastructureLock.RunExclusiveAsync(InfrastructureLockKey,
+            () => EnsureFtpInfrastructureCoreAsync(forceReconfigure, cancellationToken, beforeMutation), cancellationToken);
+
+    private static async Task ApproveInfrastructureAsync(Func<CancellationToken, Task>? beforeMutation, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        if (beforeMutation is not null) await beforeMutation(token);
+        token.ThrowIfCancellationRequested();
+    }
+
+    private Task<FtpInfraState> PublishInfrastructureReadyAsync(Func<CancellationToken, Task>? beforeMutation, CancellationToken token) =>
+        fileStore.UpdateAsync(InfraStatePath, new FtpInfraState(), _ => new FtpInfraState { Configured = true },
+            ct => ApproveInfrastructureAsync(beforeMutation, ct), token);
+
+    private async Task<FtpTlsMeasurement> EnsureFtpInfrastructureCoreAsync(bool forceReconfigure, CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeMutation = null, bool? requestedPolicy = null, bool publishReady = true)
+    {
+        await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
         // IIS FTP rolü kurulu değilse New-WebFtpSite ve ftpServer config bölümleri bulunmaz → script
         // "ftp.site_configuration_failed" ile patlar (canlı VPS bulgusu). Classic ASP/PHP gibi OTOMATİK KUR (atlama yok).
         await EnsureFtpFeatureInstalledAsync(cancellationToken, beforeMutation);
 
-        if (beforeMutation is not null) await beforeMutation(cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
+        await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
 
         var ftpRoot = Path.Combine(dataRoot, "ftp-root");
         Directory.CreateDirectory(Path.Combine(ftpRoot, "LocalUser"));
@@ -932,6 +989,7 @@ public sealed partial class FtpService(
         // (SSL politikası değişimi gibi gerçekten gereken durumlar force=true ile tam yeniden kurar.)
         if (!forceReconfigure && await IsFtpInfrastructureReadyAsync(cancellationToken))
         {
+            await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
             // Hızlı yolda TLS politikası YENİDEN YAZILMADI, dolayısıyla ÖLÇÜLMEDİ de. Burada
             // "uygulandı" demek, hiç bakmadan iddia etmek olurdu.
             return FtpTlsMeasurement.Olculemedi("FTP altyapisi hazir kabul edildi; TLS politikasi bu cagride yazilmadi.");
@@ -941,6 +999,7 @@ public sealed partial class FtpService(
         // istemci bağlanır, giriş yapar ama DİZİN LİSTESİ/transfer TAKILIR. Panelde tanımlı public IPv4'ü
         // FTP sitesine externalIp4Address olarak yazıyoruz; tanımlı değilse IIS kendi IP'sini kullanır.
         var preferences = await panelPreferencesService.GetAsync(cancellationToken);
+        await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
         var externalIp = preferences.ServerAddress?.Trim() ?? string.Empty;
         var externalIpLine = System.Net.IPAddress.TryParse(externalIp, out var parsedIp)
                 && parsedIp.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
@@ -948,11 +1007,12 @@ public sealed partial class FtpService(
             : "# sunucu IPv4 adresi panelde tanimli degil; pasif mod sunucunun kendi IP'sini kullanir";
 
         // M5 (profesyonel paneller gibi opsiyonel): FTPS zorunlu mu? 0=SslAllow (düz+FTPS, varsayılan), 1=SslRequire (yalnız FTPS).
-        var requireSsl = (await fileStore.ReadAsync(TlsStatePath, new FtpTlsState(), cancellationToken)).RequireSsl;
+        var requireSsl = requestedPolicy ?? await GetRequireSslAsync(cancellationToken);
         var policy = requireSsl ? 1 : 0;
         var policyName = requireSsl ? "SslRequire" : "SslAllow";
 
         var script = $$"""
+            $ErrorActionPreference = 'Stop'
             Import-Module WebAdministration -ErrorAction Stop
             $siteName = '{{EscapePowerShellLiteral(FtpSiteName)}}'
             $root = '{{EscapePowerShellLiteral(ftpRoot)}}'
@@ -987,6 +1047,15 @@ public sealed partial class FtpService(
             Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.ftpServer/firewallSupport' -Name lowDataChannelPort -Value {{PassivePortStart}}
             Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.ftpServer/firewallSupport' -Name highDataChannelPort -Value {{PassivePortEnd}}
             {{externalIpLine}}
+            Start-WebSite -Name $siteName -ErrorAction Stop
+            # Restart failure must not be reported as a verified TLS application.
+            Restart-Service FTPSVC -Force -ErrorAction Stop
+            if (-not (Get-NetFirewallRule -DisplayName 'AdaPanel FTP Control' -ErrorAction SilentlyContinue)) {
+              New-NetFirewallRule -DisplayName 'AdaPanel FTP Control' -Direction Inbound -Action Allow -Protocol TCP -LocalPort {{FtpPort}} -Profile Any | Out-Null
+            }
+            if (-not (Get-NetFirewallRule -DisplayName 'AdaPanel FTP Passive' -ErrorAction SilentlyContinue)) {
+              New-NetFirewallRule -DisplayName 'AdaPanel FTP Passive' -Direction Inbound -Action Allow -Protocol TCP -LocalPort {{PassivePortStart}}-{{PassivePortEnd}} -Profile Any | Out-Null
+            }
             # SESSIZ BASARISIZLIK BIR DAHA OLMASIN: ayarin gercekten uygulandigini geri-okuyup dogrula.
             # NOT: bu geri-okuma yalnız OLCER, ASLA throw etmez. Bazı IIS sürümlerinde Get-ItemProperty
             # değeri farklı tipte döndürdüğü için (.Value boş/enum-adı) eski throw, Set basarili olsa bile
@@ -1013,42 +1082,41 @@ public sealed partial class FtpService(
             # reddeder -> duz baglanti da yasak, TLS de imkansiz = FTP TUMDEN kapanir. Yukaridaki
             # sertifika baglama `catch { }` icinde oldugu icin bu durum SESSIZCE olusabilir.
             #
-            # BOS SERTIFIKA ile OKUNAMAYAN SERTIFIKA ayni goruntuye DUSMEMELI (bu deponun tekrarlanan
-            # dersi). Ayrimi kanit yapan sey komsu okuma: controlChannelPolicy okunabildiyse saglayici
-            # ve site okunabiliyor demektir, dolayisiyla BOS serverCertHash gercekten "bagli degil"dir.
-            # Komsu da okunamadiysa hicbir sey iddia etmeyiz ve alan BOS (= olculemedi) kalir.
-            $okunanCert = Oku-FtpAyari 'ftpServer.security.ssl.serverCertHash'
-            if ($okunanCert -eq '' -and $okunanControl -ne '') { $okunanCert = 'yok' }
+            # A successful neighboring property read does not prove the certificate read succeeded.
+            $okunanCert = ''
+            try {
+              $certProperty = Get-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.ssl.serverCertHash -ErrorAction Stop
+              if ($certProperty -is [string]) {
+                $okunanCert = if ($certProperty.Trim() -eq '') { 'yok' } else { $certProperty }
+              } elseif ($null -ne $certProperty -and $null -ne $certProperty.PSObject.Properties['Value']) {
+                $certValue = [string]$certProperty.Value
+                $okunanCert = if ($certValue.Trim() -eq '') { 'yok' } else { $certValue }
+              }
+            } catch { $okunanCert = '' }
             if ($okunanControl -ne '{{policy}}' -and $okunanControl -ne '{{policyName}}') { Write-Warning "FTP SSL ayari dogrulanamadi (controlChannelPolicy=$okunanControl, beklenen={{policy}})." }
             [Console]::Out.WriteLine('ADAPANEL-FTP-TLS=' + $okunanControl + '|' + $okunanData + '|' + $okunanCert)
-            Start-WebSite -Name $siteName -ErrorAction SilentlyContinue
-            # Pasif port aralığı (firewallSupport) ve SSL sertifikası değişikliklerinin uygulanması için
-            # Microsoft FTP Service yeniden başlatılır (IIS bu ayarları canlı okumaz).
-            Restart-Service FTPSVC -Force -ErrorAction SilentlyContinue
-            if (-not (Get-NetFirewallRule -DisplayName 'AdaPanel FTP Control' -ErrorAction SilentlyContinue)) {
-              New-NetFirewallRule -DisplayName 'AdaPanel FTP Control' -Direction Inbound -Action Allow -Protocol TCP -LocalPort {{FtpPort}} -Profile Any | Out-Null
-            }
-            if (-not (Get-NetFirewallRule -DisplayName 'AdaPanel FTP Passive' -ErrorAction SilentlyContinue)) {
-              New-NetFirewallRule -DisplayName 'AdaPanel FTP Passive' -Direction Inbound -Action Allow -Protocol TCP -LocalPort {{PassivePortStart}}-{{PassivePortEnd}} -Profile Any | Out-Null
-            }
             """;
 
-        if (beforeMutation is not null) await beforeMutation(cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
+        await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
+        // Once a new native configuration starts, the previous ready marker cannot authorize a
+        // later fast path if application fails or its result is unknown. Keep the saved policy.
+        var previous = await fileStore.ReadAsync(InfraStatePath, new FtpInfraState(), cancellationToken);
+        if (previous.Configured)
+            await fileStore.UpdateAsync(InfraStatePath, new FtpInfraState(), _ => new FtpInfraState(),
+                token => ApproveInfrastructureAsync(beforeMutation, token), cancellationToken);
+        await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
         var result = await RunScriptAsync(script, cancellationToken);
+        await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
         if (!result.Success)
         {
             throw new AppException("ftp.site_configuration_failed", 500, 500, BuildCommandDetails(result));
         }
 
-        // Tam kurulum başarılı → bayrağı işaretle ki sonraki kullanıcı eklemeleri hızlı yolu kullansın (servis restart yok).
-        await fileStore.WriteAsync(InfraStatePath, new FtpInfraState { Configured = true }, cancellationToken);
-
-        // ÖLÇÜM ARTIK ATILMIYOR. `result.Success` burada yalnız "betik sonuna kadar aktı" demektir:
-        // koşucu GEVŞEK (RunPowerShellAsync) ve `Set-ItemProperty` sonlandırıcı olmayan bir hata
-        // verdiğinde powershell.exe 0 ile çıkar. Politikanın yürürlükte olup olmadığını yalnız
-        // yukarıdaki damga söyler.
+        // Completion alone does not prove the requested policy. Critical native commands stop
+        // on error; the final independent read still decides whether policy and certificate agree.
         var olcum = FtpTlsMeasurement.Olc(requireSsl, result.StandardOutput);
+        if (olcum.Verified == true && publishReady)
+            await PublishInfrastructureReadyAsync(beforeMutation, cancellationToken);
         if (olcum.Failed)
         {
             logger?.LogWarning(
@@ -1086,6 +1154,7 @@ public sealed partial class FtpService(
         const string probe = "if (Get-Service FTPSVC -ErrorAction SilentlyContinue) { 'present' } else { 'absent' }";
 
         var check = await RunScriptAsync(probe, cancellationToken);
+        await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
         if (check.Success && check.StandardOutput.Contains("present", StringComparison.OrdinalIgnoreCase))
         {
             return;
@@ -1098,8 +1167,10 @@ public sealed partial class FtpService(
         if (beforeMutation is not null) await beforeMutation(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         var install = await RunScriptAsync(script, cancellationToken);
+        await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
 
         var verify = await RunScriptAsync(probe, cancellationToken);
+        await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
         if (!(verify.Success && verify.StandardOutput.Contains("present", StringComparison.OrdinalIgnoreCase)))
         {
             throw new AppException(

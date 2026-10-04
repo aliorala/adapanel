@@ -18,6 +18,7 @@ function isUser(value: unknown): value is FtpUser {
     && ['homePath','siteName','createdAtUtc'].every(key => typeof value[key] === 'string')
     && typeof value.isEnabled === 'boolean' && typeof value.existsOnSystem === 'boolean';
 }
+function sameIdentity(value: unknown, expected: string) { return typeof value === 'string' && value.trim().toLowerCase() === expected.trim().toLowerCase(); }
 function isStatus(value: unknown): value is FtpServerStatus {
   return record(value) && ['serverAddress','statusMessage','serviceState','siteState','controlPortOwner'].every(key => typeof value[key] === 'string')
     && ['isConfigured','isSiteRunning','hasControlPortConflict'].every(key => typeof value[key] === 'boolean')
@@ -91,12 +92,17 @@ export async function getFtpUsers() {
 }
 
 export async function createFtpUser(payload: { userName: string; password: string; siteName: string; homePath: string; }): Promise<FtpUser & { message?: string }> {
-  const response = await apiClient.post<ApiEnvelope<FtpUser>>("/ftp/users", payload);
-  return { ...response.data.data, message: response.data.message };
+  const accepted = { ...payload };
+  const response = await apiClient.post<ApiEnvelope<FtpUser>>("/ftp/users", accepted);
+  const user = measured(response.data, (value): value is FtpUser => isUser(value)
+    && sameIdentity(value.userName, accepted.userName) && sameIdentity(value.siteName, accepted.siteName)
+    && (value.passwordNeverExpires == null || typeof value.passwordNeverExpires === 'boolean'));
+  return { ...user, passwordNeverExpires: user.passwordNeverExpires ?? null, message: response.data.message };
 }
 
 export async function setFtpPassword(userName: string, password: string) {
-  await apiClient.post<ApiEnvelope<object>>("/ftp/users/password", { userName, password });
+  const response = await apiClient.post<ApiEnvelope<object>>("/ftp/users/password", { userName, password });
+  measured(response.data, (value): value is {userName: string} => record(value) && sameIdentity(value.userName, userName));
 }
 
 export type FtpTlsStatus = {
@@ -115,9 +121,13 @@ export async function getFtpTls() {
 
 export async function setFtpTls(requireSsl: boolean) {
   const response = await apiClient.put<ApiEnvelope<FtpTlsStatus>>("/ftp/tls", { requireSsl });
-  return response.data.data;
+  return measured(response.data, (value): value is FtpTlsStatus => record(value) && typeof value.requireSsl === 'boolean'
+    && (value.verified == null || typeof value.verified === 'boolean')
+    && (value.verified !== true || value.requireSsl === requireSsl)
+    && (value.detail == null || typeof value.detail === 'string'));
 }
 
 export async function deleteFtpUser(userName: string) {
-  await apiClient.delete<ApiEnvelope<object>>(`/ftp/users/${encodeURIComponent(userName)}`);
+  const response = await apiClient.delete<ApiEnvelope<object>>(`/ftp/users/${encodeURIComponent(userName)}`);
+  measured(response.data, (value): value is {userName: string} => record(value) && sameIdentity(value.userName, userName));
 }

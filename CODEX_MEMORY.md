@@ -1,5 +1,46 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R38 yerelde doğrulandı; son yayın 0.8.82
+
+R38 HENÜZ YAYIMLANMADI, version files0.8.82 kaldı. R37 public release0.8.82 önceki kanıtla aynı;
+canlı kurulu sürüm hiç ölçülmedi. Kullanıcının0.8.75 “paket hazır değil” sorusu: installsonrası
+stagingclean normalolabilir, eşit sürüm tekbaşına başarıkanıtıdeğil. UpdateView successfulmanualGET
+önceki failed/timeout fazını temizler; failedGET/monitoring/backend scheduled korunur (bu tur fix).
+
+Files GET/download acceptedactor/SID/stamp/delegation/readOnly scope +sitegeneration pin ve final
+checks. Suspended read allowed; tenant physicalpath boş. MVC doğrulanmış openFileStream alır;
+denial/cancel dispose. AuthorizedmissingGET404, trustedlegacy mkdir korunur. FileTextContent
+strict UTF8BOM/noBOM+UTF16LE/BE+UTF32LE/BE codecs; aynıcodec/BOM korunur, invalid/binary readonly.
+Write doğrudan da guard; yeni beforeWrite callback sameencodedbyte[]+capturedexistinglength ile
+netgrowth quota kullanır, quotaawaitsonrası originalactor/sitecheck. Callbacktrustedoverloads korunur.
+
+FTP ensure/TLS/createinfra sharedlease, acceptedactor/session/CT checkpoints. requestedpolicy
+immutable; onlyverified savesTLSJSON, false/null SavedRequireSsl=oldsaved under samelease/DTO.
+Ready marker invalidated before reconfiguration; requiredTLS certificateunknown!=verified.
+Script stamp restart/firewallsonrası; certreadfailed unknown. FE strictmutation responses,
+persistent savedpolicy+measurement card, nativecheckbox resetwhilepending/onfailure, mobileshrinkfix.
+Files strictGET/path/rows +oldconfirmchangeSiteguard. Locale FE5555/API287 TR/ENparity.
+
+Backend baseline120=94RED26green; quota4RED; FTP40green then45green. Newbackend132=Read56+codec27+
+quota4+FTP45. Target886=884green+2plannedmissingGETRED,2fixed. Full70192terminalexit1:
+Infra8662/8663+Core2/2; only CssTokenReferenceTests failed (--warning/--textundefined in newFtpView).
+Fixed to existing--warn-1, targetedCSS3/3exit0. Do NOT falselycallfullrunzero failures orclaimsecond
+fullrun. All132newbackendandfinalC#passedfull. Build0warning/error. FullTRX round38-full_net8.0_
+20261004085257.trx; CSS round38-css-recheck.trx. Sourcecodefrozenallagentsdone; rootsole.NET.
+
+FE new67=Files29+FTP32+Update6. Final93731exit0 types+108files2066/2066+Vite. Initialfull34308
+2060green beforeupdaterfix. Updaterbaseline3RED/54green then59green. FinalCSSonlycolorchangeafter
+fullFE; final3ViteGREEN+sync,6indexassetsverified. Alllogs .tmp/audit-20261004/round38-*.
+No further production/testedit after CSSrepaircheck. Gitdiffcheckclean.
+
+Chrome3auditTab38 CLOSED/viewportreset; preview96594CtrlCterminalexit1; __audit38filesREMOVED.
+RealVue/Pinia fakeAPI, pendingcheckboxoldvalue+disabled, false/null oldvalue/explicitwarning,
+truechecked+verified, warningpersistafterdismiss.390TRdoc380/380card320/320;320ENdoc310/310card250/250
+checkbox13px. Consoleerrors0excludingextensions. Proof round38-ftp-tls-verified-mobile.png final
+successUI; en320unknown and desktopfailure saved; oldmobileimagebeforecheckboxshrinkfix.
+Allrootprocessesterminal:36431baseline,34308FE,92303quota/FTP,93731finalFE,83672target,70192full,
+96594preview, CSSrecheckdirectexit0,final3Vitedirectexit0. Onlypreexistinguntracked TestResults/
+leftuntouched. No liveinstall/sourcepush. ContinuousunbudgetedgoalACTIVE, nevercomplete.
 ## 2026-10-04 — R36+R37 içeren 0.8.82 yayımlandı ve doğrulandı
 
 Kaynaklar ve public latest 0.8.82. Yayın 2026-10-04T05:22:25Z / 08:22:25 İstanbul.

@@ -11,10 +11,10 @@ namespace AdaPanel.Api.Security;
 
 /// <summary>The actor accepted before a file publication waits for site or content IO.</summary>
 internal sealed record FileActorAuthority(Guid UserId, Guid SubscriptionId, string Role, string CredentialStamp,
-    CookieSessionValidator.SourceActor? Cookie)
+    CookieSessionValidator.SourceActor? Cookie, bool ReadOnly = false)
 {
     internal static async Task<FileActorAuthority> CaptureAsync(AdaPanelDbContext db, ICustomerScopeService scopes,
-        SessionRevocationStore sessions, ClaimsPrincipal principal, CancellationToken token)
+        SessionRevocationStore sessions, ClaimsPrincipal principal, CancellationToken token, bool readOnly = false)
     {
         token.ThrowIfCancellationRequested();
         var cookie = PanelAuthentication.IsTokenAuthenticated(principal)
@@ -46,16 +46,16 @@ internal sealed record FileActorAuthority(Guid UserId, Guid SubscriptionId, stri
                 throw new AppException("auth.forbidden", 403, 403);
         }
         await CustomerAccess.EnsureSectionAsync(scopes, principal, "files", token);
-        if (CustomerAccess.IsScoped(principal) && (await scopes.GetScopeAsync(subscription, token)).IsSuspended)
+        if (!readOnly && CustomerAccess.IsScoped(principal) && (await scopes.GetScopeAsync(subscription, token)).IsSuspended)
             throw new AppException("subscription.suspended_readonly", 403, 403);
         token.ThrowIfCancellationRequested();
-        return new(userId, subscription, user.Role.ToString(), stamp, cookie);
+        return new(userId, subscription, user.Role.ToString(), stamp, cookie, readOnly);
     }
 
     internal async Task RevalidateAsync(AdaPanelDbContext db, ICustomerScopeService scopes,
         SessionRevocationStore sessions, ClaimsPrincipal principal, CancellationToken token)
     {
-        if (await CaptureAsync(db, scopes, sessions, principal, token) != this)
+        if (await CaptureAsync(db, scopes, sessions, principal, token, ReadOnly) != this)
             throw new AppException("auth.unauthorized", 401, 401);
     }
 }
