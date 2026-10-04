@@ -1,5 +1,7 @@
 {
   "common.unexpected_error": "Beklenmeyen bir hata oluştu.",
+  "backup.selection_download_required": "Seçilen dosyaları almak için Seçilenleri indir işlemini kullanın. Sunucudaki dosyalar değiştirilmedi.",
+  "backup.items_not_found": "Seçilen öğelerin bazıları arşivde bulunamadı. Listeyi yenileyip yeniden seçin.",
   "validation.failed": "Doğrulama başarısız.",
   "setup.default_components_failed": "Önerilen yazılım bileşenleri kurulurken bir veya daha fazla adım tamamlanamadı.",
   "setup.webdb_deploy_failed": "phpMyAdmin kuruldu ancak IIS yayını tamamlanamadı.",

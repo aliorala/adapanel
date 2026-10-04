@@ -20,6 +20,8 @@
 
     <p v-if="notice" :class="['notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
+    <BackupRestoreResult v-if="fullRestore.result.value" :result="fullRestore.result.value" :refresh-error="fullRestore.refreshError.value" />
+
     <section v-if="createResult" class="form-surface create-result" aria-labelledby="backup-result-title">
       <div class="section-head">
         <h3 id="backup-result-title">{{ t("panel.backup.lastCreateResult") }}</h3>
@@ -326,6 +328,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import { useBackupRestore, restoreResult } from "../composables/useBackupRestore";
+import BackupRestoreResult from "../components/BackupRestoreResult.vue";
 import { UserFacingError } from "../utils/apiError";
 import { useAuthStore } from "../stores/auth";
 import router from "../router";
@@ -365,7 +368,7 @@ const loading = ref(false);
 const listLoaded = ref(false);
 const busy = ref(false);
 const downloadingId = ref("");
-const fullRestore = useBackupRestore();
+const fullRestore = useBackupRestore(() => siteName.value);
 const restoringId = fullRestore.restoringId;
 const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
@@ -557,6 +560,7 @@ async function refresh() {
     backups.value = result;
     listLoaded.value = true;
     listLoad.clear();
+    fullRestore.clearRefreshError();
     return true;
   } catch (error) {
     if (isCurrent() && request === listRequest) listLoad.capture(error);
@@ -675,7 +679,7 @@ async function restore(record: BackupRecord) {
   if (!isCurrent() || locked.value) return;
   await fullRestore.restore(record, (result) => {
     const report = restoreResult(result, t);
-    showNotice(report.message, report.failed);
+    showNotice(t(report.failed ? "panel.backup.restoredWithErrors" : "panel.backup.restored"), report.failed);
   }, (error) => showNotice(error instanceof Error && !(error instanceof UserFacingError) && !("isAxiosError" in error) ? error.message : resolveApiMessage(error), true), refresh);
 }
 

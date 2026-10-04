@@ -1,5 +1,7 @@
 {
   "common.unexpected_error": "An unexpected error occurred.",
+  "backup.selection_download_required": "Use Download selected to retrieve the selected files. Server files were not changed.",
+  "backup.items_not_found": "Some selected items were not found in the archive. Refresh the list and select them again.",
   "validation.failed": "Validation failed.",
   "setup.default_components_failed": "One or more recommended software components could not be installed during setup.",
   "setup.webdb_deploy_failed": "phpMyAdmin was installed but its IIS publication could not be completed.",

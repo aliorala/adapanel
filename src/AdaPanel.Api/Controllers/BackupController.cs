@@ -671,29 +671,47 @@ public sealed class BackupController(
         return Ok(ApiResponse<BackupEntriesDto>.Ok(entries));
     }
 
+    /// <summary>Authenticated selected-entry download; creates no site or restore-directory content.</summary>
+    [HttpPost("download-items")]
+    public async Task<IActionResult> DownloadItemsAsync([FromBody] DownloadBackupItemsRequest request,
+        CancellationToken cancellationToken)
+    {
+        var snapshot = new DownloadBackupItemsRequest
+        {
+            BackupId = request.BackupId, Items = [.. (request.Items ?? [])],
+            EncryptionPassword = request.EncryptionPassword
+        };
+        var authority = await CaptureReadAuthorityAsync(cancellationToken);
+        await EnsureBackupOwnershipAsync(snapshot.BackupId, cancellationToken);
+        async Task BeforeRead(BackupRecordDto record, CancellationToken token)
+        {
+            await EnsureBackupOwnershipAsync(record, token);
+            await RevalidateReadAuthorityAsync(authority, token);
+        }
+        var download = await backupService.DownloadItemsAsync(snapshot, BeforeRead, cancellationToken);
+        try
+        {
+            await EnsureBackupOwnershipAsync(snapshot.BackupId, cancellationToken);
+            await RevalidateReadAuthorityAsync(authority, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            // MVC disposes FileStreamResult after copying (also on abort). Register as well
+            // so a later filter/response failure cannot leave the private handle open.
+            HttpContext.Response.RegisterForDispose(download);
+            return File(download.Content, "application/zip", download.FileName);
+        }
+        catch { download.Dispose(); throw; }
+    }
+
     [HttpPost("restore-items")]
     public async Task<ActionResult<ApiResponse<RestoreBackupItemsResultDto>>> RestoreItemsAsync(
         [FromBody] RestoreBackupItemsRequest request,
         CancellationToken cancellationToken)
     {
+        if (CustomerAccess.IsScoped(User))
+            throw new AdaPanel.Core.Common.AppException("backup.selection_download_required", 409, 409);
         var actor = await EnterActorAsync(cancellationToken);
         using var actorLease = actor.Lease;
         await EnsureBackupOwnershipAsync(request.BackupId, cancellationToken);
-
-        // GÜVENLİK (çapraz-kiracı): yönetici DIŞINDA kimse hedef yol seçemez; içerik her zaman
-        // sitenin kendi konumuna yüklenir.
-        //
-        // Burada önceden yalnız `IsCustomer` bakılıyordu, yani BAYİ dışarıda kalıyordu. Oysa bayi
-        // de bir kiracıdır: serbest hedef yolla bu uç, yedeğin içindeki dosyaları diskte istenen
-        // yere yazan bir araca dönüşüyordu — panel LocalSystem olarak çalıştığı için başka
-        // müşterilerin site klasörleri de, Windows'un kendi klasörleri de dahil.
-        //
-        // Tam geri yükleme (`POST restore`) zaten yönetici-özel; kapsamlı kullanıcıya açık olan
-        // tek yol burasıydı.
-        if (CustomerAccess.IsScoped(User))
-        {
-            request.TargetPath = string.Empty;
-        }
 
         var hedef = (await backupService.GetBackupsAsync(cancellationToken))
             .FirstOrDefault(item => string.Equals(item.Id, request.BackupId, StringComparison.OrdinalIgnoreCase));
@@ -732,10 +750,7 @@ public sealed class BackupController(
             konu,
             cancellationToken);
 
-        var response = CustomerAccess.IsScoped(User)
-            ? new RestoreBackupItemsResultDto { RestoredCount = result.RestoredCount, TargetRoot = string.Empty }
-            : result;
-        return Ok(ApiResponse<RestoreBackupItemsResultDto>.Ok(response, "backup.items_restored"));
+        return Ok(ApiResponse<RestoreBackupItemsResultDto>.Ok(result, "backup.items_restored"));
     }
 
     /// <summary>

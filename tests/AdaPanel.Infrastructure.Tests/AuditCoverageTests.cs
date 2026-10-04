@@ -85,6 +85,7 @@ public sealed class AuditCoverageTests
         // aramayı her çağrıda kayda yazmak, kaydı gürültüye boğup asıl değişiklikleri görünmez
         // kılardı — denetim kaydının değeri seyrekliğindedir.
         ["FilesController.cs#SearchAsync"] = "Dosya arama: yalnız okur, hiçbir şey değiştirmez.",
+        ["BackupController.cs#DownloadItemsAsync"] = "Seçili arşiv içeriğini geçici ZIP akışıyla indirir; kaynak arşivi, yedek envanterini ve site dosyalarını değiştirmez. Akış tamamlanınca geçici dosya silinir. Davranış testi: ScopedBackupExtractionAccessTests.",
         ["FilesController.cs#CalculateSizeAsync"] = "Klasör boyutu: yalnız meta veriden boyut toplar, dosya içeriğine bile dokunmaz; arayüzde klasör başına tıklanan bir düğme olduğu için her çağrıyı yazmak kaydı gürültüye boğardı.",
         ["MigrationController.cs#DiscoverPleskAsync"] = "Plesk keşfi: UZAK sunucudan domain listesi okur, bu sunucuda hiçbir şey değişmez.",
         ["MigrationController.cs#DiscoverCpanelAsync"] = "cPanel/WHM keşfi: uzak sunucudan hesap listesi okur, bu sunucuda hiçbir şey değişmez.",

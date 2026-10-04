@@ -130,6 +130,11 @@ public interface IBackupService
     /// <summary>Zip yedeği içeriğini dizin bazlı listeler (granüler geri yükleme için gezinme).</summary>
     Task<BackupEntriesDto> GetEntriesAsync(string backupId, string? prefix, CancellationToken cancellationToken = default);
 
+    /// <summary>Build a private selected-entry ZIP. Ownership is checked after the source lease wait.</summary>
+    Task<BackupItemsDownload> DownloadItemsAsync(DownloadBackupItemsRequest request,
+        Func<BackupRecordDto, CancellationToken, Task> beforeRead, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
+
     /// <summary>Seçilen dosya/dizinleri orijinal site köküne veya verilen hedefe geri yükler.</summary>
     Task<RestoreBackupItemsResultDto> RestoreItemsAsync(RestoreBackupItemsRequest request, CancellationToken cancellationToken = default);
 

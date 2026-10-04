@@ -88,7 +88,11 @@ public static class PanelTokenCapabilities
             throw new AppException("auth.forbidden", 403, 403, TerminalReason);
         }
 
-        if (PanelAuthentication.IsStateChanging(httpMethod) && !AllowsDestructive(user))
+        // Password-bearing selected ZIP download is a read. Do not exempt its prefix,
+        // other HTTP methods, restore-items, or any neighboring backup operation.
+        var selectedDownload = string.Equals(httpMethod, "POST", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(path?.TrimEnd('/'), "/api/v1/backup/download-items", StringComparison.OrdinalIgnoreCase);
+        if (PanelAuthentication.IsStateChanging(httpMethod) && !selectedDownload && !AllowsDestructive(user))
         {
             throw new AppException("auth.forbidden", 403, 403, ReadOnlyReason);
         }

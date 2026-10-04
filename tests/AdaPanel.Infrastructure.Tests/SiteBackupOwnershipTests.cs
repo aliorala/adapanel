@@ -99,10 +99,22 @@ public sealed class SiteBackupOwnershipTests
         }
         else if (operation == "restore")
         {
-            var result = Data(await controller.RestoreItemsAsync(fixture.RestoreRequest(), default));
-            Assert.Equal(1, result.RestoredCount);
-            var extracted = Assert.Single(Directory.EnumerateFiles(fixture.Backup.Root, "mysql-private_ledger.sql", SearchOption.AllDirectories));
-            Assert.Contains("mysql:private_ledger", await File.ReadAllTextAsync(extracted));
+            if (role == "Administrator")
+            {
+                var result = Data(await controller.RestoreItemsAsync(fixture.RestoreRequest(), default));
+                Assert.Equal(1, result.RestoredCount);
+                var extracted = Assert.Single(Directory.EnumerateFiles(fixture.Backup.Root, "mysql-private_ledger.sql", SearchOption.AllDirectories));
+                Assert.Contains("mysql:private_ledger", await File.ReadAllTextAsync(extracted));
+            }
+            else
+            {
+                var result = Assert.IsType<FileStreamResult>(await controller.DownloadItemsAsync(new DownloadBackupItemsRequest
+                { BackupId = fixture.Record.Id, Items = fixture.RestoreRequest().Items }, default));
+                await using var stream = result.FileStream;
+                using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+                using var reader = new StreamReader(Assert.Single(archive.Entries).Open());
+                Assert.Contains("mysql:private_ledger", await reader.ReadToEndAsync());
+            }
         }
         else
         {
@@ -115,13 +127,12 @@ public sealed class SiteBackupOwnershipTests
     [Theory]
     [InlineData("Customer")]
     [InlineData("Reseller")]
-    public async Task SuccessfulTenantExtractionDoesNotPublishItsPrivateServerDestination(string role)
+    public async Task LegacyTenantExtractionRequiresTheUsableSelectionDownload(string role)
     {
         using var fixture = await Fixture.Create();
-        var result = Data(await fixture.Controller(role).RestoreItemsAsync(fixture.RestoreRequest(), default));
-        Assert.Equal(1, result.RestoredCount);
-        Assert.Equal(string.Empty, result.TargetRoot);
-        Assert.Single(Directory.EnumerateFiles(fixture.Backup.Root, "mysql-private_ledger.sql", SearchOption.AllDirectories));
+        var error = await Assert.ThrowsAsync<AppException>(() => fixture.Controller(role).RestoreItemsAsync(fixture.RestoreRequest(), default));
+        Assert.Equal("backup.selection_download_required", error.MessageKey);
+        Assert.Empty(Directory.EnumerateFiles(fixture.Backup.Root, "mysql-private_ledger.sql", SearchOption.AllDirectories));
     }
 
     [Fact]
@@ -442,7 +453,8 @@ public sealed class SiteBackupOwnershipTests
                 {
                     case "entries": await controller.GetEntriesAsync(Record.Id, "databases/", default); break;
                     case "chain": await controller.GetChainAsync(Record.Id, default); break;
-                    case "restore": await controller.RestoreItemsAsync(RestoreRequest(), default); break;
+                    case "restore": await controller.DownloadItemsAsync(new DownloadBackupItemsRequest
+                        { BackupId = Record.Id, Items = RestoreRequest().Items }, default); break;
                     case "delete": await controller.DeleteAsync(Record.Id, default); break;
                     case "delete-chain": await controller.DeleteChainAsync(Record.Id, default,
                         new DeleteBackupChainRequest { ExpectedBackupIds = [Record.Id] }); break;

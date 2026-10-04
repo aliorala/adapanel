@@ -25,6 +25,8 @@
       </button>
     </p>
 
+    <BackupRestoreResult v-if="fullRestore.result.value" :result="fullRestore.result.value" :refresh-error="fullRestore.refreshError.value" />
+
     <!-- DOĞRULAMA SONUCU. Üç sayı ayrı ayrı gösterilir; "ulaşılamadı" KAYIP DEĞİLDİR ve
          karıştırılırsa kullanıcı geçici bir ağ arızasında bütün geçmişini kayıp sanar. -->
     <section v-if="verification" class="form-surface verify-panel">
@@ -681,7 +683,7 @@
             <span class="cell-muted">{{ group.entries.length }}</span>
           </div>
           <div v-for="entry in group.entries" :key="entry.path" class="data-row entry-row">
-            <input v-model="selectedItems" type="checkbox" :value="entry.path" :aria-label="entry.name" :disabled="busy || restoreItemsBusy || locked" />
+            <input v-model="selectedItems" type="checkbox" :value="entry.path" :aria-label="entry.name" :disabled="busy || restoreItemsBusy || downloadItemsBusy" />
             <button
               v-if="entry.isDirectory"
               class="secondary compact entry-link"
@@ -706,7 +708,7 @@
       <section class="archive-selection" :aria-label="t('panel.backup.selectedItemsTitle')">
         <div class="section-head">
           <h4>{{ t('panel.backup.selectedItemsTitle') }} <span class="status-pill">{{ selectedItems.length }}</span></h4>
-          <button v-if="selectedItems.length" type="button" class="secondary compact" :disabled="busy || restoreItemsBusy" @click="selectedItems = []">
+          <button v-if="selectedItems.length" type="button" class="secondary compact" :disabled="busy || restoreItemsBusy || downloadItemsBusy" @click="selectedItems = []">
             {{ t("panel.bulk.clearSelection") }}
           </button>
         </div>
@@ -714,26 +716,33 @@
         <ul v-if="selectedItems.length" class="selected-paths">
           <li v-for="path in selectedItems" :key="path">
             <code>{{ path }}</code>
-            <button type="button" class="secondary compact" :disabled="busy || restoreItemsBusy" :aria-label="t('panel.backup.removeSelection', { path })" @click="selectedItems = selectedItems.filter(item => item !== path)">×</button>
+            <button type="button" class="secondary compact" :disabled="busy || restoreItemsBusy || downloadItemsBusy" :aria-label="t('panel.backup.removeSelection', { path })" @click="selectedItems = selectedItems.filter(item => item !== path)">×</button>
           </li>
         </ul>
       </section>
 
-      <div class="archive-destination">
-        <label v-if="canChooseItemsTarget" class="stacked-field">
-          <span class="field-label">{{ t("panel.backup.itemsTarget") }}</span>
-          <input v-model.trim="itemsTargetPath" :disabled="busy || restoreItemsBusy" :placeholder="t('panel.backup.itemsTargetOriginal')" />
-        </label>
-        <p class="field-hint">{{ t(canChooseItemsTarget && itemsTargetPath ? 'panel.backup.customExtractHint' : 'panel.backup.separateExtractHint') }}</p>
-      </div>
+      <p class="field-hint">{{ t('panel.backup.selectedDownloadHint') }}</p>
       <div class="row-actions">
-        <button
-          class="compact"
-          v-bind="writeGate(!canRestoreItems)"
-          @click="restoreSelectedItems">
-          {{ t("panel.backup.restoreSelected") }} ({{ selectedItems.length }})
+        <button type="button" class="compact" :disabled="!canDownloadSelectedItems" @click="downloadSelectedItems">
+          {{ t(downloadItemsBusy ? 'panel.backup.downloading' : 'panel.backup.downloadSelected') }} ({{ selectedItems.length }})
         </button>
       </div>
+      <details v-if="canChooseItemsTarget" class="archive-destination">
+        <summary>{{ t('panel.backup.extractOnServer') }}</summary>
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.backup.itemsTarget") }}</span>
+          <input v-model.trim="itemsTargetPath" :disabled="busy || restoreItemsBusy || downloadItemsBusy" :placeholder="t('panel.backup.itemsTargetOriginal')" />
+        </label>
+        <p class="field-hint">{{ t(itemsTargetPath ? 'panel.backup.customExtractHint' : 'panel.backup.separateExtractHint') }}</p>
+        <div class="row-actions">
+          <button
+            class="secondary compact"
+            v-bind="writeGate(!canRestoreItems)"
+            @click="restoreSelectedItems">
+            {{ t("panel.backup.restoreSelected") }} ({{ selectedItems.length }})
+          </button>
+        </div>
+      </details>
     </section>
 
     <!-- ================= YENİ YEDEK ================= -->
@@ -1143,6 +1152,7 @@ import { getFormattingLocale } from '../utils/locale';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
+import BackupRestoreResult from "../components/BackupRestoreResult.vue";
 import BackupScheduleFields from "../components/BackupScheduleFields.vue";
 import { bosProgram, programOzeti, type BackupSchedulePlan } from "../api/schedule";
 import {
@@ -1156,6 +1166,7 @@ import {
   deleteBackupChain,
   deleteBackupSchedule,
   downloadBackup,
+  downloadBackupItems,
   getBackupChain,
   getBackupEncryption,
   getBackupEntries,
@@ -1624,8 +1635,13 @@ const browseLoad = useSectionError();
 const selectedItems = ref<string[]>([]);
 const itemsTargetPath = ref("");
 const restoreItemsBusy = ref(false);
+const downloadItemsBusy = ref(false);
+let selectedDownloadContext = 0;
+watch(() => sitesStore.selectedSiteName, () => { selectedDownloadContext++; }, { flush: "sync" });
 const canChooseItemsTarget = computed(() => isActive() && isAdmin.value);
-const canRestoreItems = computed(() => canWrite() && !busy.value && !restoreItemsBusy.value &&
+const canRestoreItems = computed(() => isAdmin.value && canWrite() && !busy.value && !restoreItemsBusy.value && !downloadItemsBusy.value &&
+  browseRecord.value?.format === "zip" && selectedItems.value.length > 0);
+const canDownloadSelectedItems = computed(() => isActive() && !busy.value && !restoreItemsBusy.value && !downloadItemsBusy.value &&
   browseRecord.value?.format === "zip" && selectedItems.value.length > 0);
 
 /**
@@ -2100,6 +2116,7 @@ async function refresh() {
     listConfirmed.value = true;
     const previousError = listLoad.message.value;
     listLoad.clear();
+    fullRestore.clearRefreshError();
     if (!updateReadOutcome() && noticeError.value && notice.value === previousError) showNotice("");
     return true;
   } catch (error) {
@@ -2299,7 +2316,7 @@ async function restore(backup: BackupRecord, chainChecked = false) {
       // içeriğin üzerine eksik bir durum yazmak demektir. Sebep şeritte yazar, kullanıcı yineleyebilir.
       let resolved: BackupChain;
       try {
-        resolved = await getBackupChain(backup.id);
+        resolved = await getBackupChain(backup.id, backup.chainId);
         if (!canWrite()) return;
       } catch (error) {
         if (isActive()) showError(error);
@@ -2352,8 +2369,9 @@ async function askBackupPassword() {
  */
 function reportRestoreResult(record: BackupRecord) {
   const report = restoreResult(record, t);
-  if (report.failed) expandedWarnings.value = record.id;
-  reportWithListState(report.message, report.failed);
+  // The result card reports a catalogue refresh failure separately from restoration.
+  readOutcomeNotice = null;
+  showNotice(t(report.failed ? "panel.backup.restoredWithErrors" : "panel.backup.restored"), report.failed);
 }
 
 /** Tek bir uyarının çevrilmiş satırı ("hedef: sebep"). */
@@ -2426,7 +2444,7 @@ async function loadChain(backup: BackupRecord) {
   chain.value = null;
   chainLoading.value = true;
   try {
-    const result = await getBackupChain(backup.id);
+    const result = await getBackupChain(backup.id, backup.chainId);
     if (!isCurrent()) return null;
     chain.value = result;
     chainLoad.clear();
@@ -2680,6 +2698,32 @@ async function navigateTo(prefix: string) {
  * Yarıda hata alınırsa önceki dosyalar diskte kalmış olabilir. Aynı yazmayı yeniden
  * göndermek sonuç ölçmek değildir: otomatik tekrar yapılmaz, belirsizlik bildirilir.
  */
+async function downloadSelectedItems() {
+  if (!canDownloadSelectedItems.value || !browseRecord.value) return;
+  const record = { ...browseRecord.value }, items = [...selectedItems.value];
+  const request = browseRequest, context = selectedDownloadContext;
+  const current = () => isActive() && request === browseRequest && context === selectedDownloadContext && browseRecord.value?.id === record.id;
+  await withOperation(async () => {
+    downloadItemsBusy.value = true;
+    let password = "";
+    try {
+      if (record.encrypted) {
+        const entered = await askBackupPassword();
+        if (entered === null || !current()) return;
+        password = entered;
+      }
+      if (!current()) return;
+      await downloadBackupItems(record.id, items, password, current);
+      if (current()) showNotice(t("panel.backup.selectedDownloadStarted"));
+    } catch (error) {
+      if (current()) showError(error);
+    } finally {
+      password = "";
+      if (isActive()) downloadItemsBusy.value = false;
+    }
+  }, false);
+}
+
 async function restoreSelectedItems() {
   const record = browseRecord.value;
   if (!canRestoreItems.value || !record) return;
@@ -3313,6 +3357,9 @@ function statusTone(status: string) {
   gap: var(--sp-8);
   margin: 0;
 }
+
+.archive-destination summary { cursor: pointer; font-weight: 600; }
+.archive-destination[open] > :not(summary) { margin-top: var(--sp-10); }
 
 .selected-paths {
   list-style: none;

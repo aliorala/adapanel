@@ -1,4 +1,42 @@
 # AdaPanel Codex Memory
+## 2026-10-04 — R34 tam doğrulandı; R33 + R34 için 0.8.80 paketleniyor
+
+Kaynaklar 0.8.80'e eşitlendi (props/frontend package+lock/installer/release-body).
+Henüz bu paragraf yazılırken yayımlanmadı; son public0.8.79. Canlı kurulum yok.
+R34 auth36 + selectedZIP44 =80 yeniC#; targeted733/733, full.NET tek koşum
+Infra8275+Core2=8277/8277 fail0skip0, build0warning/error. Root61566exit0.
+TRX round34-full...063024(Core),063354(Infra). Loground34-final-build/backend.
+FE68new, final98files1818/1818, types/Vitegreen3710exit0. wwwroot sync6refOK,
+TR/EN5521parity. Target330, son notice/emptyrow203green. Kaynakların hepsi SABİT.
+
+Persistent delegation immutable originaladmin credentialstamp+SID carries across
+2FA Confirm/Disable; missinglegacy/sourceSIDrevoked rejectedbeforecache. Source/target
+SQL usesexisting60sec cadence; freshcookies/Stop event unconditionallyrechecks source.
+Normalcookies unchanged. Cookie fixturemetadata refreshed, assertsnotweakened.
+POST backup/download-items selected ZIP actualbyte delivery fixes inaccessible tenant
+privatebackupRoot extraction. Legacytenant restore-items409; adminextraction retained.
+Sourcelease+owner/actor/SID revalidate afterwaiting+beforepublish. SecureTempFileACL,
+DeleteOnClose+Response/MVCdispose, missing/partial/dangerous/duplicatepaths reject.
+ExactreadonlyPOST exceptions in suspension+PanelToken+FEclient, CSRFretained.
+Readscopeunchanged, no privatebackuproot exposedtositeorFileService. ActualMVC failure
+cleanup/encrypted/queued/finalauth/source/indexunchanged tested. Streamafterstart and
+APIkeyre-auth remainoutsideboundary; peerreviews auth+backup noadditionalfinding.
+FE chain/result shape+id+metadata; optionalcontext clears restore resultonsitechange.
+New BackupRestoreResult keeps measuredpartial/warnings/paths+copy separatelyfrom
+refresh failure; retry clears onlyrefreshError. Selected ZIP MIME/header/signature/errors
+andpre-Blob-save context guard/duplicates. Adminextractunderseparatedetails; tenantonlydownload.
+
+Chrome3/auditTab34 CLOSED, viewport32RESET, preview7993stopped, __audit34filesREMOVED.
+RealVue/Pinia fakeadapter:1440darkTR result,320lightENcard,390darkTRCustomerselection.
+Docswidth/scroll1440/1440,320/320,380/380. Blobdelivery observedbyfixtureintercept of
+anchorclick; no actualuserDownloadsfile. Appconsole0 (walletChromeextensionerrors separate).
+Screenshotsround34-result-desktop/mobile,selected-mobile,backup-desktop.png. Lastfullview
+screenshot precedes tiny emptyrowautoexpandremoval; finalcardcomponentunchanged.
+Freshrelease080components22Passed3LargeSkipped0Failed, privacy12/12/parser/versionguardgreen.
+Package root60022RUNNING logrelease080-package.log, -SkipComponentAudit ONLY becausefresh
+separateauditpassed. NoSkipVerify. Next awaitpackage then publishusingexistingCurlscript,
+verifypublic/latest/tag/body/assetdigest+redownloadSHA, writefinaldocs+memory+localcommit.
+Do notpushsource/history; preexistingTestResults/ untouched/untracked. Activegoalstaysactive.
 
 ## 2026-10-04 — R33 yerelde doğrulandı, henüz yayımlanmadı
 

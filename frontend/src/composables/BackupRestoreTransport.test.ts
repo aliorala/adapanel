@@ -76,3 +76,7 @@ it("shows invalid-success as an error without refreshing or publishing restorati
   await flow.restore(record(), result, error, refresh);
   expect(error).toHaveBeenCalledOnce(); expect(result).not.toHaveBeenCalled(); expect(refresh).not.toHaveBeenCalled();
 });
+it.each(["name", "source", "createdAtUtc", "size"])("rejects malformed restored-record metadata before presenting %s", async field => {
+  transport = async config => response(config, { ...record(), [field]: field === "size" ? -1 : field === "createdAtUtc" ? "not-a-date" : null });
+  await expect(restoreBackup("one", "")).rejects.toThrow("panel.backup.resultUnconfirmed");
+});

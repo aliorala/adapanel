@@ -25,6 +25,7 @@ vi.mock("../api/panelSettings", () => ({ getPanelPreferences: vi.fn() }));
 type State = {
   expandedLocation: string;
   backups: api.BackupRecord[]; listConfirmed: boolean; loading: boolean; busy: boolean; notice: string; noticeError: boolean;
+  fullRestore: { result: Ref<api.BackupRecord | null>; refreshError: Ref<string> };
   listLoad: { message: Ref<string> }; chainLoad: { message: Ref<string> }; chain: api.BackupChain | null;
   chainRecord: api.BackupRecord | null; chainLoading: boolean; verification: api.BackupVerificationResult | null;
   browseEntries: api.BackupEntry[]; browseRecord: api.BackupRecord | null; browseLoading: boolean;
@@ -209,7 +210,14 @@ it("does not open a chain-delete confirmation from an obsolete deletion failure"
 it.each(["removeBackup", "removeChain", "createSelectedBackup", "restore"] as const)("keeps a list refresh failure visible after %s", async operation => {
   const state = await mount(); vi.mocked(api.getBackups).mockRejectedValueOnce(new UserFacingError("backup.list_unavailable"));
   if (operation === "createSelectedBackup") await state[operation](); else await state[operation](record());
-  expect(state.noticeError).toBe(true); expect(state.notice).toContain("backup.list_unavailable");
+  if (operation === "restore") {
+    expect(state.notice).toBe("panel.backup.restored"); expect(state.noticeError).toBe(false);
+    expect(state.fullRestore.result.value?.status).toBe("restored");
+    expect(state.fullRestore.refreshError.value).toBe("panel.backup.restoreRefreshFailed");
+    expect(state.listLoad.message.value).toBe("backup.list_unavailable");
+  } else {
+    expect(state.noticeError).toBe(true); expect(state.notice).toContain("backup.list_unavailable");
+  }
 });
 it.each(["unmount", "session"])("does not begin restore after an obsolete chain lookup on %s", async context => {
   const state = await mount(), pending = deferred<api.BackupChain>(); vi.mocked(api.getBackupChain).mockReturnValueOnce(pending.promise);
@@ -308,10 +316,10 @@ it.each(["actor", "session"])("does not reopen full restore for a changed %s aft
   gate.resolve(chain()); await restoring;
   expect(shared.confirm).not.toHaveBeenCalled(); expect(api.restoreBackup).not.toHaveBeenCalled();
 });
-it.each(["Customer", "Reseller"])("allows %s ZIP subscription items into the server-selected extraction folder", async role => {
+it.each(["Customer", "Reseller"])("does not offer %s server extraction instead of a deliverable ZIP download", async role => {
   const state = await mount(role); await state.openBrowser({ ...record(), type: "subscription" }); state.selectedItems = ["files/a.txt"];
-  expect(state.canChooseItemsTarget).toBe(false); expect(state.canRestoreItems).toBe(true);
-  await state.restoreSelectedItems(); expect(api.restoreBackupItems).toHaveBeenCalledExactlyOnceWith("first", ["files/a.txt"], "", "");
+  expect(state.canChooseItemsTarget).toBe(false); expect(state.canRestoreItems).toBe(false);
+  await state.restoreSelectedItems(); expect(api.restoreBackupItems).not.toHaveBeenCalled();
 });
 it("allows an administrator's empty extraction target and reserves selection confirmation", async () => {
   const state = await mount(); await state.openBrowser({ ...record(), type: "subscription" });
@@ -513,12 +521,11 @@ it("rechecks admin authority after confirming server mail backup", async () => {
   const state = await mount(); state.backupKind = "mail"; shared.confirm.mockImplementationOnce(async () => { useAuthStore().session!.user!.role = "Customer"; return true; });
   await state.createSelectedBackup(); expect(api.backupMail).not.toHaveBeenCalled();
 });
-it("keeps administrator database/mail/panel creation options and tenant granular restore", async () => {
+it("keeps administrator database/mail/panel creation options", async () => {
   const state = await mount(); state.activeView = "create"; const html = renderMarkup(state);
   for (const key of ["panel.backup.dbTitle", "panel.backup.mailTitle", "panel.backup.panelTitle"]) expect(html).toContain(key);
   for (const kind of ["database", "mail", "panel"]) { state.backupKind = kind; await state.createSelectedBackup(); }
   expect(api.backupDatabase).toHaveBeenCalledOnce(); expect(api.backupMail).toHaveBeenCalledOnce(); expect(api.backupPanel).toHaveBeenCalledOnce();
-  unmount(); const customer = await mount("Customer"); await customer.openBrowser(record()); customer.selectedItems = ["files/a.txt"]; await customer.restoreSelectedItems(); expect(api.restoreBackupItems).toHaveBeenCalledOnce();
 });
 it("limits chain-delete impact to its case-insensitive site source and kind", async () => {
   const state = await mount(), base = { ...record(), chainId: "shared" };

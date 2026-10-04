@@ -3,6 +3,8 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using AdaPanel.Core.Common;
+using AdaPanel.Core.Entities;
+using AdaPanel.Core.Enums;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication;
@@ -70,10 +72,14 @@ public static class CookieSessionValidator
     internal const string AcceptedIdentityParameter = "adapanel_accepted_identity";
     internal const string SourceSessionParameter = "adapanel_source_session";
     internal const string SourceActorParameter = "adapanel_source_actor";
+    internal const string DelegatingCredentialStampClaim = "adapanel_impersonator_cred";
+    internal const string DelegatingSessionIdClaim = "adapanel_impersonator_sid";
 
     // A delegation request has two different identities: the accepted target and the
     // cookie actor that requested it. Carry an immutable snapshot, never HttpContext.User.
-    internal sealed record SourceActor(Guid UserId, string Role, string CredentialStamp, string SessionId);
+    internal sealed record DelegationAuthority(Guid UserId, string UserName, string CredentialStamp, string SessionId);
+    internal sealed record SourceActor(Guid UserId, string Role, string CredentialStamp, string SessionId,
+        DelegationAuthority? Delegation = null);
 
     internal static SourceActor CaptureSourceActor(ClaimsPrincipal principal)
     {
@@ -84,7 +90,9 @@ public static class CookieSessionValidator
             identity.FindFirst(CredentialStampClaim)?.Value is not { Length: > 0 } stamp ||
             identity.FindFirst(SessionRevocationStore.SessionIdClaim)?.Value is not { Length: > 0 } sessionId)
             throw new AppException("auth.unauthorized", 401, 401);
-        return new(userId, role, stamp, sessionId);
+        if (!TryReadDelegation(identity.Claims, out var delegation))
+            throw new AppException("auth.unauthorized", 401, 401);
+        return new(userId, role, stamp, sessionId, delegation);
     }
 
     /// <summary>Son doğrulama zamanı — çerezin kendi özelliklerinde taşınır.</summary>
@@ -125,10 +133,11 @@ public static class CookieSessionValidator
             throw new AppException("auth.unauthorized", 401, 401);
         var dbContext = context.HttpContext.RequestServices.GetRequiredService<AdaPanelDbContext>();
         var sourceUserId = sourceActor?.UserId ?? userId;
+        var delegatingUserId = sourceActor?.Delegation?.UserId ?? userId;
         // Read both rows in one statement. In a return request the source is the
         // impersonated customer; the administrator is only the destination identity.
         var users = await dbContext.Users.AsNoTracking()
-            .Where(candidate => candidate.Id == userId || candidate.Id == sourceUserId).ToArrayAsync(token);
+            .Where(candidate => candidate.Id == userId || candidate.Id == sourceUserId || candidate.Id == delegatingUserId).ToArrayAsync(token);
         var user = users.FirstOrDefault(candidate => candidate.Id == userId);
         if (user is null || !user.IsActive || identity.FindFirst(ClaimTypes.Role)?.Value != user.Role.ToString() ||
             !AcceptedIdentityEvidence.Matches(user, evidence))
@@ -141,6 +150,13 @@ public static class CookieSessionValidator
                 await context.HttpContext.RequestServices.GetRequiredService<SessionRevocationStore>()
                     .IsRevokedAsync(sourceActor.SessionId, token))
                 throw new AppException("auth.unauthorized", 401, 401);
+            // Returning to an administrator or renewing a delegated factor cookie must
+            // not adopt a newer administrator credential merely because its target is valid.
+            if (sourceActor.Delegation is { } delegation &&
+                (!IsDelegatingAdministrator(users.FirstOrDefault(candidate => candidate.Id == delegation.UserId), delegation) ||
+                 await context.HttpContext.RequestServices.GetRequiredService<SessionRevocationStore>()
+                     .IsRevokedAsync(delegation.SessionId, token)))
+                throw new AppException("auth.unauthorized", 401, 401);
         }
         if (renewingSession)
         {
@@ -150,6 +166,36 @@ public static class CookieSessionValidator
                 throw new AppException("auth.unauthorized", 401, 401);
         }
         token.ThrowIfCancellationRequested();
+
+        var impersonators = identity.FindAll("impersonator_id").ToArray();
+        var impersonatorNames = identity.FindAll("impersonator_name").ToArray();
+        foreach (var claim in identity.FindAll(DelegatingCredentialStampClaim).Concat(identity.FindAll(DelegatingSessionIdClaim)).ToArray())
+            identity.RemoveClaim(claim);
+        if (impersonators.Length > 0 || impersonatorNames.Length > 0)
+        {
+            if (impersonators.Length != 1 || impersonatorNames.Length != 1 ||
+                string.IsNullOrWhiteSpace(impersonatorNames[0].Value) ||
+                !Guid.TryParse(impersonators[0].Value, out var impersonatorId) || sourceActor is null || impersonatorId == userId)
+                throw new AppException("auth.unauthorized", 401, 401);
+            DelegationAuthority acceptedDelegation;
+            if (sourceActor.Delegation is { } existingDelegation)
+            {
+                // A factor change renews the customer's cookie without discarding its
+                // administrator binding. It cannot create a different delegation.
+                if (sourceActor.UserId != userId || existingDelegation.UserId != impersonatorId ||
+                    existingDelegation.UserName != impersonatorNames[0].Value)
+                    throw new AppException("auth.unauthorized", 401, 401);
+                acceptedDelegation = existingDelegation;
+            }
+            else
+            {
+                if (sourceActor.UserId != impersonatorId || sourceActor.Role != nameof(UserRole.Administrator))
+                    throw new AppException("auth.unauthorized", 401, 401);
+                acceptedDelegation = new(impersonatorId, impersonatorNames[0].Value, sourceActor.CredentialStamp, sourceActor.SessionId);
+            }
+            identity.AddClaim(new(DelegatingCredentialStampClaim, acceptedDelegation.CredentialStamp));
+            identity.AddClaim(new(DelegatingSessionIdClaim, acceptedDelegation.SessionId));
+        }
 
         // OTURUM KİMLİĞİ HER GİRİŞTE YENİDEN ÜRETİLİR.
         //
@@ -198,6 +244,15 @@ public static class CookieSessionValidator
             return;
         }
 
+        // Source logout and legacy delegation rejection cannot wait for the SQL cache.
+        // Ordinary cookies still use their existing validation interval.
+        if (!TryReadDelegation(principal.Claims, out var delegation) ||
+            delegation is not null && await kaldirilanlar.IsRevokedAsync(delegation.SessionId, context.HttpContext.RequestAborted))
+        {
+            await ReddetAsync(context);
+            return;
+        }
+
         if (SonDogrulamaTaze(context.Properties))
         {
             return;
@@ -210,9 +265,12 @@ public static class CookieSessionValidator
         }
 
         var dbContext = context.HttpContext.RequestServices.GetRequiredService<AdaPanelDbContext>();
-        var kullanici = await dbContext.Users
+        var delegatingUserId = delegation?.UserId ?? userId;
+        var users = await dbContext.Users
             .AsNoTracking()
-            .FirstOrDefaultAsync(user => user.Id == userId, context.HttpContext.RequestAborted);
+            .Where(user => user.Id == userId || user.Id == delegatingUserId)
+            .ToArrayAsync(context.HttpContext.RequestAborted);
+        var kullanici = users.FirstOrDefault(user => user.Id == userId);
 
         // 1) Kullanıcı silinmiş ya da pasife alınmış mı.
         if (kullanici is null || !kullanici.IsActive)
@@ -240,8 +298,37 @@ public static class CookieSessionValidator
             return;
         }
 
+        if (delegation is not null && (delegation.UserId == userId ||
+            !IsDelegatingAdministrator(users.FirstOrDefault(user => user.Id == delegation.UserId), delegation)))
+        {
+            await ReddetAsync(context);
+            return;
+        }
+
         context.Properties.Items[LastValidatedKey] = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture);
         context.ShouldRenew = true; // damgalı/zaman damgalı çerez tarayıcıya geri yazılsın
+    }
+
+    private static bool IsDelegatingAdministrator(PanelUser? user, DelegationAuthority delegation) =>
+        user is { IsActive: true, Role: UserRole.Administrator } && user.Id == delegation.UserId &&
+        CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(delegation.CredentialStamp),
+            Encoding.UTF8.GetBytes(ComputeStamp(user.PasswordHash)));
+
+    private static bool TryReadDelegation(IEnumerable<Claim> claims, out DelegationAuthority? delegation)
+    {
+        delegation = null;
+        var snapshot = claims.ToArray();
+        var ids = snapshot.Where(claim => claim.Type == "impersonator_id").Take(2).ToArray();
+        var names = snapshot.Where(claim => claim.Type == "impersonator_name").Take(2).ToArray();
+        var stamps = snapshot.Where(claim => claim.Type == DelegatingCredentialStampClaim).Take(2).ToArray();
+        var sessions = snapshot.Where(claim => claim.Type == DelegatingSessionIdClaim).Take(2).ToArray();
+        if (ids.Length == 0 && names.Length == 0 && stamps.Length == 0 && sessions.Length == 0) return true;
+        if (ids.Length != 1 || names.Length != 1 || stamps.Length != 1 || sessions.Length != 1 ||
+            !Guid.TryParse(ids[0].Value, out var userId) || userId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(names[0].Value) || string.IsNullOrWhiteSpace(stamps[0].Value) ||
+            string.IsNullOrWhiteSpace(sessions[0].Value)) return false;
+        delegation = new(userId, names[0].Value, stamps[0].Value, sessions[0].Value);
+        return true;
     }
 
     private static bool SonDogrulamaTaze(AuthenticationProperties properties)

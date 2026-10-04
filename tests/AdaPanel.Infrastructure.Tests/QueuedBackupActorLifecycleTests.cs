@@ -60,13 +60,13 @@ public sealed partial class QueuedBackupActorLifecycleTests
     }
 
     public static IEnumerable<object[]> TenantRevocations() =>
-        from operation in new[] { "items", "delete", "chain" }
+        from operation in new[] { "download-items", "delete", "chain" }
         from change in new[] { "source", "section", "parent_disabled", "parent_deleted", "reparented", "detached" }
         select new object[] { operation, change };
 
     [Theory]
     [MemberData(nameof(TenantRevocations))]
-    public async Task AQueuedTenantMutationRechecksSourceParentAndSection(string operation, string change)
+    public async Task AQueuedTenantOperationRechecksSourceParentAndSection(string operation, string change)
     {
         using var f = new Fixture();
         await f.Prepare(operation);
@@ -128,7 +128,7 @@ public sealed partial class QueuedBackupActorLifecycleTests
     }
 
     [Theory]
-    [InlineData("items")]
+    [InlineData("download-items")]
     [InlineData("delete")]
     [InlineData("chain")]
     public async Task AnUnchangedSubUserKeepsItsPermittedBackupAccess(string operation)
@@ -137,7 +137,11 @@ public sealed partial class QueuedBackupActorLifecycleTests
         await f.Prepare(operation);
         await f.Invoke(f.Controller(f.Child), operation);
         if (operation is "delete" or "chain") Assert.Empty(await f.Service.GetBackupsAsync(f.Token));
-        else Assert.NotEmpty(Directory.EnumerateFiles(f.Area.Kok, "payload.txt", SearchOption.AllDirectories));
+        else
+        {
+            Assert.Equal(1, f.SelectedDownloads);
+            Assert.Empty(Directory.EnumerateFiles(f.Area.Kok, "payload.txt", SearchOption.AllDirectories));
+        }
     }
 
     [Fact]
@@ -244,6 +248,7 @@ public sealed partial class QueuedBackupActorLifecycleTests
         internal int OutboundAttempts;
         internal int ProducerBoundaryAttempts;
         internal int MailRuntimeReads;
+        internal int SelectedDownloads;
         private bool retry;
         internal CancellationToken Token => Area.Iptal;
         private string IndexPath => Area.DosyaDeposu.ResolvePath("config/backups.json");
@@ -349,6 +354,15 @@ public sealed partial class QueuedBackupActorLifecycleTests
             {
                 case "restore": await controller.RestoreAsync(new RestoreBackupRequest { BackupId = Record.Id, TargetPath = Target }, ct); break;
                 case "items": await controller.RestoreItemsAsync(new RestoreBackupItemsRequest { BackupId = Record.Id, Items = ["payload.txt"] }, ct); break;
+                case "download-items":
+                    var result = Assert.IsType<FileStreamResult>(await controller.DownloadItemsAsync(
+                        new DownloadBackupItemsRequest { BackupId = Record.Id, Items = ["payload.txt"] }, ct));
+                    await using (var stream = result.FileStream)
+                    using (var zip = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true))
+                    using (var reader = new StreamReader(Assert.Single(zip.Entries).Open()))
+                        Assert.Equal("backup payload", await reader.ReadToEndAsync(ct));
+                    SelectedDownloads++;
+                    break;
                 case "delete": await controller.DeleteAsync(Record.Id, ct); break;
                 case "chain": await controller.DeleteChainAsync(Record.Id, ct, new DeleteBackupChainRequest { ExpectedBackupIds = [Record.Id] }); break;
                 case "retry": await controller.RetryRemoteAsync(Record.Id, new RetryBackupRemoteRequest { RemoteUrl = Remote }, ct); break;

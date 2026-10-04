@@ -393,6 +393,7 @@ public sealed class AuthController(
         [FromBody] VerifyTwoFactorRequest request,
         CancellationToken cancellationToken)
     {
+        var sourceActor = CookieSessionValidator.CaptureSourceActor(User);
         var sourceSessionId = User.FindFirstValue(SessionRevocationStore.SessionIdClaim) ?? string.Empty;
         var result = await authService.ConfirmTwoFactorSetupAsync(
             User.GetRequiredUserId(),
@@ -403,7 +404,8 @@ public sealed class AuthController(
 
         var authentication = await HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         await SignInAsync(result.User, authentication.Properties?.IsPersistent ?? false,
-            sourceSessionId: sourceSessionId);
+            impersonatorId: sourceActor.Delegation?.UserId, impersonatorName: sourceActor.Delegation?.UserName,
+            sourceSessionId: sourceSessionId, sourceActor: sourceActor);
         return Ok(ApiResponse<TwoFactorConfirmDto>.Ok(result, "auth.2fa.confirmed"));
     }
 
@@ -445,6 +447,7 @@ public sealed class AuthController(
         [FromBody] DisableTwoFactorRequest request,
         CancellationToken cancellationToken)
     {
+        var sourceActor = CookieSessionValidator.CaptureSourceActor(User);
         var sourceSessionId = User.FindFirstValue(SessionRevocationStore.SessionIdClaim) ?? string.Empty;
         var user = await authService.DisableTwoFactorAsync(
             User.GetRequiredUserId(),
@@ -455,7 +458,8 @@ public sealed class AuthController(
 
         var authentication = await HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         await SignInAsync(user, authentication.Properties?.IsPersistent ?? false,
-            sourceSessionId: sourceSessionId);
+            impersonatorId: sourceActor.Delegation?.UserId, impersonatorName: sourceActor.Delegation?.UserName,
+            sourceSessionId: sourceSessionId, sourceActor: sourceActor);
         return Ok(ApiResponse<CurrentUserDto>.Ok(user, "auth.2fa.disabled"));
     }
 

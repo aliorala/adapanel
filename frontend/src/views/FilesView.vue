@@ -26,6 +26,8 @@
         @click="clearNotice">×</button>
     </p>
 
+    <BackupRestoreResult v-if="fullRestore.result.value" :result="fullRestore.result.value" :refresh-error="fullRestore.refreshError.value" />
+
     <div class="module-toolbar">
       <div class="segmented-tabs" role="tablist">
         <button role="tab" :aria-selected="activeTab === 'files'" :class="{ active: activeTab === 'files' }" @click="activeTab = 'files'">
@@ -496,6 +498,8 @@ import {
   type FileWorkspace
 } from "../api/files";
 import { useBackupRestore, restoreResult } from "../composables/useBackupRestore";
+import BackupRestoreResult from "../components/BackupRestoreResult.vue";
+import { UserFacingError } from "../utils/apiError";
 import { useNavigationGuard, allowNavigation } from "../composables/navigationGuard";
 import { useAuthStore } from "../stores/auth";
 import router from "../router";
@@ -515,7 +519,6 @@ const props = defineProps<{ embedded?: boolean }>();
 const { t } = useI18n();
 const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
-const fullRestore = useBackupRestore();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
 // `locked`/`lockReason` yükleme için ayrıca gerekiyor: yükleme bir <label> içindeki dosya
@@ -524,6 +527,7 @@ const { writeGate, locked, lockReason } = useSubscriptionGate();
 const { prompt } = usePrompt();
 const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
+const fullRestore = useBackupRestore(() => sitesStore.selectedSiteName);
 
 const activeTab = ref<"files" | "backups">("files");
 const workspace = ref<FileWorkspace | null>(null);
@@ -1407,6 +1411,8 @@ async function refreshBackups() {
   try {
     backups.value = await getBackups();
     backupsLoaded.value = true;
+    fullRestore.clearRefreshError();
+    return true;
   } catch (error) {
     // Yedek listesi okunamadıysa ESKİ liste bırakılmaz: bayat bir listeyi güncel sanmak,
     // olmayan bir yedeğe güvenmek demektir. Boşaltılan liste "yedek yok" DEĞİLDİR: bayrak da
@@ -1414,6 +1420,7 @@ async function refreshBackups() {
     backups.value = [];
     backupsLoaded.value = false;
     showNotice(resolveApiMessage(error), true);
+    return false;
   }
 }
 
@@ -1440,8 +1447,8 @@ async function createDatabaseBackup() {
 async function restore(record: BackupRecord) {
   await fullRestore.restore(record, (result) => {
     const report = restoreResult(result, t);
-    showNotice(report.message, report.failed);
-  }, (error) => showNotice(error instanceof Error && !('isAxiosError' in error) ? error.message : resolveApiMessage(error), true), refreshBackups);
+    showNotice(t(report.failed ? "panel.backup.restoredWithErrors" : "panel.backup.restored"), report.failed);
+  }, (error) => showNotice(error instanceof Error && !(error instanceof UserFacingError) && !('isAxiosError' in error) ? error.message : resolveApiMessage(error), true), refreshBackups);
 }
 
 </script>

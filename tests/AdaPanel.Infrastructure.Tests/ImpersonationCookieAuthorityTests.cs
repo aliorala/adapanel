@@ -235,6 +235,8 @@ public sealed class ImpersonationCookieAuthorityTests
             {
                 claims.Add(new("impersonator_id", admin.Id.ToString()));
                 claims.Add(new("impersonator_name", admin.UserName));
+                claims.Add(new(CookieSessionValidator.DelegatingCredentialStampClaim, CookieSessionValidator.ComputeStamp(admin.PasswordHash)));
+                claims.Add(new(CookieSessionValidator.DelegatingSessionIdClaim, SessionRevocationStore.NewSessionId()));
             }
             fixture.Controller.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
             return fixture;

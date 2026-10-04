@@ -210,12 +210,13 @@ apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) =>
 
   const method = (config.method ?? "get").toUpperCase();
   if (MUTATING_METHODS.includes(method)) {
-    if (isReadOnlyMode() && !isAuthPath(config.url)) {
+    const readOnlyAllowed = isAuthPath(config.url) || (method === "POST" && config.url === "/backup/download-items");
+    if (isReadOnlyMode() && !readOnlyAllowed) {
       throw readOnlyRejection(config);
     }
 
     const token = await waitForCsrf(fetchCsrfToken(), config.signal);
-    if (isReadOnlyMode() && !isAuthPath(config.url)) throw readOnlyRejection(config);
+    if (isReadOnlyMode() && !readOnlyAllowed) throw readOnlyRejection(config);
     headers["X-CSRF-TOKEN"] = token;
   }
 

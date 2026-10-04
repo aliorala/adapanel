@@ -1,5 +1,6 @@
 import { apiClient } from "./client";
 import { UserFacingError } from "../utils/apiError";
+import { isAxiosError } from "axios";
 // Çalışan-iş sözleşmesi TEK YERDE tanımlı (composables/useRunningTask.ts): dört modül aynı
 // gövdeyi döndürüyor ve tipi her sarmalayıcıda yeniden yazmak, bir alan eklendiğinde üçünün
 // bayatlaması demekti.
@@ -283,9 +284,28 @@ export async function backupSubscription(
 }
 
 /** Yedeğin zinciri: TAM yedekten bu yedeğe kadar halkalar + kopuk mu. */
-export async function getBackupChain(backupId: string) {
+export async function getBackupChain(backupId: string, expectedChainId?: string) {
   const response = await apiClient.get<ApiEnvelope<BackupChain>>(`/backup/${encodeURIComponent(backupId)}/chain`);
-  return response.data.data;
+  const chain = response.data?.data;
+  if (response.data?.success !== true || !chain || typeof chain.chainId !== "string" || typeof chain.broken !== "boolean" ||
+    (expectedChainId !== undefined && chain.chainId.toLowerCase() !== expectedChainId.toLowerCase()) ||
+    !Array.isArray(chain.missingLinks) || chain.missingLinks.some(name => typeof name !== "string" || !name.trim()) ||
+    !Array.isArray(chain.links) || chain.links.some(link => !link || typeof link.backupId !== "string" || !link.backupId.trim() ||
+      typeof link.name !== "string" || !link.name.trim() || !Number.isSafeInteger(link.chainIndex) ||
+      typeof link.backupMode !== "string" || typeof link.available !== "boolean" ||
+      typeof link.createdAtUtc !== "string" || !Number.isFinite(Date.parse(link.createdAtUtc)) ||
+      typeof link.size !== "number" || !Number.isFinite(link.size) || link.size < 0)) {
+    throw new UserFacingError("panel.backup.resultUnconfirmed");
+  }
+  // Broken graphs can contain duplicate or disconnected nodes: retain the server's
+  // diagnostics. A claimed healthy path must actually terminate at the chosen archive.
+  if (!chain.broken && (chain.links.length === 0 || chain.missingLinks.length !== 0 ||
+    chain.links[chain.links.length - 1]?.backupId !== backupId ||
+    new Set(chain.links.map(link => link.backupId)).size !== chain.links.length ||
+    chain.links.some((link, index) => !link.available || link.chainIndex !== index || link.backupMode !== (index === 0 ? "full" : "incremental")))) {
+    throw new UserFacingError("panel.backup.resultUnconfirmed");
+  }
+  return chain;
 }
 
 /**
@@ -306,8 +326,12 @@ export async function downloadBackup(backupId: string, fileName: string, isCurre
     responseType: "blob"
   });
   // Saving the file is the side effect: the caller must still own this response.
+  saveDownloadedBlob(response.data as Blob, fileName, isCurrent);
+}
+
+function saveDownloadedBlob(blob: Blob, fileName: string, isCurrent: () => boolean) {
   if (!isCurrent()) return;
-  const url = window.URL.createObjectURL(response.data as Blob);
+  const url = window.URL.createObjectURL(blob);
   const link = document.createElement("a");
   try {
     link.href = url;
@@ -318,6 +342,38 @@ export async function downloadBackup(backupId: string, fileName: string, isCurre
     link.remove();
     window.URL.revokeObjectURL(url);
   }
+}
+
+async function selectionDownloadError(data: unknown) {
+  if (!(data instanceof Blob) || !data.type.toLowerCase().includes("json")) return;
+  const payload = await data.text().then(text => JSON.parse(text)).catch(() => null) as { success?: unknown; message?: unknown } | null;
+  if (payload?.success === false && typeof payload.message === "string" && payload.message.trim()) throw new UserFacingError(payload.message);
+}
+
+export async function downloadBackupItems(backupId: string, items: readonly string[], encryptionPassword: string, isCurrent: () => boolean) {
+  if (!isCurrent()) return;
+  let response;
+  try {
+    response = await apiClient.post("/backup/download-items", { backupId, items: [...items], encryptionPassword }, { responseType: "blob" });
+  } catch (error) {
+    if (!isCurrent()) return;
+    if (isAxiosError(error)) await selectionDownloadError(error.response?.data);
+    throw error;
+  }
+  if (!isCurrent()) return;
+  const blob: unknown = response.data;
+  await selectionDownloadError(blob);
+  const disposition = String(response.headers["content-disposition"] ?? "");
+  let fileName = "";
+  try {
+    const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    fileName = encoded ? decodeURIComponent(encoded.trim()) : disposition.match(/filename=(?:"([^"]+)"|([^;]+))/i)?.slice(1).find(Boolean)?.trim() ?? "";
+  } catch { /* Invalid filename metadata cannot identify a downloadable archive. */ }
+  if (!(blob instanceof Blob) || String(response.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase() !== "application/zip" ||
+    !fileName.toLowerCase().endsWith(".zip") || /[\\/\x00-\x1f\x7f]/.test(fileName)) throw new UserFacingError("panel.backup.selectedDownloadUnconfirmed");
+  const signature = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+  if (signature[0] !== 80 || signature[1] !== 75 || !((signature[2] === 3 && signature[3] === 4) || (signature[2] === 5 && signature[3] === 6))) throw new UserFacingError("panel.backup.selectedDownloadUnconfirmed");
+  saveDownloadedBlob(blob, fileName, isCurrent);
 }
 
 // Yedeği siler (yerel dosya + kayıt; off-site uzak kopya hedef depoda kalır).
@@ -506,6 +562,9 @@ export async function restoreBackup(backupId: string, targetPath: string, encryp
 
   const record = response.data?.data;
   if (response.data?.success !== true || !record || record.id !== backupId ||
+    typeof record.name !== "string" || !record.name.trim() || typeof record.source !== "string" ||
+    typeof record.createdAtUtc !== "string" || !Number.isFinite(Date.parse(record.createdAtUtc)) ||
+    typeof record.size !== "number" || !Number.isFinite(record.size) || record.size < 0 ||
     !["restored", "restored_with_errors"].includes(record.status) ||
     !Array.isArray(record.warnings) || record.warnings.some(warning => !warning ||
       typeof warning.messageKey !== "string" || !warning.messageKey.trim() || typeof warning.target !== "string" || typeof warning.detail !== "string") ||

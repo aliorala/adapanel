@@ -326,7 +326,9 @@ public sealed class CookieIssuanceAuthorityTests
                     new Claim(ClaimTypes.Role, customer.Role.ToString()),
                     new Claim(CookieSessionValidator.CredentialStampClaim, CookieSessionValidator.ComputeStamp(customer.PasswordHash)),
                     new Claim(SessionRevocationStore.SessionIdClaim, fixture.OriginalSessionId),
-                    new Claim("impersonator_id", user.Id.ToString()), new Claim("impersonator_name", user.UserName)
+                    new Claim("impersonator_id", user.Id.ToString()), new Claim("impersonator_name", user.UserName),
+                    new Claim(CookieSessionValidator.DelegatingCredentialStampClaim, CookieSessionValidator.ComputeStamp(user.PasswordHash)),
+                    new Claim(CookieSessionValidator.DelegatingSessionIdClaim, SessionRevocationStore.NewSessionId())
                 ], CookieAuthenticationDefaults.AuthenticationScheme));
             if (operation == "sso")
             {
