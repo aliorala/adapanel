@@ -152,6 +152,96 @@ public sealed class FtpHomeBoundaryTests
         Assert.Empty(await f.Db.AuditLogs.ToListAsync());
     }
 
+    [Fact]
+    public async Task APlannedDescendantReplacedAfterTheRootGrantIsNeverPassedToAcl()
+    {
+        await using var f = await Fixture.Create(existing: true);
+        var child = Path.Combine(f.Home, "ordinary");
+        Directory.CreateDirectory(child);
+        await File.WriteAllTextAsync(Path.Combine(child, "inside.txt"), "fixture", f.Token);
+        var before = await f.StateBytes();
+        var command = f.Service.NativeCommand!;
+        var changed = false;
+        f.Service.NativeCommand = async (file, arguments, token) =>
+        {
+            var result = await command(file, arguments, token);
+            if (file == "icacls.exe" && arguments.Contains(" /grant ", StringComparison.Ordinal) && !changed)
+            {
+                changed = true;
+                await f.ReplaceDescendantWithOutsideJunction(child);
+            }
+            return result;
+        };
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Run());
+        Assert.Equal(403, error.HttpStatusCode);
+        Assert.Single(f.Effects, effect => effect == "grant");
+        Assert.Empty(f.OutsideEffects);
+        Assert.Equal(before, await f.StateBytes());
+        Assert.Empty(await f.Db.AuditLogs.ToListAsync());
+    }
+
+    [Fact]
+    public async Task CancellationAfterOneGrantStopsFurtherGrantsButPreservesIndependentRecovery()
+    {
+        await using var f = await Fixture.Create(existing: true);
+        await File.WriteAllTextAsync(Path.Combine(f.Home, "next.txt"), "fixture", f.Token);
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(f.Token);
+        var before = await f.StateBytes();
+        var command = f.Service.NativeCommand!;
+        f.Service.NativeCommand = async (file, arguments, token) =>
+        {
+            var result = await command(file, arguments, token);
+            if (file == "icacls.exe" && arguments.Contains(" /grant ", StringComparison.Ordinal)) caller.Cancel();
+            return result;
+        };
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => f.Run(caller.Token));
+        Assert.Single(f.Effects, effect => effect == "grant");
+        Assert.Contains("remove-grant", f.Effects);
+        Assert.True(f.AccountExists);
+        Assert.Equal(before, await f.StateBytes());
+        Assert.Empty(await f.Db.AuditLogs.ToListAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnOversizedPlanDoesNotApplyOrRemoveUntouchedPermissions(bool existing)
+    {
+        await using var f = await Fixture.Create(existing: existing);
+        await File.WriteAllTextAsync(Path.Combine(f.Home, "first.txt"), "fixture", f.Token);
+        await File.WriteAllTextAsync(Path.Combine(f.Home, "second.txt"), "fixture", f.Token);
+        f.Service.HomeAclEntryLimit = 1;
+        var before = await f.StateBytes();
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Run());
+        Assert.Equal("ftp.acl_failed", error.MessageKey);
+        Assert.DoesNotContain(f.Effects, effect => effect is "grant" or "remove-grant");
+        if (existing) Assert.DoesNotContain("remove-home", f.Effects);
+        else Assert.Contains("delete", f.Effects);
+        Assert.Equal(existing, f.AccountExists);
+        Assert.Equal(before, await f.StateBytes());
+        Assert.Empty(await f.Db.AuditLogs.ToListAsync());
+    }
+
+    [Fact]
+    public async Task PermissionAndRecoveryDeadlinesDoNotLeaveTheNewAccountBehind()
+    {
+        await using var f = await Fixture.Create();
+        f.Service.HomeAclExecutionTimeout = TimeSpan.FromMilliseconds(30);
+        var command = f.Service.NativeCommand!;
+        f.Service.NativeCommand = async (file, arguments, token) =>
+        {
+            if (file == "icacls.exe") await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            return await command(file, arguments, token);
+        };
+        var before = await f.StateBytes();
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Run().WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal("ftp.acl_failed", error.MessageKey);
+        Assert.False(f.AccountExists);
+        Assert.Contains("delete", f.Effects);
+        Assert.Equal(before, await f.StateBytes());
+        Assert.Empty(await f.Db.AuditLogs.ToListAsync());
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly string root = Path.Combine(Path.GetTempPath(), "adapanel-ftp-home-boundary-" + Guid.NewGuid().ToString("N"));
@@ -300,6 +390,16 @@ public sealed class FtpHomeBoundaryTests
             Assert.Equal((FileAttributes)0, File.GetAttributes(Link) & FileAttributes.ReparsePoint);
             Directory.Delete(Link, recursive: true);
             await CreateOwnedJunction(Link, Outside);
+        }
+        internal async Task ReplaceDescendantWithOutsideJunction(string path)
+        {
+            ValidateOwnedRoot();
+            Assert.True(PathContainment.IsInsideRoot(Home, path));
+            Assert.Equal((FileAttributes)0, File.GetAttributes(path) & FileAttributes.ReparsePoint);
+            foreach (var entry in new DirectoryInfo(path).EnumerateFileSystemInfos())
+                Assert.Equal((FileAttributes)0, entry.Attributes & FileAttributes.ReparsePoint);
+            Directory.Delete(path, recursive: true);
+            await CreateOwnedJunction(path, Outside);
         }
         internal async Task CreateOwnedJunction(string link, string target)
         {

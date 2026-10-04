@@ -142,8 +142,20 @@
         <p v-if="archiveOperation.error" class="meta">{{ t('panel.files.archiveFailedHint') }}</p>
         <p v-else-if="archiveOperation.status === 'running'" class="meta">{{ t('panel.files.archivePendingHint') }}</p>
         <p v-if="archiveOperation.refreshError" class="meta">{{ t('panel.files.archiveRefreshFailed') }}</p>
+        <div v-if="archiveOperation.status === 'succeeded' && archiveOperation.kind === 'compress'" class="archive-output">
+          <div v-if="archiveOperation.output" class="archive-output-details">
+            <span class="meta">{{ t('panel.files.archiveOutput') }}</span>
+            <strong>{{ archiveOperation.output.name }}</strong>
+            <span class="meta">{{ boyutMetni(archiveOperation.output.size) }}</span>
+          </div>
+          <p v-else class="meta">{{ t('panel.files.archiveOutputUnavailable') }}</p>
+          <a v-if="archiveDownloadUrl" class="secondary compact action-link" :href="archiveDownloadUrl">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4" /></svg>
+            {{ t('panel.files.archiveDownload') }}
+          </a>
+        </div>
         <div v-if="archiveOperation.status === 'failed' || archiveOperation.status === 'succeeded'" class="archive-actions">
-          <button v-if="archiveOperation.status === 'failed'" type="button" class="secondary compact" :disabled="fileMutationBusy || loading" @click="refreshArchiveListing">{{ t('panel.files.archiveRefresh') }}</button>
+          <button v-if="archiveOperation.status === 'failed' || (archiveOperation.kind === 'compress' && !archiveDownloadUrl)" type="button" class="secondary compact" :disabled="fileMutationBusy || loading" @click="refreshArchiveListing">{{ t('panel.files.archiveRefresh') }}</button>
           <button type="button" class="link-button" @click="dismissArchiveOperation">{{ t('panel.files.archiveClose') }}</button>
         </div>
       </section>
@@ -628,10 +640,24 @@ type ArchiveOperation = {
   status: "confirming" | "running" | "refreshing" | "succeeded" | "failed";
   error: string;
   refreshError: string;
+  output: { path: string; name: string; size: number } | null;
 };
 const archiveState = ref<ArchiveOperation | null>(null);
 let archiveContext: (() => boolean) | null = null;
 const archiveOperation = computed(() => archiveState.value && archiveContext?.() ? archiveState.value : null);
+const archiveDownloadUrl = computed(() => {
+  const operation = archiveOperation.value;
+  if (!operation?.output || operation.status !== "succeeded" || fileMutationBusy.value || loading.value || workspaceLoad.message.value) return null;
+  return getDownloadUrl(operation.output.path);
+});
+function filePathKey(path: string) {
+  return path.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").toLowerCase();
+}
+function archiveOutput(workspace: FileWorkspace, source: string) {
+  const expected = filePathKey(`${source.replace(/[\\/]+$/, "")}.zip`);
+  const entry = workspace.entries.find(item => !item.isDirectory && filePathKey(item.path) === expected);
+  return entry ? { path: entry.path, name: entry.name, size: entry.size } : null;
+}
 watch(() => [authStore.session, authStore.session?.user?.id, authStore.session?.user?.role], () => {
   if (!isFileViewActive()) archiveState.value = null;
 }, { flush: "sync" });
@@ -920,7 +946,11 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
     fileContent.value = result.content || "";
     savedContent.value = fileContent.value;
     workspaceLoad.clear();
-    if (archiveOperation.value) archiveOperation.value.refreshError = "";
+    if (archiveOperation.value) {
+      const operation = archiveOperation.value;
+      operation.refreshError = "";
+      if (operation.kind === "compress" && !operation.error) operation.output = archiveOutput(result, operation.sourcePath);
+    }
     // Artık listede olmayan yollar seçili kalmasın (silme/klasör değişimi sonrası).
     selection.keepOnly(workspace.value.entries.map((entry) => entry.path));
     return true;
@@ -1012,6 +1042,7 @@ async function uploadMany(files: File[], folders: string[]) {
     for (const file of files) {
       if (!isCurrent() || locked.value) return;
       try {
+        dismissArchiveOperation();
         await uploadFile(hedef, file);
         if (!isCurrent()) return;
         uploadDone.value += 1;
@@ -1252,23 +1283,31 @@ async function runArchive(path: string, extracting: boolean) {
   if (!isFileViewActive() || fileMutationBusy.value || locked.value || loading.value || workspaceLoad.message.value || !workspace.value?.isDirectory) return;
   const isCurrent = currentFileContext(false);
   const destination = workspace.value.path;
+  const previous = archiveOperation.value, previousContext = archiveContext;
+  const outputPath = `${path.replace(/[\\/]+$/, "")}.zip`;
+  const collision = !extracting && workspace.value.entries.some(entry => filePathKey(entry.path) === filePathKey(outputPath));
   archiveBusy.value = true;
   archiveContext = isCurrent;
   archiveState.value = { kind: extracting ? "extract" : "compress", sourcePath: path, destinationPath: destination,
-    status: extracting ? "confirming" : "running", error: "", refreshError: "" };
+    status: extracting || collision ? "confirming" : "running", error: "", refreshError: "", output: null };
   try {
-    if (extracting) {
+    if (extracting || collision) {
       const name = path.replace(/\\/g, "/").split("/").pop()!;
       const approved = await confirm({
-        title: t("panel.files.extractConfirmTitle"),
-        message: t("panel.files.extractConfirmMessage", { name, path: destination }),
-        impact: [path, destination], tone: "danger", confirmLabel: t("panel.files.extractConfirmAction")
+        title: t(extracting ? "panel.files.extractConfirmTitle" : "panel.files.compressOverwriteTitle"),
+        message: t(extracting ? "panel.files.extractConfirmMessage" : "panel.files.compressOverwriteMessage", { name, path: extracting ? destination : outputPath }),
+        impact: [path, extracting ? destination : outputPath], tone: "danger",
+        confirmLabel: t(extracting ? "panel.files.extractConfirmAction" : "panel.files.compressOverwriteAction")
       });
-      if (!approved || !isCurrent() || locked.value) { archiveState.value = null; return; }
+      if (!approved || !isCurrent() || locked.value) {
+        archiveState.value = previousContext?.() ? previous : null;
+        archiveContext = previousContext;
+        return;
+      }
     }
     archiveState.value!.status = "running";
     clearNotice();
-    const result = await (extracting ? extractPath(path) : compressPath(path));
+    const result = await (extracting ? extractPath(path) : compressPath(path, "", collision));
     if (!isCurrent()) return;
     // The mutation response owns this newer workspace; older list reads cannot
     // put the pre-operation directory back after publication.
@@ -1284,6 +1323,7 @@ async function runArchive(path: string, extracting: boolean) {
     fileContent.value = result.content;
     savedContent.value = result.content;
     selection.keepOnly(result.entries.map(entry => entry.path));
+    archiveState.value!.output = extracting ? null : archiveOutput(result, path);
     archiveState.value!.status = "succeeded";
     showNotice(t(extracting ? "panel.files.extracted" : "panel.files.compressed"), false);
   } catch (error) {
@@ -1325,6 +1365,7 @@ async function savePermissions() {
   const path = workspace.value.path, principal = permissionPrincipal.value, rights = permissionRights.value;
   permissionsBusy.value = true;
   try {
+    dismissArchiveOperation();
     const result = await updatePermissions(path, principal, rights);
     if (!isCurrent()) return;
     if (result.permissionsVerified === true) showNotice(t("panel.files.permissionsSaved"), false);
@@ -1356,6 +1397,7 @@ async function createFolder() {
     });
     if (!folderName?.trim() || !isCurrent() || locked.value || workspaceLoad.message.value) return;
     const basePath = `${parentPath}/${folderName.trim()}`;
+    dismissArchiveOperation();
     await createDirectory(basePath);
     if (!isCurrent()) return;
     const refreshed = await refreshAfterFileOperation(parentPath, isCurrent);
@@ -1400,6 +1442,7 @@ async function createNewFile() {
     }
 
     const basePath = `${parentPath}/${name}`;
+    dismissArchiveOperation();
     await createFile(basePath);
     if (!isCurrent()) return;
     // Dosya oluşturulup DÜZENLEYİCİDE açılır: "oluştur" sonrası kullanıcı ayrıca aramak
@@ -1434,6 +1477,7 @@ async function renamePath(entry: FileEntry) {
       defaultValue: entry.name
     });
     if (!newName || newName.trim() === entry.name || !isCurrent() || locked.value) return;
+    dismissArchiveOperation();
     const result = await renameEntry(entry.path, newName.trim(), false);
     if (!isCurrent()) return;
     const refreshed = await refreshAfterFileOperation(sourceFolder, isVisible);
@@ -1499,6 +1543,7 @@ async function runTransfer() {
     const warnings: { name: string; reason: string }[] = [];
     let done = 0;
 
+    dismissArchiveOperation();
     if (mode === "move") {
       const result = await moveEntries(paths, destination, overwrite);
       if (!isCurrent()) return;
@@ -1602,6 +1647,7 @@ async function removePath(entry: FileEntry) {
       action: async () => {
         if (!isCurrent() || locked.value) return;
         try {
+          dismissArchiveOperation();
           await deletePath(entry.path);
           if (!isCurrent()) return;
           const refreshed = await refreshAfterFileOperation(sourceFolder, isCurrent);
@@ -1652,6 +1698,7 @@ async function removeSelected() {
     });
     if (!onay || !isCurrent() || locked.value) return;
 
+    dismissArchiveOperation();
     const outcome = await bulk.runBulk(targets, (entry) => entry.path, (entry) => deletePath(entry.path), () => isCurrent() && !locked.value);
     if (!isCurrent()) return;
     const refreshed = await refreshAfterFileOperation(sourceFolder, isCurrent);
@@ -1669,6 +1716,7 @@ async function saveCurrentFile(): Promise<boolean> {
   const isCurrent = currentFileContext(false);
   saving.value = true;
   try {
+    dismissArchiveOperation();
     await saveFile(path, content);
     if (!isCurrent()) return false;
     savedContent.value = content;
@@ -1761,6 +1809,11 @@ async function restore(record: BackupRecord) {
 .archive-state p { margin: 0; line-height: 1.6; overflow-wrap: anywhere; }
 .archive-error { color: var(--text-strong); font-size: var(--fs-sm); }
 .archive-actions { display: flex; align-items: center; gap: var(--sp-8); flex-wrap: wrap; }
+.archive-output { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-16); flex-wrap: wrap; min-width: 0; padding: var(--sp-12); background: var(--surface-1); border: 1px solid var(--panel-border); border-radius: var(--radius-sm); }
+.archive-output-details { display: grid; gap: var(--sp-4); min-width: 0; flex: 1 1 180px; }
+.archive-output-details strong { font-size: var(--fs-sm); color: var(--text-strong); overflow-wrap: anywhere; }
+.archive-output .action-link { display: inline-flex; align-items: center; gap: var(--sp-8); max-width: 100%; white-space: normal; }
+.archive-output svg { width: 18px; height: 18px; flex: 0 0 18px; }
 @container file-workspace (max-width: 480px) {
   .archive-scope { grid-template-columns: minmax(0, 1fr); }
   .archive-actions button { max-width: 100%; white-space: normal; }

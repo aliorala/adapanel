@@ -140,6 +140,12 @@ public interface IFileService
         Func<SiteDto, CancellationToken, Task> beforePublication, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Authorized file publication is not implemented.");
 
+    /// <summary>Checks the completed archive's net disk growth before publication.</summary>
+    Task<FileWorkspaceDto> CompressAsync(ArchiveFileRequest request,
+        Func<SiteDto, CancellationToken, Task> beforePublication,
+        Func<long, CancellationToken, Task> beforeCompress, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Measured archive compression is not implemented.");
+
     Task<FileWorkspaceDto> ExtractAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default);
 
     Task<FileWorkspaceDto> ExtractAsync(ArchiveFileRequest request,

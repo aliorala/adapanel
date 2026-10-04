@@ -5591,5 +5591,11 @@
   "panel.files.archiveDestination": "Hedef klasör",
   "panel.files.archiveClose": "İşlem sonucunu kapat",
   "panel.files.archiveRefresh": "Klasör listesini yenile",
-  "panel.files.archivePendingHint": "İşlem sürüyor. Tamamlanana kadar başka dosya değişikliği başlatılamaz."
+  "panel.files.archivePendingHint": "İşlem sürüyor. Tamamlanana kadar başka dosya değişikliği başlatılamaz.",
+  "panel.files.archiveOutput": "Oluşturulan ZIP",
+  "panel.files.archiveOutputUnavailable": "Oluşturulan arşiv bu klasörün güncel listesinde doğrulanamadı. Klasör listesini yeniden yükleyin.",
+  "panel.files.archiveDownload": "ZIP'i indir",
+  "panel.files.compressOverwriteTitle": "Mevcut ZIP değiştirilsin mi?",
+  "panel.files.compressOverwriteMessage": "“{name}” için şu arşiv zaten var: {path}. Devam ederseniz mevcut ZIP'in içeriği yeni arşivle değiştirilir.",
+  "panel.files.compressOverwriteAction": "ZIP'in üzerine yaz"
 }

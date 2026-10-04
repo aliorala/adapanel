@@ -186,8 +186,8 @@ export function getDownloadUrl(path: string) {
   return `/api/v1/files/download?path=${encodeURIComponent(path)}`;
 }
 
-export async function compressPath(path: string, destinationPath = "") {
-  const response = await apiClient.post<ApiEnvelope<FileWorkspace>>("/files/compress", { path, destinationPath });
+export async function compressPath(path: string, destinationPath = "", overwrite = false) {
+  const response = await apiClient.post<ApiEnvelope<FileWorkspace>>("/files/compress", { path, destinationPath, overwrite });
   const destination = destinationPath.trim() || `${path.replace(/[\\/]+$/, "")}.zip`;
   const result = measuredReadableWorkspace(response.data, parentPathOf(destination));
   if (!result.isDirectory || !result.entries.some(entry => !entry.isDirectory && filePathIdentity(entry.path) === filePathIdentity(destination))) {

@@ -311,20 +311,25 @@ public sealed class FilesController(
     [HttpPost("compress")]
     public async Task<ActionResult<ApiResponse<FileWorkspaceDto>>> CompressAsync([FromBody] ArchiveFileRequest request, CancellationToken cancellationToken)
     {
-        request = new ArchiveFileRequest { Path = request.Path, DestinationPath = request.DestinationPath };
+        request = new ArchiveFileRequest { Path = request.Path, DestinationPath = request.DestinationPath, Overwrite = request.Overwrite };
         using var publication = await CapturePublicationAsync(string.IsNullOrWhiteSpace(request.DestinationPath)
             ? [request.Path] : [request.Path, request.DestinationPath], cancellationToken);
 
         // EŞZAMANLILIK TAVANI KAPSAM DENETİMİNDEN SONRA: yer ayırmadan önce isteğin meşru olduğu
         // bilinmeli, yoksa kapsam dışı bir istek de kiracının bütçesini tüketirdi.
-        using var kapsam = await AgirIseGirisAsync(cancellationToken);
-        var workspace = await fileService.CompressAsync(request, publication.ApproveAsync, cancellationToken);
+        using var kapsam = await AgirIseGirisAsync(cancellationToken, publication.Principal);
+        var workspace = await fileService.CompressAsync(request, publication.ApproveAsync,
+            (bytes, token) => EnsureDiskQuotaAsync(
+                string.IsNullOrWhiteSpace(request.DestinationPath) ? request.Path : request.DestinationPath,
+                _ => Task.FromResult((bytes, string.Empty)), token, publication.Principal), cancellationToken);
+        await publication.RevalidateAsync(cancellationToken);
         await WriteAuditAsync(
             "files.compressed",
             request.Path,
             $"Archived to '{(string.IsNullOrWhiteSpace(request.DestinationPath) ? "(default)" : request.DestinationPath)}'.",
             cancellationToken);
-        return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace, "files.compressed"));
+        await publication.RevalidateAsync(cancellationToken);
+        return Ok(ApiResponse<FileWorkspaceDto>.Ok(ProjectWorkspace(workspace, publication.Principal), "files.compressed"));
     }
 
     [HttpPost("extract")]

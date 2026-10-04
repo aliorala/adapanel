@@ -69,7 +69,7 @@ public sealed class FileCompressionLifecycleTests
             error = await Record.ExceptionAsync(() => fixture.Service.CompressAsync(new ArchiveFileRequest
             {
                 Path = "sites/a.test/" + (directory ? "source" : source),
-                DestinationPath = "sites/a.test/result.zip"
+                DestinationPath = "sites/a.test/result.zip", Overwrite = true
             }));
         Assert.True(error is IOException or UnauthorizedAccessException, error?.ToString() ?? "Unexpected success");
         fixture.AssertPreserved(destination, before);
@@ -94,7 +94,7 @@ public sealed class FileCompressionLifecycleTests
         var error = await Record.ExceptionAsync(() => fixture.Service.CompressAsync(new ArchiveFileRequest
         {
             Path = "sites/a.test/" + (directory ? "source" : "source.txt"),
-            DestinationPath = "sites/a.test/result.zip"
+            DestinationPath = "sites/a.test/result.zip", Overwrite = true
         }, cancellation.Token));
         fixture.AssertPreserved(fixture.PathFor("result.zip"), before);
         Assert.Equal(filesBefore, fixture.RelativeFiles());
@@ -116,7 +116,7 @@ public sealed class FileCompressionLifecycleTests
         var before = existing ? fixture.OldArchive("result.zip") : null;
         var error = await Record.ExceptionAsync(() => fixture.Service.CompressAsync(new ArchiveFileRequest
         {
-            Path = "sites/a.test/source", DestinationPath = "sites/a.test/result.zip"
+            Path = "sites/a.test/source", DestinationPath = "sites/a.test/result.zip", Overwrite = true
         }));
         fixture.AssertPreserved(destination, before);
         Assert.Equal("files.path_outside_root", Assert.IsType<AppException>(error).MessageKey);
@@ -141,7 +141,7 @@ public sealed class FileCompressionLifecycleTests
         var workspace = await fixture.Service.CompressAsync(new ArchiveFileRequest
         {
             Path = "sites/a.test/" + (directory ? "source" : "source.bin"),
-            DestinationPath = "sites/a.test/result.zip"
+            DestinationPath = "sites/a.test/result.zip", Overwrite = true
         });
         Assert.Equal("sites/a.test", workspace.Path);
         Assert.Equal(bytes, await File.ReadAllBytesAsync(source));
@@ -206,7 +206,7 @@ public sealed class FileCompressionLifecycleTests
         });
         fixture.Service.OpenCompressionFile = path => { Assert.Equal(source, path); return input; };
         var error = await Record.ExceptionAsync(() => fixture.Service.CompressAsync(new ArchiveFileRequest
-        { Path = "sites/a.test/source.txt", DestinationPath = "sites/a.test/result.zip" }, cancellation.Token));
+        { Path = "sites/a.test/source.txt", DestinationPath = "sites/a.test/result.zip", Overwrite = true }, cancellation.Token));
         if (failure == "io") Assert.IsType<IOException>(error);
         else Assert.IsAssignableFrom<OperationCanceledException>(error);
         Assert.True(input.WasRead);

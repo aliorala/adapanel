@@ -20,8 +20,8 @@ function response(config: InternalAxiosRequestConfig, data: unknown): AxiosRespo
 function failure(config: InternalAxiosRequestConfig, message = "files.invalid_archive") { return new AxiosError("Request failed", "ERR_BAD_RESPONSE", config, undefined, { ...response(config, null), status: 500, data: { success: false, message } }); }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }
 async function flush() { for (let i = 0; i < 40; i++) await nextTick(); }
-type ArchiveOperation = { kind: "compress" | "extract"; sourcePath: string; destinationPath: string; status: "confirming" | "running" | "refreshing" | "succeeded" | "failed"; error: string; refreshError: string };
-type State = { workspace: FileWorkspace; notice: string; noticeError: boolean; archiveBusy: boolean; archiveOperation: ArchiveOperation | null; workspaceLoad: { message: Ref<string> }; folderSizes: Record<string, DirectorySizeResult>; searchQuery: string; searchRan: boolean; searchResults: FileEntry[]; searchScannedFiles: number | null; compress(path: string): Promise<void>; extract(path: string): Promise<void>; refresh(path?: string): Promise<unknown>; refreshArchiveListing(): Promise<void>; dismissArchiveOperation(): void; removePath(entry: FileEntry): Promise<void>; uploadSelectedFiles(event: Event): Promise<void>; calculateFolderSize(entry: FileEntry): Promise<void>; runSearch(): Promise<void>; };
+type ArchiveOperation = { kind: "compress" | "extract"; sourcePath: string; destinationPath: string; status: "confirming" | "running" | "refreshing" | "succeeded" | "failed"; error: string; refreshError: string; output: { path: string; name: string; size: number } | null };
+type State = { workspace: FileWorkspace; notice: string; noticeError: boolean; archiveBusy: boolean; archiveOperation: ArchiveOperation | null; archiveDownloadUrl: string | null; workspaceLoad: { message: Ref<string> }; folderSizes: Record<string, DirectorySizeResult>; searchQuery: string; searchRan: boolean; searchResults: FileEntry[]; searchScannedFiles: number | null; compress(path: string): Promise<void>; extract(path: string): Promise<void>; refresh(path?: string): Promise<unknown>; refreshArchiveListing(): Promise<void>; dismissArchiveOperation(): void; removePath(entry: FileEntry): Promise<void>; uploadSelectedFiles(event: Event): Promise<void>; calculateFolderSize(entry: FileEntry): Promise<void>; runSearch(): Promise<void>; };
 let app: App | undefined, calls: InternalAxiosRequestConfig[], read: (config: InternalAxiosRequestConfig) => Promise<AxiosResponse>, write: (config: InternalAxiosRequestConfig) => Promise<AxiosResponse>;
 const original = apiClient.defaults.adapter;
 const workspaceReads = () => calls.filter(call => call.method === "get" && call.url === "/files");
@@ -176,4 +176,70 @@ it.each(["compress", "extract"] as const)("clears the previous failure only when
   post.resolve(response(request, folder(root, ["data.zip", "source.txt", "source.txt.zip"]))); await pending;
   expect(pendingNotice).toBe(""); expect(pendingError).toBe(false);
   expect(state.archiveOperation?.status).toBe("succeeded");
+});
+it("publishes the measured Unicode ZIP name, size, and encoded authenticated download URL", async () => {
+  const name = "özel rapor.txt", zip = `${name}.zip`;
+  read = async config => response(config, folder(root, [name]));
+  const { state } = await mount();
+  write = async config => response(config, folder(root, [name, zip]));
+  await state.compress(`${root}/${name}`);
+  expect(state.archiveOperation?.output).toEqual({ path: `${root}/${zip}`, name: zip, size: 10 });
+  expect(state.archiveDownloadUrl).toBe(`/api/v1/files/download?path=${encodeURIComponent(`${root}/${zip}`)}`);
+  expect(JSON.parse(String(posts("/files/compress")[0].data)).overwrite).toBe(false);
+});
+it("confirms a listed ZIP collision before dispatch and preserves the previous result on cancellation", async () => {
+  const { state } = await mount(); write = async config => response(config, folder(root, ["data.zip", "source.txt", "source.txt.zip"]));
+  await state.compress(`${root}/source.txt`); const previous = state.archiveOperation && { ...state.archiveOperation };
+  const answer = deferred<boolean>(); dialogs.confirm.mockReturnValueOnce(answer.promise);
+  const pending = state.compress(`${root}/source.txt`); await flush(); const sentBeforeAnswer = posts("/files/compress").length;
+  answer.resolve(false); await pending;
+  expect(sentBeforeAnswer).toBe(1); expect(posts("/files/compress")).toHaveLength(1);
+  expect(state.archiveOperation).toEqual(previous);
+  expect(dialogs.confirm).toHaveBeenCalledWith(expect.objectContaining({ tone: "danger", impact: [`${root}/source.txt`, `${root}/source.txt.zip`] }));
+});
+it("sends overwrite only after the listed target is explicitly approved", async () => {
+  read = async config => response(config, folder(root, ["source.txt", "source.txt.zip"]));
+  const { state } = await mount(); write = async config => response(config, folder(root, ["source.txt", "source.txt.zip"]));
+  await state.compress(`${root}/source.txt`);
+  expect(dialogs.confirm).toHaveBeenCalledOnce();
+  expect(JSON.parse(String(posts("/files/compress")[0].data))).toEqual({ path: `${root}/source.txt`, destinationPath: "", overwrite: true });
+});
+it("does not silently retry a raced ZIP collision and asks on the next user attempt", async () => {
+  const { state } = await mount();
+  write = async config => { const error = failure(config, "files.already_exists"); error.response!.status = 409; throw error; };
+  read = async config => response(config, folder(root, ["source.txt", "source.txt.zip"]));
+  await state.compress(`${root}/source.txt`);
+  expect(posts("/files/compress")).toHaveLength(1); expect(state.archiveOperation?.status).toBe("failed");
+  expect(state.archiveDownloadUrl ?? null).toBeNull();
+  write = async config => response(config, folder(root, ["source.txt", "source.txt.zip"]));
+  await state.compress(`${root}/source.txt`);
+  expect(dialogs.confirm).toHaveBeenCalledOnce(); expect(posts("/files/compress")).toHaveLength(2);
+  expect(JSON.parse(String(posts("/files/compress")[1].data)).overwrite).toBe(true);
+});
+it("keeps the preceding result when a later extraction confirmation is cancelled", async () => {
+  const { state } = await mount(); write = async config => response(config, folder(root, ["data.zip", "source.txt", "source.txt.zip"]));
+  await state.compress(`${root}/source.txt`); const previous = state.archiveOperation && { ...state.archiveOperation };
+  dialogs.confirm.mockResolvedValueOnce(false); await state.extract(archive);
+  expect(state.archiveOperation).toEqual(previous); expect(posts("/files/extract")).toHaveLength(0);
+});
+it("retires the old output only when a confirmed deletion is dispatched", async () => {
+  const { state } = await mount(); write = async config => response(config, folder(root, ["source.txt", "source.txt.zip"]));
+  await state.compress(`${root}/source.txt`); const previous = state.archiveOperation && { ...state.archiveOperation };
+  dialogs.confirm.mockResolvedValueOnce(false); await state.removePath(row("source.txt.zip"));
+  expect(state.archiveOperation).toEqual(previous);
+  const post = deferred<AxiosResponse>(); let request!: InternalAxiosRequestConfig;
+  write = config => (request = config, post.promise); read = async config => response(config, folder(root, ["source.txt"]));
+  const pending = state.removePath(row("source.txt.zip")); await flush(); const duringDelete = state.archiveOperation;
+  post.resolve(response(request, folder(root, ["source.txt"]))); await pending;
+  expect(duringDelete).toBeNull(); expect(state.archiveOperation).toBeNull(); expect(state.archiveDownloadUrl ?? null).toBeNull();
+});
+it("keeps a valid output through refresh but hides its link after an unreadable or missing result", async () => {
+  const { state } = await mount();
+  write = async config => response(config, folder(root, ["source.txt", "source.txt.zip"]));
+  read = async config => response(config, folder(root, ["source.txt", "source.txt.zip"]));
+  await state.compress(`${root}/source.txt`); await state.refresh();
+  expect(state.archiveDownloadUrl).toBe(`/api/v1/files/download?path=${encodeURIComponent(`${root}/source.txt.zip`)}`);
+  read = async config => { throw failure(config); }; await state.refresh(); expect(state.archiveDownloadUrl ?? null).toBeNull();
+  read = async config => response(config, folder(root, ["source.txt"])); await state.refresh();
+  expect(state.archiveDownloadUrl ?? null).toBeNull();
 });

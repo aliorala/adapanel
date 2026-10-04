@@ -5591,5 +5591,11 @@
   "panel.files.archiveDestination": "Destination folder",
   "panel.files.archiveClose": "Dismiss operation result",
   "panel.files.archiveRefresh": "Refresh folder listing",
-  "panel.files.archivePendingHint": "The operation is in progress. Other file changes are unavailable until it finishes."
+  "panel.files.archivePendingHint": "The operation is in progress. Other file changes are unavailable until it finishes.",
+  "panel.files.archiveOutput": "Created ZIP",
+  "panel.files.archiveOutputUnavailable": "The created archive could not be confirmed in the current folder listing. Reload the folder listing.",
+  "panel.files.archiveDownload": "Download ZIP",
+  "panel.files.compressOverwriteTitle": "Replace the existing ZIP?",
+  "panel.files.compressOverwriteMessage": "An archive for “{name}” already exists at: {path}. Continuing will replace the existing ZIP's contents with the new archive.",
+  "panel.files.compressOverwriteAction": "Replace ZIP"
 }

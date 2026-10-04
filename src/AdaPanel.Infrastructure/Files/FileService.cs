@@ -73,6 +73,9 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
+    internal Func<string> CompressionStagingPath { get; set; } = static () =>
+        SecureTempFile.BuildPath("adapanel-compress", ".zip");
+
     // Per-instance observation boundaries keep lifecycle tests on real temp files.
     internal Func<string, CancellationToken, Task>? TransferItemReady { get; set; }
     internal Action<string>? CopyEntryReady { get; set; }
@@ -1093,7 +1096,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     private static async Task WriteAtomicallyAsync(
         ResolvedTarget target, Func<Stream, CancellationToken, Task> write, CancellationToken cancellationToken,
         Func<CancellationToken, Task>? beforePublication = null, bool failIfExists = false,
-        DateTime? lastWriteTimeUtc = null)
+        DateTime? lastWriteTimeUtc = null, Action? releasePublicationRead = null)
     {
         // Aynı birimdeki geçici dosya tamamlanmadan mevcut site dosyasına dokunma.
         // Doğrudan File.Create, aktarımın ilk baytından önce eski içeriği siliyordu.
@@ -1111,6 +1114,8 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             if (beforePublication is not null) await beforePublication(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             EnsureNoReparsePoints(target.SandboxRoot, target.PhysicalPath);
+            // Release an optional original-file read lock only after all awaits.
+            releasePublicationRead?.Invoke();
             if (failIfExists)
             {
                 // No-overwrite publication is atomic too. A concurrent creator wins;
@@ -1174,18 +1179,26 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     }
 
     public Task<FileWorkspaceDto> CompressAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default) =>
-        CompressCoreAsync(request, null, cancellationToken);
+        CompressCoreAsync(request, null, null, cancellationToken);
 
     public Task<FileWorkspaceDto> CompressAsync(ArchiveFileRequest request,
         Func<SiteDto, CancellationToken, Task> beforePublication, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(beforePublication);
-        return CompressCoreAsync(request, beforePublication, cancellationToken);
+        return CompressCoreAsync(request, beforePublication, null, cancellationToken);
     }
 
+    public Task<FileWorkspaceDto> CompressAsync(ArchiveFileRequest request,
+        Func<SiteDto, CancellationToken, Task> beforePublication,
+        Func<long, CancellationToken, Task> beforeCompress, CancellationToken cancellationToken) =>
+        CompressCoreAsync(request, beforePublication ?? throw new ArgumentNullException(nameof(beforePublication)),
+            beforeCompress ?? throw new ArgumentNullException(nameof(beforeCompress)), cancellationToken);
+
     private async Task<FileWorkspaceDto> CompressCoreAsync(ArchiveFileRequest request,
-        Func<SiteDto, CancellationToken, Task>? beforePublication, CancellationToken cancellationToken)
+        Func<SiteDto, CancellationToken, Task>? beforePublication,
+        Func<long, CancellationToken, Task>? beforeCompress, CancellationToken cancellationToken)
     {
+        var overwrite = request.Overwrite;
         var sourcePath = NormalizeVirtualPath(request.Path);
         var destinationPath = string.IsNullOrWhiteSpace(request.DestinationPath)
             ? sourcePath.TrimEnd('/') + ".zip"
@@ -1214,15 +1227,61 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             throw new AppException("files.archive_target_invalid", 400, 400);
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(destination.PhysicalPath) ?? destination.SandboxRoot);
-        await WriteAtomicallyAsync(destination,
-            (output, token) => WriteCompressedSourceAsync(source, output, token), cancellationToken,
-            async token =>
+        if (!overwrite && (File.Exists(destination.PhysicalPath) || Directory.Exists(destination.PhysicalPath)))
+            throw new AppException("files.already_exists", 409, 409);
+
+        // Finish the ZIP outside the site's usage tree. Its central directory and
+        // compressed bytes must be complete before quota is measured.
+        var stagedPath = CompressionStagingPath();
+        var stagedCreated = false;
+        try
+        {
+            await using (var output = SecureTempFile.Create(stagedPath))
             {
-                await ApprovePublicationAsync(source, beforePublication, token);
-                await ApprovePublicationAsync(destination, beforePublication, token);
-            });
-        return await GetWorkspaceAsync(BuildParentPath(destinationPath), cancellationToken);
+                stagedCreated = true;
+                await WriteCompressedSourceAsync(source, output, cancellationToken);
+                await output.FlushAsync(cancellationToken);
+            }
+            await using var staged = new FileStream(stagedPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            await ApproveTransferAsync(source, destination, beforePublication, cancellationToken);
+            EnsureInsideSandbox(destination);
+
+            // Keep the deducted original length stable through quota and the copy.
+            // On Windows this handle denies writes/replacement until final approval.
+            using var original = OpenCompressionDestination(destination.PhysicalPath, overwrite);
+            var hadOriginal = original is not null;
+            if (beforeCompress is not null)
+                await beforeCompress(Math.Max(0, staged.Length - (original?.Length ?? 0)), cancellationToken);
+            await ApproveTransferAsync(source, destination, beforePublication, cancellationToken);
+            EnsureInsideSandbox(destination);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination.PhysicalPath) ?? destination.SandboxRoot);
+            await WriteAtomicallyAsync(destination,
+                (output, token) => staged.CopyToAsync(output, token), cancellationToken,
+                token => ApproveTransferAsync(source, destination, beforePublication, token),
+                failIfExists: !overwrite || !hadOriginal,
+                releasePublicationRead: () => original?.Dispose());
+        }
+        finally
+        {
+            if (stagedCreated)
+            {
+                try { File.Delete(stagedPath); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                { /* Preserve the original failure if private staging cleanup fails. */ }
+            }
+        }
+        return await ReadMutationWorkspaceAsync(BuildParentPath(destinationPath), beforePublication, cancellationToken);
+    }
+
+    private static FileStream? OpenCompressionDestination(string path, bool overwrite)
+    {
+        if (Directory.Exists(path) || (!overwrite && File.Exists(path)))
+            throw new AppException("files.already_exists", 409, 409);
+        if (!overwrite) return null;
+        try { return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read); }
+        catch (FileNotFoundException) { return null; }
+        catch (DirectoryNotFoundException) { return null; }
     }
 
     private async Task WriteCompressedSourceAsync(ResolvedTarget source, Stream output, CancellationToken cancellationToken)

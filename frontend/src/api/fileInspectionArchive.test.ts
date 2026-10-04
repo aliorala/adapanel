@@ -50,6 +50,20 @@ it("accepts default and explicit archive destinations with the backend workspace
   body = { success: true, data: workspace() }; await expect(compressPath(directory)).resolves.toMatchObject({ path: root }); await expect(extractPath(archive)).resolves.toMatchObject({ path: root });
   body = { success: true, data: workspace(`${root}/dest`) }; await expect(compressPath(directory, `${root}/dest/folder.zip`)).resolves.toMatchObject({ path: `${root}/dest` }); await expect(extractPath(archive, `${root}/dest`)).resolves.toMatchObject({ path: `${root}/dest` });
 });
+it("does not authorize compression overwrite by default and preserves explicit destination consent", async () => {
+  const requests: unknown[] = [];
+  apiClient.defaults.adapter = async config => {
+    requests.push(JSON.parse(String(config.data)));
+    return { config, status: 200, statusText: "OK", headers: {}, data: { success: true, data: workspace() } };
+  };
+  await compressPath(directory);
+  // The third parameter is an explicit user decision; it is never inferred from a response.
+  await compressPath(directory, archive, true);
+  expect(requests).toEqual([
+    { path: directory, destinationPath: "", overwrite: false },
+    { path: directory, destinationPath: archive, overwrite: true }
+  ]);
+});
 it.each(["failed-envelope", "legacy-array", "wrong-scope", "wrong-query", "foreign-hit", "traversal-hit", "duplicate-hit", "missing-truncated", "invalid-count"])("rejects an unconfirmed search result: %s", async kind => {
   const data = search();
   if (kind === "wrong-scope") data.path = "sites/b.test";

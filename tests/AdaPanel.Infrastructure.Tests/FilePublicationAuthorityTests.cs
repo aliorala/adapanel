@@ -360,7 +360,7 @@ public sealed class FilePublicationAuthorityTests
             return route switch
             {
                 "write" => (await controller.WriteAsync(new WriteFileRequest { Path = $"sites/{Name}/page.txt", Content = "NEW CONTENT", FailIfExists = CreateOnly }, ct)).Result!,
-                "compress" => (await controller.CompressAsync(new ArchiveFileRequest { Path = $"sites/{Name}/source.txt", DestinationPath = $"sites/{Name}/result.zip" }, ct)).Result!,
+                "compress" => (await controller.CompressAsync(new ArchiveFileRequest { Path = $"sites/{Name}/source.txt", DestinationPath = $"sites/{Name}/result.zip", Overwrite = true }, ct)).Result!,
                 "upload" => (await controller.UploadAsync($"sites/{Name}", new Upload(new BarrierStream("NEW CONTENT"u8.ToArray(), ContentBoundary)), ct)).Result!,
                 _ => throw new NotSupportedException(route)
             };

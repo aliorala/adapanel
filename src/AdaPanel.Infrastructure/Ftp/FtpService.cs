@@ -1,10 +1,13 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Ftp;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Iis;
+using AdaPanel.Infrastructure.Files;
 using AdaPanel.Infrastructure.Options;
 using AdaPanel.Infrastructure.Services;
 using AdaPanel.Infrastructure.Support;
@@ -44,6 +47,9 @@ public sealed partial class FtpService(
     internal Func<string, string?> HomeTargetResolver { get; set; } = static path =>
         Directory.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName ?? path;
     internal Func<string, CancellationToken, Task>? HomeRepairSnapshotReady { get; set; }
+    internal int HomeAclEntryLimit { get; set; } = 50_000;
+    internal TimeSpan HomeAclExecutionTimeout { get; set; } = TimeSpan.FromMinutes(2);
+    internal Func<string, SecurityIdentifier>? HomePermissionIdentity { get; set; }
 
     private Task<CommandResult> RunCommandAsync(string fileName, string arguments, CancellationToken cancellationToken) =>
         NativeCommand is { } command ? command(fileName, arguments, cancellationToken)
@@ -571,22 +577,22 @@ public sealed partial class FtpService(
         // A rejected retry can refer to a working account whose ACL/home was never touched.
         // Cleanup must not remove that existing access merely because an approval expired.
         var permissionsMayHaveChanged = false;
+        var attemptedPermissionPaths = new List<string>();
+        var homeConfigurationMayHaveChanged = false;
         try
         {
             await Approve(cancellationToken);
             parolaSuresiz = await EnsurePasswordNeverExpiresAsync(userName, cancellationToken);
             await Approve(cancellationToken);
-            permissionsMayHaveChanged = true;
-            var aclResult = await RunCommandAsync(
-                "icacls.exe",
-                $"\"{homePath}\" /grant \"{userName}:(OI)(CI)M\" /T /C",
-                cancellationToken: cancellationToken);
-            if (!aclResult.Success)
-            {
-                throw new AppException("ftp.acl_failed", 500, 500, BuildCommandDetails(aclResult));
-            }
+            await ChangeHomePermissionsAsync(userName, homePath, grant: true, Approve,
+                path =>
+                {
+                    attemptedPermissionPaths.Add(path);
+                    permissionsMayHaveChanged = true;
+                }, cancellationToken);
 
             await Approve(cancellationToken);
+            homeConfigurationMayHaveChanged = true;
             await ConfigureUserHomeAsync(userName, homePath, cancellationToken);
 
             var record = new FtpUserState
@@ -637,14 +643,16 @@ public sealed partial class FtpService(
         }
         catch (AppException error)
         {
-            var recovery = hesabiBuCagriActi || permissionsMayHaveChanged
-                ? await RollbackCreateAsync(userName, homePath, hesabiBuCagriActi) : string.Empty;
+            var recovery = hesabiBuCagriActi || permissionsMayHaveChanged || homeConfigurationMayHaveChanged
+                ? await RollbackCreateAsync(userName, homePath, hesabiBuCagriActi,
+                    removePermissions: permissionsMayHaveChanged, permissionPaths: attemptedPermissionPaths) : string.Empty;
             throw new AppException(error.MessageKey, error.Code, error.HttpStatusCode, error.Details + recovery);
         }
         catch
         {
-            if (hesabiBuCagriActi || permissionsMayHaveChanged)
-                await RollbackCreateAsync(userName, homePath, hesabiBuCagriActi);
+            if (hesabiBuCagriActi || permissionsMayHaveChanged || homeConfigurationMayHaveChanged)
+                await RollbackCreateAsync(userName, homePath, hesabiBuCagriActi,
+                    removePermissions: permissionsMayHaveChanged, permissionPaths: attemptedPermissionPaths);
             throw;
         }
     }
@@ -681,9 +689,11 @@ public sealed partial class FtpService(
     // MUMKUN DEGIL — o yol EnsureFtpInfrastructureAsync'i cagirir, yani yukseltilmis bir makinede
     // GERCEK "AdaPanel FTP" sitesini yeniden yapilandirip FTPSVC'yi yeniden baslatirdi. Bir testin
     // canli FTP sunucusunu yeniden baslatmasi kabul edilemez; geri alma davranisi burada olculur.
-    internal async Task<string> RollbackCreateAsync(string userName, string homePath, bool hesabiBuCagriActi)
+    internal async Task<string> RollbackCreateAsync(string userName, string homePath, bool hesabiBuCagriActi,
+        bool removePermissions = true, IReadOnlyCollection<string>? permissionPaths = null)
     {
         var notlar = new List<string>();
+        var attemptedPaths = permissionPaths?.ToArray();
 
         async Task DeneAsync(string ad, Func<Task> is_)
         {
@@ -697,19 +707,15 @@ public sealed partial class FtpService(
             }
         }
 
-        await DeneAsync("acl-geri-alma", async () =>
+        if (removePermissions) await DeneAsync("acl-geri-alma", async () =>
         {
             // Recovery must not follow a home/ancestor replaced after the original grant.
             // Other owned cleanup (FTP links and a newly created account) still proceeds.
-            EnsureHomePathBoundary(homePath);
-            var sonuc = await RunCommandAsync(
-                "icacls.exe",
-                $"\"{homePath}\" /remove:g \"{userName}\" /T /C",
-                cancellationToken: CancellationToken.None);
-            if (!sonuc.Success)
-            {
-                notlar.Add($"acl-geri-alma: ExitCode={sonuc.ExitCode}");
-            }
+            // Creation supplies only paths where its native grant was attempted.
+            // A skipped, already-correct parent must retain its pre-existing grants.
+            // Direct recovery callers retain the full-tree behavior when this is null.
+            await ChangeHomePermissionsAsync(userName, homePath, grant: false, null, null,
+                CancellationToken.None, attemptedPaths);
         });
 
         // Yetki kuralı + junction: ikisi de bu akışta oluşturulmuş olabilir ve ikisi de idempotent
@@ -734,6 +740,95 @@ public sealed partial class FtpService(
         return notlar.Count == 0
             ? string.Empty
             : $"{Environment.NewLine}GeriAlmaUyarilari:{Environment.NewLine}{string.Join(Environment.NewLine, notlar)}";
+    }
+
+    private async Task ChangeHomePermissionsAsync(string userName, string homePath, bool grant,
+        Func<CancellationToken, Task>? beforeMutation, Action<string>? nativeStarting, CancellationToken cancellationToken,
+        IReadOnlyCollection<string>? permissionPaths = null)
+    {
+        // /T traverses junction descendants even with /L on supported Windows builds.
+        // Plan ordinary entries ourselves, then issue only nonrecursive native operations.
+        // The linked deadline bounds all commands together, including independent recovery.
+        using var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        execution.CancelAfter(HomeAclExecutionTimeout);
+        var token = execution.Token;
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            EnsureHomePathBoundary(homePath);
+            List<string> paths;
+            if (permissionPaths is null)
+            {
+                paths = [homePath];
+                var walk = SafeDirectoryWalk.Yuru(homePath, new SafeDirectoryWalkBudget(HomeAclEntryLimit, 5_000),
+                    entry => paths.Add(entry.FullName), null, token);
+                if (walk.Truncated)
+                    throw new AppException("ftp.acl_failed", 500, 500, "FTP permission tree could not be fully inspected.");
+            }
+            else
+            {
+                if (permissionPaths.Count > (long)HomeAclEntryLimit + 1)
+                    throw new AppException("ftp.acl_failed", 500, 500, "FTP permission recovery exceeds its entry limit.");
+                paths = permissionPaths.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            }
+            if (paths.Any(path => !PathContainment.IsRootOrInside(homePath, path)))
+                throw new AppException("ftp.home_outside_site", 403, 403);
+
+            // A fake command transport does not imply permission to query live SAM.
+            // Native ACL fixtures opt in with their current-process SID; production
+            // always resolves the exact local account once, never a domain fallback.
+            var identity = HomePermissionIdentity is { } resolve ? resolve(userName)
+                : NativeCommand is null
+                    ? (SecurityIdentifier)new NTAccount(Environment.MachineName, userName).Translate(typeof(SecurityIdentifier))
+                    : null;
+
+            foreach (var path in paths)
+            {
+                token.ThrowIfCancellationRequested();
+                if (beforeMutation is not null) await beforeMutation(token);
+                token.ThrowIfCancellationRequested();
+                // Recheck after approval awaits: a previously ordinary descendant or its
+                // ancestor may now be a junction. Never let a stale plan authorize it.
+                EnsureHomePathBoundary(path);
+                var attributes = File.GetAttributes(path);
+                var isDirectory = (attributes & FileAttributes.Directory) != 0;
+                if (identity is not null)
+                {
+                    FileSystemSecurity security = isDirectory
+                        ? new DirectoryInfo(path).GetAccessControl(AccessControlSections.Access)
+                        : new FileInfo(path).GetAccessControl(AccessControlSections.Access);
+                    token.ThrowIfCancellationRequested();
+                    if (!HomePermissionChangeNeeded(security, identity, isDirectory, grant)) continue;
+                    // Reading a descriptor is not permission to follow a replacement.
+                    EnsureHomePathBoundary(path);
+                }
+                var rights = isDirectory ? "(OI)(CI)M" : "M";
+                var operation = grant ? $"/grant \"{userName}:{rights}\"" : $"/remove:g \"{userName}\"";
+                token.ThrowIfCancellationRequested();
+                nativeStarting?.Invoke(path);
+                var result = await RunCommandAsync("icacls.exe", $"\"{path}\" {operation} /C /L", token);
+                token.ThrowIfCancellationRequested();
+                if (!result.Success)
+                    throw new AppException("ftp.acl_failed", 500, 500, BuildCommandDetails(result));
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new AppException("ftp.acl_failed", 500, 500, "FTP permission work exceeded its time limit.");
+        }
+    }
+
+    internal static bool HomePermissionChangeNeeded(FileSystemSecurity security, SecurityIdentifier identity,
+        bool isDirectory, bool grant)
+    {
+        var rules = security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+            .Cast<FileSystemAccessRule>().Where(rule => rule.IdentityReference.Equals(identity)
+                && rule.AccessControlType == AccessControlType.Allow);
+        if (!grant) return rules.Any(rule => !rule.IsInherited);
+        return !rules.Any(rule => (rule.FileSystemRights & FileSystemRights.Modify) == FileSystemRights.Modify
+            && (rule.PropagationFlags & PropagationFlags.InheritOnly) == 0
+            && (!isDirectory || (rule.InheritanceFlags == (InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit)
+                && rule.PropagationFlags == PropagationFlags.None)));
     }
 
     private static void EnsureHomePathBoundary(string homePath)

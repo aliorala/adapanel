@@ -1,5 +1,42 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R42, 0.8.85 yayın hazırlığı
+
+Kaynak0.8.85; public latest son kimliksiz kontrol0.8.84, .85 tag404. Yalnız installer+notlar
+yayımlanacak; canlı kurulum veya kaynak/Git geçmişi gönderimi yok. R41 de .85'e dahil.
+ZIP Compress: request/principal snapshot, gerçek bitmiş private ZIP handle length ile netgrowth
+kota, overwrite=false varsayılan/no-clobber publication; olddestination FileShare.Read kota/kopya
+awaitleri boyunca açık, sonapproval sonrası sync close→replace. Final workspace/authority/audit
+recheck +scoped projection. NewZIP29 (ilk23te19RED4green), related115green iki koşuda.
+FTP /T+/L native dış-DACL kaçışını çözmedi (5RED/3green); /T kaldırıldı. Bounded ordinary-tree
+planı +herentry actor/CT/fullchain recheck. Localqualified SID bir kez, ACLread classifier yeterli
+fileModify veya dirModify+OI/CI/None gördüğünde nativekomutu atlar; protectedchild eksikse çalışır.
+Create actualattemptedACLpaths kaydeder; cleanup yalnızbunları işler, skippedHome mevcutACL korunur.
+Homeconfiguration flag ayrı: allACLskip+configurefail homecleanup yapar, unchangedACL sökmez.
+Direct internalRollback nullpathlist normalfulltree uyumunu korur. Touchedentry eskiACLsnapshot
+restore veya dışfilesystemwriter transaction garantisi yok. Bu aynıentry eskiACLkoruması ilerikiaday.
+Yeni FTPnative/decision21 +Home ek5 =>R42 backend55=ZIP29+FTP26.
+Son FTP43/43 (50350terminal0), yeni gerçek500fileprobe502cmd10114ms→1cmd387ms. Bu trustedservice
+fixture ölçümüdür, HTTPactorSQL veya bütün makinelerin performansgarantisi değildir. Fixture yalnız
+uniqueownedtemp/currentSID ACL; SAM/IISfake. İlk skipfixture FCsilinememesi ve noncanonicalSDDL
+7fail düzeltildi; 54150'deki0cmd344ms başarılıkabul edilmez. 50350 final2 gerçekmutasyonpositive.
+FEtypes/full113files2201/2201(50139terminal0), Vite.85/wwwroot152filesSHAequal,6indexassets,
+FE5599/API291 parity. Yeni8 FEbaselineRED→GREEN; related250. Outputcard gerçekentryZIPname/size/link;
+missing/readfailedGET linkhide; overwriteexplicitconfirm;409onlyonePOST+refresh; canceloldcardpreserved.
+ChromeTR390dark output266/266,doc380/380;EN320lightoutput196/196,doc310/310;desktop1440doc1440/1440.
+Appconsoleerror0(extensionerrors excluded,existingi18nwarning). FinalTR round42-archive-result-final-mobile.png;
+EN round42-archive-result-en320-light.png. Preview97367closed,Tab42closed,viewportreset,__audit42removed.
+Freshcomponents22pass3standardlargeSkipped0fail; privacy12/12+actual0findings; parser/versionguardpassed.
+Release085 preflight/proofs .tmp/audit-20261004; sourcebody UTF8BOMless. Allagents/C# FINALFREEZE.
+Build0warnings/errors. Broad14904 TERMINAL0: Core2+Infrastructure8966=8968/8968 fail0skip0;
+excludes ONLY realSAM2 FtpCreateRollbackTests. TRX round42-broad_net8.0_20261004115338.trx
+and20261004115651.trx. Every test/preview process is now terminal; packaging next.
+Root alone runs.NET, serialize-m:1/nodeReuse:false; don't edit C# while active. Existinguntracked
+tests/AdaPanel.Infrastructure.Tests/TestResults/ remains untouched/uncommitted. Goal ACTIVE unbudgeted.
+User .75packagequestion: stagedinstaller removedafterupdate normal; equality onlywithsuccessfulcheck
+meanscurrentpermanifest. NewUI already saysPanelguncel/no redownload. LiveURL unavailable; don't repeat
+URLquestion or claimliveversion/installed. Final screenshot Markdown path D:/... not /D:/....
+
 ## 2026-10-04 — R41 doğrulandı, yerel; public son sürüm hâlâ 0.8.84
 
 Bu turun değişiklikleri henüz yayımlanmadı. Kaynak sürüm dosyaları 0.8.84; aynı public paketi
