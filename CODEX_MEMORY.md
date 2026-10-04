@@ -1,8 +1,9 @@
 # AdaPanel Codex Memory
-## 2026-10-04 — R34 tam doğrulandı; R33 + R34 için 0.8.80 paketleniyor
+
+## 2026-10-04 — R33 + R34 içeren 0.8.80 yayımlandı ve doğrulandı
 
 Kaynaklar 0.8.80'e eşitlendi (props/frontend package+lock/installer/release-body).
-Henüz bu paragraf yazılırken yayımlanmadı; son public0.8.79. Canlı kurulum yok.
+Public latest0.8.80, yayın06:38:26İstanbul04Ekim. Canlı kurulum yok; kurulu sürüm ölçülmedi.
 R34 auth36 + selectedZIP44 =80 yeniC#; targeted733/733, full.NET tek koşum
 Infra8275+Core2=8277/8277 fail0skip0, build0warning/error. Root61566exit0.
 TRX round34-full...063024(Core),063354(Infra). Loground34-final-build/backend.
@@ -33,9 +34,12 @@ anchorclick; no actualuserDownloadsfile. Appconsole0 (walletChromeextensionerror
 Screenshotsround34-result-desktop/mobile,selected-mobile,backup-desktop.png. Lastfullview
 screenshot precedes tiny emptyrowautoexpandremoval; finalcardcomponentunchanged.
 Freshrelease080components22Passed3LargeSkipped0Failed, privacy12/12/parser/versionguardgreen.
-Package root60022RUNNING logrelease080-package.log, -SkipComponentAudit ONLY becausefresh
-separateauditpassed. NoSkipVerify. Next awaitpackage then publishusingexistingCurlscript,
-verifypublic/latest/tag/body/assetdigest+redownloadSHA, writefinaldocs+memory+localcommit.
+Initial package60022exit1 missing global ISCC; rerun47953exit0 with -IsccPath .tools/inno/ISCC.exe.
+Fresh component audit passed; redundant package audit skipped. Mandatory verifiers passed170files/0findings.
+Publisher30753exit0; public latest/tag/title/body exact, draftfalse/prereleasefalse, size/digest verified.
+Downloaded SHA093272F819229A391F3714E50166A84C9624A1DCBA25CCD770C9DF6693803062,91064899bytes.
+https://github.com/aliorala/adapanel/releases/tag/0.8.80 sourcecommit678dc1a.
+Proof release080-published-verification.json. All processes terminal; final docs updated.
 Do notpushsource/history; preexistingTestResults/ untouched/untracked. Activegoalstaysactive.
 
 ## 2026-10-04 — R33 yerelde doğrulandı, henüz yayımlanmadı
