@@ -5676,5 +5676,16 @@
   "files.owner_changed": "İşlem beklerken sitenin abonelik sahibi değişti. Güncel siteyi kontrol edip işlemi yeniden başlatın.",
   "files.upload_too_large": "Yüklenecek dosya 200 MiB sınırını aşıyor.",
   "files.upload_size_mismatch": "Yüklenen içerik bildirilen dosya boyutuyla eşleşmiyor. Dosyayı yeniden seçip tekrar deneyin.",
-  "update.github_version_invalid": "Yayımlanan sürüm numarası doğrulanamadı. Güncel sürüm bilgisi alınamadı."
+  "update.github_version_invalid": "Yayımlanan sürüm numarası doğrulanamadı. Güncel sürüm bilgisi alınamadı.",
+  "panel.update.history.title": "Son kurulum denemesi",
+  "panel.update.history.lastKnownTitle": "Son bilinen kurulum denemesi",
+  "panel.update.history.failed": "Deneme tamamlanamadı",
+  "panel.update.history.succeeded": "Deneme tamamlandı",
+  "panel.update.history.recordedAt": "Kayıt zamanı",
+  "panel.update.history.context": "Bu kayıt son kurulum denemesine aittir. Şu an çalışan sürüm yukarıda gösterilir.",
+  "panel.update.history.stale": "Son durum okunamadığı için önceki kayıt gösteriliyor. Güncelleme denetimini yeniden çalıştırın.",
+  "panel.update.history.recordedReason": "Kaydedilen açıklama",
+  "panel.update.history.aborted": "Bu deneme, panel dosyaları kullanımda olduğu için iptal edildi.",
+  "panel.update.history.noReason": "Bu deneme için ayrıntılı hata açıklaması kaydedilmemiş.",
+  "panel.update.watchChanged": "İzlenen kurulumun bilgileri değişti. Yeni durumu doğrulamak için Güncelleme denetle düğmesini kullanın."
 }

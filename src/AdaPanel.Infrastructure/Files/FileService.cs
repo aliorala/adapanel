@@ -330,7 +330,9 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         EnsureSiteTarget(target);
         EnsureNotSiteRoot(target);
         await ApprovePublicationAsync(target, beforeMutation, cancellationToken);
-        EnsureInsideSandbox(target);
+        // Approval can await actor/scope IO. Recheck the real path afterwards: a
+        // replaced ancestor or selected entry must not redirect recursive deletion.
+        EnsureTransferPath(target);
         if (File.Exists(target.PhysicalPath))
         {
             File.Delete(target.PhysicalPath);

@@ -112,7 +112,7 @@ it('requires a new terminal attempt when resuming a same-version reinstall', asy
   initial = { ...scheduled(), currentVersion: '0.8.88', isUpdateAvailable: false, lastAttempt: oldAttempt };
   const state = await mount(); await vi.advanceTimersByTimeAsync(5000);
   expect(state.installPhase).not.toBe('done'); expect(reload).not.toHaveBeenCalled();
-  initial = { ...initial, isInstallScheduled: false, lastAttempt: attempt() };
+  initial = { ...initial, isInstallScheduled: false, checkedAtUtc: new Date().toISOString(), lastAttempt: attempt() };
   await vi.advanceTimersByTimeAsync(6500);
   expect(state.installPhase).toBe('done'); expect(posts()).toHaveLength(0); expect(reload).toHaveBeenCalledOnce();
 });

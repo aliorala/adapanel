@@ -10,7 +10,10 @@
       </button>
     </div>
 
-    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
+    <div v-if="notice" :class="['notice', 'page-notice', 'update-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
+      <span>{{ notice }}</span>
+      <button type="button" class="secondary compact notice-close" :aria-label="t('panel.common.dismissNotice')" @click="notice = ''">×</button>
+    </div>
 
     <UpdateStatusCard :status="status" :confirmed="statusConfirmed" :checking="refreshing"
       :phase="busy === 'download' ? 'downloading' : installPhase" />
@@ -35,6 +38,8 @@
           <div><dt>{{ t('panel.update.watchElapsed') }}</dt><dd>{{ formatElapsed(installElapsedSeconds) }}</dd></div>
         </dl>
       </section>
+
+      <UpdateAttemptCard v-if="status.lastAttempt?.isFinished && !installPhase" :attempt="status.lastAttempt" :confirmed="statusConfirmed" />
 
       <section v-if="!status.isInstallScheduled && !monitoring && (status.isUpdateAvailable || status.isPackageReady || busy)" class="update-next-step">
         <div class="next-step-heading">
@@ -85,6 +90,8 @@ import ReleaseNotes from "../components/ReleaseNotes.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { getSessionEpoch } from "../api/client";
 import UpdateStatusCard from "../components/UpdateStatusCard.vue";
+import UpdateAttemptCard from "../components/UpdateAttemptCard.vue";
+import { UserFacingError } from "../utils/apiError";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -253,9 +260,16 @@ function startPostInstallWatch(expectedVersion: string, previousVersion: string,
   // Both timestamps come from the server. Only elapsed time since this read uses
   // the browser clock, so clock skew and reopening the view cannot extend the window.
   const observedAge = checkedAt - scheduledAt;
-  const generation = watchGeneration, startedAt = Date.now();
+  const generation = watchGeneration, startedAt = performance.now();
+  const expectedHash = scheduledStatus.preparedPackageSha256?.toLowerCase() ?? "";
   const previousAttemptIdentity = JSON.stringify(previousAttempt);
   const owned = () => current() && generation === watchGeneration;
+  const stopUnconfirmed = (key: string) => {
+    statusConfirmed.value = false;
+    stopPostInstallWatch();
+    installAttempt.value = null;
+    showNotice(t(key), true);
+  };
   monitoring.value = true;
   installPhase.value = "scheduled";
   installTargetVersion.value = expectedVersion;
@@ -269,7 +283,7 @@ function startPostInstallWatch(expectedVersion: string, previousVersion: string,
   };
   const updateElapsed = () => {
     if (!owned()) { stopPostInstallWatch(true); return; }
-    const elapsed = observedAge + Math.max(0, Date.now() - startedAt);
+    const elapsed = observedAge + Math.max(0, performance.now() - startedAt);
     installElapsedSeconds.value = Math.floor(elapsed / 1000);
     if (elapsed >= 15 * 60_000) {
       installPhase.value = "timeout";
@@ -289,6 +303,18 @@ function startPostInstallWatch(expectedVersion: string, previousVersion: string,
       const fresh = await checkForUpdate();
       if (!owned()) return;
       status.value = fresh;
+      const nextTarget = fresh.preparedVersion?.trim() ?? "";
+      const nextHash = fresh.preparedPackageSha256?.toLowerCase() ?? "";
+      const nextSchedule = fresh.installScheduledAtUtc === null ? null : Date.parse(fresh.installScheduledAtUtc);
+      // A different operation may have been accepted while this view was waiting.
+      // Do not apply its terminal result or version to the original observation.
+      if ((fresh.isInstallScheduled && (!nextTarget || nextSchedule !== scheduledAt)) ||
+        (nextTarget && !sameVersion(nextTarget, expectedVersion)) ||
+        (nextHash && expectedHash && nextHash !== expectedHash) ||
+        (nextSchedule !== null && nextSchedule !== scheduledAt)) {
+        stopUnconfirmed("panel.update.watchChanged");
+        return;
+      }
       statusConfirmed.value = true;
       const attempt = fresh.lastAttempt;
       const finished = attempt?.isFinished === true && attemptIsNewerThan(attempt, installStartedAtIso) && JSON.stringify(attempt) !== previousAttemptIdentity;
@@ -310,6 +336,10 @@ function startPostInstallWatch(expectedVersion: string, previousVersion: string,
       installPhase.value = installPhase.value === "restarting" || installPhase.value === "verifying" ? "verifying" : "scheduled";
     } catch (error) {
       if (!owned()) return;
+      if (error instanceof UserFacingError) {
+        stopUnconfirmed(error.messageKey);
+        return;
+      }
       statusConfirmed.value = false;
       if ((error as { response?: { status?: number } })?.response?.status === 401) {
         stopPostInstallWatch(true);
@@ -339,8 +369,9 @@ function attemptIsNewerThan(attempt: UpdateAttempt, startedAtIso: string) {
     return false;
   }
 
-  // Calistirici gorevi 15 saniye sonra basliyor; saat kaymalarina karsi kucuk bir tolerans birakiyoruz.
-  return new Date(attempt.updatedAtUtc).getTime() >= new Date(startedAtIso).getTime() - 30_000;
+  // Both timestamps belong to the server clock. An earlier terminal file belongs
+  // to a previous attempt, even if the previous file was briefly unreadable.
+  return new Date(attempt.updatedAtUtc).getTime() >= new Date(startedAtIso).getTime();
 }
 
 function describeAttemptFailure(attempt: UpdateAttempt) {
@@ -412,6 +443,10 @@ function showNotice(message: string, isError: boolean) {
   display: grid;
   gap: var(--sp-12);
 }
+
+.update-notice { display: flex; align-items: flex-start; gap: var(--sp-12); overflow-wrap: anywhere; }
+.update-notice > span { min-width: 0; flex: 1; }
+.notice-close { flex: 0 0 28px; width: 28px; height: 28px; padding: 0; color: inherit; }
 
 /* Uc kutucuk: ortak serit 4 sutunlu, burada 3 deger var. Dar ekran davranisi (900/720)
    base.css'ten MIRAS ALINIR, burada tekrarlanmaz. */

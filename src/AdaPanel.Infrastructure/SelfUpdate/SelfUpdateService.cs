@@ -756,20 +756,14 @@ public sealed class SelfUpdateService : ISelfUpdateService
             await response.Content.CopyToAsync(stream, cancellationToken);
         }
 
-        try
-        {
-            await EnsureWindowsExecutableAsync(destination, cancellationToken);
-        }
-        catch
-        {
-            File.Delete(destination);
-            throw;
-        }
-
-        var actualHash = await CalculateSha256Async(destination, cancellationToken);
+        // Keep the verified bytes stable while the native identity reader and
+        // pending-record publication await. Read sharing still permits native probes.
+        await using var packageRead = new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.Read,
+            81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await EnsureWindowsExecutableAsync(destination, packageRead, cancellationToken);
+        var actualHash = await CalculateSha256Async(packageRead, cancellationToken);
         if (!string.Equals(expectedHash, actualHash, StringComparison.OrdinalIgnoreCase))
         {
-            File.Delete(destination);
             throw new AppException("update.checksum_mismatch", 400, 400, $"Expected={expectedHash}\r\nActual={actualHash}");
         }
 
@@ -777,15 +771,8 @@ public sealed class SelfUpdateService : ISelfUpdateService
         // sorusunu cevaplar, "yayinlanan dosyanin kendisi bulasik mi" sorusunu CEVAPLAMAZ -- kaynakta
         // bulasma varsa yayindaki ozet de bulasik dosyanin ozetidir ve karsilastirma "temiz" der.
         // Bu depoda tam olarak bu yasandi (Synaptics PE bulastiricisi).
-        try
-        {
-            await EnsureTrustedPackageAsync(destination, cancellationToken);
-        }
-        catch
-        {
-            File.Delete(destination);
-            throw;
-        }
+        await EnsureTrustedPackageAsync(destination, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var pendingUpdate = new PendingUpdate
         {
@@ -871,9 +858,13 @@ public sealed class SelfUpdateService : ISelfUpdateService
             throw new AppException("update.package_not_ready", 409, 409);
         }
 
-        await EnsureWindowsExecutableAsync(packagePath, cancellationToken);
+        // The hash, publisher probe and launcher must all refer to the same bytes.
+        // Dispose before the final status read; the separate runner checks its hash again.
+        await using var packageRead = new FileStream(packagePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+            81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await EnsureWindowsExecutableAsync(packagePath, packageRead, cancellationToken);
         var expectedHash = NormalizeSha256(pendingUpdate.PackageSha256);
-        var actualHash = await CalculateSha256Async(packagePath, cancellationToken);
+        var actualHash = await CalculateSha256Async(packageRead, cancellationToken);
         if (!string.Equals(expectedHash, actualHash, StringComparison.OrdinalIgnoreCase))
         {
             throw new AppException(
@@ -891,6 +882,7 @@ public sealed class SelfUpdateService : ISelfUpdateService
         // DURUM DOSYALARINDAN ONCE calisir: denetim reddederse ortada YENI bir deneme yoktur ve
         // onceki denemenin sonucu kullanicidan silinmemelidir.
         await EnsureTrustedPackageAsync(packagePath, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         // ONCEKI denemenin durum dosyasi SILINIR. Aksi halde eski bir "failed" kaydi yeni denemenin
         // uzerine golge duser: panel, daha kurulum baslamadan gecmis bir basarisizligi bu denemenin
@@ -903,6 +895,7 @@ public sealed class SelfUpdateService : ISelfUpdateService
         // denemenin sonucuymus gibi gorunurdu.
         TemizlemeyiDene(() => File.Delete(fileStore.ResolvePath(PanelVerdictPath)));
 
+        cancellationToken.ThrowIfCancellationRequested();
         await installerLauncher.ScheduleAsync(packagePath, actualHash, cancellationToken);
         pendingUpdate.InstallScheduledAtUtc = DateTime.UtcNow;
         // Scheduling has committed. A disconnected caller must not erase that fact.
@@ -973,8 +966,18 @@ public sealed class SelfUpdateService : ISelfUpdateService
     private static async Task<string> CalculateSha256Async(string filePath, CancellationToken cancellationToken)
     {
         await using var stream = File.OpenRead(filePath);
-        var hash = await SHA256.HashDataAsync(stream, cancellationToken);
-        return Convert.ToHexString(hash);
+        return await CalculateSha256Async(stream, cancellationToken);
+    }
+
+    private static async Task<string> CalculateSha256Async(FileStream stream, CancellationToken cancellationToken)
+    {
+        stream.Position = 0;
+        try
+        {
+            var hash = await SHA256.HashDataAsync(stream, cancellationToken);
+            return Convert.ToHexString(hash);
+        }
+        finally { stream.Position = 0; }
     }
 
     private static Uri ResolvePackageUri(string url)
@@ -1041,13 +1044,22 @@ public sealed class SelfUpdateService : ISelfUpdateService
     private static async Task EnsureWindowsExecutableAsync(string filePath, CancellationToken cancellationToken)
     {
         if (!string.Equals(Path.GetExtension(filePath), ".exe", StringComparison.OrdinalIgnoreCase))
+            throw new AppException("update.package_invalid", 400, 400);
+        await using var stream = File.OpenRead(filePath);
+        await EnsureWindowsExecutableAsync(filePath, stream, cancellationToken);
+    }
+
+    private static async Task EnsureWindowsExecutableAsync(string filePath, FileStream stream, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(Path.GetExtension(filePath), ".exe", StringComparison.OrdinalIgnoreCase))
         {
             throw new AppException("update.package_invalid", 400, 400);
         }
 
         var header = new byte[2];
-        await using var stream = File.OpenRead(filePath);
+        stream.Position = 0;
         var read = await stream.ReadAsync(header, cancellationToken);
+        stream.Position = 0;
         if (read != header.Length || header[0] != (byte)'M' || header[1] != (byte)'Z')
         {
             throw new AppException("update.package_invalid", 400, 400);

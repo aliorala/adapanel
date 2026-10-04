@@ -5676,5 +5676,16 @@
   "files.owner_changed": "The site's subscription owner changed while the operation was waiting. Check the current site and try again.",
   "files.upload_too_large": "The uploaded file exceeds the 200 MiB limit.",
   "files.upload_size_mismatch": "The uploaded content does not match the declared file size. Select the file again and retry.",
-  "update.github_version_invalid": "The published version number could not be validated. Latest release information is unavailable."
+  "update.github_version_invalid": "The published version number could not be validated. Latest release information is unavailable.",
+  "panel.update.history.title": "Last installation attempt",
+  "panel.update.history.lastKnownTitle": "Last known installation attempt",
+  "panel.update.history.failed": "The attempt did not complete",
+  "panel.update.history.succeeded": "The attempt completed",
+  "panel.update.history.recordedAt": "Recorded at",
+  "panel.update.history.context": "This record describes the last installation attempt. The currently running version is shown above.",
+  "panel.update.history.stale": "The latest status could not be read, so the previous record is shown. Check for updates again.",
+  "panel.update.history.recordedReason": "Recorded explanation",
+  "panel.update.history.aborted": "This attempt was cancelled because the panel files were in use.",
+  "panel.update.history.noReason": "No detailed error explanation was recorded for this attempt.",
+  "panel.update.watchChanged": "The installation being monitored has changed. Check for updates to verify the new status."
 }

@@ -98,7 +98,7 @@ it.each(["unmount", "session", "timeout"])("ignores a late successful poll after
   expect(reload).not.toHaveBeenCalled(); expect(state.installPhase).not.toBe("done"); if (change === "timeout") expect(state.installPhase).toBe("timeout");
 });
 it.each(["0.8.74", "0.8.77", "0.8.75"])("does not claim target 0.8.76 installed when the reported version is %s", async currentVersion => {
-  const { state } = await mount(); await state.installUpdate(); read = async config => response(config, valid({ currentVersion, lastAttempt: { phase: "finished", isFinished: true, isFailed: false, error: "", errorKey: "", isDecidedByPanel: false, updatedAtUtc: new Date().toISOString(), installerExitCode: 0 } }));
+  const { state } = await mount(); await state.installUpdate(); read = async config => response(config, valid({ currentVersion, lastAttempt: { phase: "succeeded", isFinished: true, isFailed: false, error: "", errorKey: "", isDecidedByPanel: false, updatedAtUtc: new Date().toISOString(), installerExitCode: 0 } }));
   await vi.advanceTimersByTimeAsync(5000); await vi.advanceTimersByTimeAsync(2000); expect(state.installPhase).not.toBe("done"); expect(reload).not.toHaveBeenCalled(); expect(state.notice).not.toBe("panel.update.updated");
 });
 it("verifies the approved version and cancels its delayed page reload on unmount", async () => {
@@ -119,11 +119,11 @@ it.each([undefined, ""])("does not offer installation without a measured prepare
 });
 it("does not claim a same-version reinstall succeeded before the new attempt finishes", async () => {
   initial = valid({ currentVersion: "0.8.76", isUpdateAvailable: false });
-  const finished = { phase: "finished", isFinished: true, isFailed: false, error: "", errorKey: "", isDecidedByPanel: false, updatedAtUtc: new Date().toISOString(), installerExitCode: 0 };
+  const finished = { phase: "succeeded", isFinished: true, isFailed: false, error: "", errorKey: "", isDecidedByPanel: false, updatedAtUtc: new Date().toISOString(), installerExitCode: 0 };
   initial.lastAttempt = finished; write = async config => response(config, { ...initial, isInstallScheduled: true, installScheduledAtUtc: new Date().toISOString(), checkedAtUtc: new Date().toISOString() });
   const { state } = await mount(); await state.installUpdate(); await vi.advanceTimersByTimeAsync(6500);
   expect(state.installPhase).not.toBe("done"); expect(reload).not.toHaveBeenCalled();
-  initial = { ...initial, lastAttempt: { ...finished, updatedAtUtc: new Date().toISOString() } };
+  initial = { ...initial, checkedAtUtc: new Date().toISOString(), lastAttempt: { ...finished, updatedAtUtc: new Date().toISOString() } };
   await vi.advanceTimersByTimeAsync(5000); expect(state.installPhase).toBe("done"); expect(reload).toHaveBeenCalledOnce();
 });
 it("reports a new failed same-version reinstall rather than inferring success from the unchanged version", async () => {
