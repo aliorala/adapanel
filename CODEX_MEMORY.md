@@ -1,9 +1,13 @@
 # AdaPanel Codex Memory
 
-## 2026-10-04 — R32 yerelde doğrulandı; 0.8.79 yayın hazırlığı
+## 2026-10-04 — R31 + R32 içeren 0.8.79 yayımlandı
 
-Kaynak sürümleri ve release-body.json 0.8.79'a eşitlendi; henüz yayımlanmadı.
-Yayımdaki son binary API'den tekrar doğrulandı: 0.8.78. Kullanıcının Chrome sekmeleri
+Kaynak sürümleri ve release-body.json 0.8.79'a eşitlendi ve yayımlandı. Latest public API,
+tag, başlık/not, assetboyut/digest ve yenidenindirilenSHA doğrulandı. Yayın05:28:50İstanbul,
+2026-10-04. https://github.com/aliorala/adapanel/releases/tag/0.8.79
+https://github.com/aliorala/adapanel/releases/download/0.8.79/AdaPanelSetup.exe
+91.053.220bytes SHA25651E333C4A262298008088722C620F30B59E3E018E1D61B6E88F5AE956F3F9AD1.
+Source localcommit1ad4e2e; source/Git push yok. Kullanıcının Chrome sekmeleri
 arasında AdaPanel yok; canlı kurulu sürüm/güncelleme başarısı doğrudan ölçülmedi.
 Paket hazır değil sorusunun yanıtı: başarılı kurulumdan sonra staged paket temizlenir;
 tek başına hata değil. R26+ arayüz currentconfirmed ise Panel güncel gösteriyor.
@@ -27,12 +31,13 @@ CtrlC stopped; __audit32 files REMOVED. Saved/viewed round32-backup-{mobile,en32
 Chrome extensions injected errors. RealVue/Pinia fakeadapter only; no real backup/restore.
 
 Fresh release079-components.json 22Passed3largeSkipped0Failed. Versionguard0.8.79,
-release-parser and privacy12/12green. Packaging/publication NOT started. Commit local
-changes excluding preexisting TestResults/, package
-with mandatory publish/installer verifiers, publish binary+notes only, verify download
-SHA and public API/body. No liveinstallation/sourcepush/realmail/webhook/telemetry.
+release-parser and privacy12/12green. Package37105exit0 publish169files0findings,
+installer0findings/version0.8.79. Publish40707exit0 downloadedSHAexact. PublicAPIverified
+draft/prereleasefalse+title/bodyexact, release079-published-verification.json.
+Mandatory verifier gates passed. No liveinstallation/sourcepush/realmail/webhook/telemetry.
 Full logs round32-final-{build,backend,types,frontend,vite}.log under .tmp/audit-20261004.
-Docs R32 section added; replace its pending final sentence after results.
+Docs R32 +0.8.79 section final evidence complete. No active test/build/preview/publisher.
+Preexisting untracked tests/AdaPanel.Infrastructure.Tests/TestResults/ untouched/excluded.
 
 Next R33 candidates (not yet fixed): impersonate/stop accepted target evidence does not
 bind original source actor; add source id/role/credentialstamp/sid proof at event with
