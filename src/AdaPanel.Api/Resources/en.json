@@ -211,6 +211,7 @@
   "notifications.settings_saved": "The notification settings were saved.",
   "notifications.test_sent": "The test notification was sent.",
   "backup.not_found": "The requested backup could not be found.",
+  "backup.archive_corrupt": "The backup archive is corrupt or incomplete; the operation was stopped. Try again with a valid backup.",
   "backup.created": "The backup was created.",
   "backup.restored": "The backup was restored.",
   "backup.remote_target_invalid": "The remote backup target is invalid.",

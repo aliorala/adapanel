@@ -58,14 +58,14 @@ public sealed partial class BackupService
             {
                 using (var zip = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
                 {
+                    var buffer = new byte[81920];
                     foreach (var (entry, name) in selected)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         var destination = zip.CreateEntry(name, CompressionLevel.Fastest);
                         if (name.EndsWith('/')) continue;
-                        await using var input = entry.Open();
                         await using var target = destination.Open();
-                        await input.CopyToAsync(target, cancellationToken);
+                        await CopyVerifiedSelectedEntryAsync(entry, target, buffer, cancellationToken);
                     }
                 }
                 await output.FlushAsync(cancellationToken);
@@ -85,6 +85,55 @@ public sealed partial class BackupService
             TryDeleteFile(path);
             throw;
         }
+    }
+
+    private static async Task CopyVerifiedSelectedEntryAsync(ZipArchiveEntry entry, Stream output,
+        byte[] buffer, CancellationToken token)
+    {
+        try
+        {
+            // ZipArchive decompresses entries but .NET 8 does not validate their CRC or
+            // declared length. Repacking unchecked data would give damaged legacy bytes
+            // a new valid ZIP checksum. Only the selected entries need to be decoded.
+            await using var input = entry.Open();
+            var remaining = entry.Length;
+            if (remaining < 0) throw new InvalidDataException();
+            var crc = uint.MaxValue;
+            while (remaining > 0)
+            {
+                token.ThrowIfCancellationRequested();
+                var read = await input.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), token);
+                token.ThrowIfCancellationRequested();
+                if (read == 0) throw new InvalidDataException();
+                for (var i = 0; i < read; i++) crc = SelectedEntryCrcTable[(crc ^ buffer[i]) & 255] ^ (crc >> 8);
+                await output.WriteAsync(buffer.AsMemory(0, read), token);
+                remaining -= read;
+            }
+            // Do not write excess decompressed content beyond the declared length.
+            var extra = await input.ReadAsync(buffer.AsMemory(0, 1), token);
+            token.ThrowIfCancellationRequested();
+            if (extra != 0 || ~crc != entry.Crc32) throw new InvalidDataException();
+        }
+        catch (InvalidDataException)
+        {
+            // Do not expose entry names or decompressor diagnostics in the response.
+            // The outer owner deletes the incomplete private output and releases its lease.
+            throw new AppException("backup.archive_corrupt", 400, 400);
+        }
+    }
+
+    private static readonly uint[] SelectedEntryCrcTable = CreateSelectedEntryCrcTable();
+
+    private static uint[] CreateSelectedEntryCrcTable()
+    {
+        var table = new uint[256];
+        for (uint i = 0; i < table.Length; i++)
+        {
+            var value = i;
+            for (var bit = 0; bit < 8; bit++) value = (value >> 1) ^ ((value & 1) == 0 ? 0 : 0xEDB88320u);
+            table[i] = value;
+        }
+        return table;
     }
 
     private static string SelectedEntryPath(string? value)

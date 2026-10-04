@@ -211,6 +211,7 @@
   "notifications.settings_saved": "Bildirim ayarları kaydedildi.",
   "notifications.test_sent": "Test bildirimi gönderildi.",
   "backup.not_found": "Istenen yedek bulunamadı.",
+  "backup.archive_corrupt": "Yedek arşivi bozuk veya eksik; işlem durduruldu. Sağlam bir yedekle yeniden deneyin.",
   "backup.created": "Yedek oluşturuldu.",
   "backup.restored": "Yedek geri yüklendi.",
   "backup.remote_target_invalid": "Uzak yedek hedefi geçersiz.",

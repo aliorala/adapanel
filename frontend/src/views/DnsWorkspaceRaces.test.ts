@@ -4,6 +4,7 @@ import { createRenderer, h, nextTick, ssrContextKey, type App, type Component } 
 import DnsView from "./DnsView.vue";
 import { deleteDnsRecord, getDnsZone, resetDnsDefaults, setDnssec, setDnsZoneMode, upsertDnsRecord, type DnsZone } from "../api/dns";
 import { useSitesStore } from "../stores/sites";
+import { useAuthStore } from "../stores/auth";
 
 const confirm = vi.hoisted(() => vi.fn());
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
@@ -16,7 +17,9 @@ beforeEach(() => {
   confirm.mockImplementation(async options => { await options.action?.(); return true; });
 });
 afterEach(() => { app?.unmount(); vi.clearAllMocks(); });
-function zone(siteName: string): DnsZone { return { siteName, zoneName: siteName, nameServers: [], records: [] } as unknown as DnsZone; }
+function zone(siteName: string): DnsZone { return { siteName, zoneName: siteName, nameServers: [], records: [], zoneTransferIps: [],
+  masterServers: [], effectiveNotifyServers: [], windowsZoneType: "Primary", isSecondary: false, isWindowsDnsAvailable: true,
+  isWindowsZonePresent: true, source: "windows-dns", statusMessage: "dns.windows_zone_present", isDnssecSigned: false, dnssecDsRecords: [] }; }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }
 type State = {
   zone: DnsZone | null; busy: boolean; editingId: string; showRecordForm: boolean;
@@ -26,6 +29,7 @@ type State = {
 async function mount() {
   const renderer = createRenderer<object, object>({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
   const pinia = createPinia(); setActivePinia(pinia);
+  useAuthStore().session = { isAuthenticated: true, requiresSetupWizard: false, user: { id: "actor", userName: "actor", email: "actor@example.test", role: "Administrator", preferredLanguage: "en", isTwoFactorEnabled: false, isActive: true, lastLoginAtUtc: null } };
   useSitesStore().selectedSiteName = "a.test";
   app = renderer.createApp({ ...DnsView, render: () => h("section") } as Component).use(pinia);
   app.provide(ssrContextKey, {});
