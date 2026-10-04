@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { toRaw } from "vue";
 import { apiClient, getSessionEpoch } from "../api/client";
 import { UserFacingError } from "../utils/apiError";
-import { extractApiMessage } from "./auth";
+import { extractApiMessage, useAuthStore } from "./auth";
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -34,6 +34,7 @@ export type NetworkInterfaceMetric = {
 };
 
 export type SystemOverview = {
+  isRestricted: boolean;
   cpuMeasured: boolean;
   memoryMeasured: boolean;
   disksMeasured: boolean;
@@ -73,7 +74,7 @@ const optionalFlag = (value: unknown) => value === undefined || typeof value ===
 const invalid = () => new UserFacingError("panel.monitor.measurementFailed");
 function measuredOverview(envelope: ApiEnvelope<SystemOverview>): SystemOverview {
   const value = envelope?.data;
-  if (envelope?.success !== true || !value ||
+  if (envelope?.success !== true || !value || typeof value.isRestricted !== "boolean" ||
     [value.machineName, value.operatingSystem, value.osArchitecture, value.frameworkDescription, value.panelVersion, value.currentServerTimeUtc, value.bootTimeUtc, value.uptime].some(item => typeof item !== "string") ||
     !percent(value.cpuUsagePercent) || !percent(value.memoryUsagePercent) ||
     [value.logicalProcessorCount, value.totalMemoryBytes, value.availableMemoryBytes, value.usedMemoryBytes].some(item => !nonnegative(item)) ||
@@ -98,13 +99,15 @@ function measuredHistory(envelope: ApiEnvelope<SystemHistorySample[]>): SystemHi
   return envelope.data.map(row => ({ ...row, cpuMeasured: row.cpuMeasured === true, memoryMeasured: row.memoryMeasured === true, networkMeasured: row.networkMeasured === true }));
 }
 type RequestState = { requestScope: object };
-type Requests = { epoch: number; scope: object; overview: number; history: number };
+type Requests = { epoch: number; scope: object; actor: string; overview: number; history: number };
 const requestsByStore = new WeakMap<object, Requests>();
 function requestsFor(store: RequestState) {
   const key = toRaw(store), scope = toRaw(store.requestScope);
+  const session = useAuthStore().session;
+  const actor = JSON.stringify([session?.isAuthenticated, session?.user?.id, session?.user?.role]);
   let requests = requestsByStore.get(key);
-  if (!requests || requests.epoch !== getSessionEpoch() || requests.scope !== scope) {
-    requests = { epoch: getSessionEpoch(), scope, overview: 0, history: 0 }; requestsByStore.set(key, requests);
+  if (!requests || requests.epoch !== getSessionEpoch() || requests.scope !== scope || requests.actor !== actor) {
+    requests = { epoch: getSessionEpoch(), scope, actor, overview: 0, history: 0 }; requestsByStore.set(key, requests);
   }
   return requests;
 }

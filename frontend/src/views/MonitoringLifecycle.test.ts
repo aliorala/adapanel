@@ -1,3 +1,4 @@
+import { useAuthStore } from "../stores/auth";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { createRenderer, h, nextTick, ssrContextKey, type App, type Component } from "vue";
@@ -24,9 +25,10 @@ async function flush() { for (let i = 0; i < 10; i++) await nextTick(); }
 async function mount(beforeMount?: () => void) {
   const renderer = createRenderer<object, object>({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
   const pinia = createPinia(); setActivePinia(pinia);
+  useAuthStore().session = { isAuthenticated: true, requiresSetupWizard: false, user: { id: "admin", userName: "admin", email: "a@example.test", role: "Administrator", preferredLanguage: "en", isTwoFactorEnabled: false, isActive: true, lastLoginAtUtc: null } };
   vi.spyOn(useSystemStore(), "fetchHistory").mockResolvedValue([]);
   beforeMount?.();
-  app = renderer.createApp({ ...MonitoringView, render: () => h("section") } as Component, { overview: null, loading: false }).use(pinia);
+  app = renderer.createApp({ ...MonitoringView, render: () => h("section") } as Component, { overview: { isRestricted: false, disks: [], networkInterfaces: [] }, overviewConfirmed: true, loading: false }).use(pinia);
   app.provide(ssrContextKey, {});
   const state = (app.mount({}).$ as unknown as { setupState: State }).setupState;
   await flush(); return state;

@@ -5459,5 +5459,13 @@
   "panel.health.domainsNeedAttention": "İncelenecek bulgular var",
   "panel.health.lastKnownServices": "Son okunan hizmet listesi gösteriliyor. Güncel durum doğrulanana kadar yeniden başlatma kapalı.",
   "panel.monitor.measurementFailed": "Kaynak ölçümü doğrulanamadı. Yenileyip tekrar deneyin.",
-  "health.restart_unverified": "Yeniden başlatma komutu tamamlandı, ancak hizmetin çalıştığı doğrulanamadı. Güncel durumunu kontrol edin."
+  "health.restart_unverified": "Yeniden başlatma komutu tamamlandı, ancak hizmetin çalıştığı doğrulanamadı. Güncel durumunu kontrol edin.",
+
+  "panel.dashboard.scoped.title": "Hesabınıza genel bakış",
+  "panel.dashboard.scoped.hint": "Sitelerinizi ve veritabanlarınızı buradan takip edin; işlem yapmak için ilgili karta dokunun.",
+  "panel.dashboard.countUnmeasured": "Sayı henüz doğrulanmadı. Ayrıntılar için açın.",
+  "panel.dashboard.access.current": "Geçerli panel adresi",
+  "panel.dashboard.access.noAdditionalIps": "Ek sunucu IP adresi bulunamadı.",
+  "panel.monitor.restricted": "Sunucu izleme bilgileri yalnızca yöneticilere açıktır.",
+  "system.ip_addresses_unmeasured": "Sunucu IP adresleri okunamadı. Yeniden deneyin."
 }

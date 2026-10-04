@@ -1,7 +1,7 @@
 <template>
   <div class="overview-stack">
     <section
-      v-if="panelUpdate && panelUpdate.isUpdateAvailable"
+      v-if="showServerResources && panelUpdate && panelUpdate.isUpdateAvailable"
       class="panel update-banner"
       role="alert">
       <span class="ub-badge" aria-hidden="true">↑</span>
@@ -15,7 +15,7 @@
     <!-- Güncelleme DENETİMİ yapılamadıysa bu SÖYLENİR. Sessizce hiçbir şey göstermek,
          "son sürümdesiniz" demekle aynı etkiyi yapıyor ve bekleyen güncelleme gizli kalıyordu. -->
     <SectionLoadError
-      v-else-if="panelUpdateError"
+      v-else-if="showServerResources && panelUpdateError"
       :message="panelUpdateError"
       @retry="emit('retryPanelUpdate')" />
 
@@ -23,7 +23,7 @@
       Dikkat özeti: panele girer girmez "N site · N güncelleme bekliyor · N sertifika yakında
       bitiyor" görünür. Tıklanan parça ya ilgili ekrana ya da dikkat çekmecesine götürür.
     -->
-    <section v-if="attention" :class="['panel', 'attention-card', attentionTone]">
+    <section v-if="showServerResources && attention" :class="['panel', 'attention-card', attentionTone]">
       <div class="ac-head">
         <span class="tile-label">{{ t("panel.attention.summaryTitle") }}</span>
         <button class="secondary compact" @click="go('attention')">{{ t("panel.attention.viewAll") }}</button>
@@ -72,34 +72,39 @@
       yani bir tık uzakta ve tarayıcının kendi metin aramasıyla yine bulunabilir.
     -->
     <section class="panel">
-      <p v-if="overviewError" class="notice error measurement-notice" role="alert"><span>{{ t('panel.monitor.overviewFailed') }}</span><button class="secondary compact" :disabled="loading" @click="emit('retryOverview')">{{ t('panel.common.retry') }}</button></p>
-      <p v-else-if="overview && (cpuValue === null || memoryValue === null || overview.disksMeasured !== true || overview.networkMeasured !== true)" class="notice warn" role="status">{{ t('panel.monitor.partialMeasurement') }}</p>
-      <div v-if="overview" class="resource-grid">
+      <div v-if="isRestricted" class="scoped-dashboard">
+        <div><h2>{{ t('panel.dashboard.scoped.title') }}</h2><p class="meta">{{ t('panel.dashboard.scoped.hint') }}</p></div>
+        <span v-if="overviewConfirmed && overview?.isRestricted && overview.panelVersion" class="scope-version">AdaPanel {{ overview.panelVersion }}</span>
+      </div>
+      <p v-if="!isRestricted && overviewError" class="notice error measurement-notice" role="alert"><span>{{ t('panel.monitor.overviewFailed') }}</span><button class="secondary compact" :disabled="loading" @click="emit('retryOverview')">{{ t('panel.common.retry') }}</button></p>
+      <p v-else-if="!isRestricted && !showServerResources" class="meta measurement-notice" role="status"><span>{{ t(loading ? 'panel.common.loading' : 'panel.monitor.unmeasured') }}</span><button class="secondary compact" :disabled="loading" @click="emit('retryOverview')">{{ t('panel.common.retry') }}</button></p>
+      <p v-else-if="showServerResources && overview && (cpuValue === null || memoryValue === null || overview.disksMeasured !== true || overview.networkMeasured !== true)" class="notice warn" role="status">{{ t('panel.monitor.partialMeasurement') }}</p>
+      <div v-if="showServerResources && overview" class="resource-grid">
         <ResourceMetric kind="cpu" :label="t('panel.system.cpu')" :value="cpuValue" :detail="overview.logicalProcessorCount + ' ' + t('panel.system.cores')" />
         <ResourceMetric kind="memory" :label="t('panel.system.memory')" :value="memoryValue" :detail="memoryValue === null ? '' : formatBytes(overview.usedMemoryBytes) + ' / ' + formatBytes(overview.totalMemoryBytes)" />
         <ResourceMetric kind="disk" :label="primaryDisk?.name || t('panel.system.disks')" :value="diskValue" :detail="primaryDisk && diskValue !== null ? formatBytes(primaryDisk.usedBytes) + ' / ' + formatBytes(primaryDisk.totalBytes) : ''" :hint="primaryDisk && diskValue !== null ? t('panel.system.free') + ': ' + formatBytes(primaryDisk.freeBytes) : ''" />
       </div>
 
       <div class="summary-grid">
-        <button type="button" :class="['summary-card', { clickable: can('sites') }]" :disabled="!can('sites')" @click="can('sites') && go('sites')">
+        <button v-if="can('sites')" type="button" class="summary-card clickable" @click="go('sites')">
           <span class="tile-label">{{ t("panel.sites.title") }}</span>
-          <strong>{{ sitesCount }}</strong>
-          <small>{{ t("panel.sites.bindings") }}: {{ totalBindingCount }}</small>
+          <strong>{{ sitesCount ?? '—' }}</strong>
+          <small>{{ sitesCount === null ? t('panel.dashboard.countUnmeasured') : t("panel.sites.bindings") + ': ' + (totalBindingCount ?? '—') }}</small>
         </button>
 
-        <button type="button" :class="['summary-card', { clickable: can('sites') }]" :disabled="!can('sites')" @click="can('sites') && go('sites')">
+        <button v-if="canReadFtpCount && can('sites')" type="button" class="summary-card clickable" @click="go('sites')">
           <span class="tile-label">{{ t("panel.ftp.title") }}</span>
-          <strong>{{ ftpUserCount }}</strong>
-          <small>{{ t("panel.ftp.cardHint") }}</small>
+          <strong>{{ ftpUserCount ?? '—' }}</strong>
+          <small>{{ t(ftpUserCount === null ? 'panel.dashboard.countUnmeasured' : 'panel.ftp.cardHint') }}</small>
         </button>
 
-        <button type="button" :class="['summary-card', { clickable: can('database') }]" :disabled="!can('database')" @click="can('database') && go('database')">
+        <button v-if="can('database')" type="button" class="summary-card clickable" @click="go('database')">
           <span class="tile-label">{{ t("panel.database.title") }}</span>
-          <strong>{{ databaseCount }}</strong>
-          <small>{{ t("panel.database.cardHint") }}</small>
+          <strong>{{ databaseCount ?? '—' }}</strong>
+          <small>{{ t(databaseCount === null ? 'panel.dashboard.countUnmeasured' : 'panel.database.cardHint') }}</small>
         </button>
 
-        <button type="button" :class="['summary-card', { clickable: can('security') }]" :disabled="!can('security')" @click="can('security') && go('security')">
+        <button v-if="showServerResources && can('security')" type="button" class="summary-card clickable" @click="go('security')">
           <span class="tile-label">{{ t("panel.dashboard.accessProtection") }}</span>
           <strong>{{ securityStatusLabel }}</strong>
           <small>{{ t("panel.dashboard.accessProtectionHint") }}</small>
@@ -122,7 +127,7 @@
          ve uydurma harf çiftleri hiçbir şey öğretmiyordu. 34px'lik ikon karesi gidince kart
          yüksekliği 58px'ten ~34px'e indi; şerit toplamda ~106px'ten ~66px'e düştü.
     -->
-    <section class="panel quick-actions-panel">
+    <section v-if="['sites', 'mail', 'database', 'files', 'tools'].some(can)" class="panel quick-actions-panel">
       <span class="tile-label">{{ t("panel.dashboard.quickActions") }}</span>
       <div class="quick-actions">
         <button v-if="can('sites')" class="qa-btn" @click="go('sites')">{{ t("panel.navigation.sites") }}</button>
@@ -133,7 +138,7 @@
       </div>
     </section>
 
-    <div class="overview-columns">
+    <div v-if="showServerResources" class="overview-columns">
       <section class="panel server-info-panel">
         <div class="section-head">
           <h2>{{ t("panel.system.serverInfo") }}</h2>
@@ -275,7 +280,7 @@
       ekran okuyucuya "genişletilebilir" der ve tarayıcının sayfa içi aramasıyla kapalıyken de
       bulunur. Yani bilgi GİZLENMİYOR, sırası değişiyor.
     -->
-    <section class="panel access-panel">
+    <section v-if="showServerResources" class="panel access-panel">
       <details class="reference-fold">
         <summary class="reference-summary">
           <span class="tile-label">{{ t("panel.dashboard.reference.title") }}</span>
@@ -287,6 +292,9 @@
             <span class="tile-label">{{ t("panel.dashboard.access.title") }}</span>
             <small>{{ t("panel.dashboard.access.hint") }}</small>
           </div>
+          <p v-if="ipLoading" class="meta" role="status">{{ t('panel.common.loading') }}</p>
+          <p v-else-if="ipError" class="notice error measurement-notice" role="alert"><span>{{ ipError }}</span><button class="secondary compact" :disabled="!canReadServerIps || ipLoading" @click="loadServerIps">{{ t('panel.common.retry') }}</button></p>
+          <p v-else-if="ipLoaded && accessLinks.length === 1" class="meta" role="status">{{ t('panel.dashboard.access.noAdditionalIps') }}</p>
           <ul class="access-list">
             <li v-for="link in accessLinks" :key="link.url" class="access-row">
               <span class="access-tag">{{ link.label }}</span>
@@ -320,7 +328,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import ResourceMetric from "../components/ResourceMetric.vue";
 import { useI18n } from "vue-i18n";
 import { getServerIpAddresses } from "../api/system";
@@ -330,6 +338,8 @@ import { copyToClipboard } from "../utils/clipboard";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import { formatBytes as sharedFormatBytes } from "../utils/bytes";
 import { formatDateTime, formatTimeSpan as sharedFormatTimeSpan } from "../utils/datetime";
+import { getSessionEpoch } from "../api/client";
+import { extractApiMessage, useAuthStore } from "../stores/auth";
 
 type DiskUsage = {
   measured: boolean;
@@ -348,6 +358,7 @@ type NetworkInterface = {
 };
 
 type SystemOverview = {
+  isRestricted: boolean;
   cpuMeasured: boolean;
   memoryMeasured: boolean;
   disksMeasured: boolean;
@@ -383,10 +394,11 @@ const props = defineProps<{
   overviewConfirmed?: boolean;
   overviewError?: string;
   loading: boolean;
-  sitesCount: number;
-  totalBindingCount: number;
-  ftpUserCount: number;
-  databaseCount: number;
+  sitesCount: number | null;
+  totalBindingCount: number | null;
+  ftpUserCount: number | null;
+  databaseCount: number | null;
+  canReadFtpCount?: boolean;
   securityStatusLabel: string;
   securePath: string;
   auditItems: AuditItem[];
@@ -400,6 +412,13 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
+const auth = useAuthStore(), mountedEpoch = getSessionEpoch(), actor = auth.session?.user?.id, role = auth.session?.user?.role;
+let disposed = false;
+const current = () => !disposed && mountedEpoch === getSessionEpoch() && auth.session?.isAuthenticated === true && auth.session.user?.id === actor && auth.session.user?.role === role;
+const fullScope = () => current() && role === "Administrator" && props.overviewConfirmed === true && props.overview?.isRestricted === false;
+const isRestricted = computed(() => auth.session?.user?.role !== "Administrator" || props.overview?.isRestricted === true);
+const showServerResources = computed(fullScope);
+const canReadFtpCount = computed(() => current() && props.canReadFtpCount === true && ["Administrator", "Reseller"].includes(role ?? "") && can("sites"));
 
 // Bekleyen güncellemeler: bileşen güncellemeleri ("software") + panel güncellemesi ("updates").
 const pendingUpdateItems = computed(() => (props.attention?.items ?? [])
@@ -450,29 +469,50 @@ function go(sectionId: string) {
 // Panele erişim adresleri: bu cihazdan (localhost) + ağdan (sunucu IPv4'leri). Şema/port mevcut
 // pencereden, güvenli yol prop'tan; IP'ler API'den. Kurulumdan sonra "nasıl erişirim" sorusunu yanıtlar.
 const serverIps = ref<string[]>([]);
+const ipLoading = ref(false), ipError = ref(""), ipLoaded = ref(false);
+const canReadServerIps = computed(fullScope);
+let ipRequest = 0;
 const copiedUrl = ref("");
 const copyFailed = ref("");
+let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
-onMounted(async () => {
+async function loadServerIps() {
+  if (!fullScope() || ipLoading.value) return;
+  const request = ++ipRequest;
+  const owns = () => fullScope() && request === ipRequest;
+  ipLoading.value = true; ipError.value = "";
   try {
     const addresses = await getServerIpAddresses();
-    serverIps.value = addresses
-      .filter((item) => item.family === "InterNetwork" || item.family === "IPv4" || /^\d+\.\d+\.\d+\.\d+$/.test(item.address))
+    if (!owns()) return;
+    serverIps.value = [...new Set(addresses
       .map((item) => item.address)
-      .filter((address) => address && !address.startsWith("127.") && address !== "::1");
-  } catch {
-    serverIps.value = [];
+      .filter(address => !address.startsWith("127.") && address !== "::1" && address !== "0.0.0.0" && address !== "::"))];
+    ipLoaded.value = true;
+  } catch (error) {
+    if (owns()) { serverIps.value = []; ipLoaded.value = false; ipError.value = t(extractApiMessage(error)); }
+  } finally {
+    if (owns()) ipLoading.value = false;
   }
-});
+}
+watch(showServerResources, allowed => {
+  ++ipRequest; serverIps.value = []; ipError.value = ""; ipLoaded.value = false; ipLoading.value = false;
+  if (copyTimer !== undefined) { clearTimeout(copyTimer); copyTimer = undefined; }
+  copiedUrl.value = ""; copyFailed.value = "";
+  if (allowed) void loadServerIps();
+}, { flush: "sync" });
+onMounted(() => { void loadServerIps(); });
+onUnmounted(() => { disposed = true; ++ipRequest; if (copyTimer !== undefined) clearTimeout(copyTimer); });
 
 const accessLinks = computed(() => {
   const protocol = window.location.protocol;
   const port = window.location.port ? `:${window.location.port}` : "";
   const path = (props.securePath || "").replace(/^\/+|\/+$/g, "");
   const suffix = `${port}${path ? `/${path}` : ""}`;
-  const links = [{ label: t("panel.dashboard.access.local"), url: `${protocol}//localhost${suffix}` }];
+  const links = [{ label: t("panel.dashboard.access.current"), url: `${window.location.origin}${path ? `/${path}` : ""}` }];
   for (const ip of serverIps.value) {
-    links.push({ label: ip, url: `${protocol}//${ip}${suffix}` });
+    const host = ip.includes(":") ? `[${ip}]` : ip;
+    const url = `${protocol}//${host}${suffix}`;
+    if (!links.some(link => link.url === url)) links.push({ label: ip, url });
   }
   return links;
 });
@@ -481,12 +521,17 @@ const accessLinks = computed(() => {
 const primaryHost = computed(() => serverIps.value[0] || window.location.hostname || "127.0.0.1");
 
 async function copyAccess(url: string) {
+  if (!fullScope() || !accessLinks.value.some(link => link.url === url)) return;
+  const request = ipRequest;
   // window.prompt kaldırıldı: tarayıcı diyalogları engellendiğinde akış sessizce ölüyordu.
   // Ama SESSİZ de kalınmaz: eski hâli en azından adresi bir kutuda gösteriyordu, yani
   // kullanıcının elle kopyalama şansı vardı. Kopyalanamadıysa bunu SÖYLERİZ.
-  if (!(await copyToClipboard(url))) {
+  const copied = await copyToClipboard(url);
+  if (!fullScope() || request !== ipRequest) return;
+  if (copyTimer !== undefined) clearTimeout(copyTimer);
+  if (!copied) {
     copyFailed.value = url;
-    window.setTimeout(() => {
+    copyTimer = setTimeout(() => {
       if (copyFailed.value === url) copyFailed.value = "";
     }, 4000);
     return;
@@ -495,15 +540,15 @@ async function copyAccess(url: string) {
   copyFailed.value = "";
 
   copiedUrl.value = url;
-  window.setTimeout(() => {
+  copyTimer = setTimeout(() => {
     if (copiedUrl.value === url) copiedUrl.value = "";
   }, 1500);
 }
 
 const primaryDisk = computed(() => props.overview?.disks[0] ?? null);
-const cpuValue = computed(() => props.overviewConfirmed !== false && props.overview?.cpuMeasured === true ? props.overview.cpuUsagePercent : null);
-const memoryValue = computed(() => props.overviewConfirmed !== false && props.overview?.memoryMeasured === true ? props.overview.memoryUsagePercent : null);
-const diskValue = computed(() => props.overviewConfirmed !== false && primaryDisk.value?.measured === true ? primaryDisk.value.usagePercent : null);
+const cpuValue = computed(() => showServerResources.value && props.overview?.cpuMeasured === true ? props.overview.cpuUsagePercent : null);
+const memoryValue = computed(() => showServerResources.value && props.overview?.memoryMeasured === true ? props.overview.memoryUsagePercent : null);
+const diskValue = computed(() => showServerResources.value && primaryDisk.value?.measured === true ? primaryDisk.value.usagePercent : null);
 
 /*
  * DİSK TABLOSU: EN DOLU DİSK EN ÜSTTE.
@@ -527,7 +572,7 @@ const METER_DANGER_PERCENT = 90;
  * disk hakkında söylenecek bir şey yoktur (her satırı yeşile boyamak gürültüdür).
  */
 function diskTone(disk: DiskUsage): "" | "warn" | "danger" {
-  if (props.overviewConfirmed === false || disk.measured !== true) return "";
+  if (!showServerResources.value || disk.measured !== true) return "";
   if (disk.usagePercent >= METER_DANGER_PERCENT) {
     return "danger";
   }
@@ -563,6 +608,10 @@ function formatTimeSpan(value: string): string {
 </script>
 
 <style scoped>
+.scoped-dashboard { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-12); margin-bottom: var(--sp-16); }
+.scoped-dashboard h2 { margin: 0 0 var(--sp-8); }
+.scoped-dashboard p { margin: 0; }
+.scope-version { color: var(--text-muted); font-size: var(--fs-xs); white-space: nowrap; }
 .measurement-notice { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-12); flex-wrap: wrap; }
 .measurement-notice span { flex: 1 1 240px; }
 .measurement-notice button { flex: 0 0 auto; width: auto; }
@@ -596,7 +645,7 @@ function formatTimeSpan(value: string): string {
 }
 
 .summary-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
 }
 
 /* `.mini-row` bu listeden ÇIKARILDI: satırın kendi kenarlığı ve kendi zemini olması, onu

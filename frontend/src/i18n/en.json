@@ -5459,5 +5459,13 @@
   "panel.health.domainsNeedAttention": "Findings need attention",
   "panel.health.lastKnownServices": "The last read service list is shown. Restart is disabled until the current status is confirmed.",
   "panel.monitor.measurementFailed": "Resource measurements could not be verified. Refresh and try again.",
-  "health.restart_unverified": "The restart command completed, but the service could not be verified as running. Check its current status."
+  "health.restart_unverified": "The restart command completed, but the service could not be verified as running. Check its current status.",
+
+  "panel.dashboard.scoped.title": "Your account at a glance",
+  "panel.dashboard.scoped.hint": "Keep track of your sites and databases here. Open a card to manage its resources.",
+  "panel.dashboard.countUnmeasured": "Count not yet confirmed. Open for details.",
+  "panel.dashboard.access.current": "Current panel address",
+  "panel.dashboard.access.noAdditionalIps": "No additional server IP addresses were found.",
+  "panel.monitor.restricted": "Server monitoring is available to administrators only.",
+  "system.ip_addresses_unmeasured": "Server IP addresses could not be read. Try again."
 }

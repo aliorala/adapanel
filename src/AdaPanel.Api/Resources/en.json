@@ -274,5 +274,7 @@
   "notifications.settings_revision_required": "The displayed notification settings could not be verified. Refresh them and try again.",
   "notifications.settings_changed": "Notification settings changed; the test was not started. Check the current destination.",
   "errorReporting.settings_revision_required": "The displayed reporting settings could not be verified. Refresh them and try again.",
-  "health.restart_unverified": "The restart command completed, but the service could not be verified as running. Check its current status."
+  "health.restart_unverified": "The restart command completed, but the service could not be verified as running. Check its current status.",
+
+  "system.ip_addresses_unmeasured": "Server IP addresses could not be read. Try again."
 }

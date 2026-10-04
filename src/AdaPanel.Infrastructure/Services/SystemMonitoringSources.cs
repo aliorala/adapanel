@@ -8,9 +8,11 @@ internal sealed class SystemMonitoringSources
     internal required Func<SystemMemorySnapshot> ReadMemory { get; init; }
     internal required Func<IReadOnlyCollection<SystemDiskSnapshot>> ReadDisks { get; init; }
     internal required Func<IReadOnlyCollection<SystemNetworkSnapshot>> ReadNetwork { get; init; }
+    internal Func<IEnumerable<SystemIpAddressSnapshot>> ReadIpAddresses { get; init; } = () => [];
     internal TimeProvider Clock { get; init; } = TimeProvider.System;
 }
 
 internal sealed record SystemMemorySnapshot(ulong TotalPhysicalMemory, ulong AvailablePhysicalMemory);
 internal sealed record SystemDiskSnapshot(string Name, string Label, string Format, long TotalBytes, long FreeBytes);
 internal sealed record SystemNetworkSnapshot(string Id, string Name, string Type, string Status, long BytesReceived, long BytesSent);
+internal sealed record SystemIpAddressSnapshot(global::System.Net.IPAddress Address, string InterfaceName);

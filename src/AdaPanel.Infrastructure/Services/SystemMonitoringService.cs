@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.System;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
@@ -30,7 +31,8 @@ public sealed class SystemMonitoringService : ISystemMonitoringService, IDisposa
             ReadCpu = () => cpuCounter?.NextValue(),
             ReadMemory = ReadMemoryStatus,
             ReadDisks = ReadDisks,
-            ReadNetwork = ReadNetworkSnapshots
+            ReadNetwork = ReadNetworkSnapshots,
+            ReadIpAddresses = ReadIpAddressSnapshots
         };
     }
 
@@ -132,52 +134,44 @@ public sealed class SystemMonitoringService : ISystemMonitoringService, IDisposa
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+            foreach (var address in sources.ReadIpAddresses())
             {
-                if (nic.OperationalStatus != OperationalStatus.Up ||
-                    nic.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+                cancellationToken.ThrowIfCancellationRequested();
+                var ip = address.Address;
+                if (ip.IsIPv6LinkLocal || System.Net.IPAddress.IsLoopback(ip))
                 {
                     continue;
                 }
 
-                foreach (var unicast in nic.GetIPProperties().UnicastAddresses)
+                var text = ip.ToString();
+                var scopeIndex = text.IndexOf('%');
+                if (scopeIndex >= 0)
                 {
-                    var ip = unicast.Address;
-                    if (ip.IsIPv6LinkLocal || System.Net.IPAddress.IsLoopback(ip))
-                    {
-                        continue;
-                    }
-
-                    var text = ip.ToString();
-                    var scopeIndex = text.IndexOf('%');
-                    if (scopeIndex >= 0)
-                    {
-                        text = text[..scopeIndex];
-                    }
-
-                    if (!seen.Add(text))
-                    {
-                        continue;
-                    }
-
-                    result.Add(new ServerIpAddressDto
-                    {
-                        Address = text,
-                        Family = ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 ? "IPv6" : "IPv4",
-                        InterfaceName = nic.Name
-                    });
+                    text = text[..scopeIndex];
                 }
+
+                if (!seen.Add(text)) continue;
+                result.Add(new ServerIpAddressDto
+                {
+                    Address = text,
+                    Family = ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 ? "IPv6" : "IPv4",
+                    InterfaceName = address.InterfaceName
+                });
             }
+            cancellationToken.ThrowIfCancellationRequested();
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             logger.LogWarning(exception, "Server IP addresses could not be enumerated.");
+            throw new AppException("system.ip_addresses_unmeasured", httpStatusCode: 503);
         }
 
         var ordered = result
             .OrderBy(item => item.Family == "IPv4" ? 0 : 1)
             .ThenBy(item => item.Address, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult<IReadOnlyCollection<ServerIpAddressDto>>(ordered);
     }
 
@@ -353,6 +347,17 @@ public sealed class SystemMonitoringService : ISystemMonitoringService, IDisposa
             return new SystemNetworkSnapshot(network.Id, network.Name, network.NetworkInterfaceType.ToString(),
                 network.OperationalStatus.ToString(), statistics.BytesReceived, statistics.BytesSent);
         }).ToArray();
+
+    private static IEnumerable<SystemIpAddressSnapshot> ReadIpAddressSnapshots()
+    {
+        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.OperationalStatus != OperationalStatus.Up || nic.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+                continue;
+            foreach (var unicast in nic.GetIPProperties().UnicastAddresses)
+                yield return new SystemIpAddressSnapshot(unicast.Address, nic.Name);
+        }
+    }
 
     private static SystemMemorySnapshot ReadMemoryStatus()
     {

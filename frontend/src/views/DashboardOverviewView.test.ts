@@ -1,3 +1,5 @@
+import { createPinia, setActivePinia } from "pinia";
+import { useAuthStore } from "../stores/auth";
 import { afterEach, expect, it, vi } from "vitest";
 import { createRenderer, h, ssrContextKey, type App, type Component } from "vue";
 import DashboardOverviewView from "./DashboardOverviewView.vue";
@@ -7,6 +9,8 @@ vi.mock("../api/system", () => ({ getServerIpAddresses: vi.fn(async () => []) })
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 let app: App | undefined;
 function mount(items: AttentionItem[], failedSources: string[] = []) {
+  const pinia = createPinia(); setActivePinia(pinia);
+  useAuthStore().session = { isAuthenticated: true, requiresSetupWizard: false, user: { id: "admin", userName: "admin", email: "a@example.test", role: "Administrator", preferredLanguage: "en", isTwoFactorEnabled: false, isActive: true, lastLoginAtUtc: null } };
   const renderer = createRenderer<object, object>({
     createElement: () => ({}), createText: () => ({}), createComment: () => ({}),
     insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {},
@@ -17,6 +21,7 @@ function mount(items: AttentionItem[], failedSources: string[] = []) {
     securityStatusLabel: "", securePath: "panel", auditItems: [], allowedSections: [], panelUpdate: null,
     attention: { ...emptyAttentionSummary(), items, failedSources }
   });
+  app.use(pinia);
   app.provide(ssrContextKey, {});
   return (app.mount({}).$ as unknown as { setupState: { pendingUpdateCount: number | null; pendingUpdateTarget: string; expiringCertificateCount: number | null; attentionTone: string } }).setupState;
 }

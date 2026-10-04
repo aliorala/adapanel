@@ -1,3 +1,4 @@
+import { useAuthStore } from "./auth";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { createRenderer, h, nextTick, ssrContextKey, type App, type Component } from "vue";
@@ -12,7 +13,7 @@ vi.mock("../api/processes", () => ({ getProcessSnapshot: vi.fn(() => new Promise
 type MeasuredOverview = SystemOverview & { cpuMeasured: boolean; memoryMeasured: boolean; disksMeasured: boolean; networkMeasured: boolean };
 type MeasuredSample = SystemHistorySample & { cpuMeasured: boolean; memoryMeasured: boolean; networkMeasured: boolean };
 type State = { cpuValue: number | null; memoryValue: number | null; diskValue: number | null; cpuSparks: string[]; memSparks: string[]; netDownSparks: string[]; hasCpuTrend: boolean };
-const overview = (cpuUsagePercent = 10): MeasuredOverview => ({ machineName: "fixture", operatingSystem: "Windows", osArchitecture: "x64", frameworkDescription: ".NET", panelVersion: "0.8.77", currentServerTimeUtc: "2026-10-04T10:00:00Z", bootTimeUtc: "2026-10-04T00:00:00Z", uptime: "10:00:00", cpuUsagePercent, logicalProcessorCount: 4, totalMemoryBytes: 1000, availableMemoryBytes: 800, usedMemoryBytes: 200, memoryUsagePercent: 20, disks: [], networkInterfaces: [], cpuMeasured: true, memoryMeasured: true, disksMeasured: true, networkMeasured: true });
+const overview = (cpuUsagePercent = 10): MeasuredOverview => ({ isRestricted: false, machineName: "fixture", operatingSystem: "Windows", osArchitecture: "x64", frameworkDescription: ".NET", panelVersion: "0.8.77", currentServerTimeUtc: "2026-10-04T10:00:00Z", bootTimeUtc: "2026-10-04T00:00:00Z", uptime: "10:00:00", cpuUsagePercent, logicalProcessorCount: 4, totalMemoryBytes: 1000, availableMemoryBytes: 800, usedMemoryBytes: 200, memoryUsagePercent: 20, disks: [], networkInterfaces: [], cpuMeasured: true, memoryMeasured: true, disksMeasured: true, networkMeasured: true });
 const sample = (cpuPercent = 10, measured = true): MeasuredSample => ({ timestampUtc: "2026-10-04T10:00:00Z", cpuPercent, memoryPercent: cpuPercent, networkDownBytesPerSec: cpuPercent, networkUpBytesPerSec: cpuPercent, cpuMeasured: measured, memoryMeasured: measured, networkMeasured: measured });
 function response(config: InternalAxiosRequestConfig, data: unknown): AxiosResponse { return { config, data: { success: true, data }, headers: {}, status: 200, statusText: "OK" }; }
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
@@ -21,6 +22,7 @@ let app: App | undefined, calls: InternalAxiosRequestConfig[], read: (config: In
 async function flush() { for (let i = 0; i < 35; i++) await nextTick(); }
 beforeEach(() => {
   vi.useFakeTimers(); setActivePinia(createPinia()); invalidateSessionRequests(); calls = [];
+  useAuthStore().session = { isAuthenticated: true, requiresSetupWizard: false, user: { id: "admin", userName: "admin", email: "a@example.test", role: "Administrator", preferredLanguage: "en", isTwoFactorEnabled: false, isActive: true, lastLoginAtUtc: null } };
   vi.stubGlobal("window", globalThis); vi.stubGlobal("location", { pathname: "/panel", hostname: "localhost" }); vi.stubGlobal("document", { hidden: false });
   read = async config => response(config, config.url === "/system/overview" ? overview() : config.url === "/system/history" ? [sample()] : []);
   apiClient.defaults.adapter = async config => { calls.push(config); return read(config); };

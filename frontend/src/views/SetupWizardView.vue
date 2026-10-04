@@ -284,9 +284,10 @@
       :overview-error="systemStore.overviewError"
       @retry-overview="systemStore.fetchOverview().catch(() => {})"
       :loading="systemStore.loading"
-      :sites-count="sitesStore.sites.length"
+      :sites-count="sitesCount"
       :total-binding-count="totalBindingCount"
       :ftp-user-count="ftpUserCount"
+      :can-read-ftp-count="canReadFtpCount"
       :database-count="databaseCount"
       :security-status-label="securityStatusLabel"
       :secure-path="currentSecurePath"
@@ -655,6 +656,7 @@ import PasswordField from "../components/PasswordField.vue";
 import MainLayout from "../layouts/MainLayout.vue";
 import { getSessionEpoch, readSecureEntryPath, setSessionExpiredHandler } from "../api/client";
 import { getFtpUsers } from "../api/ftp";
+import { getMyDatabases } from "../api/myDatabases";
 import {
   emptyBranding,
   getBranding,
@@ -803,7 +805,11 @@ watch([activeSection, settingsTab], ([section, tab]) => {
 const panelUpdate = ref<UpdateStatus | null>(null);
 // Denetim yapılamadıysa bunu SÖYLERİZ; sessizlik "güncel" gibi okunuyordu.
 const panelUpdateLoad = useSectionError();
-const ftpUserCount = ref(0);
+const measuredFtpCount = ref<number | null>(null);
+const measuredDatabaseCount = ref<number | null>(null);
+const measuredSites = ref(false);
+let dashboardRead = 0;
+let dashboardActive = true;
 // "Dikkat" toplayıcısı (menü rozetleri + üst bar çekmecesi). Yalnız admin doldurur (uç admin-only).
 const attention = useAttentionSummary(resolveApiMessage);
 const { summary: attentionSummary, loading: attentionLoading, error: attentionError } = attention;
@@ -880,10 +886,31 @@ const isReseller = computed(() => authStore.session?.user?.role === "Reseller");
 const isSubUser = computed(() => authStore.session?.isSubUser === true);
 const subUserAllowedSections = computed(() => authStore.session?.allowedSections ?? null);
 
+function dashboardActorKey() {
+  const session = authStore.session;
+  return JSON.stringify([getSessionEpoch(), session?.isAuthenticated, session?.user?.id, session?.user?.role,
+    session?.isSubUser, session?.allowedSections?.map(section => section.toLowerCase()).sort() ?? null]);
+}
+function canReadDashboardSection(section: string) {
+  if (!authStore.session?.isAuthenticated || !(isAdmin.value || isCustomer.value || isReseller.value)) return false;
+  return !isSubUser.value || !subUserAllowedSections.value ||
+    subUserAllowedSections.value.some(item => item.toLowerCase() === section);
+}
+const canReadFtpCount = computed(() => (isAdmin.value || isReseller.value) && canReadDashboardSection("sites"));
+const ftpUserCount = computed(() => canReadFtpCount.value ? measuredFtpCount.value : null);
+const databaseCount = computed(() => canReadDashboardSection("database") ? measuredDatabaseCount.value : null);
+const sitesCount = computed(() => canReadDashboardSection("sites") && measuredSites.value && sitesStore.loaded ? sitesStore.sites.length : null);
+const totalBindingCount = computed(() => sitesCount.value === null ? null :
+  sitesStore.sites.reduce((sum, site) => sum + site.bindings.length, 0));
+function resetDashboardCounts() {
+  dashboardRead++;
+  measuredFtpCount.value = null;
+  measuredDatabaseCount.value = null;
+  measuredSites.value = false;
+}
+watch(dashboardActorKey, resetDashboardCounts, { flush: "sync" });
+
 const installedSoftwareCount = computed(() => softwareStore.catalog?.installed.length ?? 0);
-const totalBindingCount = computed(() => sitesStore.sites.reduce((sum, site) => sum + site.bindings.length, 0));
-const databaseCount = computed(() => Object.values(databasesStore.workspaces)
-  .reduce((sum, workspace) => sum + workspace.databases.length, 0));
 const currentSecurePath = computed(() => securityForm.secureEntryPath || readSecureEntryPath() || setupForm.secureEntryPath);
 const showDefaultPortWarning = computed(() => setupForm.preferredHttpsPort === 8888);
 const securityStatusLabel = computed(() => {
@@ -1117,6 +1144,8 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  dashboardActive = false;
+  resetDashboardCounts();
   installPollController?.abort();
   stopRefreshLoop();
   setSessionExpiredHandler(null);
@@ -1260,9 +1289,24 @@ async function restoreSession() {
 
   restorePanelLocation();
   mode.value = "dashboard";
-  await loadDashboardData();
+  await loadAuthenticatedDashboard();
+}
+
+async function loadAuthenticatedDashboard() {
+  const actor = dashboardActorKey();
+  const current = () => dashboardActive && mode.value === "dashboard" &&
+    authStore.session?.isAuthenticated === true && dashboardActorKey() === actor;
+  try {
+    await loadDashboardData();
+  } catch (error) {
+    // Authentication succeeded. A partial count failure stays visible without
+    // turning startup into a failure or disabling the dashboard's refresh loop.
+    if (current()) showBanner(resolveApiMessage(error), true);
+  }
+  if (!current()) return false;
   restorePanelLocation();
   startRefreshLoop();
+  return true;
 }
 
 async function submitSetup() {
@@ -1373,9 +1417,7 @@ async function submitLogin() {
     void loadBranding();
     // "Giriş başarılı" yalnız ana sayfada bir kez görünüp ~4 sn sonra kaybolur.
     showBanner(t("panel.auth.loginSuccess"), false, 4000);
-    await loadDashboardData();
-    restorePanelLocation();
-    startRefreshLoop();
+    if (!await loadAuthenticatedDashboard()) return;
     // Girişten hemen sonra da "yeni sürüm" bandı görünsün (mount'taki kontrol login öncesiydi).
     void loadPanelUpdate();
   } catch (error) {
@@ -1415,87 +1457,82 @@ async function logout() {
 }
 
 async function loadDashboardData() {
+  resetDashboardCounts();
+  const request = dashboardRead, actor = dashboardActorKey();
+  const current = () => dashboardActive && dashboardRead === request && dashboardActorKey() === actor &&
+    authStore.session?.isAuthenticated === true;
+  if (!current()) return false;
+  const admin = isAdmin.value, customer = isCustomer.value, reseller = isReseller.value;
   /*
    * ASKI DURUMU HER ŞEYDEN ÖNCE ölçülür: salt okunur kapısı (api/client.ts) bu çağrıda
    * kuruluyor. Yönetici askıya takılmadığı için sorulmaz, bayrak da temizlenir.
    */
-  if (isCustomer.value || isReseller.value) {
+  if (customer || reseller) {
     await subscriptionStore.fetchMine();
   } else {
     subscriptionStore.reset();
   }
 
-  await systemStore.fetchOverview();
+  if (!current()) return false;
 
-  if (isCustomer.value) {
-    // Müşteri için site listesi (kapsam ucu yalnızca atanmış siteleri döner).
-    // Alt-kullanıcıda "sites" izni yoksa uç 403 döner (allSettled yutar) ve otomatik geçiş yapılmaz.
-    const sitesAllowed = !isSubUser.value || !subUserAllowedSections.value ||
-      subUserAllowedSections.value.some((section) => section.toLowerCase() === "sites");
-    if (sitesAllowed) {
-      await Promise.allSettled([sitesStore.fetchSites()]);
-      if (activeSection.value === "home" && !router.currentRoute.value.query.section && sitesStore.sites.length > 0) {
-        activeSection.value = "sites";
-      }
-    }
-    return;
+  // Each count is measured independently. A failed server overview must not turn
+  // readable tenant data into zero, or prevent those scoped requests from running.
+  const reads: Promise<unknown>[] = [systemStore.fetchOverview()];
+  if (canReadDashboardSection("sites")) reads.push(sitesStore.fetchSites().then(() => {
+    if (current()) measuredSites.value = sitesStore.loaded;
+  }));
+  if (canReadFtpCount.value) reads.push(getFtpUsers().then(users => {
+    if (!Array.isArray(users) || users.some(user => !user || typeof user.userName !== "string" || !user.userName.trim()))
+      throw new Error(t("panel.common.loadFailed"));
+    if (current()) measuredFtpCount.value = users.length;
+  }));
+  if ((customer || reseller) && canReadDashboardSection("database")) reads.push(getMyDatabases().then(databases => {
+    if (!Array.isArray(databases) || databases.some(database => !database || typeof database.engine !== "string" ||
+      !database.engine.trim() || typeof database.name !== "string" || !database.name.trim()))
+      throw new Error(t("panel.common.loadFailed"));
+    if (current()) measuredDatabaseCount.value = databases.length;
+  }));
+  if (reseller) reads.push(authStore.fetchUsers());
+  if (admin) {
+    reads.push(authStore.fetchUsers(), authStore.fetchAuditLogs(), phpStore.fetchVersions(),
+      authStore.fetchSecuritySettings().then(settings => {
+        if (!current()) return;
+        securityForm.secureEntryPath = settings.secureEntryPath.replace("/", "");
+        securityForm.allowedIpAddressesText = settings.allowedIpAddresses.join("\n");
+      }),
+      getPanelPreferences().then(async preferences => {
+        if (!current()) return;
+        Object.assign(panelPreferences, preferences);
+        panelPreferencesLoaded.value = true;
+        await setPanelLocale(preferences.defaultLanguage);
+        if (current()) applyAppearance(preferences);
+      }),
+      softwareStore.fetchCatalog().then(async catalog => {
+        if (!current()) return;
+        const installedIds = new Set(catalog.installed.map(component => component.componentId));
+        const engines = [["mariadb-11", "mariadb"], ["mysql-8", "mysql"], ["postgresql-16", "postgresql"]]
+          .filter(([id]) => installedIds.has(id!)).map(([, engine]) => engine!);
+        const workspaces = await Promise.all(engines.map(engine => databasesStore.fetchWorkspace(engine)));
+        if (workspaces.some(workspace => !Array.isArray(workspace.databases))) throw new Error(t("panel.common.loadFailed"));
+        if (current()) measuredDatabaseCount.value = workspaces.reduce((sum, workspace) => sum + workspace.databases.length, 0);
+      }));
   }
-
-  if (isReseller.value) {
-    // Bayi: kendi müşterileri (UsersController sahip-filtreli) + müşterilerinin siteleri
-    // (Müşteriler sekmesi ve Posta/Dosyalar için gerekli).
-    await Promise.allSettled([authStore.fetchUsers(), sitesStore.fetchSites()]);
-    return;
+  const results = await Promise.allSettled(reads);
+  if (!current()) return false;
+  if (customer && measuredSites.value && activeSection.value === "home" && !router.currentRoute.value.query.section && sitesStore.sites.length > 0) {
+    activeSection.value = "sites";
   }
-
-  if (!isAdmin.value) {
-    return;
-  }
-
-  const [settings] = await Promise.all([
-    authStore.fetchSecuritySettings(),
-    authStore.fetchUsers(),
-    authStore.fetchAuditLogs(),
-    softwareStore.fetchCatalog(),
-    getPanelPreferences().then(async (preferences) => {
-      Object.assign(panelPreferences, preferences);
-      panelPreferencesLoaded.value = true;
-      await setPanelLocale(preferences.defaultLanguage);
-      applyAppearance(preferences);
-    })
-  ]);
-
-  await Promise.allSettled([sitesStore.fetchSites(), phpStore.fetchVersions()]);
-  const installedComponentIds = new Set((softwareStore.catalog?.installed ?? []).map((component) => component.componentId));
-  const databasePrefetches: Promise<unknown>[] = [
-    getFtpUsers().then((users) => {
-      ftpUserCount.value = users.length;
-    })
-  ];
-
-  if (installedComponentIds.has("mariadb-11")) {
-    databasePrefetches.push(databasesStore.fetchWorkspace("mariadb"));
-  }
-
-  if (installedComponentIds.has("mysql-8")) {
-    databasePrefetches.push(databasesStore.fetchWorkspace("mysql"));
-  }
-
-  if (installedComponentIds.has("postgresql-16")) {
-    databasePrefetches.push(databasesStore.fetchWorkspace("postgresql"));
-  }
-
-  await Promise.allSettled(databasePrefetches);
-
-  if (sitesStore.selectedSiteName) {
+  if (admin && sitesStore.selectedSiteName) {
     await Promise.allSettled([
       appsStore.fetchConfiguration(sitesStore.selectedSiteName),
       proxyStore.fetchConfiguration(sitesStore.selectedSiteName)
     ]);
   }
 
-  securityForm.secureEntryPath = settings.secureEntryPath.replace("/", "");
-  securityForm.allowedIpAddressesText = settings.allowedIpAddresses.join("\n");
+  if (!current()) return false;
+  const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failure) throw failure.reason;
+  return true;
 }
 
 async function savePanelPreferences() {
@@ -1650,11 +1687,11 @@ async function toggleTheme() {
 }
 
 async function refreshDashboard() {
+  const actor = dashboardActorKey();
   try {
-    await loadDashboardData();
-    showBanner(t("panel.dashboard.refreshed"), false);
+    if (await loadDashboardData()) showBanner(t("panel.dashboard.refreshed"), false);
   } catch (error) {
-    showBanner(resolveApiMessage(error), true);
+    if (dashboardActive && dashboardActorKey() === actor) showBanner(resolveApiMessage(error), true);
   }
 }
 

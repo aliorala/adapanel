@@ -1,5 +1,56 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R30 tamamlandı; R29+R30 içeren 0.8.78 yayımlandı
+
+Yayımdaki kurucu **0.8.78**, latest/tag aynı, draft/prerelease false. Yayın zamanı
+**2026-10-04 03:59:00 İstanbul**. https://github.com/aliorala/adapanel/releases/tag/0.8.78
+Kurucu https://github.com/aliorala/adapanel/releases/download/0.8.78/AdaPanelSetup.exe
+**91.023.328 bayt**, SHA256 **5E635F74C00447EB0168DD5B1E64C81EDD976AB00C60BBAA088F7760ED6D1D69**.
+Paketleme96897 exit0: publish169dosya/0bulgu, installer0bulgu/version0.8.78.
+Yayın71926 exit0; indirilen dosya SHA eşleşti. Resmi public API latest/name/size/digest/body
+birebir doğrulandı. Kanıt .tmp/audit-20261004/release078-{package,github-publish}.log,
+release078-{components,publish-manifest,installer-manifest,published-verification}.json.
+Taze bileşen denetimi22Passed3standardSkipped0Failed; KeepDownloads ile cached payloadlar
+korundu. Bileşen kontrolü ayrı geçtiğinden paketlemede tekrarlanmadı; diğer kapılar atlanmadı.
+Yalnız binary/notlar yayımlandı; kaynak/Git geçmişi push edilmedi, canlı kurulum yapılmadı.
+
+R30: SystemOverview strict boolean isRestricted; actor+role+epoch ownership. Dashboard ve
+Monitoring kaynak/metadata/update/attention/audit/reference yalnız doğrulanmış güncel admin
+tam kapsamda. Tenant sakin hesap özeti; private/server-only IP, history, process/consumer
+sorguları yok. Overview failure retry admin scope gate dışında görünür. Null sayaçlar —,
+izinli kart/kısayollar, responsive auto-fit. API IP envelope/shape/IP family/lexical+URL
+validity; current window.origin+securepath ilkpaneladresi, IPv6 brackets. IP read error/retry,
+stale/unmount/copy guards. NativeIP lazy seam; incomplete enumeration503
+system.ip_addresses_unmeasured, caller CT preserved, partial success yok. DTO/policy aynı.
+
+SetupWizard customer/reseller DB /my-databases, reseller/admin FTP /ftp/users scoped reads;
+customer FTP hidden; backend yetkileri genişletilmedi. Site/binding/FTP/DB independentnull
+measurement; auth/role/allowedsection/epoch/reset/unmount guards; logout localFTP leak kapandı.
+Refresh partialfail successnotice yok. Review yeni counts throw'unun giriş/restore sonrası
+polling'i engellediğini buldu; loadAuthenticatedDashboard helper currentactorise hatayıgösterir
+ve paneli hazır/polling açık tutar. Logout/unmount oldcontinuation timerbaşlatmaz.
+
+Kanıt: C#IP14=10RED4green→ilgili60green; 14yeniC#. Frontend scope/IP33=30RED3green,
+SSR6+IPv6extra3(toplam42new), IPv6bozukpath2RED→99/99relatedgreen. Counts26=23RED3green,
+giriş6RED→32new/76relatedgreen. Full FE **90file1591/1591**, types+Vitegreen, wwwrootsynced.
+SonFE72930exit0, log round30-final-{types,frontend,vite}.log. Backend **Infra7967+Core2=7969**
+failed/skipped0, build0warnings/errors. İlkfull onlyrelease-note versiontransitionfail;
+5versionssynced→fullgreen44843exit0. TRX round30-verified_net8.0_20261004034912.trx(Core),
+...035213.trx(Infra). TR/EN FE5468/API277 parity, release-noteprivacy0findings, diffcheckclean,
+wwwroot6refsallpresent. No active .NET/test/preview/publisher. Agentler completed/frozen.
+
+RealVue/Pinia/API fakeadapter browserQA:390darkTRcustomer,320lightENreseller,1440darkTRadmin;
+widths380/380,310/310,1430/1430,consoleerrors0,tenantIPGET0/meters0/alerts0; DBnavigationok.
+AdminIPfailure→retry→IPv4/IPv6links. Saved+viewed round30-customer-mobile.png,
+round30-reseller-en320.png,round30-admin-ip-recovery.png (aynı.tmp). auditTab30 CLOSED,
+viewport26 reset, preview59979CtrlCexit1intentional, __audit30 filesremoved, originals preserved.
+CUA selectedBrowser2/auditBrowser26,viewport26,auditFs29 reusable after rewriteDocumentation.
+
+User0.8.75 “pakethazırdeğil” sorusu: normal stagedinstaller cleanup; kaynak SelfUpdateService
+187–222/447/484–500 doğrulandı; 0.8.76+UI updatePresentation statecurrent→“Panel güncel”.
+Kurulu canlıasset/cache doğrudan ölçülmedi. Yeni kurucu bağlantısı verilecek. Süreklihedefaktif;
+R31 kapsamı henüz seçilmedi. Preexisting untracked tests/.../TestResults/ korunur/commitlenmez.
+
 ## 2026-10-04 — R29 yerelde tamamlandı; yayımdaki kurucu hâlâ 0.8.77
 
 R29 sunucu ölçümleri/hizmet sonuçları/ilgili UI düzeltmeleri tam doğrulandı, henüz

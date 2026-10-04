@@ -8,11 +8,13 @@
         </div>
         <span class="meta">{{ loading ? t("panel.system.loading") : formatUtc(overview?.currentServerTimeUtc ?? null) }}</span>
       </div>
-      <p v-if="overviewError" class="notice error measurement-notice" role="alert"><span>{{ t('panel.monitor.overviewFailed') }}</span><button class="secondary compact" :disabled="loading" @click="emit('retryOverview')">{{ t('panel.common.retry') }}</button></p>
+      <p v-if="isRestricted" class="meta" role="status">{{ t('panel.monitor.restricted') }}</p>
+      <p v-else-if="overviewError" class="notice error measurement-notice" role="alert"><span>{{ t('panel.monitor.overviewFailed') }}</span><button class="secondary compact" :disabled="loading" @click="emit('retryOverview')">{{ t('panel.common.retry') }}</button></p>
+      <p v-else-if="!showServerResources" class="meta measurement-notice" role="status"><span>{{ t(loading ? 'panel.common.loading' : 'panel.monitor.unmeasured') }}</span><button class="secondary compact" :disabled="loading" @click="emit('retryOverview')">{{ t('panel.common.retry') }}</button></p>
       <p v-else-if="overview && (cpuValue === null || memoryValue === null || overview.disksMeasured !== true || overview.networkMeasured !== true)" class="notice warn" role="status">{{ t('panel.monitor.partialMeasurement') }}</p>
-      <p v-if="historyError" class="notice error" role="alert">{{ historyError }}</p>
+      <p v-if="showServerResources && historyError" class="notice error" role="alert">{{ historyError }}</p>
       <!-- Ortak kaynak göstergeleri ana sayfayla aynı durum eşiklerini kullanır. -->
-      <div v-if="overview" class="resource-grid">
+      <div v-if="showServerResources && overview" class="resource-grid">
         <ResourceMetric kind="cpu" :label="t('panel.system.cpu')" :value="cpuValue" :detail="overview.logicalProcessorCount + ' ' + t('panel.system.cores')">
           <svg v-if="hasCpuTrend" class="meter-spark cpu" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"><polyline v-for="(points, index) in cpuSparks" :key="index" :points="points" /></svg>
         </ResourceMetric>
@@ -23,6 +25,7 @@
       </div>
     </section>
 
+    <template v-if="showServerResources">
     <div class="monitor-columns">
       <section class="panel">
         <h3>{{ t("panel.system.serverInfo") }}</h3>
@@ -298,6 +301,7 @@
       <ResourceConsumers v-if="consumerTab === 'live'" :source="consumerSource" />
       <QueryHistory v-else />
     </section>
+    </template>
   </div>
 </template>
 
@@ -307,6 +311,7 @@ import ResourceMetric from "../components/ResourceMetric.vue";
 import { useI18n } from "vue-i18n";
 import { useSystemStore } from "../stores/system";
 import { getSessionEpoch } from "../api/client";
+import { useAuthStore } from "../stores/auth";
 import { getProcessSnapshot, type ProcessSnapshot } from "../api/processes";
 import QueryHistory from "../components/QueryHistory.vue";
 import ResourceConsumers from "../components/ResourceConsumers.vue";
@@ -331,6 +336,7 @@ type NetworkInterface = {
 };
 
 type SystemOverview = {
+  isRestricted: boolean;
   cpuMeasured: boolean;
   memoryMeasured: boolean;
   disksMeasured: boolean;
@@ -360,11 +366,14 @@ const props = defineProps<{
 
 const { t } = useI18n();
 const emit = defineEmits<{ (event: "retryOverview"): void }>();
+const auth = useAuthStore(), actor = auth.session?.user?.id, role = auth.session?.user?.role;
+const isRestricted = computed(() => auth.session?.user?.role !== "Administrator" || props.overview?.isRestricted === true);
+const showServerResources = computed(() => isActive());
 
 const primaryDisk = computed(() => props.overview?.disks[0] ?? null);
-const cpuValue = computed(() => props.overviewConfirmed !== false && props.overview?.cpuMeasured === true ? props.overview.cpuUsagePercent : null);
-const memoryValue = computed(() => props.overviewConfirmed !== false && props.overview?.memoryMeasured === true ? props.overview.memoryUsagePercent : null);
-const diskValue = computed(() => props.overviewConfirmed !== false && primaryDisk.value?.measured === true ? primaryDisk.value.usagePercent : null);
+const cpuValue = computed(() => showServerResources.value && props.overview?.cpuMeasured === true ? props.overview.cpuUsagePercent : null);
+const memoryValue = computed(() => showServerResources.value && props.overview?.memoryMeasured === true ? props.overview.memoryUsagePercent : null);
+const diskValue = computed(() => showServerResources.value && primaryDisk.value?.measured === true ? primaryDisk.value.usagePercent : null);
 
 /*
  * EN DOLU DİSK EN ÜSTTE — panodaki `sortedDisks` ile aynı gerekçe ve aynı kod.
@@ -384,18 +393,24 @@ const historyError = ref("");
 let historyInFlight = false;
 let disposed = false;
 const sessionEpoch = getSessionEpoch();
-const isActive = () => !disposed && sessionEpoch === getSessionEpoch();
+const isActive = () => !disposed && sessionEpoch === getSessionEpoch() && auth.session?.isAuthenticated === true &&
+  auth.session.user?.id === actor && auth.session.user?.role === role && role === "Administrator" &&
+  props.overviewConfirmed === true && props.overview?.isRestricted === false;
+let scopeGeneration = 0;
 
 async function pollHistory() {
   if (!isActive() || document.hidden || historyInFlight) return;
   historyInFlight = true;
+  const generation = scopeGeneration;
+  const current = () => isActive() && generation === scopeGeneration;
   try {
-    await systemStore.fetchHistory(isActive);
-    if (isActive()) historyError.value = "";
+    await systemStore.fetchHistory(current);
+    if (current()) historyError.value = "";
   } catch {
-    if (isActive()) historyError.value = t("panel.monitor.historyFailed");
+    if (current()) historyError.value = t("panel.monitor.historyFailed");
   } finally {
     historyInFlight = false;
+    if (isActive() && generation !== scopeGeneration) void pollHistory();
   }
 }
 
@@ -502,6 +517,12 @@ watch([processSort, processPaused], () => {
   void pollProcesses();
 }, { flush: "sync" });
 
+watch(showServerResources, allowed => {
+  ++scopeGeneration; ++processGeneration;
+  snapshot.value = null; processError.value = ""; historyError.value = ""; frozenOrder.value = [];
+  if (allowed) { void pollHistory(); void pollProcesses(); }
+}, { flush: "sync" });
+
 onMounted(() => {
   void pollHistory();
   historyTimer = window.setInterval(() => void pollHistory(), 60000);
@@ -587,7 +608,7 @@ const METER_DANGER_PERCENT = 90;
  * hakkında söylenecek bir şey yoktur (her satırı yeşile boyamak gürültüdür).
  */
 function diskTone(disk: DiskUsage): "" | "warn" | "danger" {
-  if (props.overviewConfirmed === false || disk.measured !== true) return "";
+  if (!showServerResources.value || disk.measured !== true) return "";
   if (disk.usagePercent >= METER_DANGER_PERCENT) {
     return "danger";
   }
