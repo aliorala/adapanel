@@ -1,5 +1,29 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R41+R42 içeren 0.8.85 yayımlandı ve doğrulandı
+
+PUBLIC latest ve kaynak0.8.85; yayın2026-10-04T09:00:26Z /12:00:26İstanbul.
+https://github.com/aliorala/adapanel/releases/tag/0.8.85
+https://github.com/aliorala/adapanel/releases/download/0.8.85/AdaPanelSetup.exe
+91,115,720bytes; SHA2567948E3059463C92EAD08413D31F752CC6B2EDFD0D79EA433DA6314EE64562F0C.
+Kaynaklocalcommit4853865. Paket9686terminal0: publish170files0findings;installer.85/0findings.
+Freshcomponents22pass/3standardlargeSkipped/0fail bu tur ayrı tamamlandı, yalnız tekrarıskipeklendi.
+Yayın48469terminal0: uploadedinstaller yeniden indirildi SHAequalslocal. Unauthenticated API latest/tag/
+UTF8name+fullbody/singleasset/uploaded/bytes/digest doğrulandı. release085-published-verification.json.
+Son.NET8968/8968=Core2+Infra8966 (realSAM FtpCreateRollbackTests2 bilerekhariç); build0warn0error.
+FullFE113files2201/2201/types/Vite; wwwroot152filesSHAequal,6indexassets;FE5599/API291TR/ENparity.
+Alltest/preview/package/publish sessionsTERMINAL;allagents/C#frozen. Sadeceinstaller+notespublic,
+liveinstall/customerchanges/sourcepush yok. EskiuntrackedTestResults/ korunur. ContinuousgoalACTIVE.
+YeniR42backend55=ZIP29+FTP26, newFE8. FTPactual500probe502cmd10114ms→1cmd387ms (isolatedtrustedpath,
+HTTPactorauthorityoverhead/universalperf değil). FTP /T kaldırılmıştır; attemptedpathcleanup +ACLskip
+gerçeknative/currentSID/ownedfixture43testile doğrulandı; dış4SDDLkorundu. R41ZIPintegrity+FTP homechain
+de bu yayında. UI finalmobile round42-archive-result-final-mobile.png; EN320light aynıprefix.
+User's .75package question answered: packagecleanupnormalolabilir; equalityonlysuccessfulcheck;
+nowlatest.85, liveinstalledversion stillUNMEASURED. Don'treaskliveURL. Correctimagepath D:/... .
+Nextauditcandidate: existing FTPaccount touchedentry recovery /remove:g önceki explicitAllow'u birebir
+geri getirmiyor; attemptedpath fix untouchedentry'yi korur, touchedentry snapshotrestore iddiası yok.
+Yeni köklerin tümü test/control kapsamındaydı; gerçek SAM/IIS değiştirilmedi.
+
 ## 2026-10-04 — R42, 0.8.85 yayın hazırlığı
 
 Kaynak0.8.85; public latest son kimliksiz kontrol0.8.84, .85 tag404. Yalnız installer+notlar
