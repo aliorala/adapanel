@@ -11,7 +11,7 @@ let extraInterceptor: number | undefined;
 const catalog = (id: string): SoftwareCatalog => ({ manifest: [{ id } as SoftwareCatalog["manifest"][number]], defaults: [], installed: [] });
 const progress = (title: string): OperationProgress => ({ title, running: true, completed: false, failed: false, error: "", steps: [], startedAtUtc: null });
 const installed: ComponentInstallResult = { componentId: "fixture", displayName: "Fixture", version: "1", status: "Installed", installDir: "fixture", serviceName: "fixture", generatedPassword: "", message: "installed" };
-const response = (data: unknown) => ({ data: { data } }) as AxiosResponse;
+const response = (data: unknown) => ({ data: { success: true, data } }) as AxiosResponse;
 function deferred<T>() { let resolve!: (value: T) => void; let reject!: (error: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 type Store = ReturnType<typeof useSoftwareStore>;
 const actions = [
@@ -20,7 +20,7 @@ const actions = [
   { name: "updates", method: "post", busy: "checkingUpdates", run: (s: Store, _id: string) => s.checkForUpdates(), value: catalog("old") },
   { name: "install", method: "post", busy: "installingComponentId", run: (s: Store, id: string) => s.installComponent(id), value: installed },
   { name: "defaults", method: "post", busy: "installingDefaults", run: (s: Store, _id: string) => s.installDefaultStack(), value: [installed] },
-  { name: "remove", method: "delete", busy: "removingComponentId", run: (s: Store, id: string) => s.removeComponent(id), value: {} }
+  { name: "remove", method: "delete", busy: "removingComponentId", run: (s: Store, id: string) => s.removeComponent(id), value: { componentId: "next", warnings: [] } }
 ] as const;
 
 beforeEach(() => {
@@ -29,7 +29,7 @@ beforeEach(() => {
   invalidateSessionRequests();
   vi.spyOn(apiClient, "get").mockImplementation(async url => response(url!.includes("progress") ? progress("current") : catalog("current")));
   vi.spyOn(apiClient, "post").mockImplementation(async url => response(url.includes("updates/check") ? catalog("checked") : url.includes("install-defaults") ? [installed] : installed));
-  vi.spyOn(apiClient, "delete").mockResolvedValue(response({}));
+  vi.spyOn(apiClient, "delete").mockImplementation(async url => response({ componentId: decodeURIComponent(url.split("/").slice(-1)[0]!), warnings: [] }));
 });
 afterEach(() => {
   if (extraInterceptor !== undefined) apiClient.interceptors.response.eject(extraInterceptor);

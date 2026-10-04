@@ -3,6 +3,22 @@ import { toRaw } from "vue";
 import { CanceledError } from "axios";
 import { apiClient, getSessionEpoch } from "../api/client";
 import type { OperationProgress } from "./setup";
+import { removeSoftwareComponent, type ComponentRemovalResult } from "../api/software";
+import { UserFacingError } from "../utils/apiError";
+
+// A measured DELETE result survives a failed follow-up read, while existing callers
+// still receive a rejection and cannot treat an unmeasured catalog as current.
+export class SoftwareRemovalRefreshError extends UserFacingError {
+  constructor(public readonly result: ComponentRemovalResult, public readonly refreshError: unknown) {
+    super("panel.software.refreshAfterRemoveFailed");
+  }
+}
+
+export class SoftwareRemovalIncompleteError extends UserFacingError {
+  constructor(public readonly result: ComponentRemovalResult) {
+    super("software.remove.partial");
+  }
+}
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -239,10 +255,17 @@ export const useSoftwareStore = defineStore("software", {
       this.removingComponentId = componentId;
 
       try {
-        await apiClient.delete<ApiEnvelope<object>>(`/software/${encodeURIComponent(componentId)}`);
+        const result = await removeSoftwareComponent(componentId);
         finishCatalogWrite(request);
-        await this.fetchCatalog();
+        try {
+          await this.fetchCatalog();
+        } catch (error) {
+          assertCurrentSession(request);
+          throw new SoftwareRemovalRefreshError(result, error);
+        }
         assertCurrentSession(request);
+        if (result.warnings.length) throw new SoftwareRemovalIncompleteError(result);
+        return result;
       } catch (error) {
         assertCurrentSession(request);
         throw error;

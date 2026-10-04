@@ -1,6 +1,6 @@
 namespace AdaPanel.Infrastructure.Dns;
 
-/// <summary>Serializes one site's desired state, native sync and publication bookkeeping.</summary>
+/// <summary>Site intent precedes canonical native-zone leases; JSON updates are nested last.</summary>
 internal static class DnsZoneLifecycle
 {
     private sealed class Entry
@@ -9,11 +9,17 @@ internal static class DnsZoneLifecycle
         internal int References;
     }
 
-    private static readonly Dictionary<(string Store, string Site), Entry> Entries = [];
+    private static readonly Dictionary<(string Store, string Kind, string Name), Entry> Entries = [];
 
-    internal static async Task<IDisposable> EnterAsync(string statePath, string siteName, CancellationToken token)
+    internal static Task<IDisposable> EnterAsync(string statePath, string siteName, CancellationToken token)
+        => EnterCoreAsync(statePath, "site", siteName, token);
+
+    internal static Task<IDisposable> EnterNativeAsync(string statePath, string zoneName, CancellationToken token)
+        => EnterCoreAsync(statePath, "native", zoneName.TrimEnd('.'), token);
+
+    private static async Task<IDisposable> EnterCoreAsync(string statePath, string kind, string name, CancellationToken token)
     {
-        var key = (Path.GetFullPath(statePath).ToUpperInvariant(), siteName.ToUpperInvariant());
+        var key = (Path.GetFullPath(statePath).ToUpperInvariant(), kind, name.ToUpperInvariant());
         Entry entry;
         lock (Entries)
         {
@@ -27,7 +33,7 @@ internal static class DnsZoneLifecycle
         catch { lease.Dispose(); throw; }
     }
 
-    private static void Return((string Store, string Site) key, Entry entry)
+    private static void Return((string Store, string Kind, string Name) key, Entry entry)
     {
         lock (Entries)
         {
@@ -37,7 +43,7 @@ internal static class DnsZoneLifecycle
         }
     }
 
-    private sealed class Lease((string Store, string Site) key, Entry entry) : IDisposable
+    private sealed class Lease((string Store, string Kind, string Name) key, Entry entry) : IDisposable
     {
         private int disposed;
         public void Dispose()

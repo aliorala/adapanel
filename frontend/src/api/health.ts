@@ -6,7 +6,7 @@ type ApiEnvelope<T> = { success: boolean; data: T; message: string; code: number
 export type ServiceHealth = {
   name: string;
   label: string;
-  status: string; // Running | Stopped | NotInstalled | Unknown
+  status: string; // Includes Windows pending and paused states, validated below.
 };
 
 export async function getServerHealth() {

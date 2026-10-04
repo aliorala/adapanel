@@ -6,10 +6,11 @@ import { useSoftwareStore, type ComponentManifestItem, type InstalledComponent, 
 import { useSubscriptionStore } from "../stores/subscription";
 import type { OperationProgress } from "../stores/setup";
 import { getSoftwareRunningJobs } from "../api/software";
+import { useAuthStore } from "../stores/auth";
 const shared = vi.hoisted(() => ({ epoch: 0, confirm: vi.fn() }));
 vi.mock("../api/client", () => ({ apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() }, getSessionEpoch: () => shared.epoch, setReadOnlyMode: vi.fn() }));
 vi.mock("../api/software", () => ({ getSoftwareRunningJobs: vi.fn(async () => ({ running: [], interrupted: [], serverTimeUtc: "2026-01-01T00:00:00Z" })) }));
-vi.mock("../stores/auth", () => ({ extractApiMessage: (error: Error) => error.message, extractApiDetails: () => "fixture details" }));
+vi.mock("../stores/auth", async original => ({ ...await original<object>(), extractApiMessage: (error: Error) => error.message, extractApiDetails: () => "fixture details" }));
 vi.mock("../components/ConfirmDialog.vue", () => ({ useConfirm: () => ({ confirm: shared.confirm }) }));
 vi.mock("./AppStoreView.vue", () => ({ default: { render: () => null } }));
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string, args?: object) => key + (args ? JSON.stringify(args) : "") }) }));
@@ -28,13 +29,14 @@ beforeEach(() => { vi.useFakeTimers(); shared.epoch = 0; shared.confirm.mockImpl
 afterEach(() => { app?.unmount(); app = undefined; vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); vi.resetAllMocks(); });
 async function mount() {
   const pinia = createPinia(); setActivePinia(pinia); const store = useSoftwareStore();
+  useAuthStore().session = { isAuthenticated: true, requiresSetupWizard: false, user: { id: "admin", userName: "admin", email: "admin@example.test", role: "Administrator", preferredLanguage: "en", isTwoFactorEnabled: false, isActive: true, lastLoginAtUtc: null } };
   store.catalog = { manifest: [manifest("php-8.3"), manifest("mysql-8"), manifest("nginx"), manifest("adminer")], defaults: [manifest("php-8.3")], installed: [installed("mysql-8"), installed("nginx"), installed("adminer")] }; store.loaded = true;
   vi.spyOn(store, "fetchCatalog").mockImplementation(async () => { store.loaded = true; return store.catalog!; });
   vi.spyOn(store, "checkForUpdates").mockImplementation(async () => { store.loaded = true; return store.catalog!; });
   vi.spyOn(store, "fetchOperationProgress").mockResolvedValue(progress());
   vi.spyOn(store, "installComponent").mockImplementation(async id => { store.catalog!.installed = [...store.catalog!.installed.filter(item => item.componentId !== id), { ...installed(id), version: "2.0", updateAvailable: false }]; return result(id); });
   vi.spyOn(store, "installDefaultStack").mockImplementation(async () => { store.catalog!.installed.push({ ...installed("php-8.3"), version: "2.0" }); return [result("php-8.3")]; });
-  vi.spyOn(store, "removeComponent").mockImplementation(async id => { store.catalog!.installed = store.catalog!.installed.filter(item => item.componentId !== id); });
+  vi.spyOn(store, "removeComponent").mockImplementation(async id => { store.catalog!.installed = store.catalog!.installed.filter(item => item.componentId !== id); return { componentId: id, warnings: [] }; });
   const renderer = createRenderer<object, object>({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
   app = renderer.createApp({ ...SoftwareView, render: () => h("section") } as Component).use(pinia); app.provide(ssrContextKey, {});
   const state = (app.mount({}).$ as unknown as { setupState: State }).setupState; state.activeWorkspace = "components"; await flush(); return { state, store };
@@ -105,7 +107,7 @@ it("keeps a late scan notice out of a different workspace", async () => {
   const { state, store } = await mount(), pending = deferred<NonNullable<typeof store.catalog>>(); vi.mocked(store.fetchCatalog).mockReturnValueOnce(pending.promise); const reading = state.refreshCatalog(); state.activeWorkspace = "applications"; pending.resolve(store.catalog!); await reading; expect(state.notice).toBe("");
 });
 it.each(["install", "update", "defaults", "remove"])("reports an unconfirmed %s instead of success when refreshed state disagrees", async action => {
-  const { state, store } = await mount(); vi.mocked(store.installComponent).mockImplementation(async id => result(id)); vi.mocked(store.installDefaultStack).mockResolvedValue([result("php-8.3")]); vi.mocked(store.removeComponent).mockResolvedValue(undefined);
+  const { state, store } = await mount(); vi.mocked(store.installComponent).mockImplementation(async id => result(id)); vi.mocked(store.installDefaultStack).mockResolvedValue([result("php-8.3")]); vi.mocked(store.removeComponent).mockResolvedValue({ componentId: "nginx", warnings: [] });
   await finish(action === "install" ? state.installComponent("php-8.3") : action === "update" ? state.updateComponent(state.manifestRows[1]) : action === "defaults" ? state.installDefaultStack() : state.removeComponent("nginx"));
   expect(state.notice).toBe("panel.software.resultUnconfirmed"); expect(state.noticeError).toBe(true);
 });

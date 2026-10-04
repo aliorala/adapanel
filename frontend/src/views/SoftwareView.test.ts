@@ -5,10 +5,11 @@ import { createPinia, setActivePinia } from "pinia";
 import SoftwareView from "./SoftwareView.vue";
 import { useSoftwareStore, type SoftwareCatalog } from "../stores/software";
 import { apiClient } from "../api/client";
+import { useAuthStore } from "../stores/auth";
 
 vi.mock("../api/client", () => ({ apiClient: { post: vi.fn(), get: vi.fn() }, getSessionEpoch: () => 0 }));
 vi.mock("../api/software", () => ({ getSoftwareRunningJobs: vi.fn(async () => ({ running: [], interrupted: [] })) }));
-vi.mock("../stores/auth", () => ({ extractApiMessage: () => "failed", extractApiDetails: () => "" }));
+vi.mock("../stores/auth", async original => ({ ...await original<object>(), extractApiMessage: () => "failed", extractApiDetails: () => "" }));
 vi.mock("../components/ConfirmDialog.vue", () => ({ useConfirm: () => ({ confirm: vi.fn() }) }));
 vi.mock("./AppStoreView.vue", () => ({ default: { render: () => null } }));
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string, args?: object) => key + (args ? JSON.stringify(args) : "") }) }));
@@ -17,6 +18,7 @@ let app: App | undefined;
 type State = { activeWorkspace: string; checkForUpdates: () => Promise<void>; notice: string; noticeError: boolean };
 async function mount(status: string, version = "", updateAvailable = false) {
   const pinia = createPinia(); setActivePinia(pinia);
+  useAuthStore().session = { isAuthenticated: true, requiresSetupWizard: false, user: { id: "admin", userName: "admin", email: "admin@example.test", role: "Administrator", preferredLanguage: "en", isTwoFactorEnabled: false, isActive: true, lastLoginAtUtc: null } };
   const store = useSoftwareStore();
   const catalog: SoftwareCatalog = {
     manifest: [{ id: "test", displayName: "Test", version: "2.0.0", type: "zip", installDir: "test",

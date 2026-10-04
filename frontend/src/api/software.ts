@@ -1,5 +1,6 @@
 import { apiClient } from "./client";
 import type { ServerRunningJobs } from "../composables/useRunningTask";
+import { UserFacingError } from "../utils/apiError";
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -7,6 +8,20 @@ type ApiEnvelope<T> = {
   message: string;
   code: number;
 };
+
+export type ComponentRemovalResult = { componentId: string; warnings: string[] };
+
+export async function removeSoftwareComponent(componentId: string): Promise<ComponentRemovalResult> {
+  const response = await apiClient.delete<ApiEnvelope<unknown>>(`/software/${encodeURIComponent(componentId)}`);
+  const envelope = response.data;
+  const result = envelope?.data as Partial<ComponentRemovalResult> | null;
+  if (envelope?.success !== true || !result || result.componentId !== componentId ||
+    (result.warnings !== undefined && (!Array.isArray(result.warnings) ||
+      result.warnings.some(warning => typeof warning !== "string" || !warning.trim())))) {
+    throw new UserFacingError("panel.software.resultUnconfirmed");
+  }
+  return { componentId, warnings: [...(result.warnings ?? [])] };
+}
 
 /**
  * Bu sunucuda ŞU AN süren bileşen kurulumu + yarıda kalmış olanı.

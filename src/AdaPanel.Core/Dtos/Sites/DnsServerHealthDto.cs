@@ -1,7 +1,8 @@
 namespace AdaPanel.Core.Dtos.Sites;
 
 /// <summary>
-/// Windows DNS Server'ın SERVİS DURUMU değil, FİİLEN DIŞARIYA YANIT VEREBİLİRLİĞİ.
+/// Windows DNS Server servis durumu ve DNS sürecinin yerel TCP/UDP 53 dinleyicileri.
+/// Bu ölçüm, internetten uçtan uca DNS sorgusunun başarılı olduğunu doğrulamaz.
 /// Gerçek olay (2026-07-23 reboot): servis "Running" görünüyordu, yapılandırmada genel IP
 /// dinleme listesindeydi, ama ağ arayüzü hazır olmadan başladığı için yalnız 127.0.0.1/::1
 /// üzerinde bind kalmıştı. Sonuç: 6 gün boyunca internetten hiçbir DNS sorgusu yanıtlanmadı
@@ -13,7 +14,7 @@ public sealed class DnsServerHealthDto
     /// <summary>Windows DNS Server rolü kurulu mu (DnsServer modülü mevcut mu).</summary>
     public bool Installed { get; init; }
 
-    /// <summary>Running / Stopped / NotInstalled / Unknown.</summary>
+    /// <summary>Windows servis durumu; geçiş ve duraklatma durumları da korunur.</summary>
     public string ServiceStatus { get; init; } = "Unknown";
 
     /// <summary>Auto / Manual / Disabled / Unknown (Win32_Service StartMode).</summary>
@@ -31,7 +32,7 @@ public sealed class DnsServerHealthDto
     /// <summary>Beklenip de dinlenmeyen adresler.</summary>
     public string[] MissingAddresses { get; init; } = [];
 
-    /// <summary>En az bir genel adreste dinliyor mu (0.0.0.0 tümünü kapsar).</summary>
+    /// <summary>En az bir beklenen adreste TCP ve UDP birlikte dinleniyor mu; dış erişim sınaması değildir.</summary>
     public bool PubliclyBound { get; init; }
 
     /// <summary>Panelde barındırılan birincil bölge sayısı (0 ise DNS zaten kullanılmıyor demektir).</summary>

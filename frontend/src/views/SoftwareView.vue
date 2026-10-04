@@ -284,12 +284,12 @@ import { useSubscriptionStore } from "../stores/subscription";
 import type { OperationProgress } from "../stores/setup";
 import { useI18n } from "vue-i18n";
 import AppStoreView from "./AppStoreView.vue";
-import { getSoftwareRunningJobs } from "../api/software";
+import { getSoftwareRunningJobs, type ComponentRemovalResult } from "../api/software";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import RunningTaskBanner from "../components/RunningTaskBanner.vue";
 import { runningJobLabel, useServerRunningTask } from "../composables/useRunningTask";
-import { extractApiDetails, extractApiMessage } from "../stores/auth";
-import { useSoftwareStore, type ComponentManifestItem, type InstalledComponent, type ComponentInstallResult } from "../stores/software";
+import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
+import { useSoftwareStore, SoftwareRemovalIncompleteError, SoftwareRemovalRefreshError, type ComponentManifestItem, type InstalledComponent, type ComponentInstallResult } from "../stores/software";
 
 type CategoryKey = "all" | "installed" | "runtime" | "database" | "services" | "tools";
 type WorkspaceKey = "applications" | "components";
@@ -298,6 +298,7 @@ type ManifestRow = ComponentManifestItem & { installed: InstalledComponent | nul
 const { t } = useI18n();
 const { confirm } = useConfirm();
 const softwareStore = useSoftwareStore();
+const auth = useAuthStore();
 const subscription = useSubscriptionStore();
 
 const notice = ref("");
@@ -312,11 +313,17 @@ const liveProgress = ref<OperationProgress | null>(null);
 const session = getSessionEpoch();
 let disposed = false, generation = 0;
 let stopProgress: (() => void) | undefined;
-const contextCurrent = (context = generation) => !disposed && session === getSessionEpoch() && context === generation && activeWorkspace.value === "components";
+const actorCurrent = () => !disposed && session === getSessionEpoch() && auth.session?.isAuthenticated === true && auth.session.user?.role === "Administrator";
+const contextCurrent = (context = generation) => actorCurrent() && context === generation && activeWorkspace.value === "components";
 const storeBusy = computed(() => softwareStore.loading || softwareStore.checkingUpdates || !!softwareStore.installingComponentId || !!softwareStore.removingComponentId || softwareStore.installingDefaults);
 const actionsBusy = computed(() => busy.value || storeBusy.value || serverSoftware.running.value);
 const canWrite = computed(() => softwareStore.loaded && !subscription.isSuspended && !verificationRequired.value);
 const mayStart = (write = true) => contextCurrent() && !actionsBusy.value && (!write || canWrite.value);
+watch(() => [auth.session, auth.session?.user?.id, auth.session?.user?.role, auth.session?.isAuthenticated], () => {
+  generation++; stopProgress?.(); liveProgress.value = null;
+  verificationRequired.value = true;
+  showNotice("", false);
+}, { flush: "sync" });
 watch(activeWorkspace, () => {
   generation++; stopProgress?.(); liveProgress.value = null;
   showNotice("", false);
@@ -410,9 +417,10 @@ function componentTypeLabel(type: string): string {
  */
 const serverSoftware = useServerRunningTask({
   fetchStatus: async () => {
-    if (disposed || session !== getSessionEpoch()) throw new CanceledError("Software session changed");
+    const currentSession = auth.session, actorId = auth.session?.user?.id;
+    if (!actorCurrent()) throw new CanceledError("Software session changed");
     const status = await getSoftwareRunningJobs();
-    if (disposed || session !== getSessionEpoch()) throw new CanceledError("Software session changed");
+    if (!actorCurrent() || auth.session !== currentSession || auth.session?.user?.id !== actorId) throw new CanceledError("Software session changed");
     return status;
   },
   label: (job) => runningJobLabel(t, job),
@@ -435,7 +443,7 @@ onMounted(serverSoftware.start);
 watch(
   () => serverSoftware.job.value,
   async (yeni, eski) => {
-    if (eski && !yeni && !disposed && session === getSessionEpoch() && !busy.value && !storeBusy.value) {
+    if (eski && !yeni && actorCurrent() && !busy.value && !storeBusy.value) {
       busy.value = true;
       try { await softwareStore.fetchCatalog(); }
       catch { /* Keep the store's failed measurement state; do not claim completion. */ }
@@ -701,15 +709,29 @@ async function removeComponent(componentId: string) {
         catalog !== softwareStore.catalog || fingerprint !== JSON.stringify(installedRows.value.find(row => row.componentId === componentId))) return;
       invoked = true;
       try {
-        await softwareStore.removeComponent(componentId);
+        const result = await softwareStore.removeComponent(componentId);
         if (!contextCurrent(context)) return;
         if (!softwareStore.loaded || installedRows.value.some(item => item.componentId === componentId)) { reportUnconfirmed(); return; }
-        showNotice(t("software.remove.completed"), false);
+        showRemovalResult(result);
       } catch (error) {
-        if (contextCurrent(context)) { verificationRequired.value = true; showApiError(error); }
+        if (contextCurrent(context)) {
+          if (error instanceof SoftwareRemovalIncompleteError) { showRemovalResult(error.result); return; }
+          verificationRequired.value = true;
+          if (error instanceof SoftwareRemovalRefreshError) showRemovalResult(error.result, error.refreshError);
+          else showApiError(error);
+        }
       }
     },
   }); } finally { busy.value = false; }
+}
+
+function showRemovalResult(result: ComponentRemovalResult, refreshError?: unknown) {
+  const partial = result.warnings.length > 0;
+  showNotice([
+    t(partial ? "software.remove.partial" : "software.remove.completed"),
+    refreshError !== undefined ? t("panel.software.refreshAfterRemoveFailed") : ""
+  ].filter(Boolean).join(" "), partial || refreshError !== undefined,
+  [...result.warnings, refreshError !== undefined ? extractApiDetails(refreshError) : ""].filter(Boolean).join("\n\n"));
 }
 
 function componentCategory(item: ComponentManifestItem): CategoryKey {

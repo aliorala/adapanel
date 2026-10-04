@@ -59,6 +59,10 @@
            okunur. Kurulu değilken kart tek cümleyle konuşur. -->
       <dl v-if="dns.installed" class="dns-facts">
         <div>
+          <dt>{{ t("panel.health.dnsServiceStatus") }}</dt>
+          <dd><span :class="['status-pill', pillClass(dns.serviceStatus)]">{{ statusText(dns.serviceStatus) }}</span></dd>
+        </div>
+        <div>
           <dt>{{ t("panel.health.dnsListening") }}</dt>
           <dd>{{ dns.listeningAddresses.length ? dns.listeningAddresses.join(", ") : "—" }}</dd>
         </div>
@@ -488,18 +492,25 @@ function statusText(status: string) {
   if (status === "Running") return t("panel.health.statusRunning");
   if (status === "Stopped") return t("panel.health.statusStopped");
   if (status === "NotInstalled") return t("panel.health.statusNotInstalled");
+  if (status === "StartPending") return t("panel.health.statusStarting");
+  if (status === "StopPending") return t("panel.health.statusStopping");
+  if (status === "ContinuePending") return t("panel.health.statusResuming");
+  if (status === "PausePending") return t("panel.health.statusPausing");
+  if (status === "Paused") return t("panel.health.statusPaused");
   return t("panel.health.statusUnknown");
 }
 
 function pillClass(status: string) {
   if (status === "Running") return "ok";
   if (status === "Stopped") return "danger";
+  if (["StartPending", "StopPending", "ContinuePending", "PausePending", "Paused"].includes(status)) return "warn";
   return "";
 }
 
 function dotClass(status: string) {
   if (status === "Running") return "dot-ok";
   if (status === "Stopped") return "dot-danger";
+  if (pillClass(status) === "warn") return "dot-warn";
   return "dot-muted";
 }
 
@@ -642,6 +653,11 @@ function dotClass(status: string) {
   background: var(--text-muted);
 }
 
+.state-dot.dot-warn {
+  background: var(--warn-1);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn-1) 22%, transparent);
+}
+
 .dns-card {
   display: grid;
   gap: var(--sp-10);
@@ -671,6 +687,12 @@ function dotClass(status: string) {
 
 .dns-head .health-name {
   flex: 1 1 auto;
+}
+
+.dns-head .svc-id {
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
 }
 
 .dns-head button {

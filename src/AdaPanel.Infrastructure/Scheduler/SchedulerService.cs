@@ -21,6 +21,13 @@ public sealed class SchedulerService(
 {
     private const string TaskPath = "\\AdaPanel\\";
 
+    // Instance-only command boundary for safe behavioral tests. Production keeps the
+    // same PowerShell runner; no global override can affect another service instance.
+    internal Func<string, CancellationToken, Task<CommandResult>>? TaskCommand { get; set; }
+
+    private Task<CommandResult> RunTaskCommandAsync(string script, CancellationToken token) =>
+        TaskCommand is { } command ? command(script, token) : ProcessRunner.RunPowerShellAsync(script, token);
+
     /// <summary>
     /// "script" görevinin çözülmüş hâli: hangi program, hangi argümanlar, hangi klasör ve hangi kimlik.
     /// <paramref name="PrincipalUserId"/> null ise görev bugünkü gibi SYSTEM olarak çalışır.
@@ -183,7 +190,7 @@ public sealed class SchedulerService(
 }}
 $tasks | ConvertTo-Json -Depth 5";
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        var result = await RunTaskCommandAsync(script, cancellationToken);
         if (!result.Success)
         {
             throw new AppException("cron.read_failed", 500, 500);
@@ -795,7 +802,7 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
         }
 
         var logPath = await PrepareLogPathAsync(request.Name, plan?.PrincipalUserId, cancellationToken);
-        var result = await ProcessRunner.RunPowerShellAsync(BuildCreateScript(request, plan, logPath), cancellationToken);
+        var result = await RunTaskCommandAsync(BuildCreateScript(request, plan, logPath), cancellationToken);
         if (!result.Success)
         {
             // Uygulama havuzu kimliğiyle kayıt başarısızsa SYSTEM'e SESSİZCE DÜŞME — bu, kullanıcının
@@ -1031,10 +1038,11 @@ else {{ [Console]::Out.WriteLine('ADAPANEL-DURUM=' + $gorev.State) }}";
             "New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries " +
             $"-StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit {sureSiniri}";
 
+        // Build the complete replacement before registration. Deleting the existing
+        // task first loses it when any later construction/registration step fails or
+        // is cancelled. Register -Force handles creation/replacement itself; this
+        // method must not introduce a separate destructive window before that call.
         return $@"$ErrorActionPreference = 'Stop'
-if (Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(request.Name.Trim())}' -ErrorAction SilentlyContinue) {{
-  Unregister-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(request.Name.Trim())}' -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
-}}
 $action = {action}
 $trigger = {trigger}
 $principal = {principal}

@@ -5,16 +5,17 @@ import PhpView from "./PhpView.vue";
 import { getSitePhpSettings, updateSitePhpSettings, type SitePhpSettings } from "../api/php";
 import { useSitesStore } from "../stores/sites";
 import { usePhpStore } from "../stores/php";
-import { useSoftwareStore } from "../stores/software";
+import { SoftwareRemovalIncompleteError, useSoftwareStore } from "../stores/software";
 
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock("../api/php", async original => ({ ...await original<object>(), getSitePhpSettings: vi.fn(), updateSitePhpSettings: vi.fn() }));
+vi.mock("../components/ConfirmDialog.vue", () => ({ useConfirm: () => ({ confirm: async (options: { action?: () => Promise<unknown> }) => { await options.action?.(); return true; } }) }));
 let app: App | undefined;
 beforeEach(() => { vi.mocked(getSitePhpSettings).mockImplementation(async site => settings(site)); });
 afterEach(() => { app?.unmount(); app = undefined; vi.restoreAllMocks(); vi.clearAllMocks(); });
 function settings(siteName: string, memoryLimit = "256M"): SitePhpSettings { return { siteName, memoryLimit, maxExecutionTime: 120, uploadMaxFilesize: "64M", postMaxSize: "64M", displayErrors: false, openBasedirEnabled: true, configured: true }; }
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (error: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
-type State = { settings: SitePhpSettings; settingsLoaded: boolean; settingsError: string; savingSettings: boolean; notice: string; saveSettings(): Promise<void> };
+type State = { settings: SitePhpSettings; settingsLoaded: boolean; settingsError: string; savingSettings: boolean; notice: string; noticeError: boolean; saveSettings(): Promise<void>; removeVersion(id: string): Promise<void> };
 async function flush() { for (let i = 0; i < 8; i++) await nextTick(); }
 async function mount() {
   const renderer = createRenderer<object, object>({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
@@ -29,6 +30,14 @@ async function mount() {
   await flush(); return state;
 }
 async function selectSite(site: string) { useSitesStore().selectedSiteName = site; await flush(); }
+
+it("preserves partial cleanup instead of announcing the PHP version was removed", async () => {
+  const state = await mount();
+  vi.spyOn(useSoftwareStore(), "removeComponent").mockRejectedValueOnce(new SoftwareRemovalIncompleteError({ componentId: "php-8.3", warnings: ["locked runtime"] }));
+  await state.removeVersion("php-8.3");
+  expect(useSoftwareStore().removeComponent).toHaveBeenCalledExactlyOnceWith("php-8.3");
+  expect(state.notice).toBe("software.remove.partial"); expect(state.noticeError).toBe(true);
+});
 
 it("does not expose old PHP settings while the selected site's request is pending", async () => {
   const first = deferred<SitePhpSettings>(), second = deferred<SitePhpSettings>();

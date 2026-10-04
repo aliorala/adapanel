@@ -37,8 +37,8 @@ public sealed class CronTaskNameInjectionTests
     };
 
     /// <summary>
-    /// Kayit betigi: ad UC yerde geciyor (varlik kontrolu, kaldirma, kayit). Ucu de tek tirnakli
-    /// olmali -- biri unutulursa aciklik aynen durur.
+    /// Kayit betigi: ad tek kayit/guncelleme cagrisinda tek tirnakli olmali.
+    /// Onceki kaydi ayri silmek, sonraki hata/iptalde calisan gorevi kaybettirir.
     /// </summary>
     [Fact]
     public void KayitBetiginde_gorev_adi_alt_ifade_calistiramaz()
@@ -46,7 +46,9 @@ public sealed class CronTaskNameInjectionTests
         var betik = SchedulerService.BuildCreateScript(Istek(Yuk), plan: null);
 
         // Ad her gectigi yerde TEK tirnak icinde.
-        Assert.Equal(3, SayHepsi(betik, $"-TaskName '{Yuk}'"));
+        Assert.Equal(1, SayHepsi(betik, $"-TaskName '{Yuk}'"));
+        Assert.DoesNotContain("Unregister-ScheduledTask", betik, StringComparison.Ordinal);
+        Assert.Contains("Register-ScheduledTask", betik, StringComparison.Ordinal);
 
         // Ve HICBIR yerde cift tirnakli baglamda degil (eski davranis buydu).
         Assert.DoesNotContain($"-TaskName \"{Yuk}\"", betik, StringComparison.Ordinal);

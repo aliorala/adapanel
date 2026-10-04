@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { createRenderer, h, nextTick, ssrContextKey, type App, type Component } from "vue";
 import NginxView from "./NginxView.vue";
 import { configureNginx, getNginxStatus, startNginx, stopNginx, reloadNginx, testNginxConfiguration, type NginxStatus, type NginxConfiguration } from "../api/nginx";
-import { useSoftwareStore, type SoftwareCatalog } from "../stores/software";
+import { SoftwareRemovalIncompleteError, useSoftwareStore, type SoftwareCatalog } from "../stores/software";
 const shared = vi.hoisted(() => ({ confirm: vi.fn(), epoch: 0 }));
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock("../components/ConfirmDialog.vue", () => ({ useConfirm: () => ({ confirm: shared.confirm }) }));
@@ -23,10 +23,17 @@ async function mount(pendingCatalog?: Promise<SoftwareCatalog>) {
   software.catalog = pendingCatalog ? null : catalog;
   vi.spyOn(software, "fetchCatalog").mockReturnValue(pendingCatalog ?? Promise.resolve(catalog));
   vi.spyOn(software, "installComponent").mockResolvedValue({ componentId: "nginx", displayName: "Nginx", version: "fixture", status: "Installed", installDir: "fixture", serviceName: "", generatedPassword: "", message: "" });
-  vi.spyOn(software, "removeComponent").mockResolvedValue({ componentId: "nginx", removed: true, message: "" } as never);
+  vi.spyOn(software, "removeComponent").mockResolvedValue({ componentId: "nginx", warnings: [] });
   app = renderer.createApp({ ...NginxView, render: () => h("section") } as Component).use(pinia); app.provide(ssrContextKey, {});
   const state = (app.mount({}).$ as unknown as { setupState: State }).setupState; await flush(); return { state, software };
 }
+it("preserves partial removal instead of announcing nginx was removed", async () => {
+  const { state, software } = await mount();
+  shared.confirm.mockImplementation(async options => { await options.action?.(); return true; });
+  vi.mocked(software.removeComponent).mockRejectedValueOnce(new SoftwareRemovalIncompleteError({ componentId: "nginx", warnings: ["locked runtime"] }));
+  await state.remove();
+  expect(software.removeComponent).toHaveBeenCalledExactlyOnceWith("nginx"); expect(state.notice).toBe("software.remove.partial");
+});
 it("does not save defaults while the server configuration is unread", async () => {
   const pending = deferred<NginxStatus>(); vi.mocked(getNginxStatus).mockReturnValueOnce(pending.promise); const { state } = await mount(); await state.save(); expect(configureNginx).not.toHaveBeenCalled(); pending.resolve(measured()); await flush();
 });

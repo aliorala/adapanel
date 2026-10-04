@@ -15,7 +15,7 @@ async function render(serviceStatus: string, failed: boolean) {
     load: vi.fn(), SectionLoadError, dnsLoad: { message: { value: "" } },
     dns: { serviceStatus, installed: serviceStatus !== "Unknown", publiclyBound: true,
       needsRepair: false, listeningAddresses: [], expectedAddresses: [], missingAddresses: [] },
-    dnsBusy: false, dnsDetailsIsDiagnostic: false, startModeText: () => "Auto",
+    dnsBusy: false, dnsDetailsIsDiagnostic: false, startModeText: () => "Auto", pillClass: () => "ok", statusText: () => "panel.health.statusRunning",
     domains: { totalSites: 1, updatedSites: 0, failedSites: failed ? 1 : 0, results: [], serverFindings: [] },
     domainsLoading: false, domainsRepaired: false, domainCheckFailed: failed, onarilacakVar: false, domainsBusy: false,
     refreshAllDomains: vi.fn(), domainsLoad: { message: { value: "" } }, domainReport: [],

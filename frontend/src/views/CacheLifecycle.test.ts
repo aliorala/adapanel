@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { createRenderer, h, nextTick, ssrContextKey, type App, type Component } from "vue";
 import CacheView from "./CacheView.vue";
 import { getCacheStatus, startMemcached, startRedis, stopMemcached, stopRedis, type CacheRuntime, type CacheStatus } from "../api/cache";
-import { useSoftwareStore } from "../stores/software";
+import { SoftwareRemovalIncompleteError, useSoftwareStore } from "../stores/software";
 import { invalidateSessionRequests } from "../api/client";
 import { useSubscriptionStore } from "../stores/subscription";
 import type { SubscriptionUsage } from "../api/subscriptions";
@@ -33,13 +33,21 @@ async function mount() {
   const renderer = createRenderer<object, object>({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
   const pinia = createPinia(); setActivePinia(pinia);
   vi.spyOn(useSoftwareStore(), "installComponent").mockResolvedValue({ componentId: "redis", displayName: "redis", version: "1.0", status: "Installed", installDir: "/cache/redis", serviceName: "Adaredis", generatedPassword: "", message: "installed" });
-  vi.spyOn(useSoftwareStore(), "removeComponent").mockResolvedValue();
+  vi.spyOn(useSoftwareStore(), "removeComponent").mockImplementation(async componentId => ({ componentId, warnings: [] }));
   app = renderer.createApp({ ...CacheView, render: () => h("section") } as Component).use(pinia);
   app.provide(ssrContextKey, {});
   const state = (app.mount({}).$ as unknown as { setupState: State }).setupState;
   await flush(); return state;
 }
 function unmount() { app!.unmount(); app = undefined; }
+
+it("keeps a partial component removal warning instead of claiming cache removal completed", async () => {
+  const state = await mount();
+  vi.mocked(useSoftwareStore().removeComponent).mockRejectedValueOnce(new SoftwareRemovalIncompleteError({ componentId: "redis", warnings: ["locked runtime"] }));
+  await state.remove("redis");
+  expect(useSoftwareStore().removeComponent).toHaveBeenCalledExactlyOnceWith("redis");
+  expect(state.notice).toBe("software.remove.partial"); expect(state.noticeError).toBe(true);
+});
 
 it("does not present unread cache counts as measured zeroes", async () => {
   const pending = deferred<CacheStatus>(); vi.mocked(getCacheStatus).mockReturnValueOnce(pending.promise);
