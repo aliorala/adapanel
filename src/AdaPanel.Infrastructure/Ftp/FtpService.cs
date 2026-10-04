@@ -59,7 +59,9 @@ public sealed partial class FtpService(
 
     public async Task<FtpServerStatusDto> GetServerStatusAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var preferences = await panelPreferencesService.GetAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         var durum = new FtpServerStatusDto
         {
             ServerAddress = preferences.ServerAddress,
@@ -71,9 +73,9 @@ public sealed partial class FtpService(
         var olcum = await ProbeFtpRuntimeAsync(cancellationToken);
         if (olcum is null)
         {
-            // ÖLÇEMEDİK SESSİZCE "SORUN YOK"A DA "ARIZA"YA DA ÇEVRİLMEZ (FirewallService.IsPortCovered
-            // deseni). Eski davranışa — altyapı kurulum bayrağına — düşülür ve durum "bilinmiyor" denir.
-            durum.IsConfigured = (await fileStore.ReadAsync(InfraStatePath, new FtpInfraState(), cancellationToken)).Configured;
+            // A previous installation is not evidence that the server currently works.
+            // The status key distinguishes an unknown measurement from a measured fault.
+            durum.IsConfigured = false;
             durum.StatusMessage = "ftp.server_status_unknown";
             return durum;
         }
@@ -94,6 +96,7 @@ public sealed partial class FtpService(
             : !durum.IsSiteRunning ? "ftp.site_not_running"
             : portDurumu == FtpControlPortDurumu.YabanciSurec ? "ftp.control_port_conflict"
             : portDurumu == FtpControlPortDurumu.DinleyenYok ? "ftp.server_not_listening"
+            : portDurumu == FtpControlPortDurumu.Olculemedi ? "ftp.server_status_unknown"
             : "ftp.server_ready";
 
         durum.IsConfigured = durum.StatusMessage == "ftp.server_ready";
@@ -203,31 +206,45 @@ public sealed partial class FtpService(
     private async Task<FtpRuntimeOlcum?> ProbeFtpRuntimeAsync(CancellationToken cancellationToken)
     {
         var script = $$"""
-            $ErrorActionPreference = 'SilentlyContinue'
-            $portOlculdu = [bool](Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue)
+            $ErrorActionPreference = 'Stop'
+            $portOlculdu = $false
+            $siteOlculdu = $false
+            $servisOlculdu = $false
             $siteVar = $false
             $siteDurum = ''
             $servisDurum = ''
             $servisPidleri = @()
-            $svc = Get-CimInstance Win32_Service -Filter "Name='FTPSVC'" -ErrorAction SilentlyContinue
-            if ($svc) {
-              $servisDurum = [string]$svc.State
-              if ([int]$svc.ProcessId -gt 0) { $servisPidleri = @([int]$svc.ProcessId) }
-            }
-            Import-Module WebAdministration -ErrorAction SilentlyContinue
             try {
-              $site = Get-Website -Name '{{EscapePowerShellLiteral(FtpSiteName)}}' -ErrorAction SilentlyContinue
-              if ($site) { $siteVar = $true; $siteDurum = [string]$site.State }
+              $svc = Get-CimInstance Win32_Service -Filter "Name='FTPSVC'" -ErrorAction Stop
+              if ($svc) {
+                $servisDurum = [string]$svc.State
+                if ([int]$svc.ProcessId -gt 0) { $servisPidleri = @([int]$svc.ProcessId) }
+              } else { $servisDurum = 'NotInstalled' }
+              $servisOlculdu = $true
+            } catch { }
+            try {
+              Import-Module WebAdministration -ErrorAction Stop
+              $siteler = @(Get-Website -ErrorAction Stop | Where-Object { $_.Name -eq '{{EscapePowerShellLiteral(FtpSiteName)}}' })
+              if ($siteler.Count -gt 1) { throw 'Ambiguous FTP site measurement.' }
+              if ($siteler.Count -eq 1) { $siteVar = $true; $siteDurum = [string]$siteler[0].State }
+              $siteOlculdu = $true
             } catch { }
             $satirlar = @()
-            if ($portOlculdu) {
-              foreach ($k in @(Get-NetTCPConnection -LocalPort {{FtpPort}} -State Listen -ErrorAction SilentlyContinue)) {
-                $sp = Get-Process -Id $k.OwningProcess -ErrorAction SilentlyContinue
-                $servisAdlari = @(Get-CimInstance Win32_Service -Filter "ProcessId=$($k.OwningProcess)" -ErrorAction SilentlyContinue | ForEach-Object { [string]$_.Name })
-                $satirlar += [pscustomobject]@{ pid = [int]$k.OwningProcess; process = [string]$sp.ProcessName; services = @($servisAdlari) }
-              }
+            if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
+              try {
+                # Filter after a successful inventory; no matching listener is a measured empty
+                # result, whereas a failed native query must remain unknown.
+                foreach ($k in @(Get-NetTCPConnection -ErrorAction Stop | Where-Object { $_.LocalPort -eq {{FtpPort}} -and $_.State -eq 'Listen' })) {
+                  $sp = Get-Process -Id $k.OwningProcess -ErrorAction Stop
+                  $servisAdlari = @(Get-CimInstance Win32_Service -Filter "ProcessId=$($k.OwningProcess)" -ErrorAction Stop | ForEach-Object { [string]$_.Name })
+                  $satirlar += [pscustomobject]@{ pid = [int]$k.OwningProcess; process = [string]$sp.ProcessName; services = @($servisAdlari) }
+                }
+                $portOlculdu = $true
+              } catch { $satirlar = @() }
             }
             [pscustomobject]@{
+              siteMeasured = $siteOlculdu
+              serviceMeasured = $servisOlculdu
               siteExists = $siteVar
               siteState = $siteDurum
               serviceState = $servisDurum
@@ -238,6 +255,7 @@ public sealed partial class FtpService(
             """;
 
         var sonuc = await RunScriptAsync(script, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!sonuc.Success || string.IsNullOrWhiteSpace(sonuc.StandardOutput))
         {
             return null;
@@ -247,22 +265,39 @@ public sealed partial class FtpService(
         {
             using var belge = JsonDocument.Parse(sonuc.StandardOutput);
             var kok = belge.RootElement;
+            if (kok.ValueKind != JsonValueKind.Object ||
+                !TryBoolean(kok, "siteMeasured", out var siteMeasured) || !siteMeasured ||
+                !TryBoolean(kok, "serviceMeasured", out var serviceMeasured) || !serviceMeasured ||
+                !TryBoolean(kok, "siteExists", out var siteExists) ||
+                !TryBoolean(kok, "portMeasured", out var portMeasured) ||
+                !kok.TryGetProperty("siteState", out var siteState) || siteState.ValueKind != JsonValueKind.String ||
+                !kok.TryGetProperty("serviceState", out var serviceState) || serviceState.ValueKind != JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(serviceState.GetString()) ||
+                (siteExists && string.IsNullOrWhiteSpace(siteState.GetString())) ||
+                !kok.TryGetProperty("listeners", out var listeners) || listeners.ValueKind is not (JsonValueKind.Array or JsonValueKind.Object) ||
+                !kok.TryGetProperty("servicePids", out var pids) || pids.ValueKind is not (JsonValueKind.Array or JsonValueKind.Number))
+                return null;
 
             var dinleyiciler = new List<FtpPortDinleyici>();
             foreach (var satir in DiziOku(kok, "listeners"))
             {
+                if (satir.ValueKind != JsonValueKind.Object ||
+                    !satir.TryGetProperty("pid", out var pid) || pid.ValueKind != JsonValueKind.Number || !pid.TryGetInt32(out var pidDeger) || pidDeger <= 0 ||
+                    !satir.TryGetProperty("process", out var process) || process.ValueKind != JsonValueKind.String ||
+                    !satir.TryGetProperty("services", out var services) || services.ValueKind is not (JsonValueKind.Array or JsonValueKind.String))
+                    return null;
+                var serviceNames = DiziOku(satir, "services").ToArray();
+                if (serviceNames.Any(item => item.ValueKind != JsonValueKind.String)) return null;
                 dinleyiciler.Add(new FtpPortDinleyici(
-                    satir.TryGetProperty("pid", out var pid) && pid.TryGetInt32(out var pidDeger) ? pidDeger : 0,
-                    MetinOku(satir, "process"),
-                    DiziOku(satir, "services").Select(item => item.GetString() ?? string.Empty).Where(item => item.Length > 0).ToArray()));
+                    pidDeger, process.GetString() ?? string.Empty,
+                    serviceNames.Select(item => item.GetString() ?? string.Empty).Where(item => item.Length > 0).ToArray()));
             }
+            var servicePids = DiziOku(kok, "servicePids").ToArray();
+            if (servicePids.Any(item => item.ValueKind != JsonValueKind.Number || !item.TryGetInt32(out var pid) || pid <= 0)) return null;
 
             return new FtpRuntimeOlcum(
-                kok.TryGetProperty("siteExists", out var siteVar) && siteVar.ValueKind == JsonValueKind.True,
-                MetinOku(kok, "siteState"),
-                MetinOku(kok, "serviceState"),
-                DiziOku(kok, "servicePids").Where(item => item.TryGetInt32(out _)).Select(item => item.GetInt32()).ToArray(),
-                kok.TryGetProperty("portMeasured", out var portOlculdu) && portOlculdu.ValueKind == JsonValueKind.True,
+                siteExists, siteState.GetString() ?? string.Empty, serviceState.GetString() ?? string.Empty,
+                servicePids.Select(item => item.GetInt32()).ToArray(), portMeasured,
                 dinleyiciler);
         }
         catch (JsonException)
@@ -297,14 +332,22 @@ public sealed partial class FtpService(
         }
     }
 
-    private static string MetinOku(JsonElement kok, string ad)
-        => kok.TryGetProperty(ad, out var deger) && deger.ValueKind == JsonValueKind.String
-            ? deger.GetString() ?? string.Empty
-            : string.Empty;
+    private static bool TryBoolean(JsonElement value, string name, out bool result)
+    {
+        result = false;
+        if (!value.TryGetProperty(name, out var field) || field.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return false;
+        result = field.GetBoolean();
+        return true;
+    }
 
     // M5 (profesyonel paneller gibi opsiyonel "yalnız güvenli FTP"): FTPS zorunlu mu? Varsayılan false = düz + FTPS (kilitlenme yok).
     public async Task<bool> GetRequireSslAsync(CancellationToken cancellationToken = default)
-        => (await fileStore.ReadAsync(TlsStatePath, new FtpTlsState(), cancellationToken)).RequireSsl;
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var state = await fileStore.ReadAsync(TlsStatePath, new FtpTlsState(), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        return state.RequireSsl;
+    }
 
     /// <summary>
     /// FTPS zorunluluğunu yazar, IIS'e uygular ve UYGULANDIĞINI GERİ OKUR.
@@ -338,12 +381,16 @@ public sealed partial class FtpService(
 
     public async Task<IReadOnlyCollection<FtpUserDto>> GetFtpUsersAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var records = await fileStore.ReadAsync(StatePath, Array.Empty<FtpUserState>(), cancellationToken);
         var list = new List<FtpUserDto>(records.Length);
 
         foreach (var record in records.OrderBy(item => item.UserName, StringComparer.OrdinalIgnoreCase))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var ev = ProbeHome(record.UserName);
+            var exists = await UserExistsAsync(record.UserName, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
 
             list.Add(new FtpUserDto
             {
@@ -352,7 +399,7 @@ public sealed partial class FtpService(
                 SiteName = record.SiteName,
                 CreatedAtUtc = record.CreatedAtUtc,
                 IsEnabled = record.IsEnabled,
-                ExistsOnSystem = await UserExistsAsync(record.UserName, cancellationToken),
+                ExistsOnSystem = exists,
                 HomeLinkPath = ev.LinkPath,
                 HomeLinkExists = ev.LinkExists,
                 HomeTargetExists = ev.TargetExists,
@@ -361,6 +408,7 @@ public sealed partial class FtpService(
             });
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return list;
     }
 

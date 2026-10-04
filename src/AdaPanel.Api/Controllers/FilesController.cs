@@ -166,8 +166,9 @@ public sealed class FilesController(
     [HttpDelete]
     public async Task<ActionResult<ApiResponse<FileWorkspaceDto>>> DeleteAsync([FromBody] DeleteFileRequest request, CancellationToken cancellationToken)
     {
-        await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.Path, allowRoot: false, cancellationToken);
-        var workspace = await fileService.DeleteAsync(request, cancellationToken);
+        request = new DeleteFileRequest { Path = request.Path };
+        using var publication = await CapturePublicationAsync([request.Path], cancellationToken);
+        var workspace = await fileService.DeleteAsync(request, publication.ApproveAsync, cancellationToken);
         await WriteAuditAsync("files.deleted", request.Path, "File or directory deleted.", cancellationToken);
         return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace, "files.deleted"));
     }
@@ -195,14 +196,10 @@ public sealed class FilesController(
     [HttpPost("move")]
     public async Task<ActionResult<ApiResponse<MoveFilesResultDto>>> MoveAsync([FromBody] MoveFilesRequest request, CancellationToken cancellationToken)
     {
-        foreach (var source in request.Paths ?? [])
-        {
-            await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, source, allowRoot: false, cancellationToken);
-        }
-
-        await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.DestinationPath, allowRoot: false, cancellationToken);
-
-        var result = await fileService.MoveAsync(request, cancellationToken);
+        request = new MoveFilesRequest { Paths = (request.Paths ?? []).ToArray(), DestinationPath = request.DestinationPath,
+            NewName = request.NewName, Overwrite = request.Overwrite };
+        using var publication = await CapturePublicationAsync([.. request.Paths, request.DestinationPath], cancellationToken);
+        var result = await fileService.MoveAsync(request, publication.ApproveAsync, cancellationToken);
 
         // Kayıt, kısmi başarısızlığı da yazar: "hepsi taşındı" diyen bir iz, taşınmayan dosyanın
         // nereye gittiğini soran kişiyi yanlış yönlendirirdi.
@@ -236,12 +233,9 @@ public sealed class FilesController(
     [HttpPost("copy")]
     public async Task<ActionResult<ApiResponse<CopyFilesResultDto>>> CopyAsync([FromBody] CopyFilesRequest request, CancellationToken cancellationToken)
     {
-        foreach (var source in request.Paths ?? [])
-        {
-            await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, source, allowRoot: false, cancellationToken);
-        }
-
-        await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.DestinationPath, allowRoot: false, cancellationToken);
+        request = new CopyFilesRequest { Paths = (request.Paths ?? []).ToArray(), DestinationPath = request.DestinationPath,
+            NewName = request.NewName, Overwrite = request.Overwrite };
+        using var publication = await CapturePublicationAsync([.. request.Paths, request.DestinationPath], cancellationToken);
 
         // Tavan ÖLÇÜMDEN de önce alınır: kota ölçümü bir AĞAÇ YÜRÜYÜŞÜDÜR, yani kendisi de ağır
         // bir iştir ve sınırsız bırakılırsa kopyalama hiç başlamadan sunucu tüketilebilirdi.
@@ -263,7 +257,7 @@ public sealed class FilesController(
             },
             cancellationToken);
 
-        var result = await fileService.CopyAsync(request, cancellationToken);
+        var result = await fileService.CopyAsync(request, publication.ApproveAsync, cancellationToken);
 
         // Kayıt, kısmi başarısızlığı da yazar. İZ YALNIZCA YOL VE SEBEP tutar — dosya İÇERİĞİ asla:
         // denetim kaydı, kopyalanan dosyanın gizli verisinin ikinci bir kopyası olamaz.

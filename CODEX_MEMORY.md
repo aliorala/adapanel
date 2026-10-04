@@ -1,5 +1,46 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R37 doğrulandı; 0.8.82 paketleniyor
+
+Geçici durum: kaynak sürümleri 0.8.82; yayın henüz doğrulanmadı. Son doğrulanmış yayın 0.8.81.
+R36+R37 birlikte paketlenecek. Canlı kurulum ve kaynak/Git geçmişi push yok.
+
+R37 Files Delete/Move/Copy HTTP: immutable request/principal, R36 PublicationUse ile source+target
+site generation pin, beklemeler/öge yazımları sonrası actor/SID/stamp/delegation/scope onayı.
+Yetki ve OCE normal per-item IO sonucuna çevrilmez. Move overwrite hedefi önce silmez;
+File.Move overwrite locked-source failure eski targetı korur. Nested copy bounded plan→owned temp
+directory→each entry approval/reparsecheck→no-overwrite Directory.Move; cleanup yalnız owned temp.
+ReadFileContent aynı read-only handle ile <=1MiB içeriği ölçer. DTO ContentLoaded/reason; büyükfile
+placeholder yok, UI contentLoaded!==true readonly, download açık. Binary editing ayrı aday.
+
+FTP GET users/status/tls actor+SID+delegation başlangıç/son validation, immutable scopeprincipal.
+Native measurement flags query başarıyla tamamlanınca set; malformed/unknown probe ready sayılmaz.
+Read CT korunur. TLS Set/ensure mutasyonları bu turun kapsamı dışında; sonraki audit adayı.
+
+FE save/delete strict envelope/path/content/parent validation, old context confirmations/late replies
+engelli; confirmed result + failed list refresh ayrı. FTP read DTO validation, stale list inlineerror,
+ready yalnız measured ready; unknown/failed GET eski green badge göstermez. FTP responsive labeled
+cards, matching-empty search+clear, scoped count, malformed-date safe locale formatter.
+
+Baseline backend96 =77RED/19green; editor4 ekRED. New backend112 =File67+Editor4+Ftp41.
+Target699/699. Full .NET root27404 terminalexit0: Infra8531+Core2=8533/8533 fail0skip0;
+build0warning/error. TRX round37-full_net8.0_20261004081951.trx; logs round37-final-build/backend.
+NewFE65; full105files1999/1999 types/ViteGREEN (root2242exit0). İlk fullFE9 failure eski Dashboard
+FTPfixture'da eksik isEnabled/existsOnSystem idi; gerçekDTO alanları eklendi, assertions korunuyor.
+TR/EN FE5541/API286 parity, wwwroot synced6indexassets present. No code edits after finalchecks.
+
+Chrome3 gerçekVue/Pinia fakeAPI only: 390TR dark doc380/380 table320/720→320/320;
+320EN light doc310/310 table250/250 createform250/250. Unknownbadge, failedGET notices,
+no-match clear search checked. Appconsole0 (extensions excluded). Screenshot round37-ftp-mobile.png
+proof; desktop/errors-en320/form-en320 also saved. Last desktop alignment CSS uses fixed180px
+action column after desktopcapture. Preview11957 terminal; __audit37 files removed; tab37closed,
+viewportreset. Fresh usertab inventory still no liveAdaPanel; no installedversion measurement.
+
+Packaging root90001 running release082-package.log. Componentaudit22Passed3standardlargeSkipped;
+privacy12/12, actual release-note0findings, parser/versionguardpassed. Package/publish next.
+Only preexisting tests/AdaPanel.Infrastructure.Tests/TestResults/ must remain untouched/untracked.
+All agents source frozen/done; root sole.NET. Continuous unbudgeted goal ACTIVE, never complete.
+
 ## 2026-10-04 — R36 yerelde doğrulandı; son yayın hâlâ 0.8.81
 
 R36 HENÜZ YAYIMLANMADI; kaynak sürümleri 0.8.81 kaldı. Publiclatest yeniden okundu0.8.81,

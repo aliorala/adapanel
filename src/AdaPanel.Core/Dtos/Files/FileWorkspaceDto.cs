@@ -14,5 +14,9 @@ public sealed class FileWorkspaceDto
 
     public string Content { get; set; } = string.Empty;
 
+    public bool ContentLoaded { get; set; }
+
+    public string ContentUnavailableReasonKey { get; set; } = string.Empty;
+
     public FileEntryDto[] Entries { get; set; } = [];
 }

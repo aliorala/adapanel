@@ -15,6 +15,10 @@ public interface IFileService
 
     Task<FileWorkspaceDto> DeleteAsync(DeleteFileRequest request, CancellationToken cancellationToken = default);
 
+    Task<FileWorkspaceDto> DeleteAsync(DeleteFileRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Authorized file deletion is not implemented.");
+
     Task<FileWorkspaceDto> CreateDirectoryAsync(CreateDirectoryRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -40,6 +44,10 @@ public interface IFileService
     /// </list>
     /// </remarks>
     Task<MoveFilesResultDto> MoveAsync(MoveFilesRequest request, CancellationToken cancellationToken = default);
+
+    Task<MoveFilesResultDto> MoveAsync(MoveFilesRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Authorized file transfer is not implemented.");
 
     /// <summary>
     /// Bir ya da birden çok ögeyi başka klasöre KOPYALAR; kaynak YERİNDE KALIR.
@@ -76,6 +84,10 @@ public interface IFileService
     /// </para>
     /// </remarks>
     Task<CopyFilesResultDto> CopyAsync(CopyFilesRequest request, CancellationToken cancellationToken = default);
+
+    Task<CopyFilesResultDto> CopyAsync(CopyFilesRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Authorized file transfer is not implemented.");
 
     Task<FileWorkspaceDto> SetPermissionsAsync(SetFilePermissionsRequest request, CancellationToken cancellationToken = default);
 

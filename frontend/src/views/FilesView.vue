@@ -169,17 +169,17 @@
              (ad/sayı yazdırma) yerinde duruyor; bu yerleşim onun yerine geçmez, önüne geçer. -->
         <div v-if="selection.count.value > 0" class="bulk-bar" role="status">
           <span class="status-pill">{{ t("panel.bulk.selectedCount", { count: selection.count.value }) }}</span>
-          <button class="secondary compact" v-bind="writeGate(bulk.busy.value || transferBusy)" @click="startTransfer('move')">
+          <button class="secondary compact" v-bind="writeGate(bulk.busy.value || transferBusy || deleteBusy)" @click="startTransfer('move')">
             {{ t("panel.files.move") }}
           </button>
-          <button class="secondary compact" v-bind="writeGate(bulk.busy.value || transferBusy)" @click="startTransfer('copy')">
+          <button class="secondary compact" v-bind="writeGate(bulk.busy.value || transferBusy || deleteBusy)" @click="startTransfer('copy')">
             {{ t("panel.files.copy") }}
           </button>
-          <button class="secondary compact" :disabled="bulk.busy.value || transferBusy" @click="selection.clear">
+          <button class="secondary compact" :disabled="bulk.busy.value || transferBusy || deleteBusy" @click="selection.clear">
             {{ t("panel.bulk.clearSelection") }}
           </button>
           <span class="bulk-spacer" aria-hidden="true"></span>
-          <button class="danger compact" v-bind="writeGate(bulk.busy.value || transferBusy)" @click="removeSelected">
+          <button class="danger compact" v-bind="writeGate(bulk.busy.value || transferBusy || deleteBusy)" @click="removeSelected">
             {{ t("panel.bulk.deleteSelected", { count: selection.count.value }) }}
           </button>
         </div>
@@ -206,7 +206,7 @@
             <span>{{ t("panel.files.overwrite") }}</span>
           </label>
           <div class="entry-actions">
-            <button type="submit" v-bind="writeGate(transferBusy || !transferTarget)">
+            <button type="submit" v-bind="writeGate(transferBusy || deleteBusy || !transferTarget)">
               {{ transferMode === "move" ? t("panel.files.move") : t("panel.files.copy") }}
             </button>
             <button type="button" class="secondary compact" :disabled="transferBusy" @click="transferMode = null">
@@ -228,7 +228,7 @@
               <input
                 type="checkbox"
                 :checked="selection.allSelected(visiblePaths)"
-                :disabled="bulk.busy.value || transferBusy"
+                :disabled="bulk.busy.value || transferBusy || deleteBusy"
                 :aria-label="t('panel.bulk.selectAll')"
                 @change="selection.toggleAll(visiblePaths)" />
               <span class="mobile-select-label" aria-hidden="true">{{ t("panel.bulk.selectAll") }}</span>
@@ -246,7 +246,7 @@
                 <input
                   type="checkbox"
                   :checked="selection.isSelected(entry.path)"
-                  :disabled="bulk.busy.value || transferBusy"
+                  :disabled="bulk.busy.value || transferBusy || deleteBusy"
                   :aria-label="t('panel.bulk.selectRow', { name: entry.name })"
                   @change="selection.toggle(entry.path)" />
               </span>
@@ -327,14 +327,14 @@
                    çekmece satırı altı sütunun tamamını kaplar. -->
               <div class="drawer-actions" role="cell" aria-colspan="6">
                 <span class="drawer-label">{{ entry.name }}</span>
-                <button class="secondary compact" v-bind="writeGate(transferBusy)" @click="renamePath(entry)">{{ t("panel.files.rename") }}</button>
+                <button class="secondary compact" v-bind="writeGate(transferBusy || deleteBusy)" @click="renamePath(entry)">{{ t("panel.files.rename") }}</button>
                 <button class="secondary compact" v-bind="writeGate(archiveBusy)" @click="compress(entry.path)">{{ t("panel.files.compress") }}</button>
                 <button v-if="entry.extension.toLowerCase() === '.zip'" class="secondary compact" v-bind="writeGate(archiveBusy)" @click="extract(entry.path)">
                   {{ t("panel.files.extract") }}
                 </button>
                 <!-- Yıkıcı eylem: ayırıcının ardında ve çekmecenin öbür ucunda. -->
                 <span class="drawer-divider" aria-hidden="true"></span>
-                <button class="danger compact" v-bind="writeGate()" @click="removePath(entry)">{{ t("panel.sites.delete") }}</button>
+                <button class="danger compact" v-bind="writeGate(transferBusy || deleteBusy || bulk.busy.value)" @click="removePath(entry)">{{ t("panel.sites.delete") }}</button>
               </div>
             </div>
           </template>
@@ -355,14 +355,15 @@
            tipinde girinti ve sütun hizası okunmuyordu. -->
       <label v-else-if="workspace" class="stacked-field">
         <span class="field-label">{{ t("panel.files.editor") }}</span>
-        <textarea v-model="fileContent" :disabled="saving || loading" rows="18" spellcheck="false" class="file-editor"></textarea>
+        <span v-if="!canEditFile" id="file-content-state" class="field-hint" role="status">{{ t(workspace.contentUnavailableReasonKey || 'panel.files.contentUnmeasured') }}</span>
+        <textarea v-model="fileContent" :disabled="saving || loading || !canEditFile" :aria-describedby="!canEditFile ? 'file-content-state' : undefined" rows="18" spellcheck="false" class="file-editor"></textarea>
       </label>
 
       <!-- Kaydet BİRİNCİL, indir ikincil. Eskiden ikisi `action-row` içindeydi ve o sınıf
            `space-between` uyguladığı için düğmeler kartın iki ucuna savruluyordu; `toolbar-group`
            yalnız akış + boşluk verir, ikisi yan yana durur. -->
       <div v-if="workspace && !workspace.isDirectory" class="toolbar-group editor-actions">
-        <button v-bind="writeGate(saving || loading || !isDirty)" @click="saveCurrentFile">
+        <button v-bind="writeGate(saving || loading || !canEditFile || !isDirty)" @click="saveCurrentFile">
           {{ saving ? t("panel.confirm.working") : t("panel.files.save") }}
         </button>
         <span v-if="isDirty" class="status-pill" role="status">{{ t("panel.files.unsaved") }}</span>
@@ -542,7 +543,8 @@ const workspaceLoad = useSectionError();
 const fileContent = ref("");
 const savedContent = ref("");
 const saving = ref(false);
-const isDirty = computed(() => Boolean(workspace.value && !workspace.value.isDirectory) && fileContent.value !== savedContent.value);
+const canEditFile = computed(() => Boolean(workspace.value && !workspace.value.isDirectory && workspace.value.contentLoaded === true));
+const isDirty = computed(() => canEditFile.value && fileContent.value !== savedContent.value);
 let workspaceRequest = 0;
 let fileNavigationGeneration = 0;
 let requestedWorkspacePath = "";
@@ -627,6 +629,7 @@ const filePager = usePagination(entries);
 const searchPager = usePagination(searchResults);
 const selection = useBulkSelection();
 const bulk = useBulkAction();
+const deleteBusy = ref(false);
 const visiblePaths = computed(() => filePager.items.value.map((entry) => entry.path));
 const permissionPrincipal = ref("IIS_IUSRS");
 const permissionRights = ref("M");
@@ -1385,25 +1388,37 @@ function transferOzeti(
  * dosyada normal onay yeter. Onay metni NEYİN silineceğini (tam yol) açıkça söyler.
  */
 async function removePath(entry: FileEntry) {
+  if (!isFileViewActive() || locked.value || deleteBusy.value || transferBusy.value || bulk.busy.value) return;
+  entry = { ...entry };
   const isFolder = entry.isDirectory;
-  await confirm({
-    title: isFolder ? t("panel.files.confirmDeleteFolderTitle") : t("panel.files.confirmDeleteFileTitle"),
-    message: isFolder
-      ? t("panel.files.confirmDeleteFolderMessage", { name: entry.name })
-      : t("panel.files.confirmDeleteFileMessage", { name: entry.name }),
-    impact: [entry.path],
-    // Klasör = geri dönüşsüz özyinelemeli silme: adın birebir yazılması istenir.
-    requireText: isFolder ? entry.name : undefined,
-    action: async () => {
-      try {
-        await deletePath(entry.path);
-        await refresh(workspace.value?.path || "");
-        showNotice(t("panel.files.deleted"), false);
-      } catch (error) {
-        showNotice(resolveApiMessage(error), true);
+  const isCurrent = currentFileContext(false);
+  const sourceFolder = workspace.value?.path || "";
+  deleteBusy.value = true;
+  try {
+    await confirm({
+      title: isFolder ? t("panel.files.confirmDeleteFolderTitle") : t("panel.files.confirmDeleteFileTitle"),
+      message: isFolder
+        ? t("panel.files.confirmDeleteFolderMessage", { name: entry.name })
+        : t("panel.files.confirmDeleteFileMessage", { name: entry.name }),
+      impact: [entry.path],
+      // Klasör = geri dönüşsüz özyinelemeli silme: adın birebir yazılması istenir.
+      requireText: isFolder ? entry.name : undefined,
+      action: async () => {
+        if (!isCurrent() || locked.value) return;
+        try {
+          await deletePath(entry.path);
+          if (!isCurrent()) return;
+          const refreshed = await refreshAfterFileOperation(sourceFolder, isCurrent);
+          if (!isCurrent() || refreshed === undefined) return;
+          reportFileOperation(t("panel.files.deleted"), false, refreshed);
+        } catch (error) {
+          if (isCurrent()) showNotice(resolveApiMessage(error), true);
+        }
       }
-    }
-  });
+    });
+  } finally {
+    deleteBusy.value = false;
+  }
 }
 
 /**
@@ -1417,8 +1432,10 @@ async function removePath(entry: FileEntry) {
  * olursa döngü durmaz; özet "kaçı silindi, kaçı silinemedi ve neden" der.
  */
 async function removeSelected() {
-  const isCurrent = currentFileContext();
-  const targets = entries.value.filter((entry) => selection.isSelected(entry.path));
+  if (!isFileViewActive() || locked.value || deleteBusy.value || transferBusy.value || bulk.busy.value) return;
+  const isCurrent = currentFileContext(false);
+  const sourceFolder = workspace.value?.path || "";
+  const targets = entries.value.filter((entry) => selection.isSelected(entry.path)).map(entry => ({ ...entry }));
   if (targets.length === 0) {
     return;
   }
@@ -1429,34 +1446,40 @@ async function removeSelected() {
     impact.unshift(t("panel.files.bulkFolderWarn", { count: folderCount }));
   }
 
-  const onay = await confirm({
-    title: t("panel.bulk.confirmDeleteTitle", { count: targets.length }),
-    message: t("panel.bulk.confirmDeleteMessage", { count: targets.length }),
-    impact,
-    requireText: String(targets.length)
-  });
-  if (!onay || !isCurrent()) {
-    return;
-  }
+  deleteBusy.value = true;
+  try {
+    const onay = await confirm({
+      title: t("panel.bulk.confirmDeleteTitle", { count: targets.length }),
+      message: t("panel.bulk.confirmDeleteMessage", { count: targets.length }),
+      impact,
+      requireText: String(targets.length)
+    });
+    if (!onay || !isCurrent() || locked.value) return;
 
-  const outcome = await bulk.runBulk(targets, (entry) => entry.path, (entry) => deletePath(entry.path), isCurrent);
-  if (!isCurrent()) return;
-  await refresh(workspace.value?.path || "");
-  showNotice(bulk.deleteSummary(outcome), outcome.failures.length > 0);
+    const outcome = await bulk.runBulk(targets, (entry) => entry.path, (entry) => deletePath(entry.path), () => isCurrent() && !locked.value);
+    if (!isCurrent()) return;
+    const refreshed = await refreshAfterFileOperation(sourceFolder, isCurrent);
+    if (!isCurrent() || refreshed === undefined) return;
+    reportFileOperation(bulk.deleteSummary(outcome), outcome.failures.length > 0, refreshed);
+  } finally {
+    deleteBusy.value = false;
+  }
 }
 
 async function saveCurrentFile(): Promise<boolean> {
-  if (!workspace.value || workspace.value.isDirectory || saving.value || locked.value) return false;
+  if (!isFileViewActive() || !workspace.value || !canEditFile.value || saving.value || loading.value || locked.value) return false;
   const path = workspace.value.path;
   const content = fileContent.value;
+  const isCurrent = currentFileContext(false);
   saving.value = true;
   try {
     await saveFile(path, content);
-    if (workspace.value?.path === path) savedContent.value = content;
+    if (!isCurrent()) return false;
+    savedContent.value = content;
     showNotice(t("panel.files.saved"), false);
     return true;
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
     return false;
   } finally { saving.value = false; }
 }

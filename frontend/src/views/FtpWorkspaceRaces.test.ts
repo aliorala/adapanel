@@ -29,6 +29,8 @@ type State = {
   users: FtpUser[]; usersLoaded: boolean; notice: string; noticeError: boolean; creating: boolean; changingPassword: string; deletingUser: string;
   requireSsl: boolean; tlsLoaded: boolean; tlsSaving: boolean; showCreateForm: boolean;
   serverStatus: FtpServerStatus | null;
+  serverReady: boolean; serverStateLabel: string; usersLoad: { message: { value: string } }; statusLoad: { message: { value: string } };
+  formatCreatedAt(value: string): string;
   form: { userName: string; password: string; siteName: string; homePath: string };
   refresh(): Promise<void>; refreshAll(): Promise<void>; createUser(): Promise<void>; changeFtpPassword(userName: string): Promise<void>;
   removeUser(userName: string): Promise<void>; toggleTls(value: boolean): Promise<void>; loadTls(): Promise<void>; toggleCreateForm(): void;
@@ -100,9 +102,9 @@ it("does not offer duplicate password prompts or overlap account writes", async 
   const changing = state.changeFtpPassword("a.test_ftp"); await state.changeFtpPassword("a.test_ftp"); await state.removeUser("a.test_ftp");
   expect(prompt).toHaveBeenCalledOnce(); expect(confirm).not.toHaveBeenCalled(); pending.resolve(null); await changing;
 });
-it("does not replace a failed post-create refresh with a green success notice", async () => {
+it("keeps the confirmed creation and the failed list refresh separate", async () => {
   const state = await mount(); fill(state); vi.mocked(createFtpUser).mockResolvedValueOnce(user()); vi.mocked(getFtpUsers).mockRejectedValueOnce(new Error("refresh failed"));
-  await state.createUser(); expect(state.notice).toBe("common.unexpected_error");
+  await state.createUser(); expect(state.notice).toContain("panel.ftp.created"); expect(state.usersLoad.message.value).toBe("panel.ftp.listLoadFailed");
 });
 it("keeps a TLS write from being overwritten by an older TLS read", async () => {
   site.value = undefined; const state = await mount(), pending = deferred<{ requireSsl: boolean }>(); vi.mocked(getFtpTls).mockReturnValueOnce(pending.promise);
@@ -142,7 +144,27 @@ it("does not let an old setup result overwrite a newer server measurement", asyn
 });
 it("reports a failed status measurement even when the user-list refresh succeeds", async () => {
   const state = await mount(); vi.mocked(getFtpStatus).mockRejectedValueOnce(new Error("status failed")); await state.refreshAll();
-  expect(state.notice).toBe("common.unexpected_error"); expect(state.serverStatus?.isConfigured).toBe(true);
+  expect(state.statusLoad.message.value).toBe("panel.ftp.statusLoadFailed"); expect(state.serverReady).toBe(false);
+  expect(state.serverStateLabel).toBe("panel.ftp.serverUnmeasured");
+});
+
+it("does not call an unmeasured server ready because a saved configuration flag is true", async () => {
+  vi.mocked(ensureFtpServer).mockResolvedValueOnce({ ...status, statusMessage: "ftp.server_status_unknown" });
+  const state = await mount(); expect(state.serverReady).toBe(false); expect(state.serverStateLabel).toBe("panel.ftp.serverUnmeasured");
+});
+it("marks a retained list stale and clears that error after a successful retry", async () => {
+  const state = await mount(); vi.mocked(getFtpUsers).mockRejectedValueOnce(new Error("list failed")); await state.refresh();
+  expect(state.users).toHaveLength(2); expect(state.usersLoad.message.value).toBe("panel.ftp.listLoadFailed");
+  await state.refresh(); expect(state.usersLoad.message.value).toBe("");
+});
+it("keeps a confirmed deletion visible when reloading the list fails", async () => {
+  const state = await mount(); vi.mocked(getFtpUsers).mockRejectedValueOnce(new Error("list failed")); await state.removeUser("a.test_ftp");
+  expect(state.notice).toContain("panel.ftp.deleted"); expect(state.usersLoad.message.value).toBe("panel.ftp.listLoadFailed");
+  expect(state.users.some(item => item.userName === "a.test_ftp")).toBe(false);
+});
+it("renders a malformed legacy creation date without throwing", async () => {
+  const state = await mount(); expect(() => state.formatCreatedAt("legacy-date")).not.toThrow();
+  expect(state.formatCreatedAt("legacy-date")).toBe("legacy-date");
 });
 it("releases account-operation locks when password or deletion is cancelled", async () => {
   const state = await mount(); prompt.mockResolvedValueOnce(null); await state.changeFtpPassword("a.test_ftp");
@@ -191,5 +213,5 @@ it("shows normal success only when the returned expiry status is verified safe",
 it("keeps the creation warning visible when the subsequent user-list refresh fails", async () => {
   const state = await mount(); fill(state); vi.mocked(createFtpUser).mockResolvedValueOnce({ ...user(), passwordNeverExpires: false, message: "ftp.user_created_password_expires" });
   vi.mocked(getFtpUsers).mockRejectedValueOnce(new Error("refresh failed")); await state.createUser();
-  expect(state.notice).toContain("ftp.user_created_password_expires"); expect(state.notice).toContain("common.unexpected_error"); expect(state.noticeError).toBe(true);
+  expect(state.notice).toContain("ftp.user_created_password_expires"); expect(state.notice).toContain("panel.ftp.listLoadFailed"); expect(state.noticeError).toBe(true);
 });

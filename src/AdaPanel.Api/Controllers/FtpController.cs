@@ -62,7 +62,10 @@ public sealed class FtpController(
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<FtpServerStatusDto>>> GetStatusAsync(CancellationToken cancellationToken)
     {
+        var actor = new FtpActorAuthority(User);
+        await ValidateActorAsync(actor, cancellationToken);
         var status = await ftpService.GetServerStatusAsync(cancellationToken);
+        await ValidateActorAsync(actor, cancellationToken);
         return Ok(ApiResponse<FtpServerStatusDto>.Ok(status, status.StatusMessage));
     }
 
@@ -71,7 +74,10 @@ public sealed class FtpController(
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<FtpTlsStatusDto>>> GetTlsAsync(CancellationToken cancellationToken)
     {
+        var actor = new FtpActorAuthority(User);
+        await ValidateActorAsync(actor, cancellationToken);
         var requireSsl = await ftpService.GetRequireSslAsync(cancellationToken);
+        await ValidateActorAsync(actor, cancellationToken);
         return Ok(ApiResponse<FtpTlsStatusDto>.Ok(new FtpTlsStatusDto { RequireSsl = requireSsl }));
     }
 
@@ -125,10 +131,12 @@ public sealed class FtpController(
     [HttpGet("users")]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<FtpUserDto>>>> GetUsersAsync(CancellationToken cancellationToken)
     {
+        var actor = new FtpActorAuthority(User);
+        await ValidateActorAsync(actor, cancellationToken);
         var users = await ftpService.GetFtpUsersAsync(cancellationToken);
 
         // Bayi/müşteri yalnız etkin sitelerinin FTP kullanıcılarını görür.
-        var allowed = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, User, cancellationToken);
+        var allowed = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, actor.Principal, cancellationToken);
         if (allowed is not null)
         {
             users = users
@@ -136,6 +144,7 @@ public sealed class FtpController(
                 .ToArray();
         }
 
+        await ValidateActorAsync(actor, cancellationToken);
         return Ok(ApiResponse<IReadOnlyCollection<FtpUserDto>>.Ok(users));
     }
 

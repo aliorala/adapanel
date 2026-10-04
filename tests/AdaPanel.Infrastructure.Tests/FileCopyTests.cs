@@ -607,12 +607,12 @@ public sealed class FileCopyTests : IDisposable
     {
         var kaynak = File.ReadAllText(Path.Combine(DepoKoku(), "src", "AdaPanel.Infrastructure", "Files", "FileService.cs"));
 
-        var tasima = GovdeAl(kaynak, "public async Task<MoveFilesResultDto> MoveAsync(");
+        var tasima = GovdeAl(kaynak, "private async Task<MoveFilesResultDto> MoveCoreAsync(");
         // Kopyalamanın TEK uygulaması bütçeyi dışarıdan alan `internal` aşırı yüklemedir; genel
         // yüzeydeki biçim yalnız üretim bütçesini verip buna devreder (gerekçesi FileService'te).
         // Nöbetçi işin GERÇEKTEN yapıldığı gövdeye bakar — devreden kabuğa bakmak, denetimlerin
         // kaldırılmasını göremezdi.
-        var kopyalama = GovdeAl(kaynak, "internal async Task<CopyFilesResultDto> CopyAsync(");
+        var kopyalama = GovdeAl(kaynak, "private async Task<CopyFilesResultDto> CopyCoreAsync(");
         var hazirlik = GovdeAl(kaynak, "private async Task<TransferPlan> BuildTransferPlanAsync(");
 
         // 1) İKİSİ DE ortak hazırlığı çağırır.

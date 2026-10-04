@@ -71,6 +71,10 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
+    // Per-instance observation boundaries keep lifecycle tests on real temp files.
+    internal Func<string, CancellationToken, Task>? TransferItemReady { get; set; }
+    internal Action<string>? CopyEntryReady { get; set; }
+
     public async Task<FileWorkspaceDto> GetWorkspaceAsync(string path, CancellationToken cancellationToken = default)
     {
         var normalizedPath = NormalizeVirtualPath(path);
@@ -82,6 +86,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
 
         if (File.Exists(target.PhysicalPath))
         {
+            var content = await ReadFileContentAsync(target.PhysicalPath, cancellationToken);
             return new FileWorkspaceDto
             {
                 Path = normalizedPath,
@@ -89,7 +94,9 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                 DisplayName = Path.GetFileName(target.PhysicalPath),
                 PhysicalPath = target.PhysicalPath,
                 IsDirectory = false,
-                Content = await ReadFileContentAsync(target.PhysicalPath, cancellationToken)
+                Content = content.Content,
+                ContentLoaded = content.Loaded,
+                ContentUnavailableReasonKey = content.Loaded ? string.Empty : "files.content_too_large"
             };
         }
 
@@ -238,12 +245,22 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         return await GetWorkspaceAsync(normalizedPath, cancellationToken);
     }
 
-    public async Task<FileWorkspaceDto> DeleteAsync(DeleteFileRequest request, CancellationToken cancellationToken = default)
+    public Task<FileWorkspaceDto> DeleteAsync(DeleteFileRequest request, CancellationToken cancellationToken = default) =>
+        DeleteCoreAsync(request, null, cancellationToken);
+
+    public Task<FileWorkspaceDto> DeleteAsync(DeleteFileRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        DeleteCoreAsync(request, beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken);
+
+    private async Task<FileWorkspaceDto> DeleteCoreAsync(DeleteFileRequest request,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
         var normalizedPath = NormalizeVirtualPath(request.Path);
         var target = await ResolveTargetAsync(normalizedPath, cancellationToken);
         EnsureSiteTarget(target);
         EnsureNotSiteRoot(target);
+        await ApprovePublicationAsync(target, beforeMutation, cancellationToken);
+        EnsureInsideSandbox(target);
         if (File.Exists(target.PhysicalPath))
         {
             File.Delete(target.PhysicalPath);
@@ -253,7 +270,10 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             Directory.Delete(target.PhysicalPath, recursive: true);
         }
 
-        return await GetWorkspaceAsync(BuildParentPath(normalizedPath), cancellationToken);
+        await ApprovePublicationAsync(target, beforeMutation, cancellationToken);
+        var workspace = await GetWorkspaceAsync(BuildParentPath(normalizedPath), cancellationToken);
+        await ApprovePublicationAsync(target, beforeMutation, cancellationToken);
+        return workspace;
     }
 
     public async Task<FileWorkspaceDto> CreateDirectoryAsync(CreateDirectoryRequest request, CancellationToken cancellationToken = default)
@@ -278,8 +298,18 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// yedisinin taşınmasını engellemez.
     /// </para>
     /// </remarks>
-    public async Task<MoveFilesResultDto> MoveAsync(MoveFilesRequest request, CancellationToken cancellationToken = default)
+    public Task<MoveFilesResultDto> MoveAsync(MoveFilesRequest request, CancellationToken cancellationToken = default) =>
+        MoveCoreAsync(request, null, cancellationToken);
+
+    public Task<MoveFilesResultDto> MoveAsync(MoveFilesRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        MoveCoreAsync(request, beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken);
+
+    private async Task<MoveFilesResultDto> MoveCoreAsync(MoveFilesRequest request,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
+        request = new MoveFilesRequest { Paths = (request.Paths ?? []).ToArray(), DestinationPath = request.DestinationPath,
+            NewName = request.NewName, Overwrite = request.Overwrite };
         // GÜVENLİK ÖN HAZIRLIĞI TEK KAYNAKTAN gelir; taşıma ile kopyalama arasında farkı olan tek
         // şey ÖGE BAŞINA yapılan iştir (aşağıdaki MoveOne).
         var plan = await BuildTransferPlanAsync(
@@ -298,15 +328,20 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         foreach (var item in plan.Items)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (TransferItemReady is not null) await TransferItemReady(item.SourcePath, cancellationToken);
+            await ApproveTransferAsync(item.Source, item.Target, beforeMutation, cancellationToken);
             results.Add(MoveOne(item.Source, item.Target, item.SourcePath, item.TargetPath, request.Overwrite));
         }
 
+        await ApprovePublicationAsync(plan.Destination, beforeMutation, cancellationToken);
+        var workspace = await GetWorkspaceAsync(plan.DestinationPath, cancellationToken);
+        await ApprovePublicationAsync(plan.Destination, beforeMutation, cancellationToken);
         return new MoveFilesResultDto
         {
             MovedCount = results.Count(item => item.Moved),
             FailedCount = results.Count(item => !item.Moved),
             Items = results.ToArray(),
-            Workspace = await GetWorkspaceAsync(plan.DestinationPath, cancellationToken)
+            Workspace = workspace
         };
     }
 
@@ -320,6 +355,11 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     public Task<CopyFilesResultDto> CopyAsync(CopyFilesRequest request, CancellationToken cancellationToken = default)
         => CopyAsync(request, KopyaOgeButcesi, cancellationToken);
 
+    public Task<CopyFilesResultDto> CopyAsync(CopyFilesRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        CopyCoreAsync(request, KopyaOgeButcesi,
+            beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken);
+
     /// <summary>Yukarıdakinin BÜTÇESİ DIŞARIDAN verilen hâli — tek uygulama budur.</summary>
     /// <remarks>
     /// <para>
@@ -330,11 +370,16 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// <c>internal</c>'dır: dışarıya, bütçesi kaldırılabilir bir uç AÇMAZ.
     /// </para>
     /// </remarks>
-    internal async Task<CopyFilesResultDto> CopyAsync(
+    internal Task<CopyFilesResultDto> CopyAsync(
         CopyFilesRequest request,
         int ogeButcesi,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) => CopyCoreAsync(request, ogeButcesi, null, cancellationToken);
+
+    private async Task<CopyFilesResultDto> CopyCoreAsync(CopyFilesRequest request, int ogeButcesi,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
+        request = new CopyFilesRequest { Paths = (request.Paths ?? []).ToArray(), DestinationPath = request.DestinationPath,
+            NewName = request.NewName, Overwrite = request.Overwrite };
         // Taşımayla AYNI ön hazırlık. Bu satırın kopya bir doğrulama bloğuna dönüşmesi, iki akıştan
         // birinde bir denetimin unutulması demektir — ve o an tek başına deliktir.
         var plan = await BuildTransferPlanAsync(
@@ -359,15 +404,22 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         foreach (var item in plan.Items)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            results.Add(CopyOne(item.Source, item.Target, item.SourcePath, item.TargetPath, request.Overwrite, butce, cancellationToken));
+            if (TransferItemReady is not null) await TransferItemReady(item.SourcePath, cancellationToken);
+            // Authority is an operation failure, never an ordinary per-item IO result.
+            await ApproveTransferAsync(item.Source, item.Target, beforeMutation, cancellationToken);
+            results.Add(await CopyOneAsync(item.Source, item.Target, item.SourcePath, item.TargetPath, request.Overwrite,
+                butce, beforeMutation, cancellationToken));
         }
 
+        await ApprovePublicationAsync(plan.Destination, beforeMutation, cancellationToken);
+        var workspace = await GetWorkspaceAsync(plan.DestinationPath, cancellationToken);
+        await ApprovePublicationAsync(plan.Destination, beforeMutation, cancellationToken);
         return new CopyFilesResultDto
         {
             CopiedCount = results.Count(item => item.Copied),
             FailedCount = results.Count(item => !item.Copied),
             Items = results.ToArray(),
-            Workspace = await GetWorkspaceAsync(plan.DestinationPath, cancellationToken)
+            Workspace = workspace
         };
     }
 
@@ -453,7 +505,17 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             items.Add(new TransferItem(source, target, sourcePath, targetPath));
         }
 
-        return new TransferPlan(normalizedDestination, items);
+        return new TransferPlan(normalizedDestination, destination, items);
+    }
+
+    private static async Task ApproveTransferAsync(ResolvedTarget source, ResolvedTarget target,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken token)
+    {
+        await ApprovePublicationAsync(source, beforeMutation, token);
+        await ApprovePublicationAsync(target, beforeMutation, token);
+        EnsureInsideSandbox(source);
+        EnsureInsideSandbox(target);
+        token.ThrowIfCancellationRequested();
     }
 
     /// <summary>Tek ögeyi taşır; başarısızlığı İSTİSNA olarak değil, rapor satırı olarak döner.</summary>
@@ -510,7 +572,6 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                 return basarisiz("files.move_target_exists");
             }
 
-            File.Delete(target.PhysicalPath);
         }
 
         try
@@ -521,7 +582,9 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             }
             else
             {
-                File.Move(source.PhysicalPath, target.PhysicalPath);
+                // Let the filesystem replace the destination only as part of a successful
+                // move. Pre-deleting it loses the old file when the source is locked/unreadable.
+                File.Move(source.PhysicalPath, target.PhysicalPath, overwrite);
             }
         }
         catch (IOException)
@@ -548,13 +611,14 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// Kural listesi <see cref="MoveOne"/> ile aynıdır ve gerekçeleri de aynıdır; burada yalnızca
     /// KOPYALAMAYA ÖZGÜ olan kısımlar ayrıca açıklanır.
     /// </remarks>
-    private static CopyFileResultDto CopyOne(
+    private async Task<CopyFileResultDto> CopyOneAsync(
         ResolvedTarget source,
         ResolvedTarget target,
         string sourcePath,
         string targetPath,
         bool overwrite,
         SafeDirectoryWalkBudget butce,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation,
         CancellationToken cancellationToken)
     {
         var basarisiz = (string anahtar) => new CopyFileResultDto
@@ -606,15 +670,21 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         }
 
         var eksiklikAnahtari = string.Empty;
+        var approvalFailed = false;
+        async Task Reapprove(CancellationToken token)
+        {
+            try { await ApproveTransferAsync(source, target, beforeMutation, token); }
+            catch { approvalFailed = true; throw; }
+        }
         try
         {
             if (kaynakKlasor)
             {
-                var kopya = KlasoruKopyala(source.PhysicalPath, target.PhysicalPath, butce, cancellationToken);
+                var kopya = await KlasoruKopyalaAsync(source, target, butce, Reapprove, cancellationToken);
                 if (!kopya.Tamamlandi)
                 {
-                    // Bütçe doldu: yarım kopya GERİ SARILDI (gerekçe KlasoruKopyala'da) ve bu öge
-                    // başarısız raporlanır. İSTİSNA ATILMAZ — bu uç çok ögeli bir isteği karşılar ve
+                    // Bütçe doldu: bu öge yayımlanmadı ve başarısız raporlanır.
+                    // İSTİSNA ATILMAZ — bu uç çok ögeli bir isteği karşılar ve
                     // istisna, bütçe dolmadan ÖNCE düzgün kopyalanan ögelerin raporunu da götürürdü;
                     // kullanıcı diskte duran kopyaların hangileri olduğunu öğrenemezdi.
                     return basarisiz(kopya.EksiklikAnahtari);
@@ -628,7 +698,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                 File.Copy(source.PhysicalPath, target.PhysicalPath, overwrite);
             }
         }
-        catch (IOException)
+        catch (IOException) when (!approvalFailed)
         {
             // En sık sebebi: disk dolu, dosya kullanımda ya da yol sınırının aşılması. Yalanlamak
             // yerine bu ögenin kopyalanmadığı raporlanır.
@@ -636,19 +706,16 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             // YARIM KOPYA BIRAKILMAZ: "kopyalanmadı" diyip diskte yarım bir ağaç bırakmak,
             // kullanıcının raporda görmediği bir kalıntıyla baş başa kalması demekti (üstelik o
             // kalıntı kotasından da yer yer).
-            KopyayiGeriSar(kaynakKlasor, target.PhysicalPath);
             return basarisiz("files.copy_failed");
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException) when (!approvalFailed)
         {
-            KopyayiGeriSar(kaynakKlasor, target.PhysicalPath);
             return basarisiz("files.copy_denied");
         }
         catch (OperationCanceledException)
         {
             // İptal edilen istek de yarım kopya bırakmaz; sonra istisna yukarı çıkar (iptal bir
             // rapor satırı değildir, cevabı bekleyen kimse kalmamıştır).
-            KopyayiGeriSar(kaynakKlasor, target.PhysicalPath);
             throw;
         }
 
@@ -668,11 +735,9 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// <remarks>
     /// <para>
     /// <b>Neden özyinelemeli silme burada GÜVENLİ</b> (oysa bu depoda genel kural onu yasaklar):
-    /// <see cref="CopyOne"/> bu noktaya ancak hedef diskte HİÇ YOKKEN gelir — var olan bir klasör
-    /// <c>files.copy_target_exists</c> ile, var olan bir dosya da (kaynak klasörse) yine aynı
-    /// anahtarla reddedilir. Yani silinen ağacın İÇİNDEKİ HER ŞEY bu çağrıda yazılmıştır ve
-    /// içinde bağlantı da olamaz (kopyalama bağlantı üretmez). Kullanıcının verisine dokunma
-    /// ihtimali sıfırdır.
+    /// Yalnız bu çağrının rastgele adlı hazırlama dizini buraya verilir; son hedef verilmez.
+    /// Son hedef başka bir istek tarafından oluşturulduysa Directory.Move onu korur ve yalnız
+    /// hazırlama dizini temizlenir. Kopyalama bağlantı oluşturmaz.
     /// </para>
     /// <para>
     /// <b>Silme hatası YUTULUR:</b> geri sarma bir en iyi çabadır ve asıl hatanın (bütçe doldu /
@@ -739,7 +804,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// yönde ve aynı sebeple: kopyalama bir YAZMA işlemidir. Ama burada bedeli DAHA DÜŞÜK, çünkü
     /// geri sarma tam ve ucuzdur — içe aktarmada sitenin kökü yana alınmış olduğu için geri sarma
     /// ayrı bir makine gerektiriyordu; burada hedef klasör bu çağrıdan önce HİÇ YOKTU
-    /// (<see cref="CopyOne"/> aksini reddeder), yani silmek kalıntıyı tam olarak temizler.</item>
+    /// (<see cref="CopyOneAsync"/> aksini reddeder), yani silmek kalıntıyı tam olarak temizler.</item>
     /// </list>
     /// İçe aktarmadan tek FARK: orada istisna atılır (tek işlem), burada ÖGE BAŞINA rapor satırı
     /// üretilir — çünkü bu uç çok ögeli bir isteği karşılar ve istisna, bütçe dolmadan önce düzgün
@@ -759,62 +824,46 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// sınırlanması gereken de odur.
     /// </para>
     /// </remarks>
-    private static KlasorKopyasi KlasoruKopyala(
-        string kaynak,
-        string hedef,
+    private async Task<KlasorKopyasi> KlasoruKopyalaAsync(
+        ResolvedTarget source,
+        ResolvedTarget target,
         SafeDirectoryWalkBudget butce,
+        Func<CancellationToken, Task> approve,
         CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(hedef);
-
+        // Keep the single bounded/link-safe traversal, then authorize each planned mutation
+        // asynchronously. The plan is bounded by the same request-wide entry budget.
+        var entries = new List<FileSystemInfo>();
         var baglantiAtlandi = false;
-        var yuruyus = SafeDirectoryWalk.Yuru(
-            kaynak,
-            butce,
-            oge =>
-            {
-                // Göreli yol, KAYNAK KÖKÜNÜN uzunluğuyla kesilerek bulunur; ortak yürüyüş her
-                // ögenin TAM yolunu verir. Klasör, içindekilerden ÖNCE bildirilir — bu
-                // SafeDirectoryWalk sözleşmesinin parçasıdır, yani dosya yazılmadan önce hedef
-                // klasörü var olur.
-                var altHedef = hedef + oge.FullName[kaynak.Length..];
-                if (oge is DirectoryInfo)
-                {
-                    Directory.CreateDirectory(altHedef);
-                    return;
-                }
-
-                // Hedef ağacı bu çağrıda yaratıldı; üzerine yazılacak bir şey yok, bayrak yalnızca
-                // aynı adın iki kez gelmesi gibi imkânsız duruma karşı.
-                File.Copy(oge.FullName, altHedef, overwrite: true);
-            },
-            null,
-            cancellationToken,
-            () => baglantiAtlandi = true);
-
+        var yuruyus = SafeDirectoryWalk.Yuru(source.PhysicalPath, butce, entries.Add,
+            null, cancellationToken, () => baglantiAtlandi = true);
         if (yuruyus.Truncated)
+            return new KlasorKopyasi(false, yuruyus.TruncatedReasonKey == SafeDirectoryWalk.SebepErisimReddi
+                ? "files.copy_denied" : yuruyus.TruncatedReasonKey);
+
+        var temporary = Path.Combine(Path.GetDirectoryName(target.PhysicalPath)!, $".adapanel-copy-{Guid.NewGuid():N}.tmp");
+        try
         {
-            KopyayiGeriSar(kaynakKlasor: true, hedef);
-
-            // ERİŞİM REDDİ ESKİ ANAHTARINI KORUR. Önceki hâlde okunamayan bir alt klasör
-            // `EnumerateFileSystemInfos` üzerinden UnauthorizedAccessException atıyor ve öge
-            // `files.copy_denied` ile başarısız raporlanıyordu; ortak yürüyüş o istisnayı yutup
-            // sonucunda bildirdiği için anahtar burada elle geri konur. Aksi hâlde aynı arıza,
-            // hiçbir davranış değişmediği hâlde kullanıcıya bambaşka bir mesajla görünürdü.
-            //
-            // DAVRANIŞ DA AYNI KALIR (öge tümden başarısız): tek fark, artık geriye YARIM bir ağaç
-            // kalmaması. "Kopyalanmadı" deyip diskte yarım bir kopya bırakmak, kullanıcının raporda
-            // görmediği ve kotasından yer yiyen bir kalıntı demekti.
-            return new KlasorKopyasi(
-                false,
-                yuruyus.TruncatedReasonKey == SafeDirectoryWalk.SebepErisimReddi
-                    ? "files.copy_denied"
-                    : yuruyus.TruncatedReasonKey);
+            await approve(cancellationToken);
+            Directory.CreateDirectory(temporary);
+            foreach (var entry in entries)
+            {
+                CopyEntryReady?.Invoke(entry.FullName);
+                await approve(cancellationToken);
+                // The source may have changed since traversal. Re-check links after the await.
+                EnsureNoReparsePoints(source.SandboxRoot, entry.FullName);
+                var destination = Path.Combine(temporary, Path.GetRelativePath(source.PhysicalPath, entry.FullName));
+                EnsureNoReparsePoints(target.SandboxRoot, destination);
+                if (entry is DirectoryInfo) Directory.CreateDirectory(destination);
+                else File.Copy(entry.FullName, destination, overwrite: false);
+            }
+            await approve(cancellationToken);
+            // No overwrite: a competing creator keeps its directory. Recovery only ever removes
+            // this invocation's temporary tree, never the final destination or prior items.
+            Directory.Move(temporary, target.PhysicalPath);
+            return new KlasorKopyasi(true, baglantiAtlandi ? "files.copy_link_skipped" : string.Empty);
         }
-
-        // Kopya TAM. Tek eksiklik ihtimali atlanan bağlantıdır ve o susulmaz: kullanıcı eksik
-        // kopyayı tam sanmasın.
-        return new KlasorKopyasi(true, baglantiAtlandi ? "files.copy_link_skipped" : string.Empty);
+        finally { KopyayiGeriSar(kaynakKlasor: true, temporary); }
     }
 
     /// <summary>
@@ -1670,15 +1719,16 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         }
     }
 
-    private static async Task<string> ReadFileContentAsync(string path, CancellationToken cancellationToken)
+    private static async Task<(string Content, bool Loaded)> ReadFileContentAsync(string path, CancellationToken cancellationToken)
     {
-        var fileInfo = new FileInfo(path);
-        if (fileInfo.Length > 1024 * 1024)
-        {
-            return "File is larger than 1 MB and was not loaded into the editor.";
-        }
-
-        return await File.ReadAllTextAsync(path, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        // Measure and read the same handle; a concurrently growing file must not turn a
+        // bounded preview into an unbounded read. An unloaded file never impersonates text.
+        await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (input.Length > 1024 * 1024) return (string.Empty, false);
+        using var reader = new StreamReader(input, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return (await reader.ReadToEndAsync(cancellationToken), true);
     }
 
     private static string NormalizeVirtualPath(string? path)
@@ -1736,7 +1786,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         string TargetPath);
 
     /// <summary>Doğrulanmış aktarım planı; hiçbir ögesi dosya sistemine dokunmadan önce hazırdır.</summary>
-    private readonly record struct TransferPlan(string DestinationPath, IReadOnlyList<TransferItem> Items);
+    private readonly record struct TransferPlan(string DestinationPath, ResolvedTarget Destination, IReadOnlyList<TransferItem> Items);
 
     /// <summary>
     /// İsteğin BİÇİMİ geçersiz olduğunda atılacak anahtarlar — taşımada <c>files.move_*</c>,

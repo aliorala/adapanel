@@ -5502,7 +5502,6 @@
   "panel.health.lastKnownServices": "The last read service list is shown. Restart is disabled until the current status is confirmed.",
   "panel.monitor.measurementFailed": "Resource measurements could not be verified. Refresh and try again.",
   "health.restart_unverified": "The restart command completed, but the service could not be verified as running. Check its current status.",
-
   "panel.dashboard.scoped.title": "Your account at a glance",
   "panel.dashboard.scoped.hint": "Keep track of your sites and databases here. Open a card to manage its resources.",
   "panel.dashboard.countUnmeasured": "Count not yet confirmed. Open for details.",
@@ -5510,7 +5509,6 @@
   "panel.dashboard.access.noAdditionalIps": "No additional server IP addresses were found.",
   "panel.monitor.restricted": "Server monitoring is available to administrators only.",
   "system.ip_addresses_unmeasured": "Server IP addresses could not be read. Try again.",
-
   "panel.account.statusUnknown": "Status not confirmed",
   "panel.account.resultUnconfirmed": "The result could not be confirmed. Refresh your account status and check again.",
   "panel.account.confirmRegenerateTitle": "Generate new recovery codes?",
@@ -5531,5 +5529,15 @@
   "auth.two_factor_recovery_incomplete": "The authentication settings could not be saved completely. Refresh the account status; contact your server administrator if you cannot sign in.",
   "panel.files.resultUnconfirmed": "The file operation result could not be verified. Refresh the folder before trying again.",
   "panel.files.refreshAfterOperationFailed": "The operation result was received, but the folder could not be refreshed. Use Refresh to check the current list.",
-  "ftp.user_changed": "The FTP account changed while this operation was waiting. Refresh the account list and try again."
+  "ftp.user_changed": "The FTP account changed while this operation was waiting. Refresh the account list and try again.",
+  "panel.ftp.serverUnmeasured": "Status unmeasured",
+  "panel.ftp.statusLoadFailed": "The server status could not be measured again.",
+  "panel.ftp.listStale": "The list could not be refreshed; showing the last retrieved records.",
+  "panel.ftp.listLoadFailed": "The FTP user list could not be loaded.",
+  "panel.ftp.noMatches": "No FTP users match your search.",
+  "panel.ftp.clearSearch": "Clear search",
+  "panel.ftp.userCount": "{visible} / {total} users",
+  "panel.ftp.resultUnconfirmed": "The FTP response could not be verified. Reload the information.",
+  "panel.files.contentUnmeasured": "This file’s contents were not loaded for editing. Use Download to retrieve the original file.",
+  "files.content_too_large": "The file exceeds the 1 MB editing limit, so its contents were not loaded. You can download the original file."
 }

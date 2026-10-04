@@ -30,8 +30,9 @@ public sealed class FtpServerStatusDto
     /// </para>
     /// <para>
     /// <b>ÖLÇÜLEMEDİ ≠ BOZUK:</b> ölçüm yapılamazsa (ör. <c>Get-NetTCPConnection</c> yok) bu alan
-    /// eski davranışa, yani altyapı kurulum bayrağına düşer. Yalnız POZİTİF bir arıza ölçümü
-    /// değeri <c>false</c>'a çevirir; aksi hâlde ölçüm eksikliği yanlış alarma dönüşürdü.
+    /// hazır olduğu iddia edilmez: bu alan <c>false</c>, <see cref="StatusMessage"/> ise
+    /// <c>ftp.server_status_unknown</c> olur. Bilinmeyen ölçüm nötr gösterilmeli; ölçülmüş bir
+    /// arızayla karıştırılmamalıdır. Önceki kurulum bayrağı güncel sağlık kanıtı değildir.
     /// </para>
     /// </remarks>
     public bool IsConfigured { get; set; }

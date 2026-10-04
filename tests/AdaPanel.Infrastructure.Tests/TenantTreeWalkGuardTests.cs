@@ -541,7 +541,7 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
                      (yedek, "private static List<ArchiveFile> ScanFiles("),
                      (goc, "private async Task<string?> SanitizeUserIniFilesAsync("),
                      (barindirma, "private static int CopyDirectoryRecursive("),
-                     (dosyaYoneticisi, "private static KlasorKopyasi KlasoruKopyala("),
+                     (dosyaYoneticisi, "private async Task<KlasorKopyasi> KlasoruKopyalaAsync("),
                      // Dönüş tipi artık düz sayı DEĞİL: sayımın kesilip kesilmediği de taşınıyor
                      // (FileCountMeasurement). Nöbetçinin sorduğu soru değişmedi — bu gövde KENDİ
                      // yürüyüşünü taşımıyor, ortak kapıyı çağırıyor.

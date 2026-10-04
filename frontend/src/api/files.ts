@@ -24,6 +24,8 @@ export type FileWorkspace = {
   physicalPath: string;
   isDirectory: boolean;
   content: string;
+  contentLoaded?: boolean;
+  contentUnavailableReasonKey?: string;
   entries: FileEntry[];
 };
 
@@ -41,7 +43,9 @@ export async function saveFile(path: string, content: string) {
     content
   });
 
-  return response.data.data;
+  const result = measuredWorkspace(response.data, path);
+  if (result.isDirectory || result.contentLoaded !== true || result.content !== content) throw new UserFacingError("panel.files.resultUnconfirmed");
+  return result;
 }
 
 /**
@@ -70,7 +74,11 @@ export async function deletePath(path: string) {
     data: { path }
   });
 
-  return response.data.data;
+  const result = measuredWorkspace(response.data, parentPathOf(path));
+  if (!result.isDirectory || result.entries.some(entry => filePathIdentity(entry.path) === filePathIdentity(path))) {
+    throw new UserFacingError("panel.files.resultUnconfirmed");
+  }
+  return result;
 }
 
 export async function createDirectory(path: string) {
@@ -183,6 +191,16 @@ export type CopyResult = {
 
 function filePathIdentity(path: string) {
   return path.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").toLowerCase();
+}
+
+function measuredWorkspace(envelope: ApiEnvelope<FileWorkspace>, path: string): FileWorkspace {
+  const result = envelope?.data;
+  if (envelope?.success !== true || !result || typeof result.path !== "string" || filePathIdentity(result.path) !== filePathIdentity(path) ||
+    typeof result.isDirectory !== "boolean" || typeof result.content !== "string" || !Array.isArray(result.entries) ||
+    result.entries.some(entry => !entry || typeof entry.path !== "string" || !entry.path.trim())) {
+    throw new UserFacingError("panel.files.resultUnconfirmed");
+  }
+  return result;
 }
 
 function measuredTransfer<T extends MoveResult | CopyResult>(

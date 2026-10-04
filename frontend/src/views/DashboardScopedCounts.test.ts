@@ -27,7 +27,7 @@ type State = {
   initializeView(): Promise<void>; submitLogin(): Promise<void>;
 };
 const envelope = (data: unknown) => ({ data: { success: true, data, message: "", code: 0 } });
-const ftp = (name: string) => ({ userName: name, siteName: "owned.test", homePath: "D:/fixture/site", createdAtUtc: "2026-10-04T00:00:00Z" });
+const ftp = (name: string) => ({ userName: name, siteName: "owned.test", homePath: "D:/fixture/site", createdAtUtc: "2026-10-04T00:00:00Z", isEnabled: true, existsOnSystem: true });
 const owned = [{ engine: "mariadb", name: "tenant_db" }, { engine: "postgresql", name: "TenantDb" }];
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }
 async function flush() { for (let i = 0; i < 25; i++) await nextTick(); }

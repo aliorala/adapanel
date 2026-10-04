@@ -1,5 +1,5 @@
 <template>
-  <section class="panel module-shell">
+  <section class="panel module-shell ftp-shell">
     <div class="module-head">
       <div>
         <h2>{{ t("panel.ftp.title") }}</h2>
@@ -12,6 +12,7 @@
          şeridini görmüyordu. -->
     <div v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
       <p>{{ notice }}</p>
+      <button class="secondary compact ftp-dismiss" :aria-label="t('panel.common.dismissNotice')" @click="showNotice('', false)">×</button>
       <details v-if="noticeDetails" class="technical-details">
         <summary>{{ t("panel.common.technicalDetails") }}</summary>
         <pre>{{ noticeDetails }}</pre>
@@ -30,19 +31,21 @@
           <small>{{ t("panel.ftp.address") }}</small>
           <strong>{{ ftpAddress }}</strong>
         </span>
-        <span class="status-pill">{{ filteredUsers.length }} / {{ users.length }}</span>
-        <span v-if="isAdmin" :class="['status-pill', serverStatus?.isConfigured ? 'ok' : 'warn']">
+        <span v-if="usersLoaded" class="status-pill">{{ t('panel.ftp.userCount', { visible: filteredUsers.length, total: scopedUsers.length }) }}</span>
+        <span v-if="isAdmin" :class="['status-pill', serverReady ? 'ok' : 'warn']">
           {{ serverStateLabel }}
         </span>
       </div>
 
       <div class="toolbar-group ftp-filters">
         <input v-model="search" :aria-label="t('panel.ftp.search')" :placeholder="t('panel.ftp.searchPlaceholder')" />
-        <button class="secondary compact" @click="refreshAll">
-          {{ t("panel.ftp.refresh") }}
+        <button class="secondary compact" :disabled="usersLoading || statusLoading" @click="refreshAll">
+          {{ t(usersLoading || statusLoading ? "panel.common.loading" : "panel.ftp.refresh") }}
         </button>
       </div>
     </section>
+
+    <SectionLoadError v-if="isAdmin && statusLoad.message.value" :message="readErrorMessage('panel.ftp.statusLoadFailed', statusLoad.message.value)" :busy="statusLoading" @retry="loadStatus" />
 
     <!-- SUNUCU DURUMU — bu ekranin en pahali sessizligi.
          19.08.2026 bu makinede OLCULDU: 21 portunu FileZilla Server tutuyordu, panelin actigi
@@ -54,7 +57,7 @@
          duser ve true kalabilir -- "olculemedi"yi sessizce "sorun yok" saymak bu ekranin ta
          kendisiydi. -->
     <div
-      v-if="serverStatus && serverStatus.statusMessage !== 'ftp.server_ready'"
+      v-if="serverStatus && !statusLoad.message.value && serverStatus.statusMessage !== 'ftp.server_ready'"
       class="notice warn-banner ftp-status"
       role="alert">
       <strong>{{ t(serverStatus.statusMessage) }}</strong>
@@ -147,23 +150,24 @@
       </div>
     </section>
 
-    <section class="data-table">
-      <div class="data-row table-head ftp-row">
-        <span>{{ t("panel.database.userName") }}</span>
-        <span>{{ t("panel.sites.name") }}</span>
-        <span>{{ t("panel.ftp.homePath") }}</span>
-        <span>{{ t("panel.users.status") }}</span>
-        <span>{{ t("panel.files.actions") }}</span>
+    <SectionLoadError v-if="usersLoad.message.value" :message="readErrorMessage(usersLoaded ? 'panel.ftp.listStale' : 'panel.ftp.listLoadFailed', usersLoad.message.value)" :busy="usersLoading" @retry="refresh" />
+    <section class="data-table ftp-table" role="table" :aria-label="t('panel.ftp.title')" :aria-busy="usersLoading">
+      <div class="data-row table-head ftp-row" role="row">
+        <span role="columnheader">{{ t("panel.database.userName") }}</span>
+        <span role="columnheader">{{ t("panel.sites.name") }}</span>
+        <span role="columnheader">{{ t("panel.ftp.homePath") }}</span>
+        <span role="columnheader">{{ t("panel.users.status") }}</span>
+        <span role="columnheader">{{ t("panel.files.actions") }}</span>
       </div>
 
       <template v-if="filteredUsers.length">
-        <div v-for="user in pager.items.value" :key="user.userName" class="data-row ftp-row">
-          <span class="cell-main">
+        <div v-for="user in pager.items.value" :key="user.userName" class="data-row ftp-row" role="row">
+          <span class="cell-main" role="cell" :data-label="t('panel.database.userName')">
             <strong>{{ user.userName }}</strong>
             <small>{{ formatCreatedAt(user.createdAtUtc) }}</small>
           </span>
-          <span>{{ user.siteName || "-" }}</span>
-          <span class="cell-muted">
+          <span role="cell" :data-label="t('panel.sites.name')">{{ user.siteName || "-" }}</span>
+          <span class="cell-muted" role="cell" :data-label="t('panel.ftp.homePath')">
             {{ user.homePath }}
             <!--
               EV KLASÖRÜ BOZUKSA BURADA SÖYLENİR.
@@ -185,10 +189,10 @@
               {{ t("panel.ftp.homeUnmeasured") }}
             </span>
           </span>
-          <span :class="['status-pill', user.isEnabled && user.existsOnSystem ? 'ok' : 'warn']">
+          <span role="cell" :data-label="t('panel.users.status')"><span :class="['status-pill', user.isEnabled && user.existsOnSystem ? 'ok' : 'warn']">
             {{ user.isEnabled && user.existsOnSystem ? t("panel.status.active") : t("panel.status.inactive") }}
-          </span>
-          <span class="row-actions">
+          </span></span>
+          <span class="row-actions" role="cell" :data-label="t('panel.files.actions')">
             <button class="secondary compact" v-bind="writeGate(accountBusy)" @click="changeFtpPassword(user.userName)">
               {{ changingPassword === user.userName ? t("panel.database.saving") : t("panel.database.changePassword") }}
             </button>
@@ -205,9 +209,10 @@
         {{ t(usersLoading ? "panel.common.loading" : "panel.common.loadFailed") }}
       </p>
 
-      <p v-else class="empty-state">
-        {{ t("panel.ftp.noUsers") }}
-      </p>
+      <div v-else class="empty-state ftp-empty" role="status">
+        <p>{{ t(search.trim() && scopedUsers.length ? 'panel.ftp.noMatches' : 'panel.ftp.noUsers') }}</p>
+        <button v-if="search.trim() && scopedUsers.length" class="secondary compact" @click="search = ''">{{ t('panel.ftp.clearSearch') }}</button>
+      </div>
 
       <TablePager :state="pager" />
     </section>
@@ -229,6 +234,7 @@ import TablePager from "../components/TablePager.vue";
 import { usePagination } from "../composables/usePagination";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 import { getSessionEpoch } from "../api/client";
+import { formatDateTime } from "../utils/datetime";
 
 // siteName verilince (web sitesi çalışma alanı sekmesi) FTP yalnızca o siteye
 // göre filtrelenir ve yeni kullanıcı o siteye sabitlenir (profesyonel paneller gibi site-bağlamı).
@@ -248,6 +254,9 @@ const users = ref<FtpUser[]>([]);
 // Yüklenmemiş durumu "kayıt yok" / "kapalı" göstermek yanıltıcıydı.
 const usersLoaded = ref(false);
 const usersLoading = ref(false);
+const usersLoad = useSectionError();
+const statusLoad = useSectionError();
+const statusLoading = ref(false);
 const tlsLoaded = ref(false);
 // FTPS ayarı OKUNAMADI durumu — anahtarın kapalı olmasından AYRI tutulur.
 const tlsLoad = useSectionError();
@@ -315,17 +324,21 @@ const ftpAddress = computed(() => {
   const host = serverStatus.value?.serverAddress || window.location.hostname || "localhost";
   return `ftp://${host}:${serverStatus.value?.controlPort ?? 21}`;
 });
+const serverReady = computed(() => !statusLoading.value && !statusLoad.message.value && serverStatus.value?.isConfigured === true && serverStatus.value.statusMessage === 'ftp.server_ready');
 const serverStateLabel = computed(() => {
-  if (serverStatus.value?.isConfigured) {
+  if (statusLoading.value) return t('panel.ftp.serverChecking');
+  if (statusLoad.message.value || serverStatus.value?.statusMessage === 'ftp.server_status_unknown') return t('panel.ftp.serverUnmeasured');
+  if (serverReady.value) {
     return t("panel.ftp.serverReady");
   }
 
   return serverCheckCompleted.value ? t("panel.ftp.serverUnavailable") : t("panel.ftp.serverChecking");
 });
-const filteredUsers = computed(() => {
-  const scoped = props.siteName
+const scopedUsers = computed(() => props.siteName
     ? users.value.filter((user) => (user.siteName ?? "").toLowerCase() === props.siteName!.toLowerCase())
-    : users.value;
+    : users.value);
+const filteredUsers = computed(() => {
+  const scoped = scopedUsers.value;
 
   const query = search.value.trim().toLowerCase();
   if (!query) {
@@ -352,6 +365,9 @@ watch(
     users.value = [];
     usersLoaded.value = false;
     usersLoading.value = false;
+    usersLoad.clear();
+    statusLoad.clear();
+    statusLoading.value = false;
     showCreateForm.value = false;
     Object.assign(form, { siteName: value || "", userName: "", password: "", homePath: "" });
     showNotice("", false);
@@ -435,13 +451,14 @@ async function toggleTls(value: boolean) {
 async function prepareServer() {
   if (disposed || !isAdmin.value) return;
   const context = ftpContext(), request = ++statusRequest;
+  statusLoading.value = true;
   try {
     const result = await ensureFtpServer();
-    if (context.current() && request === statusRequest) serverStatus.value = result;
+    if (context.current() && request === statusRequest) { serverStatus.value = result; statusLoad.clear(); }
   } catch (error) {
-    if (context.current() && request === statusRequest) showApiError(error);
+    if (context.current() && request === statusRequest) captureReadError(statusLoad, 'panel.ftp.statusLoadFailed', error);
   } finally {
-    if (context.current() && request === statusRequest) serverCheckCompleted.value = true;
+    if (context.current() && request === statusRequest) { serverCheckCompleted.value = true; statusLoading.value = false; }
   }
 }
 
@@ -454,9 +471,10 @@ async function refresh() {
     if (!context.current() || request !== usersRequest) return false;
     users.value = result;
     usersLoaded.value = true;
+    usersLoad.clear();
     return true;
   } catch (error) {
-    if (context.current() && request === usersRequest) showApiError(error);
+    if (context.current() && request === usersRequest) captureReadError(usersLoad, 'panel.ftp.listLoadFailed', error);
     return false;
   } finally {
     if (context.current() && request === usersRequest) usersLoading.value = false;
@@ -484,13 +502,14 @@ async function loadStatus() {
     return;
   }
   const context = ftpContext(), request = ++statusRequest;
+  statusLoading.value = true;
   try {
     const result = await getFtpStatus();
-    if (context.current() && request === statusRequest) serverStatus.value = result;
+    if (context.current() && request === statusRequest) { serverStatus.value = result; statusLoad.clear(); }
   } catch (error) {
-    if (context.current() && request === statusRequest) showApiError(error);
+    if (context.current() && request === statusRequest) captureReadError(statusLoad, 'panel.ftp.statusLoadFailed', error);
   } finally {
-    if (context.current() && request === statusRequest) serverCheckCompleted.value = true;
+    if (context.current() && request === statusRequest) { serverCheckCompleted.value = true; statusLoading.value = false; }
   }
 }
 
@@ -517,11 +536,9 @@ async function createUser() {
     if (!context.current() || createVersion !== completedVersion) return;
     if (expiryWarning) {
       // Hesap açıldı; süre dolumu uyarısı sonraki liste okumasında kaybolmamalı.
-      const refreshError = refreshed ? "" : notice.value;
-      const refreshDetails = refreshed ? "" : noticeDetails.value;
+      const refreshError = refreshed ? "" : usersLoad.message.value;
       showNotice([t(expiryWarning), refreshError].filter(Boolean).join("\n\n"), true);
-      noticeDetails.value = refreshDetails;
-    } else if (refreshed) {
+    } else {
       showNotice(t("panel.ftp.created"), false);
     }
   } catch (error) {
@@ -581,8 +598,10 @@ async function removeUser(userName: string) {
         try {
           await deleteFtpUser(userName);
           if (!context.current()) return;
-          const refreshed = await refresh();
-          if (context.current() && refreshed) showNotice(t("panel.ftp.deleted"), false);
+          // The deletion was confirmed even if the next list read fails.
+          users.value = users.value.filter(user => user.userName.toLowerCase() !== userName.toLowerCase());
+          await refresh();
+          if (context.current()) showNotice(t("panel.ftp.deleted"), false);
         } catch (error) {
           if (context.current()) showApiError(error);
         }
@@ -608,18 +627,30 @@ function showApiError(error: unknown) {
 }
 
 function formatCreatedAt(value: string) {
-  if (!value) {
-    return "-";
-  }
+  return formatDateTime(value, "-");
+}
 
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "short",
-    timeStyle: "short"
-  }).format(new Date(value));
+function captureReadError(section: ReturnType<typeof useSectionError>, fallback: string, error: unknown) {
+  section.capture(error);
+  // A failed read must not say a separately confirmed account mutation failed.
+  if (extractApiMessage(error) === 'common.unexpected_error') section.message.value = t(fallback);
+}
+
+function readErrorMessage(prefix: string, error: string) {
+  const label = t(prefix);
+  return label === error ? label : `${label} ${error}`;
 }
 </script>
 
 <style scoped>
+.ftp-shell { container: ftp-workspace / inline-size; min-width: 0; }
+.ftp-address, .ftp-filters, .ftp-summary > *, .ftp-create, .ftp-form-grid > * { min-width: 0; }
+.ftp-address strong, .ftp-summary strong { overflow-wrap: anywhere; }
+.ftp-dismiss { position: absolute; top: var(--sp-8); right: var(--sp-8); }
+.page-notice { padding-right: 52px; }
+.ftp-empty { display: grid; justify-items: start; gap: var(--sp-8); }
+.ftp-empty p { margin: 0; }
+.ftp-row > [role="cell"]::before { display: none; }
 .compact-head {
   align-items: center;
 }
@@ -650,7 +681,7 @@ function formatCreatedAt(value: string) {
 }
 
 .ftp-row {
-  grid-template-columns: minmax(150px, 0.85fr) minmax(130px, 0.75fr) minmax(240px, 1.45fr) 0.65fr auto;
+  grid-template-columns: minmax(150px, 0.85fr) minmax(130px, 0.75fr) minmax(240px, 1.45fr) minmax(64px, 0.65fr) 180px;
 }
 
 .ftp-summary {
@@ -726,7 +757,20 @@ function formatCreatedAt(value: string) {
   .ftp-filters input {
     flex: 1;
     width: auto;
-    min-width: 180px;
+    min-width: 0;
   }
+}
+
+@container ftp-workspace (max-width: 880px) {
+  .ftp-row { grid-template-columns: 1fr; min-width: 0; gap: var(--sp-8); }
+  .ftp-row.table-head { position: absolute; width: 1px; height: 1px; padding: 0; clip-path: inset(50%); overflow: hidden; white-space: nowrap; }
+  .ftp-row > [role="cell"] { display: grid; justify-items: start; gap: var(--sp-2); }
+  .ftp-row > [role="cell"]::before { display: block; content: attr(data-label); color: var(--text-muted); font-size: var(--fs-xs); font-weight: 600; }
+  .ftp-row > .row-actions { display: flex; flex-wrap: wrap; gap: var(--sp-8); padding-top: var(--sp-4); }
+  .ftp-row > .row-actions::before { flex-basis: 100%; }
+  .ftp-summary { grid-template-columns: 1fr; }
+  .ftp-form-grid { grid-template-columns: 1fr; }
+  .ftp-filters { width: 100%; }
+  .ftp-filters input { flex: 1; min-width: 0; width: auto; }
 }
 </style>
