@@ -49,7 +49,10 @@ beforeEach(()=>{
       else throw new Error('Unexpected GET '+config.url);
     } else {
       writes.push(config.url!);
-      if(config.url==='/php/install'){if(failAfterInstall)phpFailure=true;data={};}
+      if(config.url==='/php/install'){
+        if(failAfterInstall)phpFailure=true;
+        data={componentId:'php-8.4',displayName:'PHP 8.4',version:'8.4.2',versionMeasured:true,status:'Installed',installDir:'fixture/php84',serviceName:'',generatedPassword:'',message:'software.install.completed'};
+      }
       else if(config.url==='/software/php-8.3') {
         if(removalFailure==='read')catalogFailure=true;
         if(removalFailure==='write')throw new Error('fixture.partial_remove_failed');
@@ -110,6 +113,18 @@ it('preserves the completed installation message when the PHP list refresh fails
   const view=await mount();failAfterInstall=true;await view.state.installVersion('php-8.4');
   expect(writes).toEqual(['/php/install']);expect(view.state.noticeError).toBe(true);expect(view.state.notice).toContain(en['panel.software.refreshAfterInstallFailed']);
   expect(view.state.notice).toContain(en['software.install.completed']);phpFailure=false;await view.state.refreshAll();expect(writes).toEqual(['/php/install']);
+});
+it('distinguishes an acknowledged install missing from measured inventory and retries only the read',async()=>{
+  const view=await mount();await view.state.installVersion('php-8.4');
+  expect(writes).toEqual(['/php/install']);expect(view.state.noticeError).toBe(true);
+  expect(view.state.notice).toContain(en['software.install.completed']);
+  expect(view.state.notice).toContain(en['panel.php.installationUnconfirmed']);
+  expect(view.state.notice).not.toContain(en['panel.software.refreshAfterInstallFailed']);
+  expect(view.php.versions.map(row=>row.componentId)).toEqual(['php-8.3']);
+  const before=reads.filter(path=>path==='/php/versions').length;
+  await view.state.refreshAll();
+  expect(reads.filter(path=>path==='/php/versions')).toHaveLength(before+1);
+  expect(writes).toEqual(['/php/install']);
 });
 it.each(['read','partial','write'])('invalidates PHP inventory after a removal whose %s outcome needs reconciliation',async failure=>{
   const view=await mount();removalFailure=failure;await view.state.removeVersion('php-8.3');

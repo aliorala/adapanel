@@ -13,7 +13,7 @@
       </button>
     </div>
 
-    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError, 'warn-banner': noticeWarning }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <section v-if="(!versionsMeasured || (activeTab === 'available' && !catalogMeasured)) && !refreshing && !phpStore.loading && !softwareStore.loading" class="php-read-state" role="status">
       <div>
@@ -57,7 +57,7 @@
       </div>
       <div class="summary-item">
         <span>{{ t("panel.php.lastAssignment") }}</span>
-        <strong>{{ phpStore.lastAssignment?.displayName || "-" }}</strong>
+        <strong>{{ selectedSiteAssignment?.displayName || "-" }}</strong>
       </div>
     </div>
 
@@ -165,7 +165,7 @@
       </div>
       <p class="meta">{{ t("panel.php.openBasedirHint") }}</p>
       <div class="row-actions">
-        <button class="compact" v-bind="writeGate(savingSettings)" @click="saveSettings">
+        <button class="compact" v-bind="writeGate(savingSettings || !actorCurrent())" @click="saveSettings">
           {{ savingSettings ? t("panel.database.saving") : t("panel.common.save") }}
         </button>
       </div>
@@ -199,6 +199,7 @@ const activeTab = ref<"installed" | "available">("installed");
 const query = ref("");
 const notice = ref("");
 const noticeError = ref(false);
+const noticeWarning = ref(false);
 const enablingRedis = ref(false);
 const refreshing = ref(false);
 const actionBusy = ref(false);
@@ -273,7 +274,7 @@ async function loadSettings(siteName: string) {
 }
 
 async function saveSettings() {
-  if (disposed || savingSettings.value || !selectedSiteName.value || !settingsLoaded.value) {
+  if (!actorCurrent() || locked.value || savingSettings.value || !selectedSiteName.value || !settingsLoaded.value) {
     return;
   }
   savingSettings.value = true;
@@ -289,6 +290,10 @@ async function saveSettings() {
     });
     if (!context.current()) return;
     settings.memoryLimit = data.memoryLimit;
+    settings.maxExecutionTime = data.maxExecutionTime;
+    settings.uploadMaxFilesize = data.uploadMaxFilesize;
+    settings.postMaxSize = data.postMaxSize;
+    settings.displayErrors = data.displayErrors;
     // İzolasyon durumunu SUNUCUNUN döndürdüğü GERÇEK değerle tazele: kutucuk, kaydedilmiş sanılan
     // ama uygulanmamış bir durumu göstermesin (yanıt php.ini'den taze okunur).
     settings.openBasedirEnabled = data.openBasedirEnabled ?? settings.openBasedirEnabled;
@@ -311,6 +316,8 @@ const selectedSiteName = computed({
   get: () => sitesStore.selectedSiteName,
   set: (value: string) => sitesStore.selectSite(value)
 });
+const selectedSiteAssignment = computed(() => phpStore.lastAssignment?.siteName.trim().toLowerCase() === selectedSiteName.value.trim().toLowerCase()
+  ? phpStore.lastAssignment : null);
 const availablePhpComponents = computed(() =>
   (softwareStore.catalog?.manifest ?? []).filter((component) => component.id.startsWith("php-")));
 const installedComponentIds = computed(() => new Set(
@@ -358,7 +365,9 @@ async function installVersion(componentId: string) {
   } catch (error) {
     if (!contextCurrent(revision)) return;
     if (error instanceof PhpInstallationRefreshError) completedMessage = error.installedMessageKey;
-    showNotice(completedMessage ? `${translate(completedMessage)}\n\n${t("panel.software.refreshAfterInstallFailed")}` : resolveApiMessage(error), true);
+    const clarification = error instanceof PhpInstallationRefreshError && extractApiMessage(error.refreshError) === "panel.php.installationUnconfirmed"
+      ? "panel.php.installationUnconfirmed" : "panel.software.refreshAfterInstallFailed";
+    showNotice(completedMessage ? `${translate(completedMessage)}\n\n${t(clarification)}` : resolveApiMessage(error), true);
   } finally {
     actionBusy.value = false;
   }
@@ -373,8 +382,12 @@ async function assignVersion(componentId: string) {
   const revision = ++viewRevision, site = selectedSiteName.value;
   actionBusy.value = true;
   try {
-    await phpStore.assignVersion(site, componentId);
-    if (contextCurrent(revision) && selectedSiteName.value === site) showNotice(t("php.assignment.success"), false);
+    const assignment = await phpStore.assignVersion(site, componentId);
+    if (contextCurrent(revision) && selectedSiteName.value === site) {
+      const warnings = [assignment.handlerOrderNoticeKey ?? "aspnet.handler_order_unverified",
+        assignment.isFastCgiRegistered ? "" : "panel.php.fastCgiMissing"].filter(Boolean);
+      showNotice(warnings.length ? warnings.map(translate).join("\n\n") : t("php.assignment.success"), false, warnings.length > 0);
+    }
   } catch (error) {
     if (contextCurrent(revision)) showNotice(resolveApiMessage(error), true);
   } finally {
@@ -457,13 +470,15 @@ function translate(key: string) {
   return translated === key ? key : translated;
 }
 
-function showNotice(message: string, isError: boolean) {
+function showNotice(message: string, isError: boolean, isWarning = false) {
   notice.value = message;
   noticeError.value = isError;
+  noticeWarning.value = isWarning;
 }
 </script>
 
 <style scoped>
+.page-notice { white-space: pre-line; overflow-wrap: anywhere; }
 .php-read-state {
   display: flex;
   align-items: center;

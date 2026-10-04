@@ -5719,5 +5719,7 @@
   "panel.update.history.recordedReason": "Kaydedilen açıklama",
   "panel.update.history.aborted": "Bu deneme, panel dosyaları kullanımda olduğu için iptal edildi.",
   "panel.update.history.noReason": "Bu deneme için ayrıntılı hata açıklaması kaydedilmemiş.",
-  "panel.update.watchChanged": "İzlenen kurulumun bilgileri değişti. Yeni durumu doğrulamak için Güncelleme denetle düğmesini kullanın."
+  "panel.update.watchChanged": "İzlenen kurulumun bilgileri değişti. Yeni durumu doğrulamak için Güncelleme denetle düğmesini kullanın.",
+  "panel.php.resultUnconfirmed": "PHP yanıtı doğrulanamadı. Yeniden işlem yapmadan önce siteyi veya PHP listesini yenileyin.",
+  "panel.php.installationUnconfirmed": "Kurulum onayı alındı ancak son PHP listesi bu sürümün kurulu olduğunu doğrulamıyor. Listeyi yenileyerek durumunu kontrol edin."
 }

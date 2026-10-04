@@ -5719,5 +5719,7 @@
   "panel.update.history.recordedReason": "Recorded explanation",
   "panel.update.history.aborted": "This attempt was cancelled because the panel files were in use.",
   "panel.update.history.noReason": "No detailed error explanation was recorded for this attempt.",
-  "panel.update.watchChanged": "The installation being monitored has changed. Check for updates to verify the new status."
+  "panel.update.watchChanged": "The installation being monitored has changed. Check for updates to verify the new status.",
+  "panel.php.resultUnconfirmed": "The PHP response could not be verified. Refresh the site or PHP list before trying again.",
+  "panel.php.installationUnconfirmed": "Installation was acknowledged, but the latest PHP list does not confirm this version is installed. Refresh the list to check its status."
 }

@@ -104,6 +104,13 @@ export const usePhpStore = defineStore("php", {
           throw new PhpInstallationRefreshError(message, error);
         }
         assertCurrentSession(request);
+        // Another scan or external mutation may have superseded this scan while
+        // it waited. Only the currently committed inventory can confirm the
+        // requested component; a valid missing/failed row stays visible as such.
+        if (!this.loaded || !this.versions.some(version =>
+          version.componentId.trim().toLowerCase() === componentId.trim().toLowerCase() && version.status.toLowerCase() === "installed")) {
+          throw new PhpInstallationRefreshError(message, new UserFacingError("panel.php.installationUnconfirmed"));
+        }
         return message;
       } catch (error) {
         assertCurrentSession(request);
