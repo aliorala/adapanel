@@ -6,8 +6,11 @@ using AdaPanel.Core.Dtos.RunningJobs;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Database;
+using AdaPanel.Infrastructure.Security;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 
 namespace AdaPanel.Api.Controllers;
 
@@ -64,6 +67,7 @@ public sealed class BackupController(
     [HttpGet]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<BackupRecordDto>>>> GetBackupsAsync(CancellationToken cancellationToken)
     {
+        var authority = await CaptureReadAuthorityAsync(cancellationToken);
         var backups = await backupService.GetBackupsAsync(cancellationToken);
 
         // Customer/Reseller yalnızca kendi sitelerinin ve KENDİ ABONELİĞİNİN yedeklerini görür.
@@ -77,6 +81,7 @@ public sealed class BackupController(
                 .ToArray();
         }
 
+        await RevalidateReadAuthorityAsync(authority, cancellationToken);
         return Ok(ApiResponse<IReadOnlyCollection<BackupRecordDto>>.Ok(backups));
     }
 
@@ -453,6 +458,7 @@ public sealed class BackupController(
     [HttpGet("{backupId}/download")]
     public async Task<IActionResult> DownloadAsync(string backupId, CancellationToken cancellationToken)
     {
+        var authority = await CaptureReadAuthorityAsync(cancellationToken);
         var backups = await backupService.GetBackupsAsync(cancellationToken);
         var record = backups.FirstOrDefault(item => string.Equals(item.Id, backupId, StringComparison.OrdinalIgnoreCase));
         if (record is null)
@@ -467,6 +473,8 @@ public sealed class BackupController(
         {
             return NotFound(ApiResponse<object>.Fail("backup.not_found"));
         }
+
+        await RevalidateReadAuthorityAsync(authority, cancellationToken);
 
         if (string.IsNullOrWhiteSpace(record.Path) || !System.IO.File.Exists(record.Path))
         {
@@ -655,8 +663,11 @@ public sealed class BackupController(
         [FromQuery] string? prefix,
         CancellationToken cancellationToken)
     {
+        var authority = await CaptureReadAuthorityAsync(cancellationToken);
         await EnsureBackupOwnershipAsync(backupId, cancellationToken);
         var entries = await backupService.GetEntriesAsync(backupId, prefix, cancellationToken);
+        await EnsureBackupOwnershipAsync(backupId, cancellationToken);
+        await RevalidateReadAuthorityAsync(authority, cancellationToken);
         return Ok(ApiResponse<BackupEntriesDto>.Ok(entries));
     }
 
@@ -821,6 +832,41 @@ public sealed class BackupController(
         catch { lease.Dispose(); throw; }
     }
 
+    // Reads hold no subscription/source mutation lease while archive IO runs. The
+    // accepted actor and cookie must still be valid at the response admission boundary.
+    // A PanelToken principal has no cookie sid/stamp and keeps its existing contract.
+    private sealed record ReadAuthority(BackupActorAuthority Actor, string? SessionId, bool Cookie);
+
+    private async Task<ReadAuthority> CaptureReadAuthorityAsync(CancellationToken token)
+    {
+        var cookie = User.Identities.Any(identity => identity.IsAuthenticated &&
+            identity.AuthenticationType == CookieAuthenticationDefaults.AuthenticationScheme);
+        var sessionId = User.FindFirstValue(SessionRevocationStore.SessionIdClaim);
+        if (cookie && (string.IsNullOrWhiteSpace(sessionId) ||
+            string.IsNullOrWhiteSpace(User.FindFirstValue(CookieSessionValidator.CredentialStampClaim))))
+            throw new AdaPanel.Core.Common.AppException("auth.unauthorized", 401, 401);
+        var actor = await BackupActorAuthority.CaptureAsync(dbContext, customerScopes, User, token);
+        var authority = new ReadAuthority(actor, sessionId, cookie);
+        await EnsureReadSessionAsync(authority, token);
+        return authority;
+    }
+
+    private async Task RevalidateReadAuthorityAsync(ReadAuthority authority, CancellationToken token)
+    {
+        await authority.Actor.RevalidateAsync(dbContext, customerScopes, User, token);
+        await EnsureReadSessionAsync(authority, token);
+    }
+
+    private async Task EnsureReadSessionAsync(ReadAuthority authority, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (authority.Cookie && (User.FindFirstValue(SessionRevocationStore.SessionIdClaim) != authority.SessionId ||
+            await HttpContext.RequestServices.GetRequiredService<SessionRevocationStore>()
+                .IsRevokedAsync(authority.SessionId, token)))
+            throw new AdaPanel.Core.Common.AppException("auth.unauthorized", 401, 401);
+        token.ThrowIfCancellationRequested();
+    }
+
     private async Task RevalidateMutationAsync(BackupActorAuthority authority, BackupRecordDto record, CancellationToken token)
     {
         await authority.RevalidateAsync(dbContext, customerScopes, User, token);
@@ -874,8 +920,11 @@ public sealed class BackupController(
     [HttpGet("{backupId}/chain")]
     public async Task<ActionResult<ApiResponse<BackupChainDto>>> GetChainAsync(string backupId, CancellationToken cancellationToken)
     {
+        var authority = await CaptureReadAuthorityAsync(cancellationToken);
         await EnsureBackupOwnershipAsync(backupId, cancellationToken);
         var chain = await backupService.GetChainAsync(backupId, cancellationToken);
+        await EnsureBackupOwnershipAsync(backupId, cancellationToken);
+        await RevalidateReadAuthorityAsync(authority, cancellationToken);
         return Ok(ApiResponse<BackupChainDto>.Ok(chain));
     }
 

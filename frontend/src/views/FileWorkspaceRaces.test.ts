@@ -4,6 +4,7 @@ import { createRenderer, h, nextTick, ssrContextKey, type App, type Component } 
 import FilesView from "./FilesView.vue";
 import BackupView from "./BackupView.vue";
 import { useSitesStore } from "../stores/sites";
+import { useAuthStore } from "../stores/auth";
 import { compressPath, createFile, createDirectory, extractPath, getFileWorkspace, searchFiles, uploadFile, type FileWorkspace } from "../api/files";
 import { getBackupEntries, restoreBackupItems, type BackupRecord } from "../api/backup";
 
@@ -14,8 +15,10 @@ const confirmMock = vi.hoisted(() => vi.fn());
 vi.mock("../components/ConfirmDialog.vue", () => ({ useConfirm: () => ({ confirm: confirmMock }) }));
 vi.mock("../components/PromptDialog.vue", () => ({ usePrompt: () => ({ prompt: promptMock }) }));
 vi.mock("../api/files", async original => ({ ...await original<object>(), createFile: vi.fn(), createDirectory: vi.fn(), compressPath: vi.fn(), extractPath: vi.fn(), getFileWorkspace: vi.fn(), searchFiles: vi.fn(), uploadFile: vi.fn() }));
-vi.mock("../api/backup", async original => ({ ...await original<object>(), restoreBackupItems: vi.fn(), getBackupEntries: vi.fn(), getBackups: vi.fn().mockResolvedValue([]), getBackupRunningJobs: vi.fn().mockResolvedValue({ running: [], interrupted: [] }) }));
+vi.mock("../api/backup", async original => ({ ...await original<object>(), restoreBackupItems: vi.fn(), getBackupEntries: vi.fn(), getBackups: vi.fn().mockResolvedValue([]), getBackupRunningJobs: vi.fn().mockResolvedValue({ running: [], interrupted: [] }), getBackupEncryption: vi.fn().mockResolvedValue({ enabled: false, passwordUsable: false, updatedAtUtc: "", algorithm: "AES" }) }));
 vi.mock("../api/subscriptions", async original => ({ ...await original<object>(), getMySubscription: vi.fn().mockResolvedValue(null) }));
+vi.mock("../api/automation", () => ({ getAutomation: vi.fn().mockResolvedValue({ settings: { backupRetentionDays: 14, autoBackupEnabled: true, backupScheduleMode: "interval", backupIntervalHours: 24, backupScheduleHour: 2, backupScheduleMinute: 0, backupScheduleDayOfWeek: 0, backupScheduleDayOfMonth: 1, backupDatabaseEngines: ["postgresql"], backupTargetType: "local", backupRemoteUrl: "" } }), updateAutomation: vi.fn() }));
+vi.mock("../api/panelSettings", () => ({ getPanelPreferences: vi.fn().mockResolvedValue({ defaultBackupRoot: "" }) }));
 
 let app: App | undefined;
 beforeEach(() => {
@@ -27,6 +30,10 @@ afterEach(() => { app?.unmount(); app = undefined; vi.clearAllMocks(); vi.unstub
 function workspace(path: string): FileWorkspace {
   return { path, parentPath: "", displayName: path, physicalPath: "", isDirectory: true, content: "", entries: [] };
 }
+function backupRecord(id: string): BackupRecord {
+  return { id, name: `backup-${id}`, type: "site", source: "a.test", path: `/backups/${id}.zip`, format: "zip", createdAtUtc: "2026-10-04T12:00:00Z", size: 100,
+    status: "created", targetType: "local", remoteUri: "", encrypted: false, warnings: [], preservedPath: "", chainId: "", chainIndex: 0, backupMode: "full", baseBackupId: "", subscriptionUserId: "", itemCount: 1, localMissing: false, remoteMissing: false, remoteVerifiedUtc: null };
+}
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(yes => { resolve = yes; });
@@ -35,6 +42,11 @@ function deferred<T>() {
 async function mount<T>(view: Component): Promise<T> {
   const renderer = createRenderer<object, object>({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
   const pinia = createPinia(); setActivePinia(pinia);
+  if (view === BackupView) {
+    useAuthStore().session = { isAuthenticated: true, requiresSetupWizard: false,
+      user: { id: "admin", role: "Administrator", userName: "admin", email: "admin@example.test", preferredLanguage: "en", isActive: true, isTwoFactorEnabled: false, lastLoginAtUtc: null } };
+    useAuthStore().users = [{ id: "customer", role: "Customer", userName: "customer" }] as never;
+  }
   useSitesStore().sites = [{ name: "a.test" }, { name: "b.test" }] as never;
   useSitesStore().selectedSiteName = "a.test";
   app = renderer.createApp({ ...view, render: () => h("section") } as Component).use(pinia);
@@ -123,7 +135,7 @@ type BackupState = {
 
 it("does not repeat destructive restore operations after a lost batch response", async () => {
   const state = await mount<BackupState>(BackupView);
-  state.browseRecord = { id: "a", name: "backup-a" } as BackupRecord;
+  state.browseRecord = backupRecord("a");
   state.selectedItems = ["first.txt", "second.txt"];
   vi.mocked(restoreBackupItems).mockRejectedValue(new Error("connection lost"));
   await state.restoreSelectedItems();
@@ -134,7 +146,7 @@ it("does not repeat destructive restore operations after a lost batch response",
 
 it("restores only to the target shown in the confirmation", async () => {
   const state = await mount<BackupState>(BackupView);
-  state.browseRecord = { id: "a", name: "backup-a" } as BackupRecord;
+  state.browseRecord = backupRecord("a");
   state.selectedItems = ["first.txt"]; state.itemsTargetPath = "original-target";
   confirmMock.mockImplementationOnce(async options => { state.itemsTargetPath = "changed-target"; await options.action(); return true; });
   vi.mocked(restoreBackupItems).mockResolvedValue({ restoredCount: 1, targetRoot: "original-target" } as never);
@@ -144,7 +156,7 @@ it("restores only to the target shown in the confirmation", async () => {
 
 it("does not start a restore confirmed after its backup browser was closed", async () => {
   const state = await mount<BackupState>(BackupView);
-  state.browseRecord = { id: "a", name: "backup-a" } as BackupRecord;
+  state.browseRecord = backupRecord("a");
   state.selectedItems = ["first.txt"];
   confirmMock.mockImplementationOnce(async options => { state.closeBrowser(); await options.action(); return true; });
   await state.restoreSelectedItems();
@@ -155,9 +167,9 @@ it("does not show entries from a closed backup under a newly opened backup", asy
   const second = deferred<Awaited<ReturnType<typeof getBackupEntries>>>();
   vi.mocked(getBackupEntries).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
   const state = await mount<BackupState>(BackupView);
-  const a = state.openBrowser({ id: "a" } as BackupRecord);
+  const a = state.openBrowser(backupRecord("a"));
   state.closeBrowser();
-  const b = state.openBrowser({ id: "b" } as BackupRecord);
+  const b = state.openBrowser(backupRecord("b"));
   first.resolve({ prefix: "", entries: [{ name: "wrong-backup" }], truncated: false } as never); await a;
   expect(state.browseLoading).toBe(true);
   expect(state.browseEntries).toEqual([]);

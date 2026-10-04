@@ -300,6 +300,7 @@ public sealed class AuthController(
     [HttpPost("impersonate/{userId:guid}")]
     public async Task<ActionResult<ApiResponse<CurrentUserDto>>> ImpersonateAsync(Guid userId, CancellationToken cancellationToken)
     {
+        var sourceActor = CookieSessionValidator.CaptureSourceActor(User);
         var adminId = User.GetRequiredUserId();
         var adminName = User.Identity?.Name ?? "admin";
         if (userId == adminId)
@@ -315,7 +316,8 @@ public sealed class AuthController(
                 ApiResponse<object>.Fail("auth.cannot_impersonate_administrator", StatusCodes.Status403Forbidden));
         }
 
-        await SignInAsync(target, isPersistent: false, impersonatorId: adminId, impersonatorName: adminName);
+        await SignInAsync(target, isPersistent: false, impersonatorId: adminId, impersonatorName: adminName,
+            sourceActor: sourceActor);
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         await auditService.WriteAsync("auth.impersonate.started", "auth", $"'{adminName}' impersonating '{target.UserName}'.", adminId, ip, cancellationToken);
         return Ok(ApiResponse<CurrentUserDto>.Ok(target, "auth.impersonate.started"));
@@ -326,6 +328,7 @@ public sealed class AuthController(
     [HttpPost("impersonate/stop")]
     public async Task<ActionResult<ApiResponse<CurrentUserDto>>> StopImpersonateAsync(CancellationToken cancellationToken)
     {
+        var sourceActor = CookieSessionValidator.CaptureSourceActor(User);
         var impersonatorId = User.FindFirstValue("impersonator_id");
         if (!Guid.TryParse(impersonatorId, out var adminId))
         {
@@ -333,7 +336,7 @@ public sealed class AuthController(
         }
 
         var admin = await authService.GetUserByIdAsync(adminId, cancellationToken);
-        await SignInAsync(admin, isPersistent: false);
+        await SignInAsync(admin, isPersistent: false, sourceActor: sourceActor);
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         await auditService.WriteAsync("auth.impersonate.stopped", "auth", $"Returned to '{admin.UserName}'.", adminId, ip, cancellationToken);
         return Ok(ApiResponse<CurrentUserDto>.Ok(admin, "auth.impersonate.stopped"));
@@ -506,7 +509,8 @@ public sealed class AuthController(
     }
 
     private Task SignInAsync(CurrentUserDto user, bool isPersistent, Guid? impersonatorId = null,
-        string? impersonatorName = null, string? sourceSessionId = null)
+        string? impersonatorName = null, string? sourceSessionId = null,
+        CookieSessionValidator.SourceActor? sourceActor = null)
     {
         var claims = new List<Claim>
         {
@@ -535,6 +539,8 @@ public sealed class AuthController(
         properties.Parameters[CookieSessionValidator.AcceptedIdentityParameter] = user.AuthenticationEvidence;
         if (sourceSessionId is not null)
             properties.Parameters[CookieSessionValidator.SourceSessionParameter] = sourceSessionId;
+        if (sourceActor is not null)
+            properties.Parameters[CookieSessionValidator.SourceActorParameter] = sourceActor;
 
         return HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, properties);
     }

@@ -30,6 +30,7 @@ type State = {
   browseEntries: api.BackupEntry[]; browseRecord: api.BackupRecord | null; browseLoading: boolean;
   backupKind: string; targetForm: api.BackupTargetPayload; selectedItems: string[];
   databaseEngine: string; databaseName: string; restoreItemsBusy: boolean;
+  canRestoreItems: boolean; canChooseItemsTarget: boolean; itemsTargetPath: string;
   activeView: string; schedules: api.SubscriptionBackupSchedule[]; schedulesLoading: boolean; schedulesLoaded: boolean;
   schedulesLoad: { message: Ref<string> }; scheduleForm: { userId: string; remotePassword: string; retentionDays: number; plan: { intervalHours: number } } | null;
   autoForm: AutomationSettings | null; autoStatus: AutomationStatus | null; autoLoad: { message: Ref<string> };
@@ -93,11 +94,11 @@ beforeEach(() => {
   vi.mocked(api.getBackupEntries).mockResolvedValue({ prefix: "", entries: [], truncated: false } as never);
 });
 afterEach(() => { app?.unmount(); app = undefined; vi.restoreAllMocks(); vi.resetAllMocks(); vi.unstubAllGlobals(); });
-async function mount() {
+async function mount(role = "Administrator") {
   const renderer = createRenderer<object, object>({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
   const pinia = createPinia(); setActivePinia(pinia);
   useSitesStore().sites = [{ name: "site.test" }] as never; useSitesStore().selectedSiteName = "site.test";
-  useAuthStore().session = { isAuthenticated: true, user: { id: "admin", role: "Administrator" } } as never;
+  useAuthStore().session = { isAuthenticated: true, user: { id: "admin", role } } as never;
   useAuthStore().users = [{ id: "tenant", role: "Customer", userName: "tenant" }] as never;
   app = renderer.createApp({ ...BackupView, render: () => h("section") } as Component).use(pinia); app.provide(ssrContextKey, {});
   const state = (app.mount({}).$ as unknown as { setupState: State }).setupState; await flush(); return state;
@@ -299,6 +300,40 @@ it("restores only the immutable selected item snapshot", async () => {
   shared.confirm.mockImplementationOnce(async options => { state.selectedItems = ["files/b.txt"]; await options.action(); return true; });
   await state.restoreSelectedItems(); expect(api.restoreBackupItems).toHaveBeenCalledExactlyOnceWith("first", ["files/a.txt"], "", ""); expect(state.notice).toBe("panel.backup.itemsRestoredAll");
 });
+it.each(["actor", "session"])("does not reopen full restore for a changed %s after the catalogue's chain preflight", async transition => {
+  const state = await mount(), gate = deferred<api.BackupChain>(); vi.mocked(api.getBackupChain).mockReturnValueOnce(gate.promise);
+  const restoring = state.restore({ ...record(), chainId: "chain" }); await flush();
+  if (transition === "actor") useAuthStore().session!.user!.id = "new-admin";
+  else useAuthStore().session = { ...useAuthStore().session!, user: { ...useAuthStore().session!.user! } };
+  gate.resolve(chain()); await restoring;
+  expect(shared.confirm).not.toHaveBeenCalled(); expect(api.restoreBackup).not.toHaveBeenCalled();
+});
+it.each(["Customer", "Reseller"])("allows %s ZIP subscription items into the server-selected extraction folder", async role => {
+  const state = await mount(role); await state.openBrowser({ ...record(), type: "subscription" }); state.selectedItems = ["files/a.txt"];
+  expect(state.canChooseItemsTarget).toBe(false); expect(state.canRestoreItems).toBe(true);
+  await state.restoreSelectedItems(); expect(api.restoreBackupItems).toHaveBeenCalledExactlyOnceWith("first", ["files/a.txt"], "", "");
+});
+it("allows an administrator's empty extraction target and reserves selection confirmation", async () => {
+  const state = await mount(); await state.openBrowser({ ...record(), type: "subscription" });
+  expect(state.canChooseItemsTarget).toBe(true); expect(state.canRestoreItems).toBe(false);
+  state.selectedItems = ["files/a.txt"]; expect(state.canRestoreItems).toBe(true);
+  const gate = deferred<boolean>(); shared.confirm.mockReturnValueOnce(gate.promise);
+  const restoring = state.restoreSelectedItems(); expect(state.canRestoreItems).toBe(false); gate.resolve(false); await restoring;
+  expect(state.canRestoreItems).toBe(true);
+});
+it.each(["", "D:/safe-extraction"])("describes the actual extraction effect for administrator target %j", async target => {
+  const state = await mount(); await state.openBrowser(record()); state.selectedItems = ["files/a.txt"]; state.itemsTargetPath = target;
+  await state.restoreSelectedItems();
+  expect(shared.confirm).toHaveBeenCalledWith(expect.objectContaining({
+    message: target ? "panel.backup.confirmRestoreItems" : "panel.backup.confirmExtractItems",
+    tone: target ? "danger" : "neutral",
+    requireText: target ? "first" : undefined,
+    title: target ? "panel.confirm.restoreBackupTitle" : "panel.backup.extractTitle",
+    confirmLabel: target ? "panel.backup.restore" : "panel.backup.restoreSelected",
+    busyLabel: target ? "panel.backup.restoring" : "panel.backup.extracting"
+  }));
+  expect(api.restoreBackupItems).toHaveBeenCalledExactlyOnceWith("first", ["files/a.txt"], target, "");
+});
 it.each([
   ["/restored/site", "panel.backup.itemsRestoredAll"],
   ["", "panel.backup.itemsRestoredScoped"],
@@ -483,7 +518,7 @@ it("keeps administrator database/mail/panel creation options and tenant granular
   for (const key of ["panel.backup.dbTitle", "panel.backup.mailTitle", "panel.backup.panelTitle"]) expect(html).toContain(key);
   for (const kind of ["database", "mail", "panel"]) { state.backupKind = kind; await state.createSelectedBackup(); }
   expect(api.backupDatabase).toHaveBeenCalledOnce(); expect(api.backupMail).toHaveBeenCalledOnce(); expect(api.backupPanel).toHaveBeenCalledOnce();
-  useAuthStore().session!.user!.role = "Customer"; await state.openBrowser(record()); state.selectedItems = ["files/a.txt"]; await state.restoreSelectedItems(); expect(api.restoreBackupItems).toHaveBeenCalledOnce();
+  unmount(); const customer = await mount("Customer"); await customer.openBrowser(record()); customer.selectedItems = ["files/a.txt"]; await customer.restoreSelectedItems(); expect(api.restoreBackupItems).toHaveBeenCalledOnce();
 });
 it("limits chain-delete impact to its case-insensitive site source and kind", async () => {
   const state = await mount(), base = { ...record(), chainId: "shared" };

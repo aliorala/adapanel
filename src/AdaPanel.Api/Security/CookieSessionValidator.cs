@@ -69,6 +69,23 @@ public static class CookieSessionValidator
 
     internal const string AcceptedIdentityParameter = "adapanel_accepted_identity";
     internal const string SourceSessionParameter = "adapanel_source_session";
+    internal const string SourceActorParameter = "adapanel_source_actor";
+
+    // A delegation request has two different identities: the accepted target and the
+    // cookie actor that requested it. Carry an immutable snapshot, never HttpContext.User.
+    internal sealed record SourceActor(Guid UserId, string Role, string CredentialStamp, string SessionId);
+
+    internal static SourceActor CaptureSourceActor(ClaimsPrincipal principal)
+    {
+        var identity = principal.Identities.FirstOrDefault(candidate => candidate.IsAuthenticated &&
+            candidate.AuthenticationType == CookieAuthenticationDefaults.AuthenticationScheme);
+        if (identity is null || !Guid.TryParse(identity.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var userId) || userId == Guid.Empty ||
+            identity.FindFirst(ClaimTypes.Role)?.Value is not { Length: > 0 } role ||
+            identity.FindFirst(CredentialStampClaim)?.Value is not { Length: > 0 } stamp ||
+            identity.FindFirst(SessionRevocationStore.SessionIdClaim)?.Value is not { Length: > 0 } sessionId)
+            throw new AppException("auth.unauthorized", 401, 401);
+        return new(userId, role, stamp, sessionId);
+    }
 
     /// <summary>Son doğrulama zamanı — çerezin kendi özelliklerinde taşınır.</summary>
     private const string LastValidatedKey = "adapanel_validated_utc";
@@ -95,15 +112,36 @@ public static class CookieSessionValidator
         context.Properties.Parameters.TryGetValue(AcceptedIdentityParameter, out var acceptedIdentity);
         var evidence = acceptedIdentity as string;
         var renewingSession = context.Properties.Parameters.TryGetValue(SourceSessionParameter, out var sourceSession);
+        var delegatedSession = context.Properties.Parameters.TryGetValue(SourceActorParameter, out var sourceActorValue);
+        var sourceActor = sourceActorValue as SourceActor;
         // Parameters are transient, but explicitly remove our handoff fields as well. They
         // must never become ticket state or survive into a later renewal.
         context.Properties.Parameters.Remove(AcceptedIdentityParameter);
         context.Properties.Parameters.Remove(SourceSessionParameter);
+        context.Properties.Parameters.Remove(SourceActorParameter);
+        if (delegatedSession && (sourceActor is null || sourceActor.UserId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(sourceActor.Role) || string.IsNullOrWhiteSpace(sourceActor.CredentialStamp) ||
+            string.IsNullOrWhiteSpace(sourceActor.SessionId)))
+            throw new AppException("auth.unauthorized", 401, 401);
         var dbContext = context.HttpContext.RequestServices.GetRequiredService<AdaPanelDbContext>();
-        var user = await dbContext.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == userId, token);
+        var sourceUserId = sourceActor?.UserId ?? userId;
+        // Read both rows in one statement. In a return request the source is the
+        // impersonated customer; the administrator is only the destination identity.
+        var users = await dbContext.Users.AsNoTracking()
+            .Where(candidate => candidate.Id == userId || candidate.Id == sourceUserId).ToArrayAsync(token);
+        var user = users.FirstOrDefault(candidate => candidate.Id == userId);
         if (user is null || !user.IsActive || identity.FindFirst(ClaimTypes.Role)?.Value != user.Role.ToString() ||
             !AcceptedIdentityEvidence.Matches(user, evidence))
             throw new AppException("auth.unauthorized", 401, 401);
+        if (sourceActor is not null)
+        {
+            var source = users.FirstOrDefault(candidate => candidate.Id == sourceActor.UserId);
+            if (source is null || !source.IsActive || source.Role.ToString() != sourceActor.Role ||
+                ComputeStamp(source.PasswordHash) != sourceActor.CredentialStamp ||
+                await context.HttpContext.RequestServices.GetRequiredService<SessionRevocationStore>()
+                    .IsRevokedAsync(sourceActor.SessionId, token))
+                throw new AppException("auth.unauthorized", 401, 401);
+        }
         if (renewingSession)
         {
             var sessionId = sourceSession as string;

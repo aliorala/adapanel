@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using AdaPanel.Api.Controllers;
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Auth;
 using AdaPanel.Core.Dtos.Terminal;
@@ -443,6 +444,10 @@ public sealed class ServerOwnerTerminalTests
                 new ThrowingSecurityService(),
                 new SessionRevocationStore(DosyaDeposu));
             denetleyici.ControllerContext = new ControllerContext { HttpContext = HttpBaglami(aktorId, null) };
+            var actor = DbContext.Users.Single(user => user.Id == aktorId);
+            var identity = (ClaimsIdentity)denetleyici.User.Identity!;
+            identity.AddClaim(new(CookieSessionValidator.CredentialStampClaim, CookieSessionValidator.ComputeStamp(actor.PasswordHash)));
+            identity.AddClaim(new(SessionRevocationStore.SessionIdClaim, SessionRevocationStore.NewSessionId()));
             return denetleyici;
         }
 

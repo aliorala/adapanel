@@ -31,9 +31,12 @@ export function useBackupRestore() {
   let disposed = false;
   if (getCurrentScope()) onScopeDispose(() => { disposed = true; });
   async function restore(record: BackupRecord, onResult: (record: BackupRecord) => void, onError: (error: unknown) => void, refresh?: () => Promise<unknown>) {
-    if (disposed || restoringId.value || auth.session?.user?.role !== "Administrator") return;
+    const session = auth.session;
+    if (disposed || restoringId.value || session?.isAuthenticated !== true || session.user?.role !== "Administrator") return;
     const epoch = getSessionEpoch();
-    const isCurrent = () => !disposed && epoch === getSessionEpoch() && auth.session?.user?.role === "Administrator";
+    const actorId = session.user.id;
+    const isCurrent = () => !disposed && epoch === getSessionEpoch() && auth.session === session &&
+      auth.session?.isAuthenticated === true && auth.session.user?.id === actorId && auth.session.user?.role === "Administrator";
     record = { ...record };
     restoringId.value = record.id;
     let password = "";

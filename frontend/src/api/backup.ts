@@ -300,18 +300,24 @@ export async function deleteBackupChain(backupId: string, expectedBackupIds: rea
   return response.data.data;
 }
 
-export async function downloadBackup(backupId: string, fileName: string) {
+export async function downloadBackup(backupId: string, fileName: string, isCurrent: () => boolean) {
+  if (!isCurrent()) return;
   const response = await apiClient.get(`/backup/${encodeURIComponent(backupId)}/download`, {
     responseType: "blob"
   });
+  // Saving the file is the side effect: the caller must still own this response.
+  if (!isCurrent()) return;
   const url = window.URL.createObjectURL(response.data as Blob);
   const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.URL.revokeObjectURL(url);
+  try {
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+  } finally {
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  }
 }
 
 // Yedeği siler (yerel dosya + kayıt; off-site uzak kopya hedef depoda kalır).
@@ -498,7 +504,15 @@ export async function restoreBackup(backupId: string, targetPath: string, encryp
     encryptionPassword
   });
 
-  return response.data.data;
+  const record = response.data?.data;
+  if (response.data?.success !== true || !record || record.id !== backupId ||
+    !["restored", "restored_with_errors"].includes(record.status) ||
+    !Array.isArray(record.warnings) || record.warnings.some(warning => !warning ||
+      typeof warning.messageKey !== "string" || !warning.messageKey.trim() || typeof warning.target !== "string" || typeof warning.detail !== "string") ||
+    typeof record.preservedPath !== "string" || (record.restoredPath !== undefined && typeof record.restoredPath !== "string")) {
+    throw new UserFacingError("panel.backup.resultUnconfirmed");
+  }
+  return record;
 }
 
 /**

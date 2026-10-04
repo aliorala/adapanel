@@ -1,5 +1,37 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R33 yerelde doğrulandı, henüz yayımlanmadı
+
+R33 source version hâlâ0.8.79; bu turun düzeltmeleri yayımdaki0.8.79 kurucuda YOK.
+Son yayımlanan0.8.79 R31+R32; canlı kuruluma dokunulmadı. Sürekli hedef aktif.
+Auth Impersonate/Stop özgün cookie actor id/role/stamp/sid snapshot'ını transient Parameters
+ile cookie event'e taşır; fresh source+target ayrı doğrulanır, source revoke401. 26 yeni test.
+BackupController liste/download/entries/chain başlangıç+final actor/sid, entries/chain final
+owner/scope denetler; read sırasında mutationlease yok. 45 yeni realZIP/SQLite test.
+APIkey principal uyumlu; streaming başladıktan sonraki değişim ve token re-auth kapsam dışı.
+Uzun süreli impersonation delegation/source-admin değişimi sonraki denetim adayı.
+FE backup restore/download actor/session/scope guard; blob save öncesi guard/duplicate lock,
+restore response shape+id+status doğrulama. Arşiv UI seçili tam path listesi/remove/clear,
+mobil satırlar, hedef admin-only/tenant payload empty. Ayrı klasöre extraction neutral,
+customtarget danger+typedconfirmation. Yanlış unavailable/originaltarget metinleri kaldırıldı.
+Nonadmin fullrestore row/chain no-op butonları gizlendi; scoped subtitle açıklar.
+
+Backend baseline59=37RED22green; finaltarget637green. Build0warning/error. Full.NET
+session38448: Core2green+Infra8194green1fail (8195),fail yalnız locale anahtarları FE editiyle
+aynı anda taranmıştı. Final stable PanelWordingAndPlaceholderTests5/5green (round33-wording-final).
+Toplam8197 distinctbackend tarandı, açıkfail yok; tekfullgreenrun diye söyleme.
+FE50new; final95files1750/1750+types/Vitegreen,session15122exit0. İlkfullFE3oldfixturefail
+FileWorkspaceRaces auth/ZIPfixture eksikleri; beklentiler korunarak düzeltildi. wwwroot sync,
+6indexasset mevcut; TR/EN5507parity; diffcheckclean. Loglarround33-verified-*.
+Chrome3 actualVue/Pinia+fakeAPI:390darkTRCustomer/320lightENReseller/1440darkTRAdmin,
+document380/380,310/310,1430/1430; archivetable de taşmıyor. Readfail→retry, seçim korunması,
+remove, neutralextract örnekPOST,customtarget typedconfirmation doğrulandı. Appconsoleerror0,
+Chrome cüzdanextension hataları hariç. Screenshotround33-archive-{mobile,en320,desktop}.png.
+__audit33fixture silindi,auditTab33CLOSED,viewport32RESET,preview44488stopped. .NET/FEterminal;
+aktiftoolprocess yok. Tümagent sabit/readonlyreviewdone. TestResults/ eskiuntracked korunacak.
+Yeni ana adaylar: uzun süreli delegation yetkisi; source/actor kabulünden sonraki sürekli
+stream-token yetki modelini önce gerçekbaseline ile ölç, kapalı sayma.
+
 ## 2026-10-04 — R31 + R32 içeren 0.8.79 yayımlandı
 
 Kaynak sürümleri ve release-body.json 0.8.79'a eşitlendi ve yayımlandı. Latest public API,

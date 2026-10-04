@@ -300,7 +300,7 @@
                    ve bir ayracin arkasinda, satirin SONUNDA duruyor — yeri satirdan satira
                    degismez. Yuksek riskli onay (site adini yazdirma) AYNEN yerinde. -->
               <div class="bk-actions">
-                <button class="secondary compact" :disabled="downloadingId === record.id" @click="download(record)">
+                <button class="secondary compact" :disabled="!!downloadingId" @click="download(record)">
                   {{ downloadingId === record.id ? t("panel.backup.downloading") : t("panel.backup.download") }}
                 </button>
                 <span v-if="isAdmin" class="action-divider" aria-hidden="true"></span>
@@ -326,6 +326,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import { useBackupRestore, restoreResult } from "../composables/useBackupRestore";
+import { UserFacingError } from "../utils/apiError";
 import { useAuthStore } from "../stores/auth";
 import router from "../router";
 import { useSitesStore } from "../stores/sites";
@@ -657,21 +658,25 @@ async function createBackup() {
 }
 
 async function download(record: BackupRecord) {
+  if (!isCurrent() || downloadingId.value) return;
+  const generation = siteGeneration, id = record.id, name = record.name;
+  const current = () => isCurrent() && generation === siteGeneration;
   downloadingId.value = record.id;
   try {
-    await downloadBackup(record.id, record.name);
+    await downloadBackup(id, name, current);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) showNotice(resolveApiMessage(error), true);
   } finally {
     downloadingId.value = "";
   }
 }
 
 async function restore(record: BackupRecord) {
+  if (!isCurrent() || locked.value) return;
   await fullRestore.restore(record, (result) => {
     const report = restoreResult(result, t);
     showNotice(report.message, report.failed);
-  }, (error) => showNotice(error instanceof Error && !("isAxiosError" in error) ? error.message : resolveApiMessage(error), true), refresh);
+  }, (error) => showNotice(error instanceof Error && !(error instanceof UserFacingError) && !("isAxiosError" in error) ? error.message : resolveApiMessage(error), true), refresh);
 }
 
 /** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */

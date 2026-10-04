@@ -310,7 +310,7 @@
             -->
             <div class="row-actions">
               <span class="safe-actions">
-                <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="restore(backup)">
+                <button v-if="isAdmin" class="secondary compact row-button" v-bind="writeGate(busy)" @click="restore(backup)">
                   {{ t("panel.backup.restore") }}
                 </button>
                 <button
@@ -482,6 +482,7 @@
 
         <div class="row-actions">
           <button
+            v-if="isAdmin"
             class="compact"
             v-bind="writeGate(busy || chain.broken, chain.broken ? t('panel.backup.chain.restoreBlocked') : undefined)"
             @click="restore(chainRecord, true)">
@@ -640,46 +641,33 @@
     <section v-if="activeView === 'list' && browseRecord" class="form-surface backup-browser">
       <div class="section-head">
         <div>
-          <h3>{{ t("panel.backup.browseTitle") }}: {{ browseRecord.name }}</h3>
+          <h3>{{ t("panel.backup.browseTitle") }}</h3>
+          <p class="archive-name">{{ browseRecord.name }}</p>
           <p class="meta">{{ t("panel.backup.browseHint") }}</p>
         </div>
-        <button class="secondary compact" @click="closeBrowser">{{ t("panel.common.cancel") }}</button>
+        <button type="button" class="secondary compact" @click="closeBrowser">{{ t("panel.backup.verify.close") }}</button>
       </div>
 
-      <!--
-        ABONELİK arşivinde sunucu "orijinal konum"u çözemez (uç yalnız SITE yedeğinde çözer) ve
-        `backup.target_path_required` döner. Kapsamlı kullanıcıda hedef yol GÜVENLİK GEREĞİ zorla
-        boşaltıldığı için bu yol o kullanıcıya tamamen kapalıdır — düğmeye bastırıp hata
-        göstermektense sebebi ÖNCEDEN söylüyoruz.
-      -->
-      <p v-if="browseRecord.type === 'subscription' && !isAdmin" class="notice error" role="alert">
-        {{ t("panel.backup.browseSubscriptionScoped") }}
-      </p>
-      <p v-else-if="browseRecord.type === 'subscription'" class="notice warn" role="status">
-        {{ t("panel.backup.browseSubscriptionTarget") }}
-      </p>
-
-      <div class="breadcrumb">
-        <!-- Erişilebilir ad: düğmenin tek içeriği "/" karakteriydi; ekran okuyucu bunu ya hiç
-             okumuyor ya da "eğik çizgi" diye okuyordu — kullanıcı düğmenin ne yaptığını
-             anlayamıyordu. Görsel "/" korunuyor, ad ayrıca veriliyor. -->
+      <nav class="breadcrumb" :aria-label="t('panel.backup.browsePath')">
         <button
           class="secondary compact"
           :disabled="busy"
           :aria-label="t('panel.backup.browseRoot')"
           :title="t('panel.backup.browseRoot')"
-          @click="navigateTo('')">/</button>
+          :aria-current="!browsePrefix ? 'location' : undefined"
+          @click="navigateTo('')">{{ t('panel.backup.browseRoot') }}</button>
         <button
           v-for="crumb in breadcrumbs"
           :key="crumb.prefix"
           class="secondary compact"
           :disabled="busy"
+          :aria-current="crumb.prefix === browsePrefix ? 'location' : undefined"
           @click="navigateTo(crumb.prefix)">
           {{ crumb.name }}
         </button>
-      </div>
+      </nav>
 
-      <div class="data-table">
+      <div class="data-table archive-entries" :aria-busy="browseLoading">
         <div class="data-row table-head entry-row">
           <span></span>
           <span>{{ t("panel.backup.name") }}</span>
@@ -693,13 +681,13 @@
             <span class="cell-muted">{{ group.entries.length }}</span>
           </div>
           <div v-for="entry in group.entries" :key="entry.path" class="data-row entry-row">
-            <input v-model="selectedItems" type="checkbox" :value="entry.path" :aria-label="entry.name" />
+            <input v-model="selectedItems" type="checkbox" :value="entry.path" :aria-label="entry.name" :disabled="busy || restoreItemsBusy || locked" />
             <button
               v-if="entry.isDirectory"
               class="secondary compact entry-link"
               :disabled="busy"
               @click="navigateTo(entry.path)">
-              📁 {{ entry.name }}
+              <span aria-hidden="true">📁</span><span>{{ entry.name }}</span>
             </button>
             <strong v-else class="entry-file">{{ entry.name }}</strong>
             <span class="cell-muted">{{ entry.isDirectory ? "—" : formatBytes(entry.size) }}</span>
@@ -715,21 +703,35 @@
       </div>
       <p v-if="browseTruncated" class="field-hint">{{ t("panel.backup.browseTruncated") }}</p>
 
-      <div class="form-grid two">
-        <label class="stacked-field">
+      <section class="archive-selection" :aria-label="t('panel.backup.selectedItemsTitle')">
+        <div class="section-head">
+          <h4>{{ t('panel.backup.selectedItemsTitle') }} <span class="status-pill">{{ selectedItems.length }}</span></h4>
+          <button v-if="selectedItems.length" type="button" class="secondary compact" :disabled="busy || restoreItemsBusy" @click="selectedItems = []">
+            {{ t("panel.bulk.clearSelection") }}
+          </button>
+        </div>
+        <p class="field-hint">{{ t(selectedItems.length ? 'panel.backup.selectionKept' : 'panel.backup.selectionEmpty') }}</p>
+        <ul v-if="selectedItems.length" class="selected-paths">
+          <li v-for="path in selectedItems" :key="path">
+            <code>{{ path }}</code>
+            <button type="button" class="secondary compact" :disabled="busy || restoreItemsBusy" :aria-label="t('panel.backup.removeSelection', { path })" @click="selectedItems = selectedItems.filter(item => item !== path)">×</button>
+          </li>
+        </ul>
+      </section>
+
+      <div class="archive-destination">
+        <label v-if="canChooseItemsTarget" class="stacked-field">
           <span class="field-label">{{ t("panel.backup.itemsTarget") }}</span>
-          <input v-model.trim="itemsTargetPath" :placeholder="t('panel.backup.itemsTargetOriginal')" />
+          <input v-model.trim="itemsTargetPath" :disabled="busy || restoreItemsBusy" :placeholder="t('panel.backup.itemsTargetOriginal')" />
         </label>
+        <p class="field-hint">{{ t(canChooseItemsTarget && itemsTargetPath ? 'panel.backup.customExtractHint' : 'panel.backup.separateExtractHint') }}</p>
       </div>
       <div class="row-actions">
         <button
           class="compact"
-          v-bind="writeGate(busy || restoreItemsBusy || selectedItems.length === 0)"
+          v-bind="writeGate(!canRestoreItems)"
           @click="restoreSelectedItems">
           {{ t("panel.backup.restoreSelected") }} ({{ selectedItems.length }})
-        </button>
-        <button v-if="selectedItems.length" class="secondary compact" :disabled="busy" @click="selectedItems = []">
-          {{ t("panel.bulk.clearSelection") }}
         </button>
       </div>
     </section>
@@ -1217,10 +1219,12 @@ const expandedWarnings = ref("");
 const expandedLocation = ref("");
 const search = ref("");
 const viewEpoch = getSessionEpoch();
+const viewSession = authStore.session, viewActorId = viewSession?.user?.id, viewActorRole = viewSession?.user?.role;
 let disposed = false;
 let listRequest = 0;
 let chainRequest = 0;
-const isActive = () => !disposed && viewEpoch === getSessionEpoch();
+const isActive = () => !disposed && viewEpoch === getSessionEpoch() && authStore.session === viewSession &&
+  authStore.session?.isAuthenticated === true && authStore.session.user?.id === viewActorId && authStore.session.user?.role === viewActorRole;
 const canWrite = () => isActive() && !locked.value;
 const canAdminWrite = () => canWrite() && isAdmin.value;
 onBeforeUnmount(() => { disposed = true; });
@@ -1620,6 +1624,9 @@ const browseLoad = useSectionError();
 const selectedItems = ref<string[]>([]);
 const itemsTargetPath = ref("");
 const restoreItemsBusy = ref(false);
+const canChooseItemsTarget = computed(() => isActive() && isAdmin.value);
+const canRestoreItems = computed(() => canWrite() && !busy.value && !restoreItemsBusy.value &&
+  browseRecord.value?.format === "zip" && selectedItems.value.length > 0);
 
 /**
  * Arşiv kökündeki girdilerin ÖNEK gruplaması.
@@ -2594,7 +2601,8 @@ async function confirmRemoveChain(backup: BackupRecord, dependentsDetail: string
 }
 
 async function download(backup: BackupRecord) {
-  await withOperation(() => downloadBackup(backup.id, backup.name), false);
+  const id = backup.id, name = backup.name;
+  await withOperation(() => downloadBackup(id, name, isActive), false);
 }
 
 function buildTargetPayload() {
@@ -2674,11 +2682,11 @@ async function navigateTo(prefix: string) {
  */
 async function restoreSelectedItems() {
   const record = browseRecord.value;
-  if (!canWrite() || busy.value || !record || restoreItemsBusy.value || selectedItems.value.length === 0) return;
+  if (!canRestoreItems.value || !record) return;
   const request = browseRequest, epoch = getSessionEpoch();
   const isCurrent = () => canWrite() && request === browseRequest && browseRecord.value?.id === record.id && epoch === getSessionEpoch();
   const items = [...selectedItems.value];
-  const targetPath = itemsTargetPath.value;
+  const targetPath = canChooseItemsTarget.value ? itemsTargetPath.value : "";
 
   await withOperation(async () => {
     // Şifreli yedekte parola önce sorulur (gözatma kayıtlı parolayla çalışmış olabilir, ama
@@ -2699,14 +2707,15 @@ async function restoreSelectedItems() {
       `${t("panel.backup.itemsTarget")}: ${targetPath || t("panel.backup.itemsTargetOriginal")}`
     ];
 
-    // Yüksek riskli onay: seçilen öğeler hedeftekilerin ÜZERİNE yazılır → yedek adı yazılmadan devam edilemez.
+    // A custom target can overwrite files; the server-selected folder is a separate extraction.
     await confirm({
-      title: t("panel.confirm.restoreBackupTitle", { name: record.name }),
-      message: t("panel.backup.confirmRestoreItems"),
+      title: targetPath ? t("panel.confirm.restoreBackupTitle", { name: record.name }) : t("panel.backup.extractTitle"),
+      message: t(targetPath ? "panel.backup.confirmRestoreItems" : "panel.backup.confirmExtractItems"),
+      tone: targetPath ? "danger" : "neutral",
       impact,
-      requireText: record.name,
-      confirmLabel: t("panel.backup.restore"),
-      busyLabel: t("panel.backup.restoring"),
+      requireText: targetPath ? record.name : undefined,
+      confirmLabel: t(targetPath ? "panel.backup.restore" : "panel.backup.restoreSelected"),
+      busyLabel: t(targetPath ? "panel.backup.restoring" : "panel.backup.extracting"),
       action: async () => {
         if (!isCurrent() || restoreItemsBusy.value) return;
         restoreItemsBusy.value = true;
@@ -3102,8 +3111,9 @@ function statusTone(status: string) {
 }
 
 .entry-row {
-  grid-template-columns: auto minmax(240px, 1fr) 120px;
-  min-width: 480px;
+  grid-template-columns: 24px minmax(0, 1fr) 80px;
+  min-width: 0;
+  align-items: center;
 }
 
 .entry-row input[type="checkbox"] {
@@ -3248,6 +3258,12 @@ function statusTone(status: string) {
 .entry-link {
   justify-self: start;
   text-align: left;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: inline-flex;
+  gap: var(--sp-6);
 }
 
 .entry-file {
@@ -3262,6 +3278,83 @@ function statusTone(status: string) {
 
 .breadcrumb button {
   width: auto;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.breadcrumb [aria-current="location"] {
+  border-color: var(--accent-1);
+  color: var(--text-strong);
+}
+
+.archive-name {
+  margin: var(--sp-4) 0;
+  color: var(--text-soft);
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.archive-selection,
+.archive-destination {
+  display: grid;
+  gap: var(--sp-8);
+  padding: var(--sp-12);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-0);
+  min-width: 0;
+}
+
+.archive-selection h4 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  margin: 0;
+}
+
+.selected-paths {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--sp-6);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.selected-paths li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  min-width: 0;
+}
+
+.selected-paths code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--fs-xs);
+}
+
+.selected-paths button {
+  flex: 0 0 auto;
+  width: 36px;
+  min-height: 36px;
+}
+
+@media (max-width: 520px) {
+  .archive-entries .entry-row {
+    grid-template-columns: 22px minmax(0, 1fr) 58px;
+    gap: var(--sp-6);
+    padding-inline: var(--sp-6);
+  }
+
+  .archive-entries .cell-muted {
+    font-size: var(--fs-2xs);
+    text-align: right;
+  }
 }
 
 .backup-browser,
