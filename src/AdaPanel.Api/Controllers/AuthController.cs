@@ -1,8 +1,10 @@
 using System.Security.Claims;
 using AdaPanel.Api.Security;
 using AdaPanel.Api.Extensions;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Auth;
 using AdaPanel.Core.Dtos.Common;
+using AdaPanel.Core.Entities;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Security;
 using Microsoft.AspNetCore.Antiforgery;
@@ -378,7 +380,7 @@ public sealed class AuthController(
     [HttpPost("2fa/begin")]
     public async Task<ActionResult<ApiResponse<TwoFactorSetupDto>>> BeginTwoFactorSetupAsync(CancellationToken cancellationToken)
     {
-        var result = await authService.BeginTwoFactorSetupAsync(User.GetRequiredUserId(), cancellationToken);
+        var result = await authService.BeginTwoFactorSetupAsync(User.GetRequiredUserId(), CaptureTwoFactorApproval(), cancellationToken);
         return Ok(ApiResponse<TwoFactorSetupDto>.Ok(result));
     }
 
@@ -392,6 +394,7 @@ public sealed class AuthController(
             User.GetRequiredUserId(),
             request.Code,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
+            CaptureTwoFactorApproval(),
             cancellationToken);
 
         var authentication = await HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
@@ -404,7 +407,8 @@ public sealed class AuthController(
     public async Task<ActionResult<ApiResponse<RecoveryCodesDto>>> RegenerateRecoveryCodesAsync(CancellationToken cancellationToken)
     {
         var userId = User.GetRequiredUserId();
-        var result = await authService.RegenerateRecoveryCodesAsync(userId, cancellationToken);
+        var result = await authService.RegenerateRecoveryCodesAsync(userId,
+            HttpContext.Connection.RemoteIpAddress?.ToString(), CaptureTwoFactorApproval(), cancellationToken);
 
         // İZ YOKTU. Kurtarma kodları 2FA'yı ATLAMANIN yoludur: yenilemek eskilerini geçersiz kılar
         // ve YENİ bir geçerli küme üretir. Ele geçirilmiş bir oturum bunu tek adımda yaparak kalıcı
@@ -414,13 +418,8 @@ public sealed class AuthController(
         // KİRACI BAĞI YOK: kimlik doğrulama kullanıcının KENDİ hesabına aittir, bir aboneliğin
         // kaynağına değil; aktör (UserId) zaten konunun ta kendisidir ve kayıt kullanıcının
         // görünümünde bu yüzden çıkar.
-        await auditService.WriteAsync(
-            "auth.2fa.recovery_regenerated",
-            "auth",
-            $"Two-factor recovery codes were regenerated ({result.Codes.Count} code(s)); previous codes are void.",
-            userId,
-            HttpContext.Connection.RemoteIpAddress?.ToString(),
-            cancellationToken);
+        // The service commits this audit together with the new recovery generation, so an
+        // audit failure cannot invalidate the old codes without returning the new codes.
 
         return Ok(ApiResponse<RecoveryCodesDto>.Ok(result, "auth.2fa.recovery_regenerated"));
     }
@@ -445,11 +444,32 @@ public sealed class AuthController(
             User.GetRequiredUserId(),
             request.Password,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
+            CaptureTwoFactorApproval(),
             cancellationToken);
 
         var authentication = await HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         await SignInAsync(user, authentication.Properties?.IsPersistent ?? false);
         return Ok(ApiResponse<CurrentUserDto>.Ok(user, "auth.2fa.disabled"));
+    }
+
+    private Func<PanelUser, CancellationToken, Task> CaptureTwoFactorApproval()
+    {
+        // Immutable request authority: a queued action must not adopt a newer password,
+        // role or login session merely because the service reloaded the same user ID.
+        var userId = User.GetRequiredUserId();
+        var authenticated = User.Identity?.IsAuthenticated == true;
+        var role = User.FindFirstValue(ClaimTypes.Role);
+        var stamp = User.FindFirstValue(CookieSessionValidator.CredentialStampClaim);
+        var sessionId = User.FindFirstValue(SessionRevocationStore.SessionIdClaim);
+        return async (current, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            if (!authenticated || current.Id != userId || !current.IsActive || role != current.Role.ToString() ||
+                string.IsNullOrWhiteSpace(stamp) || stamp != CookieSessionValidator.ComputeStamp(current.PasswordHash) ||
+                string.IsNullOrWhiteSpace(sessionId) || await sessionRevocations.IsRevokedAsync(sessionId, token))
+                throw new AppException("auth.unauthorized", 401, 401);
+            token.ThrowIfCancellationRequested();
+        };
     }
 
     /// <summary>

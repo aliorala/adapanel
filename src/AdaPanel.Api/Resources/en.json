@@ -276,5 +276,9 @@
   "errorReporting.settings_revision_required": "The displayed reporting settings could not be verified. Refresh them and try again.",
   "health.restart_unverified": "The restart command completed, but the service could not be verified as running. Check its current status.",
 
-  "system.ip_addresses_unmeasured": "Server IP addresses could not be read. Try again."
+  "system.ip_addresses_unmeasured": "Server IP addresses could not be read. Try again.",
+
+  "auth.two_factor_already_enabled": "Two-factor authentication is already enabled. Disable it with your current password before setting it up again.",
+  "auth.two_factor_setup_changed": "The account's authentication settings changed. Refresh the status and try again.",
+  "auth.two_factor_recovery_incomplete": "The authentication settings could not be saved completely. Refresh the account status; contact your server administrator if you cannot sign in."
 }

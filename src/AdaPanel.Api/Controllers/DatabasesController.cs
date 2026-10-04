@@ -195,9 +195,19 @@ public sealed class DatabasesController(
     [HttpPost]
     public async Task<ActionResult<ApiResponse<DatabaseWorkspaceDto>>> CreateDatabaseAsync(
         [FromBody] CreateDatabaseRequest request,
+        [FromServices] AdaPanelDbContext dbContext,
+        [FromServices] ICustomerScopeService customerScopes,
         CancellationToken cancellationToken)
     {
-        var workspace = await databaseService.CreateDatabaseAsync(request, cancellationToken);
+        var authority = await DatabaseActorAuthority.CaptureAsync(dbContext, customerScopes, User, cancellationToken);
+        DatabaseWorkspaceDto workspace;
+        using (await DatabaseLifecycle.EnterSubscriptionAsync(authority.SubscriptionId, cancellationToken))
+        {
+            await authority.RevalidateAsync(dbContext, customerScopes, User, cancellationToken);
+            workspace = await databaseService.CreateDatabaseAsync(request,
+                token => authority.RevalidateAsync(dbContext, customerScopes, User, token),
+                _ => Task.CompletedTask, cancellationToken);
+        }
         await WriteDatabaseAuditAsync("database.create.completed", request.Engine, request.Name, "Database was created.", cancellationToken);
         return Ok(ApiResponse<DatabaseWorkspaceDto>.Ok(workspace, "database.create.success"));
     }

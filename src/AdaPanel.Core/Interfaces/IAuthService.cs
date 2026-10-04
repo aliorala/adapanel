@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using AdaPanel.Core.Dtos.Auth;
+using AdaPanel.Core.Entities;
 
 namespace AdaPanel.Core.Interfaces;
 
@@ -14,12 +15,31 @@ public interface IAuthService
 
     Task<TwoFactorSetupDto> BeginTwoFactorSetupAsync(Guid userId, CancellationToken cancellationToken = default);
 
+    Task<TwoFactorSetupDto> BeginTwoFactorSetupAsync(Guid userId,
+        Func<PanelUser, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken)
+        => throw new NotSupportedException("Authorized two-factor mutations require live actor validation.");
+
     Task<TwoFactorConfirmDto> ConfirmTwoFactorSetupAsync(Guid userId, string code, string? ipAddress, CancellationToken cancellationToken = default);
+
+    Task<TwoFactorConfirmDto> ConfirmTwoFactorSetupAsync(Guid userId, string code, string? ipAddress,
+        Func<PanelUser, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken)
+        => throw new NotSupportedException("Authorized two-factor mutations require live actor validation.");
 
     Task<CurrentUserDto> DisableTwoFactorAsync(Guid userId, string password, string? ipAddress, CancellationToken cancellationToken = default);
 
+    Task<CurrentUserDto> DisableTwoFactorAsync(Guid userId, string password, string? ipAddress,
+        Func<PanelUser, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken)
+        => throw new NotSupportedException("Authorized two-factor mutations require live actor validation.");
+
     /// <summary>Kurtarma kodlarını yeniden üretir (eskileri geçersiz olur).</summary>
     Task<RecoveryCodesDto> RegenerateRecoveryCodesAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    Task<RecoveryCodesDto> RegenerateRecoveryCodesAsync(Guid userId, string? ipAddress, CancellationToken cancellationToken = default)
+        => RegenerateRecoveryCodesAsync(userId, cancellationToken);
+
+    Task<RecoveryCodesDto> RegenerateRecoveryCodesAsync(Guid userId, string? ipAddress,
+        Func<PanelUser, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken)
+        => throw new NotSupportedException("Authorized two-factor mutations require live actor validation.");
 
     /// <summary>
     /// Parola sıfırlama bağlantısı ister. Kullanıcı numaralandırmasını engellemek için

@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
-import { AxiosError } from "axios";
-import { apiClient, clearCsrfToken } from "../api/client";
+import { AxiosError, CanceledError } from "axios";
+import { toRaw } from "vue";
+import { apiClient, clearCsrfToken, getSessionEpoch } from "../api/client";
 import { deleteUser as deleteUserRequest } from "../api/users";
 import { resolveFailureDetail, resolveFailureKey, UserFacingError, type TransportFailure } from "../utils/apiError";
 import { resetAllStores } from "./resetAll";
@@ -143,6 +144,40 @@ type UpdateUserPayload = {
   maxScheduledTasks: number;
 };
 
+type AccountStore = { session: CurrentSession | null; twoFactorSetup: TwoFactorSetup | null };
+const accountRequests = new WeakMap<object, { current: () => boolean }>();
+function accountRequest(store: AccountStore, canPublish: () => boolean) {
+  const key = toRaw(store), originalSession = store.session, actor = originalSession?.user;
+  const epoch = getSessionEpoch(), id = actor?.id, role = actor?.role;
+  if (!originalSession?.isAuthenticated || !actor || !canPublish()) throw new CanceledError("Account context changed");
+  if (accountRequests.get(key)?.current()) throw new UserFacingError("panel.account.resultUnconfirmed");
+  const request = { current: () => accountRequests.get(key) === request && epoch === getSessionEpoch() &&
+    store.session === originalSession && store.session?.isAuthenticated === true &&
+    store.session.user?.id === id && store.session.user?.role === role && canPublish() };
+  accountRequests.set(key, request);
+  return { actor: { ...actor }, assertCurrent() { if (!request.current()) throw new CanceledError("Account context changed"); },
+    release() { if (accountRequests.get(key) === request) accountRequests.delete(key); } };
+}
+function accountPayload<T>(response: { data: ApiEnvelope<T> }): T {
+  if (response.data?.success !== true || !response.data.data) throw new UserFacingError("panel.account.resultUnconfirmed");
+  return response.data.data;
+}
+function validAccountUser(value: unknown, actor: CurrentUser, enabled?: boolean): value is CurrentUser {
+  const user = value as CurrentUser | null;
+  return !!user && user.id === actor.id && user.role === actor.role && user.isActive === true &&
+    typeof user.isTwoFactorEnabled === "boolean" && (enabled === undefined || user.isTwoFactorEnabled === enabled) &&
+    [user.userName, user.email, user.preferredLanguage].every(item => typeof item === "string" && item.trim().length > 0);
+}
+function validRecoveryCodes(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 && value.every(code => typeof code === "string" && code.trim().length > 0 && code === code.trim()) && new Set(value).size === value.length;
+}
+function validSetup(value: TwoFactorSetup): boolean {
+  if (value.isTwoFactorEnabled !== false || value.hasPendingSetup !== true || typeof value.manualEntryKey !== "string" || !value.manualEntryKey.trim()) return false;
+  try { const uri = new URL(value.provisioningUri); return uri.protocol === "otpauth:" && uri.hostname === "totp" && uri.searchParams.get("secret") === value.manualEntryKey; }
+  catch { return false; }
+}
+function requireAccountResult(valid: boolean) { if (!valid) throw new UserFacingError("panel.account.resultUnconfirmed"); }
+
 export const useAuthStore = defineStore("auth", {
   state: () => ({
     session: null as CurrentSession | null,
@@ -209,36 +244,68 @@ export const useAuthStore = defineStore("auth", {
       // yolunun onu sessizce atlaması demekti.
       resetAllStores();
     },
-    async beginTwoFactorSetup() {
-      const response = await apiClient.post<ApiEnvelope<TwoFactorSetup>>("/auth/2fa/begin", {});
-      this.twoFactorSetup = response.data.data;
-      return this.twoFactorSetup;
+    async fetchAccountSession(canPublish: () => boolean = () => true) {
+      const request = accountRequest(this, canPublish);
+      try {
+        const response = await apiClient.get<ApiEnvelope<CurrentSession>>("/auth/session");
+        request.assertCurrent();
+        const result = accountPayload(response);
+        requireAccountResult(result.isAuthenticated === true && validAccountUser(result.user, request.actor));
+        this.session!.user = { ...result.user! };
+        return result;
+      } finally { request.release(); }
     },
-    async confirmTwoFactorSetup(code: string) {
-      const response = await apiClient.post<ApiEnvelope<{ user: CurrentUser; recoveryCodes: string[] }>>("/auth/2fa/confirm", { code });
-      if (this.session) {
-        this.session.user = response.data.data.user;
-      }
-      this.twoFactorSetup = null;
-      return response.data.data.recoveryCodes ?? [];
+    async beginTwoFactorSetup(canPublish: () => boolean = () => true) {
+      const request = accountRequest(this, canPublish);
+      try {
+        const response = await apiClient.post<ApiEnvelope<TwoFactorSetup>>("/auth/2fa/begin", {});
+        request.assertCurrent();
+        const result = accountPayload(response); requireAccountResult(validSetup(result));
+        this.twoFactorSetup = { ...result };
+        return this.twoFactorSetup;
+      } finally { request.release(); }
     },
-    async regenerateRecoveryCodes() {
-      const response = await apiClient.post<ApiEnvelope<{ codes: string[] }>>("/auth/2fa/recovery-codes", {});
-      return response.data.data.codes ?? [];
+    async confirmTwoFactorSetup(code: string, canPublish: () => boolean = () => true) {
+      const request = accountRequest(this, canPublish);
+      try {
+        const response = await apiClient.post<ApiEnvelope<{ user: CurrentUser; recoveryCodes: string[] }>>("/auth/2fa/confirm", { code });
+        request.assertCurrent();
+        const result = accountPayload(response);
+        requireAccountResult(validAccountUser(result.user, request.actor, true) && validRecoveryCodes(result.recoveryCodes));
+        this.session!.user = { ...result.user };
+        this.twoFactorSetup = null;
+        return [...result.recoveryCodes];
+      } finally { request.release(); }
     },
-    async disableTwoFactor(password: string) {
-      const response = await apiClient.post<ApiEnvelope<CurrentUser>>("/auth/2fa/disable", { password });
-      if (this.session) {
-        this.session.user = response.data.data;
-      }
-      return response.data.data;
+    async regenerateRecoveryCodes(canPublish: () => boolean = () => true) {
+      const request = accountRequest(this, canPublish);
+      try {
+        const response = await apiClient.post<ApiEnvelope<{ codes: string[] }>>("/auth/2fa/recovery-codes", {});
+        request.assertCurrent();
+        const result = accountPayload(response); requireAccountResult(validRecoveryCodes(result.codes));
+        return [...result.codes];
+      } finally { request.release(); }
     },
-    async changePassword(currentPassword: string, newPassword: string) {
-      const response = await apiClient.post<ApiEnvelope<{ revokedApiTokens: number }>>("/auth/change-password", {
-        currentPassword,
-        newPassword
-      });
-      return response.data.data;
+    async disableTwoFactor(password: string, canPublish: () => boolean = () => true) {
+      const request = accountRequest(this, canPublish);
+      try {
+        const response = await apiClient.post<ApiEnvelope<CurrentUser>>("/auth/2fa/disable", { password });
+        request.assertCurrent();
+        const result = accountPayload(response); requireAccountResult(validAccountUser(result, request.actor, false));
+        this.session!.user = { ...result };
+        this.twoFactorSetup = null;
+        return result;
+      } finally { request.release(); }
+    },
+    async changePassword(currentPassword: string, newPassword: string, canPublish: () => boolean = () => true) {
+      const request = accountRequest(this, canPublish);
+      try {
+        const response = await apiClient.post<ApiEnvelope<{ revokedApiTokens: number }>>("/auth/change-password", { currentPassword, newPassword });
+        request.assertCurrent();
+        const result = accountPayload(response);
+        requireAccountResult(Number.isSafeInteger(result.revokedApiTokens) && result.revokedApiTokens >= 0);
+        return result;
+      } finally { request.release(); }
     },
     async fetchUsers() {
       const response = await apiClient.get<ApiEnvelope<ManagedUser[]>>("/users");

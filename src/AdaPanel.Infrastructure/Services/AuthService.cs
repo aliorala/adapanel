@@ -99,6 +99,13 @@ public sealed class AuthService(
             throw new InvalidOperationException("auth.invalid_credentials");
         }
 
+        using var twoFactorLease = await EnterTwoFactorAsync(user.Id, cancellationToken);
+        // A queued login must verify the current password and current factor, not the
+        // entity loaded before a setup/disable/regeneration acquired this same lease.
+        await dbContext.Entry(user).ReloadAsync(cancellationToken);
+        if (dbContext.Entry(user).State == EntityState.Detached)
+            throw new InvalidOperationException("auth.invalid_credentials");
+
         // HESAP KİLİDİ: kilitliyken parola YİNE DE doğrulanır. DOĞRU parola (ve varsa 2FA) kilidi
         // kaldırıp girişe izin verir; YANLIŞ parola kilidi olduğu gibi bırakır.
         // Neden güvenli: asıl hız sınırlayıcı IP katmanıdır (BruteForceProtectionService varsayılan
@@ -188,10 +195,10 @@ public sealed class AuthService(
             // ve aşağıdaki başarısızlık yolu — kilit sayacı, IP sayacı, denetim kaydı — aynen işler.
             var totpStep = totpService.VerifyCode(secret, request.TwoFactorCode);
             var totpValid = totpStep is { } adim &&
-                await TwoFactorRecoveryCodes.TryConsumeTotpStepAsync(fileStore, user.Id, adim, cancellationToken);
+                await TwoFactorRecoveryCodes.TryConsumeTotpStepAsync(fileStore, user.Id, adim, SecretStamp(protectedSecret), cancellationToken);
 
             // TOTP geçersizse, girilen değeri bir kurtarma kodu olarak dene (tek kullanımlık).
-            var recoveryUsed = !totpValid && await TryConsumeRecoveryCodeAsync(user.Id, request.TwoFactorCode, cancellationToken);
+            var recoveryUsed = !totpValid && await TryConsumeRecoveryCodeAsync(user.Id, request.TwoFactorCode, SecretStamp(protectedSecret), cancellationToken);
             if (!totpValid && !recoveryUsed)
             {
                 // İKİNCİ ADIM DA HESAP KİLİDİNİ BESLER.
@@ -326,27 +333,58 @@ public sealed class AuthService(
         return MapCurrentUser(user);
     }
 
-    public async Task<TwoFactorSetupDto> BeginTwoFactorSetupAsync(Guid userId, CancellationToken cancellationToken = default)
+    public Task<TwoFactorSetupDto> BeginTwoFactorSetupAsync(Guid userId, CancellationToken cancellationToken = default)
+        => BeginTwoFactorSetupCoreAsync(userId, null, cancellationToken);
+
+    public Task<TwoFactorSetupDto> BeginTwoFactorSetupAsync(Guid userId,
+        Func<PanelUser, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken)
+        => BeginTwoFactorSetupCoreAsync(userId, beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken);
+
+    private async Task<TwoFactorSetupDto> BeginTwoFactorSetupCoreAsync(Guid userId,
+        Func<PanelUser, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
-        var user = await GetUserAsync(userId, cancellationToken);
-        var secret = totpService.GenerateSecret();
-
-        user.PendingTwoFactorSecretProtected = secretProtector.Protect(secret);
-        user.UpdatedAtUtc = DateTime.UtcNow;
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        return new TwoFactorSetupDto
+        using var lease = await EnterTwoFactorAsync(userId, cancellationToken);
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        var user = await GetFreshTwoFactorUserAsync(userId, cancellationToken, beforeMutation);
+        EnsureTwoFactorDisabled(user);
+        try
         {
-            IsTwoFactorEnabled = user.IsTwoFactorEnabled,
-            HasPendingSetup = true,
-            ManualEntryKey = secret,
-            ProvisioningUri = totpService.BuildProvisioningUri(runtimeOptions.TotpIssuer, user.Email, secret)
-        };
+            var secret = totpService.GenerateSecret();
+            var uri = totpService.BuildProvisioningUri(runtimeOptions.TotpIssuer, user.Email, secret);
+            user.PendingTwoFactorSecretProtected = secretProtector.Protect(secret);
+            user.UpdatedAtUtc = DateTime.UtcNow;
+            await dbContext.SaveChangesAsync(cancellationToken);
+            if (beforeMutation is not null) await beforeMutation(user, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            await transaction.CommitAsync(cancellationToken);
+            return new TwoFactorSetupDto
+            {
+                IsTwoFactorEnabled = false, HasPendingSetup = true,
+                ManualEntryKey = secret, ProvisioningUri = uri
+            };
+        }
+        catch
+        {
+            using var recovery = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            await transaction.RollbackAsync(recovery.Token);
+            await dbContext.Entry(user).ReloadAsync(recovery.Token);
+            throw;
+        }
     }
 
-    public async Task<TwoFactorConfirmDto> ConfirmTwoFactorSetupAsync(Guid userId, string code, string? ipAddress, CancellationToken cancellationToken = default)
+    public Task<TwoFactorConfirmDto> ConfirmTwoFactorSetupAsync(Guid userId, string code, string? ipAddress, CancellationToken cancellationToken = default)
+        => ConfirmTwoFactorSetupCoreAsync(userId, code, ipAddress, null, cancellationToken);
+
+    public Task<TwoFactorConfirmDto> ConfirmTwoFactorSetupAsync(Guid userId, string code, string? ipAddress,
+        Func<PanelUser, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken)
+        => ConfirmTwoFactorSetupCoreAsync(userId, code, ipAddress, beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken);
+
+    private async Task<TwoFactorConfirmDto> ConfirmTwoFactorSetupCoreAsync(Guid userId, string code, string? ipAddress,
+        Func<PanelUser, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
-        var user = await GetUserAsync(userId, cancellationToken);
+        using var lease = await EnterTwoFactorAsync(userId, cancellationToken);
+        var user = await GetFreshTwoFactorUserAsync(userId, cancellationToken, beforeMutation);
+        EnsureTwoFactorDisabled(user);
         if (string.IsNullOrWhiteSpace(user.PendingTwoFactorSecretProtected))
         {
             throw new InvalidOperationException("auth.two_factor_setup_not_started");
@@ -358,20 +396,27 @@ public sealed class AuthService(
         // yapmaya yaraması, tekrar oynatma korumasını daha doğduğu anda delerdi: iki yol tek
         // sayacı paylaşmalı.
         var step = totpService.VerifyCode(secret, code);
-        if (step is not { } adim ||
-            !await TwoFactorRecoveryCodes.TryConsumeTotpStepAsync(fileStore, user.Id, adim, cancellationToken))
+        if (step is not { } adim)
         {
             throw new InvalidOperationException("auth.invalid_two_factor_code");
         }
 
-        user.TwoFactorSecretProtected = user.PendingTwoFactorSecretProtected;
-        user.PendingTwoFactorSecretProtected = null;
-        user.IsTwoFactorEnabled = true;
-        user.UpdatedAtUtc = DateTime.UtcNow;
-
-        var recoveryCodes = await GenerateAndStoreRecoveryCodesAsync(user.Id, cancellationToken);
-
-        await auditService.WriteAsync("auth.2fa.enabled", "auth", $"Two-factor authentication enabled for '{user.UserName}'.", user.Id, ipAddress, cancellationToken);
+        var recoveryCodes = GenerateRecoveryCodes();
+        var protectedSecret = user.PendingTwoFactorSecretProtected;
+        await PublishTwoFactorAsync(user, target =>
+        {
+            target.TwoFactorSecretProtected = protectedSecret;
+            target.PendingTwoFactorSecretProtected = null;
+            target.IsTwoFactorEnabled = true;
+        }, current =>
+        {
+            if (adim <= current.LastUsedTotpStep) throw new InvalidOperationException("auth.invalid_two_factor_code");
+            return new TwoFactorRecoveryCodes.Store
+            {
+                Codes = recoveryCodes.Select(HashRecoveryCode).ToList(), LastUsedTotpStep = adim,
+                SecretStamp = SecretStamp(protectedSecret!)
+            };
+        }, "auth.2fa.enabled", $"Two-factor authentication enabled for '{user.UserName}'.", ipAddress, cancellationToken, beforeMutation);
         return new TwoFactorConfirmDto
         {
             User = MapCurrentUser(user),
@@ -379,35 +424,61 @@ public sealed class AuthService(
         };
     }
 
-    public async Task<RecoveryCodesDto> RegenerateRecoveryCodesAsync(Guid userId, CancellationToken cancellationToken = default)
+    public Task<RecoveryCodesDto> RegenerateRecoveryCodesAsync(Guid userId, CancellationToken cancellationToken = default)
+        => RegenerateRecoveryCodesAsync(userId, null, cancellationToken);
+
+    public Task<RecoveryCodesDto> RegenerateRecoveryCodesAsync(Guid userId, string? ipAddress, CancellationToken cancellationToken = default)
+        => RegenerateRecoveryCodesCoreAsync(userId, ipAddress, null, cancellationToken);
+
+    public Task<RecoveryCodesDto> RegenerateRecoveryCodesAsync(Guid userId, string? ipAddress,
+        Func<PanelUser, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken)
+        => RegenerateRecoveryCodesCoreAsync(userId, ipAddress, beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken);
+
+    private async Task<RecoveryCodesDto> RegenerateRecoveryCodesCoreAsync(Guid userId, string? ipAddress,
+        Func<PanelUser, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
-        var user = await GetUserAsync(userId, cancellationToken);
-        if (!user.IsTwoFactorEnabled)
+        using var lease = await EnterTwoFactorAsync(userId, cancellationToken);
+        var user = await GetFreshTwoFactorUserAsync(userId, cancellationToken, beforeMutation);
+        if (!user.IsTwoFactorEnabled || string.IsNullOrWhiteSpace(user.TwoFactorSecretProtected))
         {
             throw new InvalidOperationException("auth.two_factor_not_configured");
         }
 
-        var codes = await GenerateAndStoreRecoveryCodesAsync(userId, cancellationToken);
+        var codes = GenerateRecoveryCodes();
+        await PublishTwoFactorAsync(user, _ => { }, current => new TwoFactorRecoveryCodes.Store
+        {
+            Codes = codes.Select(HashRecoveryCode).ToList(), LastUsedTotpStep = current.LastUsedTotpStep,
+            SecretStamp = SecretStamp(user.TwoFactorSecretProtected!)
+        }, "auth.2fa.recovery_regenerated",
+            $"Two-factor recovery codes were regenerated ({codes.Count} code(s)); previous codes are void.", ipAddress, cancellationToken, beforeMutation);
         return new RecoveryCodesDto { Codes = codes };
     }
 
-    public async Task<CurrentUserDto> DisableTwoFactorAsync(Guid userId, string password, string? ipAddress, CancellationToken cancellationToken = default)
+    public Task<CurrentUserDto> DisableTwoFactorAsync(Guid userId, string password, string? ipAddress, CancellationToken cancellationToken = default)
+        => DisableTwoFactorCoreAsync(userId, password, ipAddress, null, cancellationToken);
+
+    public Task<CurrentUserDto> DisableTwoFactorAsync(Guid userId, string password, string? ipAddress,
+        Func<PanelUser, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken)
+        => DisableTwoFactorCoreAsync(userId, password, ipAddress, beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken);
+
+    private async Task<CurrentUserDto> DisableTwoFactorCoreAsync(Guid userId, string password, string? ipAddress,
+        Func<PanelUser, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
-        var user = await GetUserAsync(userId, cancellationToken);
+        using var lease = await EnterTwoFactorAsync(userId, cancellationToken);
+        var user = await GetFreshTwoFactorUserAsync(userId, cancellationToken, beforeMutation);
         var passwordResult = passwordHasher.VerifyHashedPassword(user, user.PasswordHash, password);
         if (passwordResult == PasswordVerificationResult.Failed)
         {
             throw new InvalidOperationException("auth.invalid_credentials");
         }
 
-        user.IsTwoFactorEnabled = false;
-        user.TwoFactorSecretProtected = null;
-        user.PendingTwoFactorSecretProtected = null;
-        user.UpdatedAtUtc = DateTime.UtcNow;
-
-        await TwoFactorRecoveryCodes.ClearAsync(fileStore, user.Id, cancellationToken);
-
-        await auditService.WriteAsync("auth.2fa.disabled", "auth", $"Two-factor authentication disabled for '{user.UserName}'.", user.Id, ipAddress, cancellationToken);
+        await PublishTwoFactorAsync(user, target =>
+        {
+            target.IsTwoFactorEnabled = false;
+            target.TwoFactorSecretProtected = null;
+            target.PendingTwoFactorSecretProtected = null;
+        }, _ => new TwoFactorRecoveryCodes.Store(), "auth.2fa.disabled",
+            $"Two-factor authentication disabled for '{user.UserName}'.", ipAddress, cancellationToken, beforeMutation);
         return MapCurrentUser(user);
     }
 
@@ -627,34 +698,168 @@ public sealed class AuthService(
         return MapCurrentUser(user);
     }
 
-    private async Task<IReadOnlyCollection<string>> GenerateAndStoreRecoveryCodesAsync(Guid userId, CancellationToken cancellationToken)
+    private Task<IDisposable> EnterTwoFactorAsync(Guid userId, CancellationToken cancellationToken) =>
+        TwoFactorLifecycle.EnterAsync(fileStore.ResolvePath(TwoFactorRecoveryCodes.PathFor(userId)), cancellationToken);
+
+    private async Task<PanelUser> GetFreshTwoFactorUserAsync(Guid userId, CancellationToken cancellationToken,
+        Func<PanelUser, CancellationToken, Task>? beforeMutation = null)
+    {
+        var user = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == userId, cancellationToken);
+        if (user is null)
+        {
+            if (beforeMutation is not null) throw new AppException("auth.unauthorized", 401, 401);
+            throw new InvalidOperationException("auth.user_not_found");
+        }
+        await dbContext.Entry(user).ReloadAsync(cancellationToken);
+        if (dbContext.Entry(user).State == EntityState.Detached)
+        {
+            if (beforeMutation is not null) throw new AppException("auth.unauthorized", 401, 401);
+            throw new InvalidOperationException("auth.user_not_found");
+        }
+        if (beforeMutation is not null) await beforeMutation(user, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!user.IsActive) throw new InvalidOperationException("auth.user_inactive");
+        return user;
+    }
+
+    private static void EnsureTwoFactorDisabled(PanelUser user)
+    {
+        if (user.IsTwoFactorEnabled) throw new AppException("auth.two_factor_already_enabled", 409, 409);
+    }
+
+    private static string SecretStamp(string protectedSecret) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(protectedSecret)));
+
+    private sealed record TwoFactorUserSnapshot(bool Enabled, string? Secret, string? Pending, string Password,
+        bool Active, UserRole Role, DateTime Updated)
+    {
+        internal static TwoFactorUserSnapshot Capture(PanelUser user) => new(user.IsTwoFactorEnabled,
+            user.TwoFactorSecretProtected, user.PendingTwoFactorSecretProtected, user.PasswordHash,
+            user.IsActive, user.Role, user.UpdatedAtUtc);
+    }
+
+    private static TwoFactorRecoveryCodes.Store CopyRecovery(TwoFactorRecoveryCodes.Store value) => new()
+    { Codes = [.. value.Codes], LastUsedTotpStep = value.LastUsedTotpStep, SecretStamp = value.SecretStamp };
+
+    private static bool SameRecovery(TwoFactorRecoveryCodes.Store first, TwoFactorRecoveryCodes.Store second) =>
+        first.LastUsedTotpStep == second.LastUsedTotpStep && first.SecretStamp == second.SecretStamp &&
+        first.Codes.SequenceEqual(second.Codes, StringComparer.Ordinal);
+
+    // The caller holds the per-user lease, including login consumption. Stage JSON first,
+    // save SQL + audit in one transaction just before atomic file publication, then commit.
+    // Compensate a known rollback only if the file is still our own exact generation.
+    // This handles operation failures; SQLite and a JSON file are not one crash-atomic store.
+    private async Task PublishTwoFactorAsync(PanelUser user, Action<PanelUser> mutateUser,
+        Func<TwoFactorRecoveryCodes.Store, TwoFactorRecoveryCodes.Store> mutateRecovery,
+        string action, string details, string? ipAddress, CancellationToken cancellationToken,
+        Func<PanelUser, CancellationToken, Task>? beforeMutation = null)
+    {
+        var beforeUser = TwoFactorUserSnapshot.Capture(user);
+        var existingAuditEntries = dbContext.ChangeTracker.Entries<AuditLog>().Select(entry => entry.Entity).ToHashSet();
+        var path = TwoFactorRecoveryCodes.PathFor(user.Id);
+        TwoFactorRecoveryCodes.Store? beforeRecovery = null;
+        TwoFactorRecoveryCodes.Store? publishedRecovery = null;
+        TwoFactorUserSnapshot? appliedUser = null;
+        var published = false;
+        var mutationStarted = false;
+        var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            await dbContext.Entry(user).ReloadAsync(cancellationToken);
+            if (dbContext.Entry(user).State == EntityState.Detached || TwoFactorUserSnapshot.Capture(user) != beforeUser)
+                throw new AppException("auth.two_factor_setup_changed", 409, 409);
+            if (beforeMutation is not null) await beforeMutation(user, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            mutationStarted = true;
+            mutateUser(user);
+            user.UpdatedAtUtc = DateTime.UtcNow > beforeUser.Updated ? DateTime.UtcNow : beforeUser.Updated.AddTicks(1);
+            appliedUser = TwoFactorUserSnapshot.Capture(user);
+            await fileStore.UpdateAsync(path, new TwoFactorRecoveryCodes.Store(), current =>
+            {
+                beforeRecovery = CopyRecovery(current);
+                publishedRecovery = CopyRecovery(mutateRecovery(CopyRecovery(current)));
+                return publishedRecovery;
+            }, async token =>
+            {
+                // Persistence does not depend on the audit implementation sharing our context.
+                await dbContext.SaveChangesAsync(token);
+                await auditService.WriteAsync(action, "auth", details, user.Id, ipAddress, token);
+                if (beforeMutation is not null) await beforeMutation(user, token);
+            }, cancellationToken);
+            published = true;
+            // Once recovery codes have been published, finish the accepted operation even if
+            // the HTTP client disconnects. The finish/compensation phase is still bounded.
+            using var completion = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            await transaction.CommitAsync(completion.Token);
+        }
+        catch
+        {
+            using var recovery = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            if (!mutationStarted)
+            {
+                // A fresh-state conflict preceded our first write. Preserve its 409 contract;
+                // another writer's valid state is not a failed compensation of our operation.
+                await transaction.RollbackAsync(recovery.Token);
+                await dbContext.Entry(user).ReloadAsync(recovery.Token);
+                throw;
+            }
+            try
+            {
+                try { await transaction.RollbackAsync(recovery.Token); }
+                catch { /* A provider can throw after committing. Measure durable SQL below. */ }
+                await transaction.DisposeAsync();
+                var actual = await dbContext.Users.AsNoTracking().SingleOrDefaultAsync(row => row.Id == user.Id, recovery.Token);
+                if (published && actual is not null && appliedUser == TwoFactorUserSnapshot.Capture(actual))
+                {
+                    // A commit acknowledgement failed after the commit itself. Both sides
+                    // must be measured before returning the generated codes as successful.
+                    var current = await fileStore.ReadAsync(path, new TwoFactorRecoveryCodes.Store(), recovery.Token);
+                    if (!SameRecovery(current, publishedRecovery!))
+                        throw new AppException("auth.two_factor_recovery_incomplete", 500, 500);
+                    await dbContext.Entry(user).ReloadAsync(recovery.Token);
+                    return;
+                }
+                await dbContext.Entry(user).ReloadAsync(recovery.Token);
+                // SaveChanges may have accepted the audit entity before the outer rollback.
+                // Detach only this operation's new audit rows, never unrelated tracked state.
+                foreach (var entry in dbContext.ChangeTracker.Entries<AuditLog>().ToArray())
+                    if (!existingAuditEntries.Contains(entry.Entity)) entry.State = EntityState.Detached;
+                if (actual is null || TwoFactorUserSnapshot.Capture(actual) != beforeUser)
+                    throw new AppException("auth.two_factor_recovery_incomplete", 500, 500);
+                if (published)
+                    await fileStore.UpdateAsync(path, new TwoFactorRecoveryCodes.Store(), current =>
+                    {
+                        if (SameRecovery(current, beforeRecovery!)) return current;
+                        if (!SameRecovery(current, publishedRecovery!))
+                            throw new AppException("auth.two_factor_recovery_incomplete", 500, 500);
+                        return beforeRecovery!;
+                    }, recovery.Token);
+            }
+            catch
+            {
+                // Unknown recovery must not leave a stale modified entity for a later save.
+                dbContext.Entry(user).State = EntityState.Detached;
+                foreach (var entry in dbContext.ChangeTracker.Entries<AuditLog>().ToArray())
+                    if (!existingAuditEntries.Contains(entry.Entity)) entry.State = EntityState.Detached;
+                throw new AppException("auth.two_factor_recovery_incomplete", 500, 500);
+            }
+            throw;
+        }
+        finally { await transaction.DisposeAsync(); }
+    }
+
+    private static IReadOnlyCollection<string> GenerateRecoveryCodes()
     {
         var codes = new List<string>(RecoveryCodeCount);
-        var hashes = new List<string>(RecoveryCodeCount);
         for (var index = 0; index < RecoveryCodeCount; index++)
         {
             var code = GenerateRecoveryCode();
             codes.Add(code);
-            hashes.Add(HashRecoveryCode(code));
         }
-
-        // WriteAsync DEĞİL UpdateAsync: dosya kurtarma kodlarının yanında SON TÜKETİLEN TOTP
-        // ADIMINI da taşıyor. Üzerine düz yazsaydık, kurtarma kodlarını yenilemek (2FA kurulumunun
-        // son adımı da dahil) tekrar oynatma sayacını sıfırlar ve az önce kullanılmış bir kod
-        // yeniden geçerli hâle gelirdi — koruma tam da kurulduğu anda delinirdi.
-        await fileStore.UpdateAsync(
-            TwoFactorRecoveryCodes.PathFor(userId),
-            new TwoFactorRecoveryCodes.Store(),
-            mevcut => new TwoFactorRecoveryCodes.Store
-            {
-                Codes = hashes,
-                LastUsedTotpStep = mevcut.LastUsedTotpStep
-            },
-            cancellationToken);
         return codes;
     }
 
-    private async Task<bool> TryConsumeRecoveryCodeAsync(Guid userId, string? candidate, CancellationToken cancellationToken)
+    private async Task<bool> TryConsumeRecoveryCodeAsync(Guid userId, string? candidate, string secretStamp, CancellationToken cancellationToken)
     {
         var normalized = NormalizeRecoveryCode(candidate);
         if (normalized.Length == 0)
@@ -676,7 +881,8 @@ public sealed class AuthService(
             new TwoFactorRecoveryCodes.Store(),
             mevcut =>
             {
-                if (!mevcut.Codes.Any(stored => string.Equals(stored, hash, StringComparison.OrdinalIgnoreCase)))
+                if ((!string.IsNullOrEmpty(mevcut.SecretStamp) && mevcut.SecretStamp != secretStamp) ||
+                    !mevcut.Codes.Any(stored => string.Equals(stored, hash, StringComparison.OrdinalIgnoreCase)))
                 {
                     return mevcut;
                 }
@@ -689,7 +895,8 @@ public sealed class AuthService(
                         .ToList(),
                     // Aynı dosyada duran TOTP tekrar oynatma sayacı KORUNUR; düşürülseydi kurtarma
                     // kodu kullanmak, az önce harcanmış bir TOTP kodunu yeniden geçerli kılardı.
-                    LastUsedTotpStep = mevcut.LastUsedTotpStep
+                    LastUsedTotpStep = mevcut.LastUsedTotpStep,
+                    SecretStamp = secretStamp
                 };
             },
             cancellationToken);

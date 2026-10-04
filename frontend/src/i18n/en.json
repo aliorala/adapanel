@@ -5467,5 +5467,24 @@
   "panel.dashboard.access.current": "Current panel address",
   "panel.dashboard.access.noAdditionalIps": "No additional server IP addresses were found.",
   "panel.monitor.restricted": "Server monitoring is available to administrators only.",
-  "system.ip_addresses_unmeasured": "Server IP addresses could not be read. Try again."
+  "system.ip_addresses_unmeasured": "Server IP addresses could not be read. Try again.",
+
+  "panel.account.statusUnknown": "Status not confirmed",
+  "panel.account.resultUnconfirmed": "The result could not be confirmed. Refresh your account status and check again.",
+  "panel.account.confirmRegenerateTitle": "Generate new recovery codes?",
+  "panel.account.confirmRegenerateMessage": "Your existing recovery codes will stop working. Keep the new codes in a safe place.",
+  "panel.account.setupScanTitle": "Add to your authenticator app",
+  "panel.account.setupScanHint": "Add an account in the authenticator app on your phone and scan this QR code.",
+  "panel.account.setupQrLabel": "Two-factor authentication setup QR code",
+  "panel.account.setupManualHint": "If you cannot scan the QR code, enter this key manually in the app. Do not share the key.",
+  "panel.account.copyKey": "Copy key",
+  "panel.account.keyCopied": "Setup key copied.",
+  "panel.account.keyCopyFailed": "The key could not be copied. Select it in the field to copy it manually.",
+  "panel.account.setupVerifyTitle": "Verify with a code from the app",
+  "panel.account.setupVerifyHint": "Enter the current code from your app. Two-factor authentication stays off until verification is complete.",
+  "panel.account.enabledHint": "Signing in requires your password and a code from your authenticator app. Use a recovery code if you cannot access your device.",
+  "panel.account.hideRecoveryCodes": "Hide codes",
+  "auth.two_factor_already_enabled": "Two-factor authentication is already enabled. Disable it with your current password before setting it up again.",
+  "auth.two_factor_setup_changed": "The account's authentication settings changed. Refresh the status and try again.",
+  "auth.two_factor_recovery_incomplete": "The authentication settings could not be saved completely. Refresh the account status; contact your server administrator if you cannot sign in."
 }

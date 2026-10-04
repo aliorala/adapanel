@@ -175,7 +175,6 @@ public sealed class AuditCoverageTests
         ["ApiTokensController.cs#\"apitoken.created\"#\"api-token\""] = "Anahtar çağıranın KENDİ hesabına üretilir (apiTokenService.CreateAsync(User.GetRequiredUserId())); aktör = konu.",
         ["ApiTokensController.cs#\"apitoken.revoked\"#\"api-token\""] = "Anahtar çağıranın kendi hesabına aittir; aktör = konu.",
         ["AuthController.cs#\"auth.logout.succeeded\"#\"auth\""] = "Kimlik doğrulama: kullanıcının kendi oturumu; aktör = konu.",
-        ["AuthController.cs#\"auth.2fa.recovery_regenerated\"#\"auth\""] = "2FA kurtarma kodları kullanıcının KENDİ hesabına aittir; aktör = konu.",
         ["AuthController.cs#\"auth.impersonate.started\"#\"auth\""] = "Kimliğe bürünme bir PANEL YETKİ işlemidir, bir aboneliğin kaynağı üzerinde değil; hedef kullanıcı ayrıntıda yazılı.",
         ["AuthController.cs#\"auth.impersonate.stopped\"#\"auth\""] = "Yukarıdakinin karşılığı; sunucu/panel düzeyinde yetki işlemi.",
 

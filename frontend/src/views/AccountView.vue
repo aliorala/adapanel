@@ -5,7 +5,11 @@
         <h2>{{ t("panel.settings.tab.account") }}</h2>
         <p class="meta">{{ authStore.session?.user?.userName }} · {{ authStore.session?.user?.email }}</p>
       </div>
+      <button class="secondary compact" :disabled="busy" @click="refreshAccount">{{ t('panel.common.refresh') }}</button>
     </div>
+
+    <p v-if="accountError" class="notice error account-notice" role="alert"><span>{{ accountError }}</span><button class="secondary compact" :disabled="busy" @click="refreshAccount">{{ t('panel.common.retry') }}</button></p>
+    <p v-else-if="!accountConfirmed" class="meta" role="status">{{ t(loadingAccount ? 'panel.common.loading' : 'panel.account.statusUnknown') }}</p>
 
     <section class="form-surface settings-section">
       <div class="section-head">
@@ -13,60 +17,73 @@
           <h3>{{ t("panel.account.title") }}</h3>
           <p class="meta">
             {{ t("panel.account.status") }}:
-            {{ authStore.session?.user?.isTwoFactorEnabled ? t("panel.account.enabled") : t("panel.account.disabled") }}
+            {{ !accountConfirmed ? t('panel.account.statusUnknown') : authStore.session?.user?.isTwoFactorEnabled ? t("panel.account.enabled") : t("panel.account.disabled") }}
           </p>
         </div>
-        <span :class="['status-pill', authStore.session?.user?.isTwoFactorEnabled ? 'ok' : 'warn']">
-          {{ authStore.session?.user?.isTwoFactorEnabled ? t("panel.account.enabled") : t("panel.account.disabled") }}
+        <span :class="['status-pill', accountConfirmed ? authStore.session?.user?.isTwoFactorEnabled ? 'ok' : 'warn' : '']">
+          {{ !accountConfirmed ? t('panel.account.statusUnknown') : authStore.session?.user?.isTwoFactorEnabled ? t("panel.account.enabled") : t("panel.account.disabled") }}
         </span>
       </div>
 
-      <div v-if="authStore.twoFactorSetup" class="form-grid two">
-        <label class="stacked-field">
-          <span class="field-label">{{ t("panel.account.manualKey") }}</span>
-          <input :value="authStore.twoFactorSetup.manualEntryKey" readonly />
-        </label>
-        <label class="stacked-field">
-          <span class="field-label">{{ t("panel.account.verificationCode") }}</span>
-          <input v-model="twoFactorVerificationCode" inputmode="numeric" maxlength="8" />
-        </label>
-        <label class="stacked-field settings-wide-field">
-          <span class="field-label">{{ t("panel.account.provisioningUri") }}</span>
-          <textarea :value="authStore.twoFactorSetup.provisioningUri" rows="3" readonly />
-        </label>
-        <div class="row-actions settings-wide-field">
-          <button class="compact" @click="confirmTwoFactor">{{ t("panel.account.confirm2fa") }}</button>
+      <div v-if="accountConfirmed && setup" class="two-factor-setup">
+        <div class="setup-step">
+          <h4><span class="step-number">1</span>{{ t('panel.account.setupScanTitle') }}</h4>
+          <p class="meta">{{ t('panel.account.setupScanHint') }}</p>
+          <div class="setup-key-grid">
+            <div class="setup-qr" role="img" :aria-label="t('panel.account.setupQrLabel')">
+              <NQrCode :value="setup.provisioningUri" :size="176" :padding="16" type="svg" color="#000000" background-color="#ffffff" />
+            </div>
+            <div class="manual-key-fields">
+              <label class="stacked-field"><span class="field-label">{{ t('panel.account.manualKey') }}</span><input :value="setup.manualEntryKey" class="manual-key" autocomplete="off" spellcheck="false" readonly /></label>
+              <p class="field-hint">{{ t('panel.account.setupManualHint') }}</p>
+              <button class="secondary compact" :disabled="busy" @click="copySetupKey">{{ t('panel.account.copyKey') }}</button>
+              <details class="setup-uri"><summary>{{ t('panel.account.provisioningUri') }}</summary><code>{{ setup.provisioningUri }}</code></details>
+            </div>
+          </div>
         </div>
+        <form class="setup-step verification-step" @submit.prevent="confirmTwoFactor">
+          <h4><span class="step-number">2</span>{{ t('panel.account.setupVerifyTitle') }}</h4>
+          <p class="meta">{{ t('panel.account.setupVerifyHint') }}</p>
+          <label class="stacked-field verification-field"><span class="field-label">{{ t('panel.account.verificationCode') }}</span><input v-model="twoFactorVerificationCode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" /></label>
+          <div class="row-actions">
+            <button type="submit" class="compact" :disabled="!canConfirmTwoFactor">{{ t(pendingOperation === 'confirm' ? 'panel.common.saving' : 'panel.account.confirm2fa') }}</button>
+            <button type="button" class="secondary compact" :disabled="busy" @click="cancelSetup">{{ t('panel.common.cancel') }}</button>
+          </div>
+        </form>
       </div>
 
-      <div v-else class="settings-inline-action">
-        <button v-if="!(authStore.session?.user?.isTwoFactorEnabled ?? false)" class="compact" @click="startTwoFactor">
-          {{ t("panel.account.start2fa") }}
+      <div v-else-if="accountConfirmed" class="two-factor-actions">
+        <button v-if="!authStore.session?.user?.isTwoFactorEnabled" class="compact" :disabled="!canStartTwoFactor" @click="startTwoFactor">
+          {{ t(pendingOperation === 'begin' ? 'panel.common.loading' : 'panel.account.start2fa') }}
         </button>
         <template v-else>
-          <button class="secondary compact" @click="regenerateRecoveryCodes">{{ t("panel.account.regenerateRecovery") }}</button>
-          <label class="stacked-field">
-            <span class="field-label">{{ t("panel.account.disablePassword") }}</span>
-            <PasswordField v-model="disableTwoFactorPassword" minlength="12" />
-          </label>
-          <button class="danger compact" @click="disableTwoFactor">{{ t("panel.account.disable2fa") }}</button>
+          <p class="meta">{{ t('panel.account.enabledHint') }}</p>
+          <button class="secondary compact" :disabled="!canRegenerateRecovery" @click="regenerateRecoveryCodes">{{ t(pendingOperation === 'regenerate' ? 'panel.common.loading' : 'panel.account.regenerateRecovery') }}</button>
+          <details class="disable-two-factor">
+            <summary>{{ t('panel.account.disable2fa') }}</summary>
+            <p class="meta">{{ t('panel.account.confirmDisable2faMessage') }}</p>
+            <div class="settings-inline-action">
+              <label class="stacked-field"><span class="field-label">{{ t('panel.account.disablePassword') }}</span><PasswordField v-model="disableTwoFactorPassword" autocomplete="current-password" /></label>
+              <button class="danger compact" :disabled="!canDisableTwoFactor" @click="disableTwoFactor">{{ t(pendingOperation === 'disable' ? 'panel.common.saving' : 'panel.account.disable2fa') }}</button>
+            </div>
+          </details>
         </template>
       </div>
 
-      <div v-if="recoveryCodes.length" class="recovery-codes">
+      <div v-if="accountConfirmed && recoveryCodes.length" class="recovery-codes">
         <strong>{{ t("panel.account.recoveryTitle") }}</strong>
         <p class="meta">{{ t("panel.account.recoveryHint") }}</p>
         <ul class="recovery-list">
           <li v-for="rc in recoveryCodes" :key="rc">{{ rc }}</li>
         </ul>
         <div class="row-actions">
-          <button class="secondary compact" @click="copyRecoveryCodes">{{ t("panel.account.recoveryCopy") }}</button>
-          <button class="secondary compact" @click="recoveryCodes = []">{{ t("panel.common.cancel") }}</button>
+          <button class="secondary compact" :disabled="busy" @click="copyRecoveryCodes">{{ t("panel.account.recoveryCopy") }}</button>
+          <button class="secondary compact" :disabled="busy" @click="recoveryCodes = []">{{ t("panel.account.hideRecoveryCodes") }}</button>
         </div>
       </div>
     </section>
 
-    <section class="form-surface settings-section">
+    <form class="form-surface settings-section" @submit.prevent="changePassword">
       <div class="section-head">
         <div>
           <h3>{{ t("panel.account.passwordTitle") }}</h3>
@@ -94,22 +111,22 @@
       <p class="meta">{{ t("panel.account.passwordRevokesTokens") }}</p>
 
       <div class="settings-inline-action">
-        <button class="compact" :disabled="changingPassword" @click="changePassword">
-          {{ changingPassword ? t("panel.account.passwordChanging") : t("panel.account.changePassword") }}
+        <button type="submit" class="compact" :disabled="!canChangePassword">
+          {{ pendingOperation === 'password' ? t("panel.account.passwordChanging") : t("panel.account.changePassword") }}
         </button>
       </div>
-    </section>
+    </form>
   </section>
 </template>
 
 <script setup lang="ts">
-// "Hesabım": oturum açan kullanıcının kendi hesap güvenliği (iki adımlı doğrulama kurulumu,
-// kurtarma kodları, 2FA kapatma). Daha önce SetupWizardView > Ayarlar > Hesap sekmesindeydi;
-// davranış birebir korunmuştur.
-import { ref } from "vue";
+// Account operations and secrets belong to the current mounted session only.
+import { computed, onMounted, onUnmounted, ref, toRaw, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { NQrCode } from "naive-ui";
 import PasswordField from "../components/PasswordField.vue";
-import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
+import { extractApiDetails, extractApiMessage, useAuthStore, type TwoFactorSetup } from "../stores/auth";
+import { getSessionEpoch } from "../api/client";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { copyToClipboard } from "../utils/clipboard";
 
@@ -135,78 +152,118 @@ const t = (key: string, params?: Record<string, unknown>) => {
 
 const authStore = useAuthStore();
 const { confirm } = useConfirm();
-
+const originalSession = authStore.session, actorId = originalSession?.user?.id, actorRole = originalSession?.user?.role;
+const epoch = getSessionEpoch();
+let disposed = false, ownedSetup: TwoFactorSetup | null = null, draftRevision = 0, disableRevision = 0, codeRevision = 0;
+const current = () => !disposed && getSessionEpoch() === epoch && authStore.session === originalSession &&
+  authStore.session?.isAuthenticated === true && authStore.session.user?.isActive === true &&
+  authStore.session.user.id === actorId && authStore.session.user.role === actorRole;
+const setup = ref<TwoFactorSetup | null>(null);
+const pendingOperation = ref<"" | "begin" | "confirm" | "regenerate" | "disable" | "password">("");
+const confirming = ref(false), loadingAccount = ref(false), accountConfirmed = ref(false), accountError = ref("");
+const busy = computed(() => !!pendingOperation.value || confirming.value || loadingAccount.value);
+const ready = () => current() && accountConfirmed.value && !busy.value;
+const canStartTwoFactor = computed(() => ready() && !authStore.session?.user?.isTwoFactorEnabled && !setup.value);
+const canConfirmTwoFactor = computed(() => ready() && !!setup.value && !authStore.session?.user?.isTwoFactorEnabled && !!twoFactorVerificationCode.value.trim());
+const canRegenerateRecovery = computed(() => ready() && authStore.session?.user?.isTwoFactorEnabled === true);
+const canDisableTwoFactor = computed(() => ready() && authStore.session?.user?.isTwoFactorEnabled === true && !!disableTwoFactorPassword.value);
+const canChangePassword = computed(ready);
 const twoFactorVerificationCode = ref("");
 const disableTwoFactorPassword = ref("");
 const recoveryCodes = ref<string[]>([]);
-
 const currentPassword = ref("");
 const newPassword = ref("");
 const confirmPassword = ref("");
-const changingPassword = ref(false);
-
+watch([currentPassword, newPassword, confirmPassword], () => { draftRevision++; }, { flush: "sync" });
+watch(disableTwoFactorPassword, () => { disableRevision++; }, { flush: "sync" });
+watch(twoFactorVerificationCode, () => { codeRevision++; }, { flush: "sync" });
+function clearSetup() {
+  if (ownedSetup && authStore.twoFactorSetup && toRaw(authStore.twoFactorSetup) === ownedSetup) authStore.twoFactorSetup = null;
+  ownedSetup = null; setup.value = null; twoFactorVerificationCode.value = "";
+}
+function clearSecrets() {
+  clearSetup(); recoveryCodes.value = []; disableTwoFactorPassword.value = "";
+  currentPassword.value = ""; newPassword.value = ""; confirmPassword.value = "";
+}
+watch(() => [authStore.session, authStore.session?.user?.id, authStore.session?.user?.role, authStore.session?.isAuthenticated], () => {
+  if (!current()) { accountConfirmed.value = false; clearSecrets(); }
+}, { flush: "sync" });
+onMounted(refreshAccount);
+onUnmounted(() => { disposed = true; clearSecrets(); });
+async function refreshAccount() {
+  if (!current() || busy.value) return;
+  loadingAccount.value = true; accountConfirmed.value = false; accountError.value = "";
+  clearSetup(); recoveryCodes.value = [];
+  try {
+    await authStore.fetchAccountSession(current);
+    if (current()) accountConfirmed.value = true;
+  } catch (error) { if (current()) accountError.value = resolveApiMessage(error); }
+  finally { if (current()) loadingAccount.value = false; }
+}
+function mutationFailed(error: unknown) {
+  if (!current()) return;
+  const key = extractApiMessage(error);
+  // Rejected credentials/codes can be corrected in place. An ambiguous write
+  // requires a fresh account reading before another state-changing action.
+  if (!["auth.invalid_two_factor_code", "auth.invalid_credentials", "auth.password_unchanged", "auth.password_too_short", "auth.password_too_weak", "auth.rate_limited"].includes(key)) {
+    accountConfirmed.value = false; clearSetup(); recoveryCodes.value = [];
+  }
+  notify(resolveApiMessage(error), true);
+}
 async function startTwoFactor() {
+  if (!current() || !canStartTwoFactor.value) return;
+  pendingOperation.value = "begin";
   try {
-    await authStore.beginTwoFactorSetup();
-    notify(t("panel.account.started"), false);
-  } catch (error) {
-    notify(resolveApiMessage(error), true);
-  }
+    const result = await authStore.beginTwoFactorSetup(current);
+    if (!current()) return;
+    setup.value = result; ownedSetup = toRaw(result); notify(t("panel.account.started"), false);
+  } catch (error) { mutationFailed(error); }
+  finally { if (current()) pendingOperation.value = ""; }
 }
-
 async function confirmTwoFactor() {
+  if (!current() || !canConfirmTwoFactor.value) return;
+  const code = twoFactorVerificationCode.value.trim(), revision = codeRevision;
+  pendingOperation.value = "confirm";
   try {
-    recoveryCodes.value = await authStore.confirmTwoFactorSetup(twoFactorVerificationCode.value);
-    twoFactorVerificationCode.value = "";
+    const codes = await authStore.confirmTwoFactorSetup(code, current);
+    if (!current()) return;
+    ownedSetup = null; setup.value = null; recoveryCodes.value = codes;
+    if (revision === codeRevision) twoFactorVerificationCode.value = "";
     notify(t("panel.account.enabledMessage"), false);
-  } catch (error) {
-    notify(resolveApiMessage(error), true);
-  }
+  } catch (error) { mutationFailed(error); }
+  finally { if (current()) pendingOperation.value = ""; }
 }
-
 async function regenerateRecoveryCodes() {
+  if (!current() || !canRegenerateRecovery.value) return;
+  pendingOperation.value = "regenerate"; confirming.value = true;
   try {
-    recoveryCodes.value = await authStore.regenerateRecoveryCodes();
-    notify(t("panel.account.recoveryRegenerated"), false);
-  } catch (error) {
-    notify(resolveApiMessage(error), true);
-  }
-}
-
-async function copyRecoveryCodes() {
-  // Kurtarma kodları kritik: panel henüz sertifika almamışken (http) tarayıcının pano API'si
-  // yoktur ve düğme sessizce ölüyordu. Ortak yardımcı o durumda da kopyalar.
-  const oldu = await copyToClipboard(recoveryCodes.value.join("\n"));
-  notify(t(oldu ? "panel.account.recoveryCopied" : "panel.account.recoveryCopyFailed"), !oldu);
-}
-
-/**
- * İki adımlı doğrulamayı KAPATMAK hesabın güvenlik seviyesini düşürür; onay alınmadan yapılmaz.
- * (Yıkıcı değil ama geri alınması yeni kurulum + yeni kurtarma kodu gerektirir.)
- */
-async function disableTwoFactor() {
-  const onay = await confirm({
-    title: t("panel.account.confirmDisable2faTitle"),
-    message: t("panel.account.confirmDisable2faMessage"),
-    confirmLabel: t("panel.account.disable2fa")
-  });
-  if (!onay) {
-    return;
-  }
-
-  try {
-    await authStore.disableTwoFactor(disableTwoFactorPassword.value);
-    disableTwoFactorPassword.value = "";
+    const accepted = await confirm({ title: t("panel.account.confirmRegenerateTitle"), message: t("panel.account.confirmRegenerateMessage"), confirmLabel: t("panel.account.regenerateRecovery") });
+    if (!accepted || !current() || !accountConfirmed.value || authStore.session?.user?.isTwoFactorEnabled !== true) return;
+    confirming.value = false;
     recoveryCodes.value = [];
-    notify(t("panel.account.disabledMessage"), false);
-  } catch (error) {
-    notify(resolveApiMessage(error), true);
-  }
+    const codes = await authStore.regenerateRecoveryCodes(current);
+    if (current()) { recoveryCodes.value = codes; notify(t("panel.account.recoveryRegenerated"), false); }
+  } catch (error) { mutationFailed(error); }
+  finally { if (current()) { confirming.value = false; pendingOperation.value = ""; } }
 }
-
+async function disableTwoFactor() {
+  if (!current() || !canDisableTwoFactor.value) return;
+  const password = disableTwoFactorPassword.value, revision = disableRevision;
+  pendingOperation.value = "disable"; confirming.value = true;
+  try {
+    const accepted = await confirm({ title: t("panel.account.confirmDisable2faTitle"), message: t("panel.account.confirmDisable2faMessage"), confirmLabel: t("panel.account.disable2fa") });
+    if (!accepted || !current() || !accountConfirmed.value || authStore.session?.user?.isTwoFactorEnabled !== true) return;
+    confirming.value = false;
+    await authStore.disableTwoFactor(password, current);
+    if (!current()) return;
+    if (revision === disableRevision) disableTwoFactorPassword.value = "";
+    clearSetup(); recoveryCodes.value = [];
+    notify(t("panel.account.disabledMessage"), false);
+  } catch (error) { mutationFailed(error); }
+  finally { if (current()) { confirming.value = false; pendingOperation.value = ""; } }
+}
 async function changePassword() {
-  // Eşleşme denetimi İSTEMCİDE yapılır: sunucuya gitmeye gerek yok ve kullanıcı anında görür.
-  // Uzunluk/geçerlilik denetimi ise sunucuda da vardır — istemci denetimi atlanabilir bir şeydir.
+  if (!current() || !canChangePassword.value) return;
   if (newPassword.value !== confirmPassword.value) {
     notify(t("panel.account.passwordMismatch"), true);
     return;
@@ -217,12 +274,12 @@ async function changePassword() {
     return;
   }
 
-  changingPassword.value = true;
+  const submitted = { currentPassword: currentPassword.value, newPassword: newPassword.value }, revision = draftRevision;
+  pendingOperation.value = "password";
   try {
-    const result = await authStore.changePassword(currentPassword.value, newPassword.value);
-    currentPassword.value = "";
-    newPassword.value = "";
-    confirmPassword.value = "";
+    const result = await authStore.changePassword(submitted.currentPassword, submitted.newPassword, current);
+    if (!current()) return;
+    if (revision === draftRevision) { currentPassword.value = ""; newPassword.value = ""; confirmPassword.value = ""; }
 
     // Kaç anahtarın düştüğü SÖYLENİR. Sessizce kesilirse kullanıcı yapay zeka bağlantısının neden
     // çalışmadığını anlamaz ve hatayı panelde arar.
@@ -232,11 +289,21 @@ async function changePassword() {
         : t("panel.account.passwordChanged"),
       false
     );
-  } catch (error) {
-    notify(resolveApiMessage(error), true);
-  } finally {
-    changingPassword.value = false;
-  }
+  } catch (error) { mutationFailed(error); }
+  finally { if (current()) pendingOperation.value = ""; }
+}
+function cancelSetup() { if (ready()) clearSetup(); }
+async function copySetupKey() {
+  if (!ready() || !setup.value) return;
+  const captured = setup.value;
+  const copied = await copyToClipboard(captured.manualEntryKey);
+  if (current() && setup.value === captured && accountConfirmed.value) notify(t(copied ? "panel.account.keyCopied" : "panel.account.keyCopyFailed"), !copied);
+}
+async function copyRecoveryCodes() {
+  if (!ready() || !recoveryCodes.value.length) return;
+  const codes = recoveryCodes.value;
+  const copied = await copyToClipboard(codes.join("\n"));
+  if (current() && recoveryCodes.value === codes && accountConfirmed.value) notify(t(copied ? "panel.account.recoveryCopied" : "panel.account.recoveryCopyFailed"), !copied);
 }
 
 function notify(message: string, isError: boolean) {
@@ -253,6 +320,28 @@ function resolveApiMessage(error: unknown): string {
 </script>
 
 <style scoped>
+.account-notice { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-12); flex-wrap: wrap; }
+.account-notice span { flex: 1 1 220px; }
+.two-factor-setup, .two-factor-actions { display: grid; gap: var(--sp-16); justify-items: start; width: 100%; }
+.setup-step { width: 100%; min-width: 0; }
+.setup-step h4 { display: flex; align-items: center; gap: var(--sp-8); margin: 0 0 var(--sp-8); }
+.step-number { display: inline-grid; place-items: center; width: 26px; height: 26px; flex: 0 0 26px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--panel-border); }
+.setup-key-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: var(--sp-20); margin-top: var(--sp-16); }
+.setup-qr { display: grid; place-items: center; width: fit-content; padding: 0; background: white; border-radius: var(--radius-md); overflow: hidden; }
+.setup-qr :deep(.n-qr-code) { box-sizing: content-box; }
+.manual-key-fields { display: grid; gap: var(--sp-8); min-width: 0; justify-items: start; }
+.manual-key-fields label { width: 100%; }
+.manual-key { font-family: monospace; letter-spacing: .04em; }
+.setup-uri { width: 100%; color: var(--text-muted); font-size: var(--fs-xs); }
+.setup-uri code { display: block; overflow-wrap: anywhere; margin-top: var(--sp-8); }
+.setup-uri summary, .disable-two-factor summary { cursor: pointer; }
+.verification-step { border-top: 1px solid var(--panel-border); padding-top: var(--sp-16); }
+.verification-field { max-width: 240px; margin-bottom: var(--sp-12); }
+.verification-field input { font-variant-numeric: tabular-nums; letter-spacing: .18em; }
+.disable-two-factor { width: 100%; border-top: 1px solid var(--panel-border); padding-top: var(--sp-12); }
+.recovery-codes { padding: var(--sp-16); margin-top: var(--sp-16); border: 1px solid var(--panel-border); border-radius: var(--radius-md); background: var(--surface-2); }
+.recovery-list { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: var(--sp-8); }
+.recovery-list li { font-family: monospace; padding: var(--sp-8); border: 1px solid var(--panel-border); border-radius: var(--radius-sm); text-align: center; overflow-wrap: anywhere; }
 .account-workspace {
   align-content: start;
 }
@@ -297,12 +386,12 @@ label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
 
 input,
 select,
-textarea,
-button {
+textarea {
   width: 100%;
 }
 
 @media (max-width: 760px) {
+  .setup-key-grid { grid-template-columns: minmax(0, 1fr); }
   .settings-wide-field {
     grid-column: auto;
   }

@@ -415,12 +415,15 @@ internal sealed partial class DatabaseService(
             : NormalizeUserName(request.UserName, dbEngine);
 
         using var mutation = await DatabaseLifecycle.EnterResourceAsync(request.Engine, databaseName, cancellationToken);
-        await beforeCreate(cancellationToken);
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
         var provider = ResolveProvider(dbEngine);
 
         using var account = newUser.Length == 0 ? null
             : await DatabaseLifecycle.EnterAccountAsync(mutation, request.Engine, newUser, cancellationToken);
+        // Account waits can outlive the original authorization or quota snapshot. Invoke
+        // once at the final provider boundary: site callers also acquire their pin here.
+        await beforeCreate(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         // A failed or uncertain CREATE must never authorize DROP of a pre-existing database.
         await provider.CreateDatabaseAsync(profile, databaseName, cancellationToken);
         var newUserHost = NewUserHost(dbEngine);

@@ -63,6 +63,10 @@ internal static class TwoFactorRecoveryCodes
         Guid userId,
         long step,
         CancellationToken cancellationToken = default)
+        => await TryConsumeTotpStepAsync(fileStore, userId, step, null, cancellationToken);
+
+    internal static async Task<bool> TryConsumeTotpStepAsync(
+        JsonFileStore fileStore, Guid userId, long step, string? secretStamp, CancellationToken cancellationToken)
     {
         var kabul = false;
         await fileStore.UpdateAsync(
@@ -70,13 +74,14 @@ internal static class TwoFactorRecoveryCodes
             new Store(),
             mevcut =>
             {
-                if (step <= mevcut.LastUsedTotpStep)
+                if (step <= mevcut.LastUsedTotpStep ||
+                    (!string.IsNullOrEmpty(mevcut.SecretStamp) && secretStamp is not null && mevcut.SecretStamp != secretStamp))
                 {
                     return mevcut;
                 }
 
                 kabul = true;
-                return new Store { Codes = mevcut.Codes, LastUsedTotpStep = step };
+                return new Store { Codes = mevcut.Codes, LastUsedTotpStep = step, SecretStamp = secretStamp ?? mevcut.SecretStamp };
             },
             cancellationToken);
 
@@ -87,6 +92,9 @@ internal static class TwoFactorRecoveryCodes
     public sealed class Store
     {
         public List<string> Codes { get; set; } = [];
+
+        // Optional for historical files. New generations belong to one active secret.
+        public string? SecretStamp { get; set; }
 
         /// <summary>
         /// En son kabul edilen TOTP zaman adımı. 0 = hiç kullanılmadı. Kurtarma kodları yeniden

@@ -1,5 +1,66 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R31 yerelde tamamlandı; yayımdaki kurucu hâlâ 0.8.78
+
+R31 sürüm değiştirmeden tamamlandı; henüz paketlenmedi/yayımlanmadı. Aktif sürekli
+denetim hedefi devam ediyor. Son yayın aşağıdaki R30 bölümünde doğrulanmış 0.8.78.
+Canlı kurulum, kaynak/Git geçmişi push veya gerçek SMTP/webhook/rapor gönderimi yok.
+
+CREATE finalauthority profile+resource+account bekleyişinden sonra sağlayıcıdan hemen
+önce yalnız bir kez çağrılır; Sites callback reserve pin'i çift edinilmez. Standalone
+admin CREATE DatabaseActorAuthority + subscription lease ile aynı korumaya bağlandı.
+24 new tests, 186 ilgili DB önceki koşuda green; latest combined465 de green.
+
+AccountView/store: currentactor+role+sessionref+epoch+unmount ownership, shared write/
+confirmation gate, account freshread+error/retry, malformed success validation. WrongOTP/
+wrongpassword taslak+setup korur; ambiguouswrite confirmedstate ve eski recovery temizler.
+Yeni passworddraft eski yanıtla silinmez. Setup local/ownedPinia secret cleanup, regen
+onayı; iki adımlı QR+manual key/confirm UX, local NQrCode SVG (externalservice yok).
+Global border-box QR'ı kırpıyordu: n-qr-code content-box ile 176+16*2=208 kare doğrulandı.
+Kapatma details, hidecodes açıklabel, doğalgenişlikbuttons. MyDatabases API success=true,
+array ve engine/name doğrular; validempty/PGcase/enginealiases korunur.
+
+AuthService enabled2FA Begin/Confirm409; per-user/refcount TwoFactorLifecycle dataRoot+
+user path gate, login password+factor reload. Confirm/disable/regen SQLtransaction+audit
+JSON staging publication callback ile korunur. PublishfailureSQLrollback; commitfail
+durableSQL ölçümü ve exactJSONgeneration CAS compensation; postcommitackfailure ölçülür.
+New recovery SecretStamp protected-active-secret SHA binds generation; legacynullsupported.
+SQL/JSON birlikte crash-atomic DEĞİL; ayrıconsolewriters lock'a katılmaz, CAS ezmeyi önler.
+Controller captures immutable id/role/credentialstamp/sessionnonce. Callback freshuser
+lease sonrasında, transaction freshread ve SQL/audit sonrası preJSON/preCommit çalışır.
+Yeni interface overload defaultNotSupported (silentignoreyok), eski trusted wrapperskorundu.
+Regen audit svc'ye taşındı; action/resource/user/IP ve secretredaction korundu.
+
+Evidence: first32=20RED12green(Auth10/6RED,Create22/14RED); createfix197=7AuthRED190green.
+Authprotocol270=267green3WindowsIOassertfail(IOException yerine UnauthorizedAccessException);
+fixtureyalnızikifileexception kabul edecek düzeltildi, EF1002 fixedstaticSQL. Protocol37green.
+QueuedactualHTTP13=6RED7green(password/logout→begin/confirm/regen). Final41Auth+15HTTP+
+24CREATE=80newC#. Related465/465green62482. Full62528exit0 build0warn/error,
+Infra8047+Core2=8049/8049 fail/skip0. Logs round31-final-{build,backend}.log;
+TRX round31-final_net8.0_20261004044211.trx(Core), ...044545.trx(Infra).
+FE Account29=28RED1green→37new/74relatedgreen; MyDb32=24RED8green→98relatedgreen.
+Full FE92files1660/1660, types+Vitegreen82455, wwwrootsynced6indexrefsallpresent.
+Logs round31-final-{types,frontend,vite}.log. FE69newtests; locale FE5486/API280 parity.
+
+Browser realVue/Pinia/API fakeadapter only:390TRdark/320ENlight/1440TRdark widths380/380,
+310/310,1430/1430; consoleerrors0. Failedaccountread→retry; invalidOTP→correct→10codes;
+regencancel→0POST, accept→1POST; QR176square+208quietzone verified. Saved/viewed .tmp/
+audit-20261004/round31-setup-en320.png and round31-setup-desktop.png(finalbuttons), plus
+round31-setup-mobile.png and round31-recovery-en320.png(earlierbuttonstyle). __audit31files
+removed; tab auditTab31 CLOSED, viewport26 reset, preview75615CtrlCexit1intentional.
+CUA browser2/auditBrowser26/viewport26/auditFs29 reusable after rewriteDocumentation.
+All agents completed/frozen, no active test/preview/publisher. Preexisting untracked
+tests/AdaPanel.Infrastructure.Tests/TestResults/ preserved/excluded from commit.
+
+Next R32 candidate (not yet proven): AuthController SignInAsync after login/2FAcommit,
+CookieSessionValidator.OnSigningIn computes stamp from currentDB. Password/logout change
+between accepted service result and cookie issuance may mint a fresh cookie from stale
+authority. Prove with actual controller+cookie event gate before any fix; no new R31scope.
+Then broader backup/customer/reseller audit can resume. Periodic next binary release may
+combine R31+R32; current published0.8.78 remains below. User0.8.75packagequestion: staged
+installer cleansaftertarget/version+restart reached, notalonefailure. UI0.8.76+current says
+Panel güncel/Bekleyen güncelleme yok. Actual user's liveasset/cache notdirectlyverified.
+
 ## 2026-10-04 — R30 tamamlandı; R29+R30 içeren 0.8.78 yayımlandı
 
 Yayımdaki kurucu **0.8.78**, latest/tag aynı, draft/prerelease false. Yayın zamanı
