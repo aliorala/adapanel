@@ -1,9 +1,28 @@
 # AdaPanel Codex Memory
 
-## 2026-10-04 — R39 doğrulandı; R38+R39 için 0.8.83 hazırlanıyor
+## 2026-10-04 — R38+R39 içeren 0.8.83 yayımlandı ve doğrulandı
 
-Kaynak sürümleri ve release-body 0.8.83; henüz yayımlanmadı. Public tag ön kontrolü404.
-Son public release hâlâ0.8.82; canlı kurulu sürüm ölçülmedi. Kullanıcının0.8.75 sorusu için
+Public latest ve kaynaklar0.8.83. Yayın2026-10-04T06:31:29Z /09:31:29İstanbul.
+https://github.com/aliorala/adapanel/releases/tag/0.8.83
+https://github.com/aliorala/adapanel/releases/download/0.8.83/AdaPanelSetup.exe
+91,105,254 bytes; SHA256 9D9AF43A05EF674F30BE749AC5F677383BD099DFAD3ED2BB83D785157D9D297E.
+Sourcecommit7883bc6; yalnız kurucu+sürümnotu gönderildi, canlıkurulum/sourcepush yok.
+Paket30438exit0: publish170files0findings, installer0findings/version0.8.83. Freshcomponentaudit
+ayrıca22Passed3standardSkipped olduğu için paketleme yalnız tekrarcomponentaudit adımını atladı;
+içerik/kurucu denetimleri atlanmadı. Yayın56338exit0: indirilenuploadedassetSHA yerelleeşit.
+KimliksizpublicAPI latest/tag/name/body exactUTF8/singleasset bytes/digest/state doğrulandı.
+Kanıtlar .tmp/audit-20261004/release083-{package,github-publish}.log,
+release083-{components,publish-manifest,installer-manifest,published-verification}.json.
+FullNET8747/8747 +FE2115/2115; build0warning/error. Önceki R38 CSSregresyonu da bu fullkoşuda geçti.
+Bütün rootprocesses terminal:15168RED,97411FE,38540target,64961full,30438package,56338publish,
+84190previewCtrlC. BrowserauditTab39closed/viewportreset, __audit39filesremoved; agentsFINALFREEZE.
+Eski TestResults/ dışında trackedclean. Sürekli unbudgetedgoal ACTIVE, ilerlemevar, blockeddeğil.
+Sonraki somutaday HealHomeLinks/Delete linkyarışı aşağıda. Bu turn artık test/derleme/yayın yok.
+
+## 2026-10-04 — R39 doğrulaması (yayın öncesi kayıt)
+
+Bu kayıt anında kaynak sürümleri ve release-body0.8.83, public tag ön kontrolü404 idi;
+yayın sonucu üsttedir. Canlı kurulu sürüm ölçülmedi. Kullanıcının0.8.75 sorusu için
 SelfUpdateService187–208/484–496/950–965 tekrar okundu: başarılı kurulum sonrası eski pending+EXE
 temizliği IsPackageReady=false yapar; bu tek başına hata değildir. Güncel kaynak başarılı check
 sonrası eşit sürümlerde Panel güncel gösterir; checkfailed eşitliği başarı saymaz.
@@ -38,7 +57,7 @@ Finalimage .tmp/audit-20261004/round39-files-permissions-final-mobile.png; EN320
 Başlangıç fixture script hazır değilken uyarı vardı, finalreload appconsoleerror0; deneyseli18n
 warning eski. ChromeauditTab39closed/viewportreset, Vite84190terminalCtrlC, __audit39 filesremoved.
 round39-ui-integrity.json kanıtı hazır. Baseline15168/target38540/FE97411/full64961 terminal.
-Tüm agents FINAL FREEZE; root sole.NET. Paketleme ve yayın bundan sonra yapılacak.
+Tüm agents FINAL FREEZE; root sole.NET. Paketleme ve yayın sonradan tamamlandı (üstte).
 Eski tests/AdaPanel.Infrastructure.Tests/TestResults/ dokunulmadan commit dışında tutulur.
 Canlı kurulum/gerçekmüşterimutasyonu/sourcepush yok. Sürekli hedef ACTIVE kalır.
 
