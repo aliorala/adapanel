@@ -160,6 +160,52 @@
         </div>
       </section>
 
+      <section v-if="transferOperation" class="transfer-result" :class="`is-${transferOperation.status}`"
+        aria-labelledby="transfer-result-title" :aria-busy="transferOperation.status === 'running' || transferOperation.status === 'refreshing'">
+        <div class="transfer-result-head">
+          <div>
+            <p class="transfer-result-kind">{{ t(transferOperation.kind === 'copy' ? 'panel.files.transferCopyTitle' : transferOperation.kind === 'rename' ? 'panel.files.transferRenameTitle' : 'panel.files.transferMoveTitle') }}</p>
+            <h3 id="transfer-result-title" role="status">{{ t(transferOperation.status === 'running' ? 'panel.files.transferRunning'
+              : transferOperation.status === 'refreshing' ? 'panel.files.transferRefreshing'
+              : transferOperation.status === 'succeeded' ? 'panel.files.transferSucceeded'
+              : transferOperation.status === 'partial' ? 'panel.files.transferPartial' : 'panel.files.transferFailed') }}</h3>
+          </div>
+          <button v-if="transferOperation.status !== 'running' && transferOperation.status !== 'refreshing'" type="button" class="secondary compact"
+            :aria-label="t('panel.files.transferDismiss')" @click="dismissTransferOperation">×</button>
+        </div>
+        <dl class="transfer-result-scope">
+          <div><dt>{{ t('panel.files.transferSourceFolder') }}</dt><dd>{{ transferOperation.sourcePath }}</dd></div>
+          <div><dt>{{ t('panel.files.destination') }}</dt><dd>{{ transferOperation.destinationPath }}</dd></div>
+          <div v-if="transferOperation.newName"><dt>{{ t('panel.files.transferNewName') }}</dt><dd>{{ transferOperation.newName }}</dd></div>
+        </dl>
+        <p class="transfer-result-policy">{{ t('panel.files.transferRequested', { count: transferOperation.total }) }} · {{ t(transferOperation.overwrite ? 'panel.files.transferOverwriteAllowed' : 'panel.files.transferOverwriteProtected') }}</p>
+        <dl v-if="transferOperation.done !== null" class="transfer-result-counts">
+          <div class="is-ok"><dt>{{ t('panel.files.transferDoneCount') }}</dt><dd>{{ transferOperation.done - transferOperation.items.filter(item => item.success && item.reason).length }}</dd></div>
+          <div class="is-warning"><dt>{{ t('panel.files.transferWarningCount') }}</dt><dd>{{ transferOperation.items.filter(item => item.success && item.reason).length }}</dd></div>
+          <div class="is-failed"><dt>{{ t('panel.files.transferFailedCount') }}</dt><dd>{{ transferOperation.failed }}</dd></div>
+        </dl>
+        <p v-if="transferOperation.status === 'running'" class="meta">{{ t('panel.files.transferPendingHint') }}</p>
+        <p v-if="transferOperation.error" class="transfer-result-error" role="alert">{{ transferOperation.error }}</p>
+        <p v-if="transferOperation.done === null && transferOperation.status !== 'running'" class="meta">{{ t('panel.files.transferUnmeasuredHint') }}</p>
+        <p v-if="transferOperation.refreshError" class="transfer-result-refresh" role="alert">{{ transferOperation.refreshError }}</p>
+        <details v-if="transferOperation.items.length" class="transfer-result-items" :open="transferOperation.status === 'partial' || transferOperation.status === 'failed'">
+          <summary>{{ t('panel.files.transferItemDetails', { count: transferOperation.items.length }) }}</summary>
+          <ul>
+            <li v-for="item in transferResultPager.items.value" :key="item.sourcePath" :class="{ 'is-failed': !item.success, 'is-warning': item.success && Boolean(item.reason) }">
+              <div class="transfer-item-head"><strong>{{ item.sourcePath }}</strong><span>{{ t(!item.success ? 'panel.files.transferItemFailed' : item.reason ? 'panel.files.transferItemWarning' : 'panel.files.transferItemSucceeded') }}</span></div>
+              <p v-if="item.targetPath" class="transfer-item-target"><span>{{ t('panel.files.permissionsTarget') }}</span> {{ item.targetPath }}</p>
+              <p v-if="item.reason" class="transfer-item-reason">{{ item.reason }}</p>
+            </li>
+          </ul>
+          <TablePager :state="transferResultPager" />
+        </details>
+        <details v-if="transferOperation.detail" class="transfer-result-details"><summary>{{ t('panel.common.technicalDetails') }}</summary><pre>{{ transferOperation.detail }}</pre></details>
+        <div v-if="transferOperation.status !== 'running' && transferOperation.status !== 'refreshing'" class="transfer-result-actions">
+          <button v-if="transferOperation.refreshError || transferOperation.done === null" type="button" class="secondary compact" :disabled="fileMutationBusy || loading" @click="refreshTransferListing">{{ t('panel.files.transferRefreshSource') }}</button>
+          <button type="button" class="secondary compact" :disabled="fileMutationBusy || loading" @click="openTransferDestination">{{ t('panel.files.transferOpenDestination') }}</button>
+        </div>
+      </section>
+
       <!-- YÜKLEME İLERLEMESİ. Düğme metni zaten "3/20" diyor ama bir SAYI, kalan işin ne kadar
            olduğunu bir bakışta anlatmaz; çubuk oranı gösterir. Ölçü DOSYA BAŞINADIR (uç bayt
            ilerlemesi bildirmiyor), bu yüzden büyük tek dosyada çubuk uzun süre yerinde durur —
@@ -602,7 +648,9 @@ import {
   uploadFile,
   type DirectorySizeResult,
   type FileEntry,
-  type FileWorkspace
+  type FileWorkspace,
+  type MoveResult,
+  type CopyResult
 } from "../api/files";
 import { useBackupRestore, restoreResult } from "../composables/useBackupRestore";
 import BackupRestoreResult from "../components/BackupRestoreResult.vue";
@@ -696,10 +744,30 @@ type PermissionOperation = {
 const permissionState = ref<PermissionOperation | null>(null);
 let permissionContext: (() => boolean) | null = null;
 const permissionOperation = computed(() => permissionState.value && permissionContext?.() ? permissionState.value : null);
+type TransferOperation = {
+  kind: 'move' | 'copy' | 'rename';
+  status: 'running' | 'refreshing' | 'succeeded' | 'partial' | 'failed';
+  sourcePath: string;
+  destinationPath: string;
+  newName: string;
+  overwrite: boolean;
+  total: number;
+  done: number | null;
+  failed: number | null;
+  items: { sourcePath: string; targetPath: string; success: boolean; reason: string }[];
+  error: string;
+  detail: string;
+  refreshError: string;
+};
+const transferState = ref<TransferOperation | null>(null);
+let transferContext: (() => boolean) | null = null;
+const transferOperation = computed(() => transferState.value && transferContext?.() ? transferState.value : null);
+const transferResultPager = usePagination(computed(() => transferOperation.value?.items ?? []));
 watch(() => [authStore.session, authStore.session?.user?.id, authStore.session?.user?.role], () => {
   if (!isFileViewActive()) {
     archiveState.value = null;
     permissionState.value = null;
+    transferState.value = null;
   }
 }, { flush: "sync" });
 let searchRequest = 0;
@@ -729,7 +797,7 @@ function beforeUnload(event: BeforeUnloadEvent) {
   if (isDirty.value || saving.value) { event.preventDefault(); event.returnValue = ""; }
 }
 onMounted(() => window.addEventListener("beforeunload", beforeUnload));
-onBeforeUnmount(() => { disposed = true; archiveState.value = null; permissionState.value = null; workspaceRequest++; window.removeEventListener("beforeunload", beforeUnload); });
+onBeforeUnmount(() => { disposed = true; archiveState.value = null; permissionState.value = null; transferState.value = null; workspaceRequest++; window.removeEventListener("beforeunload", beforeUnload); });
 async function changeSite(event: Event) {
   if (!isFileViewActive()) return;
   const isCurrent = currentFileContext(false);
@@ -944,6 +1012,7 @@ watch(selectedSiteName, async (siteName, previousSiteName) => {
   requestedWorkspacePath = "";
   archiveState.value = null;
   permissionState.value = null;
+  transferState.value = null;
   workspace.value = null;
   searchResults.value = [];
   searchRan.value = false;
@@ -970,6 +1039,7 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
   if (path !== requestedWorkspacePath) {
     archiveState.value = null;
     permissionState.value = null;
+    transferState.value = null;
     requestedWorkspacePath = path;
     fileNavigationGeneration++;
   }
@@ -989,6 +1059,7 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
     fileContent.value = result.content || "";
     savedContent.value = fileContent.value;
     workspaceLoad.clear();
+    if (transferOperation.value) transferOperation.value.refreshError = '';
     if (archiveOperation.value) {
       const operation = archiveOperation.value;
       operation.refreshError = "";
@@ -1001,6 +1072,10 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
     if (!isFileViewActive() || request !== workspaceRequest || site !== selectedSiteName.value) return;
     // Hata hem şeritte hem listenin yerinde görünür: boş bir tablo "klasör boş" sanılmasın.
     workspaceLoad.capture(error);
+    if (transferOperation.value) {
+      transferOperation.value.refreshError = t('panel.files.refreshAfterOperationFailed');
+      workspaceLoad.message.value = transferOperation.value.refreshError;
+    }
     if (archiveOperation.value) {
       archiveOperation.value.refreshError = t("panel.files.archiveRefreshFailed");
       workspaceLoad.message.value = archiveOperation.value.refreshError;
@@ -1350,6 +1425,7 @@ async function runArchive(path: string, extracting: boolean) {
     }
     archiveState.value!.status = "running";
     dismissPermissionOperation();
+    dismissTransferOperation();
     clearNotice();
     const result = await (extracting ? extractPath(path) : compressPath(path, "", collision));
     if (!isCurrent()) return;
@@ -1407,9 +1483,14 @@ function dismissPermissionOperation() {
   if (permissionOperation.value && permissionOperation.value.status !== 'running') permissionState.value = null;
 }
 
+function dismissTransferOperation() {
+  if (transferOperation.value && !['running', 'refreshing'].includes(transferOperation.value.status)) transferState.value = null;
+}
+
 function dismissFileOperationResults() {
   dismissArchiveOperation();
   dismissPermissionOperation();
+  dismissTransferOperation();
   // Called only at dispatch: cancelling a prompt keeps the previous outcome visible.
   clearNotice();
 }
@@ -1529,12 +1610,74 @@ async function createNewFile() {
  * Sonuç öge başına gelir: istek 200 dönse bile öge taşınmamış olabilir (hedefte aynı ad var,
  * dosya kullanımda...). Bu yüzden "yeniden adlandırıldı" yalnız `moved` doğruyken yazılır.
  */
+function beginTransferOperation(kind: TransferOperation['kind'], sourcePath: string, destinationPath: string,
+  total: number, overwrite: boolean, newName: string, isCurrent: () => boolean) {
+  dismissFileOperationResults();
+  transferContext = isCurrent;
+  transferState.value = { kind, status: 'running', sourcePath, destinationPath, newName, overwrite, total,
+    done: null, failed: null, items: [], error: '', detail: '', refreshError: '' };
+  transferResultPager.reset();
+  return transferState.value;
+}
+
+function measureTransferResult(operation: TransferOperation, result: MoveResult | CopyResult) {
+  operation.done = 'copiedCount' in result ? result.copiedCount : result.movedCount;
+  operation.failed = result.failedCount;
+  operation.items = result.items.map(item => {
+    const success = 'copied' in item ? item.copied : item.moved;
+    return { sourcePath: item.sourcePath, targetPath: item.targetPath, success,
+      reason: item.errorKey || !success ? hataMetni(item.errorKey) : '' };
+  });
+}
+
+function transferTerminalStatus(operation: TransferOperation): TransferOperation['status'] {
+  if (operation.error || operation.done === null || operation.done === 0) return 'failed';
+  return operation.failed || operation.items.some(item => item.success && item.reason) ? 'partial' : 'succeeded';
+}
+
+function reportTransferOperation(operation: TransferOperation, refreshed: boolean) {
+  if (operation.error) { showNotice(operation.error, true); return; }
+  const failures = operation.items.filter(item => !item.success).map(item => ({ name: item.sourcePath, reason: item.reason }));
+  const warnings = operation.items.filter(item => item.success && item.reason).map(item => ({ name: item.sourcePath, reason: item.reason }));
+  const message = operation.kind === 'rename'
+    ? failures.length ? t('panel.bulk.failedItem', { name: operation.items[0]?.sourcePath.split('/').pop() || operation.sourcePath, reason: failures[0]!.reason }) : t('panel.files.renamed')
+    : transferOzeti(operation.kind, operation.total, operation.done ?? 0, failures, warnings);
+  reportFileOperation(message, operation.status !== 'succeeded', refreshed);
+}
+
+async function reconcileTransferOperation(operation: TransferOperation, isCurrent: () => boolean) {
+  if (!isCurrent()) return;
+  const status = transferTerminalStatus(operation);
+  operation.status = 'refreshing';
+  const refreshed = await refreshAfterFileOperation(operation.sourcePath, isCurrent);
+  if (!isCurrent() || transferState.value !== operation) return;
+  operation.status = status;
+  // A newer neutral read owns the listing/error, but cannot leave the measured write pending.
+  if (refreshed === undefined) return;
+  operation.refreshError = refreshed ? '' : t('panel.files.refreshAfterOperationFailed');
+  reportTransferOperation(operation, refreshed);
+}
+
+async function refreshTransferListing() {
+  const operation = transferOperation.value, isCurrent = transferContext;
+  if (!operation || !isCurrent || fileMutationBusy.value || loading.value || ['running', 'refreshing'].includes(operation.status)) return;
+  transferBusy.value = true;
+  try { await reconcileTransferOperation(operation, isCurrent); }
+  finally { transferBusy.value = false; }
+}
+
+async function openTransferDestination() {
+  const operation = transferOperation.value;
+  if (!operation || fileMutationBusy.value || loading.value || ['running', 'refreshing'].includes(operation.status)) return;
+  await openPath(operation.destinationPath);
+}
+
 async function renamePath(entry: FileEntry) {
   if (!isFileViewActive() || locked.value || fileMutationBusy.value) return;
   entry = { ...entry };
   const isCurrent = currentFileContext(false);
-  const isVisible = currentFileContext(false);
   const sourceFolder = workspace.value?.path || "";
+  let operation: TransferOperation | null = null;
   transferBusy.value = true;
   try {
     const newName = await prompt({
@@ -1543,20 +1686,18 @@ async function renamePath(entry: FileEntry) {
       defaultValue: entry.name
     });
     if (!newName || newName.trim() === entry.name || !isCurrent() || locked.value) return;
-    dismissFileOperationResults();
+    operation = beginTransferOperation('rename', sourceFolder, sourceFolder, 1, false, newName.trim(), isCurrent);
     const result = await renameEntry(entry.path, newName.trim(), false);
     if (!isCurrent()) return;
-    const refreshed = await refreshAfterFileOperation(sourceFolder, isVisible);
-    if (!isVisible() || refreshed === undefined) return;
-    const failure = result.items.find((item) => !item.moved);
-    if (failure) {
-      reportFileOperation(t("panel.bulk.failedItem", { name: entry.name, reason: hataMetni(failure.errorKey) }), true, refreshed);
-      return;
-    }
-
-    reportFileOperation(t("panel.files.renamed"), false, refreshed);
+    measureTransferResult(operation, result);
+    await reconcileTransferOperation(operation, isCurrent);
   } catch (error) {
-    if (isCurrent()) showNotice(resolveApiMessage(error), true);
+    if (!isCurrent()) return;
+    if (operation) {
+      operation.error = t(extractApiMessage(error));
+      operation.detail = extractApiDetails(error);
+      await reconcileTransferOperation(operation, isCurrent);
+    } else showNotice(resolveApiMessage(error), true);
   } finally {
     transferBusy.value = false;
   }
@@ -1599,48 +1740,21 @@ async function runTransfer() {
   const overwrite = transferOverwrite.value;
   const sourceFolder = workspace.value?.path || "";
   const isCurrent = currentFileContext(false);
-  const isVisible = currentFileContext(false);
   transferBusy.value = true;
+  const operation = beginTransferOperation(mode, sourceFolder, destination, targets.length, overwrite, '', isCurrent);
   try {
-    const failures: { name: string; reason: string }[] = [];
-    // UYARI ≠ HATA: kopyalamada bir alt öge bağlantı (junction/symlink) olduğu için atlanmışsa
-    // öge "kopyalandı" sayılır ama kopya EKSİKTİR (bkz. CopyFileResultDto.ErrorKey). Bu satırı
-    // yutmak, kullanıcının eksik kopyayı tam sanmasına yol açardı.
-    const warnings: { name: string; reason: string }[] = [];
-    let done = 0;
-
-    dismissFileOperationResults();
-    if (mode === "move") {
-      const result = await moveEntries(paths, destination, overwrite);
-      if (!isCurrent()) return;
-      done = result.movedCount;
-      for (const item of result.items.filter((satir) => !satir.moved)) {
-        failures.push({ name: item.sourcePath, reason: hataMetni(item.errorKey) });
-      }
-    } else {
-      const result = await copyEntries(paths, destination, overwrite);
-      if (!isCurrent()) return;
-      done = result.copiedCount;
-      for (const item of result.items) {
-        if (!item.copied) {
-          failures.push({ name: item.sourcePath, reason: hataMetni(item.errorKey) });
-        } else if (item.errorKey) {
-          warnings.push({ name: item.sourcePath, reason: hataMetni(item.errorKey) });
-        }
-      }
-    }
-
+    const result = mode === 'move' ? await moveEntries(paths, destination, overwrite) : await copyEntries(paths, destination, overwrite);
+    if (!isCurrent()) return;
+    measureTransferResult(operation, result);
     transferMode.value = null;
     selection.clear();
-    const refreshed = await refreshAfterFileOperation(sourceFolder, isVisible);
-    if (!isVisible() || refreshed === undefined) return;
-    reportFileOperation(
-      transferOzeti(mode, targets.length, done, failures, warnings),
-      failures.length > 0 || warnings.length > 0, refreshed);
+    await reconcileTransferOperation(operation, isCurrent);
   } catch (error) {
-    // İstek TÜMÜYLE reddedildi (hedef klasör yok, sanal alan dışı...): form açık kalır ki
-    // kullanıcı hedefi düzeltip yeniden deneyebilsin.
-    if (isCurrent()) showNotice(resolveApiMessage(error), true);
+    if (!isCurrent()) return;
+    // Files may already have changed before the response failed. A GET cannot prove the write's outcome.
+    operation.error = t(extractApiMessage(error));
+    operation.detail = extractApiDetails(error);
+    await reconcileTransferOperation(operation, isCurrent);
   } finally {
     transferBusy.value = false;
   }
@@ -1668,9 +1782,6 @@ function transferOzeti(
   failures: { name: string; reason: string }[],
   warnings: { name: string; reason: string }[]
 ) {
-  const lines = [...failures, ...warnings].map((satir) =>
-    t("panel.bulk.failedItem", { name: satir.name, reason: satir.reason }));
-
   if (failures.length === 0 && warnings.length === 0) {
     return mode === "move"
       ? t("panel.files.movedAll", { total })
@@ -1678,13 +1789,13 @@ function transferOzeti(
   }
 
   if (failures.length === 0) {
-    return [t("panel.files.copiedIncomplete", { total }), ...lines].join("\n");
+    return t("panel.files.copiedIncomplete", { total });
   }
 
   const head = mode === "move"
     ? t("panel.files.movedPartial", { total, done, failed: failures.length })
     : t("panel.files.copiedPartial", { total, done, failed: failures.length });
-  return [head, ...lines].join("\n");
+  return head;
 }
 
 /**
@@ -2301,6 +2412,58 @@ async function restore(record: BackupRecord) {
   min-width: min(180px, 100%);
 }
 
+.transfer-result {
+  --transfer-tone: var(--warn-1);
+  display: grid;
+  gap: var(--sp-16);
+  min-width: 0;
+  padding: var(--sp-16);
+  border: 1px solid color-mix(in srgb, var(--transfer-tone) 35%, var(--panel-border));
+  border-left: 3px solid var(--transfer-tone);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+}
+.transfer-result.is-succeeded { --transfer-tone: var(--ok-1); }
+.transfer-result.is-failed { --transfer-tone: var(--danger-1); }
+.transfer-result-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-12); }
+.transfer-result-head > div { min-width: 0; }
+.transfer-result-head h3 { margin: 0; overflow-wrap: anywhere; }
+.transfer-result-head button { flex: 0 0 auto; }
+.transfer-result-kind { margin: 0 0 var(--sp-4); color: var(--text-muted); font-size: var(--fs-xs); }
+.transfer-result-scope { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-12); margin: 0; }
+.transfer-result-scope > div { min-width: 0; }
+.transfer-result-scope dt { margin-bottom: var(--sp-4); color: var(--text-muted); font-size: var(--fs-xs); }
+.transfer-result-scope dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.transfer-result-policy { margin: 0; color: var(--text-muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.transfer-result-counts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-8); margin: 0; }
+.transfer-result-counts > div { display: grid; gap: var(--sp-4); padding: var(--sp-12); border: 1px solid var(--panel-border); border-radius: var(--radius-sm); }
+.transfer-result-counts dd { margin: 0; font-size: var(--fs-xl); font-weight: 700; font-variant-numeric: tabular-nums; }
+.transfer-result-counts dt { color: var(--text-muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+@container file-workspace (max-width: 430px) {
+  .transfer-result-counts { grid-template-columns: 1fr; }
+  .transfer-result-counts > div { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-12); }
+}
+.transfer-result-counts .is-ok dd { color: var(--ok-text); }
+.transfer-result-counts .is-warning dd, .transfer-result-refresh { color: var(--warn-text); }
+.transfer-result-counts .is-failed dd, .transfer-result-error { color: var(--danger-text); }
+.transfer-result > p { margin: 0; overflow-wrap: anywhere; }
+.transfer-result-items { min-width: 0; }
+.transfer-result-items summary, .transfer-result-details summary { cursor: pointer; font-weight: 600; }
+.transfer-result-items ul { display: grid; gap: var(--sp-8); margin: var(--sp-12) 0; padding: 0; list-style: none; }
+.transfer-result-items li { min-width: 0; padding: var(--sp-12); border: 1px solid var(--panel-border); border-radius: var(--radius-sm); }
+.transfer-item-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-12); }
+.transfer-item-head strong { min-width: 0; overflow-wrap: anywhere; }
+.transfer-item-head span { flex: 0 0 auto; color: var(--ok-text); font-size: var(--fs-xs); font-weight: 600; }
+.transfer-result-items .is-warning .transfer-item-head span { color: var(--warn-text); }
+.transfer-result-items .is-failed .transfer-item-head span { color: var(--danger-text); }
+.transfer-result-items p { margin: var(--sp-8) 0 0; overflow-wrap: anywhere; }
+.transfer-item-target { color: var(--text-muted); font-size: var(--fs-xs); }
+.transfer-item-target span { font-weight: 600; }
+.transfer-item-reason { font-size: var(--fs-xs); }
+.transfer-result-details { min-width: 0; }
+.transfer-result-details pre { margin: var(--sp-8) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--fs-xs)/1.5 var(--font-mono); }
+.transfer-result-actions { display: flex; flex-wrap: wrap; gap: var(--sp-8); }
+
 .permission-result {
   --permission-tone: var(--warn-1);
   display: grid;
@@ -2411,6 +2574,9 @@ async function restore(record: BackupRecord) {
 /* Keep file actions visible when the workspace is narrower than the six-column table. */
 @container file-workspace (max-width: 790px) {
   .permission-result-target { grid-template-columns: 1fr; }
+  .transfer-result-scope { grid-template-columns: 1fr; }
+  .transfer-result-counts > div { padding: var(--sp-8); }
+  .transfer-item-head { flex-direction: column; gap: var(--sp-4); }
   .files-table .data-row { min-width: 0; }
   .files-table .table-head { grid-template-columns: minmax(0, 1fr); }
   .files-table .table-head > :not(.select-cell) {

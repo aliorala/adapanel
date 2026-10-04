@@ -76,6 +76,9 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     internal Func<string> CompressionStagingPath { get; set; } = static () =>
         SecureTempFile.BuildPath("adapanel-compress", ".zip");
 
+    internal Func<string> TransferStagingPath { get; set; } = static () =>
+        SecureTempFile.BuildPath("adapanel-transfer", ".tmp");
+
     // Per-instance observation boundaries keep lifecycle tests on real temp files.
     internal Func<string, CancellationToken, Task>? TransferItemReady { get; set; }
     internal Action<string>? CopyEntryReady { get; set; }
@@ -374,13 +377,20 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
         MoveCoreAsync(request, beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken);
 
+    public Task<MoveFilesResultDto> MoveAsync(MoveFilesRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, FileTransferQuotaCheck beforeTransfer,
+        CancellationToken cancellationToken) =>
+        MoveCoreAsync(request, beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken,
+            beforeTransfer ?? throw new ArgumentNullException(nameof(beforeTransfer)));
+
     private async Task<MoveFilesResultDto> MoveCoreAsync(MoveFilesRequest request,
-        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken,
+        FileTransferQuotaCheck? beforeTransfer = null)
     {
         request = new MoveFilesRequest { Paths = (request.Paths ?? []).ToArray(), DestinationPath = request.DestinationPath,
             NewName = request.NewName, Overwrite = request.Overwrite };
         // GÜVENLİK ÖN HAZIRLIĞI TEK KAYNAKTAN gelir; taşıma ile kopyalama arasında farkı olan tek
-        // şey ÖGE BAŞINA yapılan iştir (aşağıdaki MoveOne).
+        // şey ÖGE BAŞINA yapılan iştir (aşağıdaki MoveOneAsync).
         var plan = await BuildTransferPlanAsync(
             request.Paths,
             request.DestinationPath,
@@ -394,16 +404,18 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             cancellationToken);
 
         var results = new List<MoveFileResultDto>(plan.Items.Count);
+        var measurementBudget = new SafeDirectoryWalkBudget(BoyutOgeButcesi, BoyutSureButcesiMs);
         foreach (var item in plan.Items)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (TransferItemReady is not null) await TransferItemReady(item.SourcePath, cancellationToken);
             await ApproveTransferAsync(item.Source, item.Target, beforeMutation, cancellationToken);
-            results.Add(MoveOne(item.Source, item.Target, item.SourcePath, item.TargetPath, request.Overwrite));
+            results.Add(await MoveOneAsync(item.Source, item.Target, item.SourcePath, item.TargetPath,
+                request.Overwrite, beforeMutation, beforeTransfer, measurementBudget, cancellationToken));
         }
 
         await ApprovePublicationAsync(plan.Destination, beforeMutation, cancellationToken);
-        var workspace = await GetWorkspaceAsync(plan.DestinationPath, cancellationToken);
+        var workspace = await ReadMutationWorkspaceAsync(plan.DestinationPath, beforeMutation, cancellationToken);
         await ApprovePublicationAsync(plan.Destination, beforeMutation, cancellationToken);
         return new MoveFilesResultDto
         {
@@ -429,6 +441,13 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         CopyCoreAsync(request, KopyaOgeButcesi,
             beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken);
 
+    public Task<CopyFilesResultDto> CopyAsync(CopyFilesRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, FileTransferQuotaCheck beforeTransfer,
+        CancellationToken cancellationToken) =>
+        CopyCoreAsync(request, KopyaOgeButcesi,
+            beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken,
+            beforeTransfer ?? throw new ArgumentNullException(nameof(beforeTransfer)));
+
     /// <summary>Yukarıdakinin BÜTÇESİ DIŞARIDAN verilen hâli — tek uygulama budur.</summary>
     /// <remarks>
     /// <para>
@@ -445,7 +464,8 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         CancellationToken cancellationToken) => CopyCoreAsync(request, ogeButcesi, null, cancellationToken);
 
     private async Task<CopyFilesResultDto> CopyCoreAsync(CopyFilesRequest request, int ogeButcesi,
-        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken,
+        FileTransferQuotaCheck? beforeTransfer = null)
     {
         request = new CopyFilesRequest { Paths = (request.Paths ?? []).ToArray(), DestinationPath = request.DestinationPath,
             NewName = request.NewName, Overwrite = request.Overwrite };
@@ -477,11 +497,11 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             // Authority is an operation failure, never an ordinary per-item IO result.
             await ApproveTransferAsync(item.Source, item.Target, beforeMutation, cancellationToken);
             results.Add(await CopyOneAsync(item.Source, item.Target, item.SourcePath, item.TargetPath, request.Overwrite,
-                butce, beforeMutation, cancellationToken));
+                butce, beforeMutation, cancellationToken, beforeTransfer));
         }
 
         await ApprovePublicationAsync(plan.Destination, beforeMutation, cancellationToken);
-        var workspace = await GetWorkspaceAsync(plan.DestinationPath, cancellationToken);
+        var workspace = await ReadMutationWorkspaceAsync(plan.DestinationPath, beforeMutation, cancellationToken);
         await ApprovePublicationAsync(plan.Destination, beforeMutation, cancellationToken);
         return new CopyFilesResultDto
         {
@@ -582,18 +602,30 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     {
         await ApprovePublicationAsync(source, beforeMutation, token);
         await ApprovePublicationAsync(target, beforeMutation, token);
-        EnsureInsideSandbox(source);
-        EnsureInsideSandbox(target);
+        EnsureTransferPath(source);
+        EnsureTransferPath(target);
         token.ThrowIfCancellationRequested();
     }
 
+    private static void EnsureTransferPath(ResolvedTarget target)
+    {
+        EnsureInsideSandbox(target);
+        if (File.GetAttributes(target.SandboxRoot).HasFlag(FileAttributes.ReparsePoint))
+            throw new AppException("files.path_outside_root", 400, 400);
+        EnsureNoReparsePoints(target.SandboxRoot, target.PhysicalPath);
+    }
+
     /// <summary>Tek ögeyi taşır; başarısızlığı İSTİSNA olarak değil, rapor satırı olarak döner.</summary>
-    private static MoveFileResultDto MoveOne(
+    private static async Task<MoveFileResultDto> MoveOneAsync(
         ResolvedTarget source,
         ResolvedTarget target,
         string sourcePath,
         string targetPath,
-        bool overwrite)
+        bool overwrite,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation,
+        FileTransferQuotaCheck? beforeTransfer,
+        SafeDirectoryWalkBudget measurementBudget,
+        CancellationToken cancellationToken)
     {
         var basarisiz = (string anahtar) => new MoveFileResultDto
         {
@@ -643,8 +675,62 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
 
         }
 
+        FileStream? sourceRead = null;
+        FileStream? original = null;
+        long? measuredBytes = null;
+        var approvalFailed = false;
+        Exception? measurementFailure = null;
+        Task<long> Measure(CancellationToken token)
+        {
+            try
+            {
+                token.ThrowIfCancellationRequested();
+                EnsureTransferPath(source);
+                EnsureTransferPath(target);
+                if (measuredBytes is null)
+                {
+                    if (kaynakKlasor)
+                    {
+                        var walk = SafeDirectoryWalk.Yuru(source.PhysicalPath, measurementBudget, token);
+                        if (walk.Truncated) throw new AppException(walk.TruncatedReasonKey, 413, 413);
+                        measuredBytes = walk.TotalBytes;
+                    }
+                    else
+                    {
+                        sourceRead = new FileStream(source.PhysicalPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                        measuredBytes = sourceRead.Length;
+                    }
+                    original = OpenCompressionDestination(target.PhysicalPath, overwrite);
+                }
+                return Task.FromResult(Math.Max(0, measuredBytes.Value - (original?.Length ?? 0)));
+            }
+            catch (Exception error) { measurementFailure = error; throw; }
+        }
         try
         {
+            if (beforeTransfer is not null)
+            {
+                try { await beforeTransfer(sourcePath, targetPath, Measure, cancellationToken); }
+                catch (Exception error) { approvalFailed = !ReferenceEquals(error, measurementFailure); throw; }
+                try { await ApproveTransferAsync(source, target, beforeMutation, cancellationToken); }
+                catch { approvalFailed = true; throw; }
+                if (kaynakKlasor && measuredBytes is not null)
+                {
+                    // A directory cannot be locked by opening all of its files. After the last
+                    // await, reject a changed or incomplete measurement before the native move.
+                    var current = SafeDirectoryWalk.Yuru(source.PhysicalPath,
+                        new SafeDirectoryWalkBudget(BoyutOgeButcesi, BoyutSureButcesiMs), cancellationToken);
+                    if (current.Truncated || current.TotalBytes != measuredBytes.Value)
+                        return basarisiz("files.move_failed");
+                }
+                EnsureTransferPath(source);
+                EnsureTransferPath(target);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            var mayOverwrite = overwrite && (measuredBytes is null || original is not null);
+            // Nothing awaits between releasing the measured files and the native move.
+            sourceRead?.Dispose();
+            original?.Dispose();
             if (kaynakKlasor)
             {
                 Directory.Move(source.PhysicalPath, target.PhysicalPath);
@@ -653,19 +739,24 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             {
                 // Let the filesystem replace the destination only as part of a successful
                 // move. Pre-deleting it loses the old file when the source is locked/unreadable.
-                File.Move(source.PhysicalPath, target.PhysicalPath, overwrite);
+                File.Move(source.PhysicalPath, target.PhysicalPath, mayOverwrite);
             }
         }
-        catch (IOException)
+        catch (AppException error) when (!approvalFailed && error.MessageKey == "files.already_exists")
+        {
+            return basarisiz("files.move_target_exists");
+        }
+        catch (IOException) when (!approvalFailed)
         {
             // En sık sebebi: klasörün BAŞKA BİR BİRİME taşınması (Directory.Move bunu yapamaz) ya da
             // dosyanın kullanımda olması. Yalanlamak yerine bu ögenin taşınmadığı raporlanır.
             return basarisiz("files.move_failed");
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException) when (!approvalFailed)
         {
             return basarisiz("files.move_denied");
         }
+        finally { sourceRead?.Dispose(); original?.Dispose(); }
 
         return new MoveFileResultDto
         {
@@ -677,7 +768,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
 
     /// <summary>Tek ögeyi kopyalar; başarısızlığı İSTİSNA olarak değil, rapor satırı olarak döner.</summary>
     /// <remarks>
-    /// Kural listesi <see cref="MoveOne"/> ile aynıdır ve gerekçeleri de aynıdır; burada yalnızca
+    /// Kural listesi <see cref="MoveOneAsync"/> ile aynıdır ve gerekçeleri de aynıdır; burada yalnızca
     /// KOPYALAMAYA ÖZGÜ olan kısımlar ayrıca açıklanır.
     /// </remarks>
     private async Task<CopyFileResultDto> CopyOneAsync(
@@ -688,7 +779,8 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         bool overwrite,
         SafeDirectoryWalkBudget butce,
         Func<SiteDto, CancellationToken, Task>? beforeMutation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        FileTransferQuotaCheck? beforeTransfer = null)
     {
         var basarisiz = (string anahtar) => new CopyFileResultDto
         {
@@ -745,9 +837,52 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             try { await ApproveTransferAsync(source, target, beforeMutation, token); }
             catch { approvalFailed = true; throw; }
         }
+        CopyPayload? payload = null;
+        FileStream? original = null;
+        var originalMeasured = false;
+        Exception? measurementFailure = null;
+        async Task<long> Measure(CancellationToken token)
+        {
+            try
+            {
+                payload ??= await PrepareCopyPayloadAsync(source, kaynakKlasor, butce, Reapprove, token);
+                EnsureTransferPath(target);
+                if (!originalMeasured)
+                {
+                    original = OpenCompressionDestination(target.PhysicalPath, overwrite);
+                    originalMeasured = true;
+                }
+                return Math.Max(0, payload.Length - (original?.Length ?? 0));
+            }
+            catch (Exception error) { measurementFailure = error; throw; }
+        }
         try
         {
-            if (kaynakKlasor)
+            if (beforeTransfer is not null)
+            {
+                try { await beforeTransfer(sourcePath, targetPath, Measure, cancellationToken); }
+                catch (Exception error)
+                {
+                    approvalFailed |= !ReferenceEquals(error, measurementFailure);
+                    throw;
+                }
+                await Reapprove(cancellationToken);
+            }
+            if (payload is not null)
+            {
+                if (kaynakKlasor)
+                    await PublishCopyPayloadDirectoryAsync(source, target, payload, Reapprove, cancellationToken);
+                else
+                {
+                    var entry = payload.Entries[0];
+                    await WriteAtomicallyAsync(target,
+                        (output, token) => payload.CopyEntryAsync(entry, output, token), cancellationToken, Reapprove,
+                        failIfExists: !overwrite || original is null, lastWriteTimeUtc: entry.LastWriteTimeUtc,
+                        releasePublicationRead: () => original?.Dispose());
+                }
+                eksiklikAnahtari = payload.Warning;
+            }
+            else if (kaynakKlasor)
             {
                 var kopya = await KlasoruKopyalaAsync(source, target, butce, Reapprove, cancellationToken);
                 if (!kopya.Tamamlandi)
@@ -766,6 +901,14 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                 // overwrite yalnız yukarıdaki kapıdan geçmiş olabilir; hedef yoksa bayrağın etkisi yok.
                 File.Copy(source.PhysicalPath, target.PhysicalPath, overwrite);
             }
+        }
+        catch (CopyPreparationException error) when (!approvalFailed)
+        {
+            return basarisiz(error.ErrorKey);
+        }
+        catch (AppException error) when (!approvalFailed && error.MessageKey == "files.already_exists")
+        {
+            return basarisiz("files.copy_target_exists");
         }
         catch (IOException) when (!approvalFailed)
         {
@@ -787,6 +930,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             // rapor satırı değildir, cevabı bekleyen kimse kalmamıştır).
             throw;
         }
+        finally { original?.Dispose(); payload?.Dispose(); }
 
         return new CopyFileResultDto
         {
@@ -933,6 +1077,157 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             return new KlasorKopyasi(true, baglantiAtlandi ? "files.copy_link_skipped" : string.Empty);
         }
         finally { KopyayiGeriSar(kaynakKlasor: true, temporary); }
+    }
+
+    private async Task<CopyPayload> PrepareCopyPayloadAsync(ResolvedTarget source, bool directory,
+        SafeDirectoryWalkBudget budget, Func<CancellationToken, Task> approve, CancellationToken token)
+    {
+        // Resolving quota ownership can await; recheck before enumerating the source tree.
+        await approve(token);
+        var planned = new List<FileSystemInfo>();
+        var skippedLink = false;
+        if (directory)
+        {
+            var walk = SafeDirectoryWalk.Yuru(source.PhysicalPath, budget, planned.Add, null, token,
+                () => skippedLink = true);
+            if (walk.Truncated)
+                throw new CopyPreparationException(walk.TruncatedReasonKey == SafeDirectoryWalk.SebepErisimReddi
+                    ? "files.copy_denied" : walk.TruncatedReasonKey);
+        }
+        else planned.Add(new FileInfo(source.PhysicalPath));
+
+        // One private payload keeps the measured bytes immutable without keeping a handle
+        // for every file in a large directory. It is outside the site's usage measurement.
+        var path = TransferStagingPath();
+        var created = false;
+        var entries = new List<CopyPayloadEntry>(planned.Count);
+        try
+        {
+            await using (var output = SecureTempFile.Create(path))
+            {
+                created = true;
+                foreach (var entry in planned)
+                {
+                    await approve(token);
+                    EnsureNoReparsePoints(source.SandboxRoot, entry.FullName);
+                    var attributes = File.GetAttributes(entry.FullName);
+                    var isDirectory = entry is DirectoryInfo;
+                    if (attributes.HasFlag(FileAttributes.Directory) != isDirectory)
+                        throw new IOException("The selected source changed during transfer preparation.");
+                    var relative = directory ? Path.GetRelativePath(source.PhysicalPath, entry.FullName) : string.Empty;
+                    if (isDirectory)
+                    {
+                        entries.Add(new CopyPayloadEntry(entry.FullName, relative, true, output.Position, 0, default));
+                        continue;
+                    }
+                    await using var input = new FileStream(entry.FullName, FileMode.Open, FileAccess.Read, FileShare.Read,
+                        81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    var length = input.Length;
+                    var offset = output.Position;
+                    var timestamp = File.GetLastWriteTimeUtc(entry.FullName);
+                    await CopyExactTransferBytesAsync(input, output, length, token);
+                    var probe = new byte[1];
+                    if (await input.ReadAsync(probe, token) != 0)
+                        throw new IOException("The selected source grew during transfer preparation.");
+                    entries.Add(new CopyPayloadEntry(entry.FullName, relative, false, offset, length, timestamp));
+                }
+                await output.FlushAsync(token);
+            }
+            token.ThrowIfCancellationRequested();
+            var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            return new CopyPayload(path, stream, entries, skippedLink ? "files.copy_link_skipped" : string.Empty);
+        }
+        catch
+        {
+            if (created) TryDeleteTransferPayload(path);
+            throw;
+        }
+    }
+
+    private async Task PublishCopyPayloadDirectoryAsync(ResolvedTarget source, ResolvedTarget target,
+        CopyPayload payload, Func<CancellationToken, Task> approve, CancellationToken token)
+    {
+        var temporary = Path.Combine(Path.GetDirectoryName(target.PhysicalPath)!, $".adapanel-copy-{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await approve(token);
+            EnsureNoReparsePoints(target.SandboxRoot, temporary);
+            Directory.CreateDirectory(temporary);
+            foreach (var entry in payload.Entries)
+            {
+                CopyEntryReady?.Invoke(entry.SourcePath);
+                await approve(token);
+                EnsureNoReparsePoints(source.SandboxRoot, entry.SourcePath);
+                var destination = Path.GetFullPath(Path.Combine(temporary, entry.RelativePath));
+                if (!PathContainment.IsInsideRoot(temporary, destination))
+                    throw new AppException("files.path_outside_root", 400, 400);
+                EnsureNoReparsePoints(target.SandboxRoot, destination);
+                if (entry.IsDirectory) Directory.CreateDirectory(destination);
+                else
+                {
+                    await using (var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write,
+                        FileShare.None, 81920, FileOptions.Asynchronous))
+                        await payload.CopyEntryAsync(entry, output, token);
+                    File.SetLastWriteTimeUtc(destination, entry.LastWriteTimeUtc);
+                }
+            }
+            await approve(token);
+            EnsureNoReparsePoints(target.SandboxRoot, temporary);
+            EnsureInsideSandbox(target);
+            token.ThrowIfCancellationRequested();
+            Directory.Move(temporary, target.PhysicalPath);
+        }
+        finally { KopyayiGeriSar(kaynakKlasor: true, temporary); }
+    }
+
+    private static async Task CopyExactTransferBytesAsync(Stream input, Stream output, long length, CancellationToken token)
+    {
+        var buffer = new byte[81920];
+        while (length > 0)
+        {
+            token.ThrowIfCancellationRequested();
+            var count = await input.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, length)), token);
+            token.ThrowIfCancellationRequested();
+            if (count == 0) throw new IOException("Transfer content ended before its measured length.");
+            await output.WriteAsync(buffer.AsMemory(0, count), token);
+            length -= count;
+        }
+        token.ThrowIfCancellationRequested();
+    }
+
+    private static void TryDeleteTransferPayload(string path)
+    {
+        try { File.Delete(path); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        { /* The private file keeps its restrictive ACL even if cleanup fails. */ }
+    }
+
+    private sealed record CopyPayloadEntry(string SourcePath, string RelativePath, bool IsDirectory,
+        long Offset, long Length, DateTime LastWriteTimeUtc);
+
+    private sealed class CopyPayload(string path, FileStream stream, IReadOnlyList<CopyPayloadEntry> entries,
+        string warning) : IDisposable
+    {
+        internal IReadOnlyList<CopyPayloadEntry> Entries { get; } = entries;
+        internal string Warning { get; } = warning;
+        internal long Length => stream.Length;
+        internal Task CopyEntryAsync(CopyPayloadEntry entry, Stream output, CancellationToken token)
+        {
+            stream.Position = entry.Offset;
+            return CopyExactTransferBytesAsync(stream, output, entry.Length, token);
+        }
+        public void Dispose()
+        {
+            stream.Dispose();
+            TryDeleteTransferPayload(path);
+        }
+    }
+
+    private sealed class CopyPreparationException : IOException
+    {
+        internal CopyPreparationException(string errorKey) : base(errorKey) => ErrorKey = errorKey;
+        internal string ErrorKey { get; }
     }
 
     /// <summary>

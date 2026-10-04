@@ -3,6 +3,10 @@ using AdaPanel.Core.Dtos.Sites;
 
 namespace AdaPanel.Core.Interfaces;
 
+/// <summary>Checks one transfer's net growth using the service's stable content measurement.</summary>
+public delegate Task FileTransferQuotaCheck(string sourcePath, string targetPath,
+    Func<CancellationToken, Task<long>> measureNetGrowth, CancellationToken cancellationToken);
+
 public interface IFileService
 {
     Task<FileWorkspaceDto> GetWorkspaceAsync(string path, CancellationToken cancellationToken = default);
@@ -62,6 +66,11 @@ public interface IFileService
         Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Authorized file transfer is not implemented.");
 
+    Task<MoveFilesResultDto> MoveAsync(MoveFilesRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, FileTransferQuotaCheck beforeTransfer,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Measured file transfer is not implemented.");
+
     /// <summary>
     /// Bir ya da birden çok ögeyi başka klasöre KOPYALAR; kaynak YERİNDE KALIR.
     /// </summary>
@@ -101,6 +110,11 @@ public interface IFileService
     Task<CopyFilesResultDto> CopyAsync(CopyFilesRequest request,
         Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Authorized file transfer is not implemented.");
+
+    Task<CopyFilesResultDto> CopyAsync(CopyFilesRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, FileTransferQuotaCheck beforeTransfer,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Measured file transfer is not implemented.");
 
     Task<FileWorkspaceDto> SetPermissionsAsync(SetFilePermissionsRequest request, CancellationToken cancellationToken = default);
 

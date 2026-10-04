@@ -211,7 +211,16 @@ public sealed class FilesController(
         request = new MoveFilesRequest { Paths = (request.Paths ?? []).ToArray(), DestinationPath = request.DestinationPath,
             NewName = request.NewName, Overwrite = request.Overwrite };
         using var publication = await CapturePublicationAsync([.. request.Paths, request.DestinationPath], cancellationToken);
-        var result = await fileService.MoveAsync(request, publication.ApproveAsync, cancellationToken);
+        var result = await fileService.MoveAsync(request, publication.ApproveAsync, async (source, target, measure, token) =>
+        {
+            if (!CustomerAccess.IsScoped(publication.Principal)) return;
+            var sourceOwner = await ResolveSiteOwnerAsync(source, token);
+            var targetOwner = await ResolveSiteOwnerAsync(target, token);
+            // A rename or a move within one subscription does not add usage to that subscription.
+            if (sourceOwner is not null && sourceOwner == targetOwner) return;
+            await EnsureDiskQuotaAsync(target, async ct => (await measure(ct), string.Empty), token, publication.Principal);
+        }, cancellationToken);
+        await publication.RevalidateAsync(cancellationToken);
 
         // Kayıt, kısmi başarısızlığı da yazar: "hepsi taşındı" diyen bir iz, taşınmayan dosyanın
         // nereye gittiğini soran kişiyi yanlış yönlendirirdi.
@@ -227,6 +236,8 @@ public sealed class FilesController(
                 + (failures.Length > 0 ? $" Not moved: {string.Join("; ", failures)}." : string.Empty),
             cancellationToken);
 
+        await publication.RevalidateAsync(cancellationToken);
+        result.Workspace = ProjectWorkspace(result.Workspace, publication.Principal);
         return Ok(ApiResponse<MoveFilesResultDto>.Ok(result, "files.moved"));
     }
 
@@ -251,25 +262,14 @@ public sealed class FilesController(
 
         // Tavan ÖLÇÜMDEN de önce alınır: kota ölçümü bir AĞAÇ YÜRÜYÜŞÜDÜR, yani kendisi de ağır
         // bir iştir ve sınırsız bırakılırsa kopyalama hiç başlamadan sunucu tüketilebilirdi.
-        using var kapsam = await AgirIseGirisAsync(cancellationToken);
+        using var kapsam = await AgirIseGirisAsync(cancellationToken, publication.Principal);
 
-        // KOTA, İŞTEN ÖNCE ÖNGÖREREK. Kopyalama diski kaynağın boyutu kadar büyütür ve bu, kotanın
-        // en kolay delindiği yoldu: 400 MB'lık klasörünü tekrar tekrar kopyalayan 500 MB kotalı bir
-        // müşteri birimi doldurup KOMŞU KİRACILARI da yazamaz hâle getiriyordu.
-        //
-        // Ölçüm işten ÖNCE yapılır ve aşan istek HİÇ BAŞLATILMAZ: yarıya kadar kopyalayıp "kota
-        // doldu" demek, kullanıcıya hedef klasörde ne olduğu belirsiz bir kalıntı bırakırdı.
-        // KOTA SAHİBİ HEDEFE göre çözülür — diski büyüyen site hedeftir.
-        await EnsureDiskQuotaAsync(
-            request.DestinationPath,
-            async ct =>
-            {
-                var olcum = await fileService.MeasureAsync(request.Paths ?? [], ct);
-                return (olcum.TotalBytes, olcum.TruncatedReasonKey);
-            },
-            cancellationToken);
-
-        var result = await fileService.CopyAsync(request, publication.ApproveAsync, cancellationToken);
+        // Measure the immutable bytes that this item will publish, subtracting a protected
+        // overwrite target. An earlier Measure(path) can describe a different source file.
+        var result = await fileService.CopyAsync(request, publication.ApproveAsync,
+            (_, target, measure, token) => EnsureDiskQuotaAsync(target,
+                async ct => (await measure(ct), string.Empty), token, publication.Principal), cancellationToken);
+        await publication.RevalidateAsync(cancellationToken);
 
         // Kayıt, kısmi başarısızlığı da yazar. İZ YALNIZCA YOL VE SEBEP tutar — dosya İÇERİĞİ asla:
         // denetim kaydı, kopyalanan dosyanın gizli verisinin ikinci bir kopyası olamaz.
@@ -285,6 +285,8 @@ public sealed class FilesController(
                 + (failures.Length > 0 ? $" Not copied: {string.Join("; ", failures)}." : string.Empty),
             cancellationToken);
 
+        await publication.RevalidateAsync(cancellationToken);
+        result.Workspace = ProjectWorkspace(result.Workspace, publication.Principal);
         return Ok(ApiResponse<CopyFilesResultDto>.Ok(result, "files.copied"));
     }
 
