@@ -1,5 +1,24 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R40 içeren 0.8.84 yayımlandı ve doğrulandı
+
+PUBLIC latest ve kaynaklar0.8.84. Yayın2026-10-04T07:25:52Z /10:25:52İstanbul.
+https://github.com/aliorala/adapanel/releases/tag/0.8.84
+https://github.com/aliorala/adapanel/releases/download/0.8.84/AdaPanelSetup.exe
+91,110,768bytes; SHA256 6E011F19BB466663CB89F07906127CB7105866C1AEAC221B70AA78DF56CE5453.
+Kaynak localcommitbe11645. Paket94117exit0: publish170files0findings, installer0findings/version0.8.84.
+Aynı sürümün freshcomponents53426exit0 22Passed3standardlargeSkipped0Failed; yalnız tekraraudit atlandı.
+Publish62359exit0: uploadedEXEdownloadedSHAequalslocal. Unauthenticatedpublic latest/tag/name/body
+exactUTF8/singleasset/bytes/digest/uploaded verified; release084-published-verification.json.
+FinalNET20854exit0 Core2+Infra8881=8883/8883 fail0skip0, build0warning/error. FE15436exit0 types+
+112files2176/2176. Versionbump sonrası Vitegreen/wwwrootsync6assets. Alltest/preview/package/publish
+processes TERMINAL. AllagentsFINALFREEZE. ChromeauditTab40closed/viewportreset, __audit40removed.
+Canlı kurulum/realcustomerchanges/sourcepush yok; sadeceinstaller+notesGitHub'da. TestResults/eskiuntracked
+dokunulmadı. Kullanıcı .75 sorusu yanıtlandı: paketnotready cleanupnormalolabilir, currentlatest.75
+newreleaseproofdeğil; nowlatest.84. UserliveURLhenüzbulunmadı, ChromeusertabsnoAdaPanel, liveunmeasured.
+R40 tamam:136newbackend61newFE; finalmobile round40-files-search-final-mobile.png.
+Sonraki aday ZIP quota estimate/opened archive identity separate; doğrulanmışhenüzdeğil. Bugününraporu
+R40publishedilegüncellendi. ContinuousunbudgetedgoalACTIVE, NOTcomplete; birsonrakiturdenetime devam.
 ## 2026-10-04 — R40 tamamlandı; 0.8.84 paket/yayın hazırlığında
 
 Kaynak sürümü0.8.84; PUBLIC latest son doğrulamada0.8.83. 0.8.84 tag önkontrol404.
