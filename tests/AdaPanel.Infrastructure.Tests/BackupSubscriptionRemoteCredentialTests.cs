@@ -104,8 +104,10 @@ public sealed class BackupSubscriptionRemoteCredentialTests
         Assert.Empty(await servis.GetBackupsAsync(alan.Iptal));
     }
 
-    [Fact]
-    public async Task Abonelik_kimligi_SITE_yedegini_ETKILEMEZ()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Abonelik_kimligi_SITE_yedegini_ETKILEMEZ(bool measuredOwner)
     {
         // KAPSAM: abonelik kimligi yalnizca O ABONELIGE ait kayitlarda kullanilir. Aksi halde bir
         // musterinin jetonu baska bir kaydin silinmesinde kullanilirdi.
@@ -117,7 +119,9 @@ public sealed class BackupSubscriptionRemoteCredentialTests
 
         var siteKaydi = AbonelikKaydi(alan, "s1");
         siteKaydi.Type = "site";
-        siteKaydi.SubscriptionUserId = string.Empty;
+        // The durable owner authorizes access; it does not turn a manually created SITE
+        // archive into a subscription scheduler archive with different credentials.
+        if (!measuredOwner) siteKaydi.SubscriptionUserId = string.Empty;
         await alan.KayitlariYazAsync(siteKaydi);
 
         var servis = alan.ServisKur(bulut);

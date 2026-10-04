@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using AdaPanel.Core.Common;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication;
@@ -66,6 +67,9 @@ public static class CookieSessionValidator
     /// <summary>Çereze yazılan kimlik damgası (parola karmasının kısaltılmış özeti).</summary>
     public const string CredentialStampClaim = "adapanel_cred";
 
+    internal const string AcceptedIdentityParameter = "adapanel_accepted_identity";
+    internal const string SourceSessionParameter = "adapanel_source_session";
+
     /// <summary>Son doğrulama zamanı — çerezin kendi özelliklerinde taşınır.</summary>
     private const string LastValidatedKey = "adapanel_validated_utc";
 
@@ -83,8 +87,31 @@ public static class CookieSessionValidator
         var identity = context.Principal?.Identities.FirstOrDefault(item => item.IsAuthenticated);
         if (identity is null || !Guid.TryParse(identity.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var userId))
         {
-            return;
+            throw new AppException("auth.unauthorized", 401, 401);
         }
+
+        var token = context.HttpContext.RequestAborted;
+        token.ThrowIfCancellationRequested();
+        context.Properties.Parameters.TryGetValue(AcceptedIdentityParameter, out var acceptedIdentity);
+        var evidence = acceptedIdentity as string;
+        var renewingSession = context.Properties.Parameters.TryGetValue(SourceSessionParameter, out var sourceSession);
+        // Parameters are transient, but explicitly remove our handoff fields as well. They
+        // must never become ticket state or survive into a later renewal.
+        context.Properties.Parameters.Remove(AcceptedIdentityParameter);
+        context.Properties.Parameters.Remove(SourceSessionParameter);
+        var dbContext = context.HttpContext.RequestServices.GetRequiredService<AdaPanelDbContext>();
+        var user = await dbContext.Users.AsNoTracking().FirstOrDefaultAsync(candidate => candidate.Id == userId, token);
+        if (user is null || !user.IsActive || identity.FindFirst(ClaimTypes.Role)?.Value != user.Role.ToString() ||
+            !AcceptedIdentityEvidence.Matches(user, evidence))
+            throw new AppException("auth.unauthorized", 401, 401);
+        if (renewingSession)
+        {
+            var sessionId = sourceSession as string;
+            var revocations = context.HttpContext.RequestServices.GetRequiredService<SessionRevocationStore>();
+            if (string.IsNullOrWhiteSpace(sessionId) || await revocations.IsRevokedAsync(sessionId, token))
+                throw new AppException("auth.unauthorized", 401, 401);
+        }
+        token.ThrowIfCancellationRequested();
 
         // OTURUM KİMLİĞİ HER GİRİŞTE YENİDEN ÜRETİLİR.
         //
@@ -100,21 +127,8 @@ public static class CookieSessionValidator
 
         identity.AddClaim(new Claim(SessionRevocationStore.SessionIdClaim, SessionRevocationStore.NewSessionId()));
 
-        var dbContext = context.HttpContext.RequestServices.GetRequiredService<AdaPanelDbContext>();
-        var passwordHash = await dbContext.Users
-            .AsNoTracking()
-            .Where(user => user.Id == userId)
-            .Select(user => user.PasswordHash)
-            .FirstOrDefaultAsync(context.HttpContext.RequestAborted);
-
-        if (passwordHash is null)
-        {
-            // Kullanıcı okunamadı. Damga EKLENMEZ; ilk doğrulamada çerez reddedilir. "Ölçemedik"i
-            // "geçerli" saymamak bu depodaki yerleşik kural.
-            return;
-        }
-
-        identity.AddClaim(new Claim(CredentialStampClaim, ComputeStamp(passwordHash)));
+        foreach (var previous in identity.FindAll(CredentialStampClaim).ToList()) identity.RemoveClaim(previous);
+        identity.AddClaim(new Claim(CredentialStampClaim, ComputeStamp(user.PasswordHash)));
     }
 
     /// <summary>Çerezin hâlâ gerçeğe karşılık gelip gelmediğini denetler.</summary>

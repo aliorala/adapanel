@@ -278,7 +278,7 @@ public sealed class TenantDatabaseScopeTests : IDisposable
             => Task.FromResult<IReadOnlyCollection<Guid>>([Kurban]);
 
         public Task<Guid?> GetSiteOwnerUserIdAsync(string siteName, CancellationToken cancellationToken = default)
-            => Task.FromResult<Guid?>(null);
+            => Task.FromResult<Guid?>(siteName == "benim-site" ? Kiraci : Kurban);
 
         public Task<IReadOnlyCollection<string>?> GetSubUserSectionsAsync(Guid userId, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyCollection<string>?>(null);

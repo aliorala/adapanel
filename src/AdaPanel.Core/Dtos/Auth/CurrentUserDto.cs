@@ -1,7 +1,14 @@
+using System.Text.Json.Serialization;
+
 namespace AdaPanel.Core.Dtos.Auth;
 
 public sealed class CurrentUserDto
 {
+    // Internal handoff from accepted authentication to cookie publication. Never accept
+    // this value from an API body or expose it in a JSON response.
+    [JsonIgnore]
+    public string AuthenticationEvidence { get; init; } = string.Empty;
+
     public Guid Id { get; init; }
 
     public string UserName { get; init; } = string.Empty;
@@ -18,4 +25,3 @@ public sealed class CurrentUserDto
 
     public DateTime? LastLoginAtUtc { get; init; }
 }
-

@@ -10,6 +10,7 @@ vi.mock("../router", () => ({ default: { push: vi.fn() } }));
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key, locale: { value: "en" } }) }));
 vi.mock("../api/backup", async original => ({ ...await original<object>(), backupSite: vi.fn(), getBackups: vi.fn(), getBackupRunningJobs: vi.fn() }));
 vi.mock("../api/databases", async original => ({ ...await original<object>(), getDatabaseEngines: vi.fn(), getDatabaseWorkspace: vi.fn() }));
+vi.mock("../api/myDatabases", () => ({ getMyDatabases: vi.fn(async () => []) }));
 let app: App | undefined;
 beforeEach(() => { vi.mocked(getBackups).mockResolvedValue([]); vi.mocked(getDatabaseEngines).mockResolvedValue([]); vi.mocked(getBackupRunningJobs).mockResolvedValue({ running: [], interrupted: [], serverTimeUtc: "2026-10-02T10:00:00Z" }); });
 afterEach(() => { app?.unmount(); app = undefined; vi.clearAllMocks(); });
@@ -25,9 +26,11 @@ function locationRecord(path = ""): BackupRecord {
   return { id: "location", name: "a.zip", type: "site", source: "a.test", path, format: "zip", createdAtUtc: "2026-10-03T10:00:00Z", size: 10, status: "created", targetType: "local", remoteUri: "https://storage.example.test/archive.zip", encrypted: false, warnings: [], preservedPath: "", chainId: "", chainIndex: 0, backupMode: "full", baseBackupId: "", subscriptionUserId: "", itemCount: 1, localMissing: true, remoteMissing: false, remoteVerifiedUtc: null };
 }
 async function flush() { for (let i = 0; i < 16; i++) await nextTick(); }
-async function mount() {
+async function mount(role = "Administrator") {
   const renderer = createRenderer<object, object>({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
   const pinia = createPinia(); setActivePinia(pinia); useSitesStore().selectedSiteName = "a.test";
+  useAuthStore().session = { isAuthenticated: true, requiresSetupWizard: false,
+    user: { id: "fixture", role, userName: "fixture", email: "fixture@example.test", isActive: true, isTwoFactorEnabled: false, preferredLanguage: "en", lastLoginAtUtc: null } };
   app = renderer.createApp({ ...SiteBackupView, render: () => h("section") } as Component).use(pinia); app.provide(ssrContextKey, {});
   const state = (app.mount({}).$ as unknown as { setupState: State }).setupState; await flush(); return state;
 }
@@ -51,8 +54,7 @@ it("does not clear the new site's password when an old backup completes", async 
 });
 it.each(["Customer", "Reseller", "Administrator"])("distinguishes a hidden site backup path from an unknown location for %s", async role => {
   vi.mocked(getBackups).mockResolvedValue([locationRecord()]);
-  const state = await mount();
-  useAuthStore().session = { isAuthenticated: true, user: { role } } as never;
+  const state = await mount(role);
   state.expandedLocation = "location";
   const html = renderMarkup(state);
   expect(html).toContain(role === "Administrator" ? "panel.backup.location.unknown" : "panel.backup.location.scopedHidden");
@@ -65,7 +67,6 @@ it.each(["Customer", "Reseller", "Administrator"])("distinguishes a hidden site 
 it("keeps the administrator's site backup path visible and copyable", async () => {
   vi.mocked(getBackups).mockResolvedValue([locationRecord("C:/backups/a.zip")]);
   const state = await mount();
-  useAuthStore().session = { isAuthenticated: true, user: { role: "Administrator" } } as never;
   state.expandedLocation = "location";
   const html = renderMarkup(state);
   expect(html).toContain("C:/backups/a.zip");

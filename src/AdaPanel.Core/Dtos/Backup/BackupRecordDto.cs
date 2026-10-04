@@ -257,8 +257,9 @@ public sealed class BackupRecordDto
     public string BaseBackupId { get; set; } = string.Empty;
 
     /// <summary>
-    /// Abonelik yedeğinde sahibinin kullanıcı kimliği ("N" biçimi). Kiracı izolasyonunun
-    /// kaydı: bir aboneliğin yedeği yalnızca kendi sahibine gösterilir/geri yüklenir.
+    /// Site/abonelik arşivinin üretim sırasında doğrulanan abonelik sahibi ("N" biçimi).
+    /// Site ataması bu kalıcı kimliği değiştirmez. Boş: sahiplik bilinmiyor veya karma
+    /// içerik nedeniyle arşiv yalnız yöneticiye açık; güncel site adından sahip türetilmez.
     /// </summary>
     public string SubscriptionUserId { get; set; } = string.Empty;
 

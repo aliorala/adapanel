@@ -84,8 +84,12 @@ public sealed class BackupArchiveCollisionTests
                 ? Task.FromResult(new SiteDto { Name = "site", PhysicalPath = SiteRoot }) : throw new NotSupportedException(method.Name));
             var preferences = Fake<IPanelPreferencesService>((method, _) => method.Name == "GetAsync"
                 ? Task.FromResult(new PanelPreferencesDto { DefaultBackupRoot = BackupsRoot }) : throw new NotSupportedException(method.Name));
-            var scopes = Fake<ICustomerScopeService>((method, _) => method.Name == "GetScopeAsync"
-                ? Task.FromResult(new CustomerScope(["site"], 0, 0, 0, 0, 0)) : throw new NotSupportedException(method.Name));
+            var scopes = Fake<ICustomerScopeService>((method, _) => method.Name switch
+            {
+                "GetScopeAsync" => Task.FromResult(new CustomerScope(["site"], 0, 0, 0, 0, 0)),
+                "GetSiteOwnerUserIdAsync" => Task.FromResult<Guid?>(Owner),
+                _ => throw new NotSupportedException(method.Name)
+            });
             var ownership = Fake<IDatabaseOwnershipService>((method, _) => throw new NotSupportedException(method.Name));
             Service = new BackupService(sites, null!, null!, preferences, null!, store, null!, customerScopes: scopes, databaseOwnership: ownership, timeProvider: new FixedClock());
         }

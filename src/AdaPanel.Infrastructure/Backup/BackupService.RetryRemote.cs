@@ -28,7 +28,8 @@ public sealed partial class BackupService
             using var sourceLease = snapshot.Lease;
             var record = snapshot.Record;
             if (record.Status != "created_remote_failed" || record.TargetType != "ftp"
-                || !string.IsNullOrEmpty(record.RemoteUri) || !string.IsNullOrEmpty(record.SubscriptionUserId))
+                || !string.IsNullOrEmpty(record.RemoteUri)
+                || string.Equals(record.Type, "subscription", StringComparison.OrdinalIgnoreCase))
                 throw new AppException("backup.retry_not_available", 409, 409);
 
             var (targetType, remoteUrl, credentials) = await RemoteCredentials.ReadUploadTargetAsync(cancellationToken);

@@ -189,9 +189,8 @@ public sealed class BackupController(
     /// Kapsamlı bir kullanıcı bu yedek kaydını görebilir mi?
     /// </summary>
     /// <remarks>
-    /// Site yedeğinde ölçü sitenin kapsamda olmasıdır; ABONELİK yedeğinde ise kaydın
-    /// <c>SubscriptionUserId</c> değeridir. İkincisi olmadan bir müşteri, listede başka bir
-    /// müşterinin abonelik arşivini görebilir ve indirebilirdi.
+    /// Site yedeği hem güncel site kapsamını hem arşiv alınırken ölçülen abonelik sahibini
+    /// gerektirir. Sahibi bilinmeyen eski/karma arşivler yalnız yöneticiye açıktır.
     /// </remarks>
     private static bool IsVisibleToScope(
         BackupRecordDto record,
@@ -200,7 +199,10 @@ public sealed class BackupController(
     {
         if (string.Equals(record.Type, "site", StringComparison.OrdinalIgnoreCase))
         {
-            return siteScope.Contains(record.Source, StringComparer.OrdinalIgnoreCase);
+            return siteScope.Contains(record.Source, StringComparer.OrdinalIgnoreCase)
+                && allowedSubscriptionIds is not null
+                && !string.IsNullOrWhiteSpace(record.SubscriptionUserId)
+                && allowedSubscriptionIds.Contains(record.SubscriptionUserId);
         }
 
         if (string.Equals(record.Type, "subscription", StringComparison.OrdinalIgnoreCase))
@@ -354,22 +356,12 @@ public sealed class BackupController(
         }
     }
 
-    /// <summary>Bir yedek KAYDININ konusu: abonelik yedeğinde sahibi, site yedeğinde sitenin sahibi.</summary>
-    private async Task<Guid?> ResolveRecordSubjectAsync(BackupRecordDto? record, CancellationToken cancellationToken)
+    /// <summary>Arşivin doğrulanmış kalıcı sahibi; bilinmeyen sahip güncel site atamasından türetilmez.</summary>
+    private static Task<Guid?> ResolveRecordSubjectAsync(BackupRecordDto? record, CancellationToken cancellationToken)
     {
-        if (record is null)
-        {
-            return null;
-        }
-
-        if (Guid.TryParseExact(record.SubscriptionUserId, "N", out var abonelik))
-        {
-            return abonelik;
-        }
-
-        return string.Equals(record.Type, "site", StringComparison.OrdinalIgnoreCase)
-            ? await ResolveSiteSubjectAsync(record.Source, cancellationToken)
-            : null;
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<Guid?>(record is not null &&
+            Guid.TryParseExact(record.SubscriptionUserId, "N", out var owner) && owner != Guid.Empty ? owner : null);
     }
 
     /// <summary>
@@ -403,8 +395,9 @@ public sealed class BackupController(
     /// </para>
     /// <para>
     /// Denetim <see cref="CustomerAccess.EnsureDatabaseAsync"/> ile yapılır; site↔veritabanı
-    /// bağlama ucuyla AYNI kuralı kullanır. Kiracı kendi veritabanını yedeklemeye devam eder
-    /// (sahiplik kaydı ya da site adı eşleşmesi), yönetici muaftır.
+    /// bağlama ucuyla aynı aktör kapsamını kullanır. Paylaşılacak site arşivi ayrıca sitenin
+    /// ölçülen sahibini ve her veritabanının açık sahiplik kaydını doğrular; ad benzerliği
+    /// arşiv sahipliği kanıtı değildir. Yönetici karma arşiv alabilir, yalnız kendisi görür.
     /// </para>
     /// </remarks>
     [HttpPost("site")]
@@ -419,18 +412,39 @@ public sealed class BackupController(
             foreach (var database in request.Databases ?? [])
                 await CustomerAccess.EnsureDatabaseAsync(
                     customerScopes, dbOwnership, User, database.Engine, database.DatabaseName, token);
+            if (CustomerAccess.IsScoped(User))
+            {
+                var owner = await customerScopes.GetSiteOwnerUserIdAsync(request.SiteName, token);
+                if (owner is null || owner == Guid.Empty)
+                    throw new AdaPanel.Core.Common.AppException("backup.ownership_unconfirmed", 409, 409);
+                await EnsureSubscriptionAccessAsync(owner.Value, token);
+                // A reseller may manage both customers, but that does not authorize
+                // sharing one customer's dump inside the other customer's site archive.
+                var databases = request.Databases ?? [];
+                if (databases.Count > 0)
+                {
+                    var ownership = await dbOwnership.GetAllAsync(token);
+                    foreach (var database in databases)
+                    {
+                        var matches = ownership.Where(record => AdaPanel.Core.Common.DatabaseResourceIdentity.Same(
+                            record.Engine, record.DatabaseName, database.Engine, database.DatabaseName)).ToArray();
+                        if (matches.Length == 0 || matches.Any(record => record.OwnerUserId != owner))
+                            throw new AdaPanel.Core.Common.AppException("backup.ownership_unconfirmed", 409, 409);
+                    }
+                }
+            }
         }
         await BeforeBackup(cancellationToken);
 
-        // Sahip İŞTEN ÖNCE çözülür: çalışan-iş kaydı da denetim kaydı da aynı sahibi taşımalı ve
-        // sahiplik yedek sırasında değişse bile ikisi tutarlı kalmalı.
+        // Çalışan iş sitenin mevcut aboneliğine aittir. Son denetim kaydı ise arşivin
+        // kalıcı sahibini kullanır: yönetici karma içerik seçtiyse yalnız yöneticiye görünür.
         var konu = await ResolveSiteSubjectAsync(request.SiteName, cancellationToken);
         await using var job = await runningJobs.BeginAsync(
             RunningJobKinds.Backup, request.SiteName, konu, cancellationToken);
 
         var backup = await backupService.BackupSiteAsync(request, BeforeBackup, cancellationToken);
 
-        await WriteBackupCreatedAuditAsync(backup, konu, cancellationToken);
+        await WriteBackupCreatedAuditAsync(backup, await ResolveRecordSubjectAsync(backup, cancellationToken), cancellationToken);
 
         return Ok(ApiResponse<BackupRecordDto>.Ok(ProjectBackupRecord(backup), "backup.created"));
     }
@@ -707,7 +721,10 @@ public sealed class BackupController(
             konu,
             cancellationToken);
 
-        return Ok(ApiResponse<RestoreBackupItemsResultDto>.Ok(result, "backup.items_restored"));
+        var response = CustomerAccess.IsScoped(User)
+            ? new RestoreBackupItemsResultDto { RestoredCount = result.RestoredCount, TargetRoot = string.Empty }
+            : result;
+        return Ok(ApiResponse<RestoreBackupItemsResultDto>.Ok(response, "backup.items_restored"));
     }
 
     /// <summary>
@@ -745,8 +762,8 @@ public sealed class BackupController(
     }
 
     /// <summary>
-    /// Customer/Reseller için yedek kaydının etkin kapsamında olduğunu doğrular: SİTE yedeğinde
-    /// site kapsamda olmalı, ABONELİK yedeğinde abonelik erişilebilir olmalı.
+    /// Customer/Reseller için arşiv sahibinin aboneliği erişilebilir olmalı; site yedeğinde
+    /// ayrıca güncel site kapsamı da doğrulanır. Site ataması geçmiş arşivleri devretmez.
     /// </summary>
     private async Task EnsureBackupOwnershipAsync(string backupId, CancellationToken cancellationToken)
     {
@@ -766,18 +783,20 @@ public sealed class BackupController(
     {
         if (!CustomerAccess.IsScoped(User)) return;
 
-        if (string.Equals(record.Type, "subscription", StringComparison.OrdinalIgnoreCase))
+        var subscription = string.Equals(record.Type, "subscription", StringComparison.OrdinalIgnoreCase);
+        var site = string.Equals(record.Type, "site", StringComparison.OrdinalIgnoreCase);
+        if (subscription || site)
         {
-            if (!Guid.TryParseExact(record.SubscriptionUserId, "N", out var sahip))
+            if (!Guid.TryParseExact(record.SubscriptionUserId, "N", out var sahip) || sahip == Guid.Empty)
             {
                 throw new AdaPanel.Core.Common.AppException("auth.subscription_forbidden", 403, 403);
             }
 
             await EnsureSubscriptionAccessAsync(sahip, cancellationToken);
-            return;
+            if (subscription) return;
         }
 
-        if (!string.Equals(record.Type, "site", StringComparison.OrdinalIgnoreCase))
+        if (!site)
         {
             throw new AdaPanel.Core.Common.AppException("auth.site_forbidden", 403, 403);
         }

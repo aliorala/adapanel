@@ -1053,6 +1053,7 @@ public sealed class AuthService(
     {
         return new CurrentUserDto
         {
+            AuthenticationEvidence = AcceptedIdentityEvidence.Create(user),
             Id = user.Id,
             UserName = user.UserName,
             Email = user.Email,

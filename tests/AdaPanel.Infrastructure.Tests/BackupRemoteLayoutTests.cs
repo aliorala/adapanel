@@ -165,7 +165,11 @@ public sealed class BackupRemoteLayoutTests
         if (scenario == "missing-file") File.Delete(record.Path);
         if (scenario == "deleted-record") record.Status = "deleted_remote_failed";
         if (scenario == "missing-hash") record.ContentHash = "";
-        if (scenario == "subscription") record.SubscriptionUserId = Guid.NewGuid().ToString();
+        if (scenario == "subscription")
+        {
+            record.Type = "subscription";
+            record.SubscriptionUserId = Guid.NewGuid().ToString("N");
+        }
         await alan.DosyaDeposu.WriteAsync("config/backups.json", new[] { record }, alan.Iptal);
         var error = await Assert.ThrowsAsync<AdaPanel.Core.Common.AppException>(() => service.RetryRemoteUploadAsync(record.Id,
             scenario == "changed-target" ? url + "/changed" : url, alan.Iptal));

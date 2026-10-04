@@ -175,6 +175,7 @@ public sealed class BackupAuditTrailTests : IDisposable
         Name = "shop.example.com-20260819030000.zip",
         Type = "site",
         Source = "shop.example.com",
+        SubscriptionUserId = SiteSahibi.ToString("N"),
         Path = @"C:\yedek\shop.zip",
         Format = "zip",
         Status = "created",

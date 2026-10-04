@@ -242,7 +242,8 @@ internal sealed class BackupRemoteCredentialResolver(
     /// <summary>Bu kaydın uzak kopyasına dokunmak için kullanılacak kimlik.</summary>
     public BackupPruneRemoteOptions? For(BackupRecordDto record)
     {
-        if (!string.IsNullOrWhiteSpace(record.SubscriptionUserId)
+        if (string.Equals(record.Type, "subscription", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(record.SubscriptionUserId)
             && abonelikKimlikleri.TryGetValue(record.SubscriptionUserId, out var abonelik))
         {
             return abonelik;

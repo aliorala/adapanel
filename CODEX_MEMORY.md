@@ -1,5 +1,46 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R32 yerelde doğrulandı; 0.8.79 yayın hazırlığı
+
+Kaynak sürümleri ve release-body.json 0.8.79'a eşitlendi; henüz yayımlanmadı.
+Yayımdaki son binary API'den tekrar doğrulandı: 0.8.78. Kullanıcının Chrome sekmeleri
+arasında AdaPanel yok; canlı kurulu sürüm/güncelleme başarısı doğrudan ölçülmedi.
+Paket hazır değil sorusunun yanıtı: başarılı kurulumdan sonra staged paket temizlenir;
+tek başına hata değil. R26+ arayüz currentconfirmed ise Panel güncel gösteriyor.
+
+R32 C# freeze. Cookie32+legacy19=51green; yeni BackupOwnership44 + remotecredential1
+toplam45, C# yeni77. Owner/explicitDB scope, chain owner, controller/audit subject,
+TargetRoot projection ve stamped site remote consumers düzeltildi. Legacy ownerunknown
+tenant'a kapalı/admin'a açık. Tenant unconfirmed create409; duplicate site assignment
+inaccessible owner403. Audit3 gerçekRED ve retry compatibilityRED giderildi. Son broad
+1360=1351green9oldfixturefailure; owner-reading strictproxy ve Type subscription fixture
+uyarlandı. Tam build0warning/error; full.NET session53686 exit0: Infra8124+Core2=8126/8126,
+fail/skip0. TRX round32-final...052218(Core)/052529(Infra). Tüm kontroller tamamlandı.
+
+FE final session73762 exit0: 93files1700/1700 (40new), types/Vitegreen; wwwroot6refsOK.
+Locale FE5499/API281 TR/EN parity. SiteBackup scopedDB, honest partial result/card,
+list error/retry, same actor+sessionref+epoch, draft revision; BackupView unknowncount,
+role subtitle, hidden restore target text, owner-stamped site retry button preserved.
+Browser Chrome3/auditChrome32; tab auditTab32 CLOSED, viewport32 RESET, preview3526
+CtrlC stopped; __audit32 files REMOVED. Saved/viewed round32-backup-{mobile,en320,desktop}.png.
+390/320/1440 widths380/310/1430 each equals scrollwidth. App console0; unrelated wallet
+Chrome extensions injected errors. RealVue/Pinia fakeadapter only; no real backup/restore.
+
+Fresh release079-components.json 22Passed3largeSkipped0Failed. Versionguard0.8.79,
+release-parser and privacy12/12green. Packaging/publication NOT started. Commit local
+changes excluding preexisting TestResults/, package
+with mandatory publish/installer verifiers, publish binary+notes only, verify download
+SHA and public API/body. No liveinstallation/sourcepush/realmail/webhook/telemetry.
+Full logs round32-final-{build,backend,types,frontend,vite}.log under .tmp/audit-20261004.
+Docs R32 section added; replace its pending final sentence after results.
+
+Next R33 candidates (not yet fixed): impersonate/stop accepted target evidence does not
+bind original source actor; add source id/role/credentialstamp/sid proof at event with
+real accepted→cookie gate tests. Long-lived delegation separately unbound. FE
+useBackupRestore actor/sessionref and SiteBackup download stale callbacks still candidates.
+Do not claim all SignIn paths/source authority or all backup lifecycle cases solved.
+All three agents finished/frozen. Active continuous goal stays active.
+
 ## 2026-10-04 — R31 yerelde tamamlandı; yayımdaki kurucu hâlâ 0.8.78
 
 R31 sürüm değiştirmeden tamamlandı; henüz paketlenmedi/yayımlanmadı. Aktif sürekli

@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using AdaPanel.Api.Security;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Entities;
 using AdaPanel.Core.Enums;
 using AdaPanel.Data.Persistence;
@@ -240,6 +241,7 @@ public sealed class OturumSonlandirmaTests
     {
         private readonly SqliteConnection baglanti;
         private readonly string girisAnindakiKarma;
+        private readonly string girisKaniti;
 
         private Duzenek(SqliteConnection baglanti, AdaPanelDbContext dbContext, PanelUser kullanici, string veriKoku)
         {
@@ -248,6 +250,7 @@ public sealed class OturumSonlandirmaTests
             Kullanici = kullanici;
             VeriKoku = veriKoku;
             girisAnindakiKarma = kullanici.PasswordHash;
+            girisKaniti = AcceptedIdentityEvidence.Create(kullanici);
             KaraListe = OturumTestOrtami.KaraListe(veriKoku);
         }
 
@@ -304,7 +307,7 @@ public sealed class OturumSonlandirmaTests
             Sema(),
             new CookieAuthenticationOptions(),
             new ClaimsPrincipal(kimlik),
-            new AuthenticationProperties(),
+            new AuthenticationProperties { Parameters = { [CookieSessionValidator.AcceptedIdentityParameter] = girisKaniti } },
             new CookieOptions());
 
         public async Task<CookieValidatePrincipalContext> DogrulaAsync(

@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import { UserFacingError } from "../utils/apiError";
 // Çalışan-iş sözleşmesi TEK YERDE tanımlı (composables/useRunningTask.ts): dört modül aynı
 // gövdeyi döndürüyor ve tipi her sarmalayıcıda yeniden yazmak, bir alan eklendiğinde üçünün
 // bayatlaması demekti.
@@ -55,7 +56,7 @@ export type BackupRecord = {
   backupMode: string;
   /** Artımsal halkanın dayandığı önceki halka; tam yedekte boş. */
   baseBackupId: string;
-  /** Abonelik yedeğinde sahibinin kullanıcı kimliği ("N" biçimi, tiresiz). */
+  /** Arşiv alınırken doğrulanan abonelik sahibi ("N" biçimi); site yedeklerinde de kullanılır. */
   subscriptionUserId: string;
   /** Arşivdeki mantıksal öğe sayısı (site + veritabanı + posta alanı + FTP); 0 = ölçülmedi. */
   itemCount: number;
@@ -231,7 +232,18 @@ export async function backupSite(siteName: string, scope?: Partial<SiteBackupSco
     ...(target ?? {})
   });
 
-  return response.data.data;
+  const record = response.data?.data;
+  if (response.data?.success !== true || !record || record.type !== "site" ||
+    typeof record.source !== "string" || record.source.trim().toLowerCase() !== siteName.trim().toLowerCase() ||
+    [record.id, record.name].some(value => typeof value !== "string" || !value.trim()) ||
+    typeof record.createdAtUtc !== "string" || !Number.isFinite(Date.parse(record.createdAtUtc)) ||
+    typeof record.size !== "number" || !Number.isFinite(record.size) || record.size < 0 ||
+    !["created", "created_remote_synced", "created_with_errors", "created_remote_failed"].includes(record.status) ||
+    !Array.isArray(record.warnings) || record.warnings.some(warning => !warning ||
+      typeof warning.messageKey !== "string" || !warning.messageKey.trim() || typeof warning.target !== "string" || typeof warning.detail !== "string")) {
+    throw new UserFacingError("panel.backup.resultUnconfirmed");
+  }
+  return record;
 }
 
 /** Abonelik yedeğinin kapsamı; hepsi kapatılırsa arşivde manifestten başka bir şey kalmaz. */

@@ -3,7 +3,7 @@
     <div class="module-head">
       <div>
         <h3>{{ t("panel.backup.title") }}</h3>
-        <p class="meta">{{ t("panel.backup.subtitle") }}</p>
+        <p class="meta">{{ t(isAdmin ? "panel.backup.subtitle" : "panel.backup.scopedSubtitle") }}</p>
       </div>
       <div class="row-actions">
         <!-- "Yedekleri doğrula": listedeki kayıtların GERÇEKTEN durup durmadığını ölçer.
@@ -132,7 +132,7 @@
       </label>
 
       <span v-if="activeView === 'list'" class="status-pill">
-        {{ search
+        {{ !listConfirmed ? (loading ? "…" : "—") : search
           ? t("panel.backup.recordsFiltered", { shown: filteredBackups.length, total: backups.length })
           : `${backups.length} ${t("panel.backup.records")}` }}
       </span>
@@ -331,7 +331,7 @@
                   {{ t("panel.backup.download") }}
                 </button>
               </span>
-              <template v-if="isAdmin && backup.status === 'created_remote_failed' && backup.targetType === 'ftp' && !backup.remoteUri && !backup.subscriptionUserId && backup.path && !backup.localMissing">
+              <template v-if="isAdmin && backup.status === 'created_remote_failed' && backup.targetType === 'ftp' && !backup.remoteUri && backup.type !== 'subscription' && backup.path && !backup.localMissing">
                 <button v-if="backup.contentHash?.trim()"
                   class="secondary compact row-button" v-bind="writeGate(busy)" @click="retryRemote(backup)">
                   {{ t("panel.backup.retryRemote") }}
@@ -1209,6 +1209,7 @@ const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const isReseller = computed(() => authStore.session?.user?.role === "Reseller");
 const backups = ref<BackupRecord[]>([]);
+const listConfirmed = ref(false);
 const activeView = ref<"list" | "create" | "schedules" | "settings">("list");
 const backupKind = ref<"site" | "subscription" | "database" | "mail" | "panel">("site");
 const expandedWarnings = ref("");
@@ -2084,10 +2085,12 @@ async function refresh() {
   const request = ++listRequest;
   const isCurrent = () => isActive() && request === listRequest;
   loading.value = true;
+  listConfirmed.value = false;
   try {
     const rows = await getBackups();
     if (!isCurrent()) return false;
     backups.value = rows;
+    listConfirmed.value = true;
     const previousError = listLoad.message.value;
     listLoad.clear();
     if (!updateReadOutcome() && noticeError.value && notice.value === previousError) showNotice("");
@@ -2711,7 +2714,7 @@ async function restoreSelectedItems() {
           const result = await restoreBackupItems(record.id, items, targetPath, password);
           if (!isCurrent()) return;
           if (selectedItems.value.length === items.length && selectedItems.value.every((item, index) => item === items[index])) selectedItems.value = [];
-          showNotice(t("panel.backup.itemsRestoredAll", {
+          showNotice(t(result.targetRoot.trim() ? "panel.backup.itemsRestoredAll" : "panel.backup.itemsRestoredScoped", {
             items: items.length,
             count: result.restoredCount,
             target: result.targetRoot

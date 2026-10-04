@@ -390,6 +390,7 @@ public sealed class AuthController(
         [FromBody] VerifyTwoFactorRequest request,
         CancellationToken cancellationToken)
     {
+        var sourceSessionId = User.FindFirstValue(SessionRevocationStore.SessionIdClaim) ?? string.Empty;
         var result = await authService.ConfirmTwoFactorSetupAsync(
             User.GetRequiredUserId(),
             request.Code,
@@ -398,7 +399,8 @@ public sealed class AuthController(
             cancellationToken);
 
         var authentication = await HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-        await SignInAsync(result.User, authentication.Properties?.IsPersistent ?? false);
+        await SignInAsync(result.User, authentication.Properties?.IsPersistent ?? false,
+            sourceSessionId: sourceSessionId);
         return Ok(ApiResponse<TwoFactorConfirmDto>.Ok(result, "auth.2fa.confirmed"));
     }
 
@@ -440,6 +442,7 @@ public sealed class AuthController(
         [FromBody] DisableTwoFactorRequest request,
         CancellationToken cancellationToken)
     {
+        var sourceSessionId = User.FindFirstValue(SessionRevocationStore.SessionIdClaim) ?? string.Empty;
         var user = await authService.DisableTwoFactorAsync(
             User.GetRequiredUserId(),
             request.Password,
@@ -448,7 +451,8 @@ public sealed class AuthController(
             cancellationToken);
 
         var authentication = await HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-        await SignInAsync(user, authentication.Properties?.IsPersistent ?? false);
+        await SignInAsync(user, authentication.Properties?.IsPersistent ?? false,
+            sourceSessionId: sourceSessionId);
         return Ok(ApiResponse<CurrentUserDto>.Ok(user, "auth.2fa.disabled"));
     }
 
@@ -501,7 +505,8 @@ public sealed class AuthController(
         return Ok(ApiResponse<ChangePasswordResultDto>.Ok(result, "auth.password_changed"));
     }
 
-    private Task SignInAsync(CurrentUserDto user, bool isPersistent, Guid? impersonatorId = null, string? impersonatorName = null)
+    private Task SignInAsync(CurrentUserDto user, bool isPersistent, Guid? impersonatorId = null,
+        string? impersonatorName = null, string? sourceSessionId = null)
     {
         var claims = new List<Claim>
         {
@@ -527,6 +532,9 @@ public sealed class AuthController(
             IssuedUtc = DateTimeOffset.UtcNow,
             ExpiresUtc = isPersistent ? DateTimeOffset.UtcNow.AddDays(14) : null
         };
+        properties.Parameters[CookieSessionValidator.AcceptedIdentityParameter] = user.AuthenticationEvidence;
+        if (sourceSessionId is not null)
+            properties.Parameters[CookieSessionValidator.SourceSessionParameter] = sourceSessionId;
 
         return HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, properties);
     }

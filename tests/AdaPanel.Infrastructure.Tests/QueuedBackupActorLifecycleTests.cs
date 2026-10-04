@@ -313,7 +313,7 @@ public sealed partial class QueuedBackupActorLifecycleTests
             {
                 Id = Guid.NewGuid().ToString("N"), Name = "fixture.zip", Path = path, Format = "zip",
                 Type = subscription ? "subscription" : "site", Source = subscription ? Customer.ToString("N") : Site,
-                SubscriptionUserId = subscription ? Customer.ToString("N") : "",
+                SubscriptionUserId = Customer.ToString("N"),
                 Status = retry ? "created_remote_failed" : "created", TargetType = retry ? "ftp" : "webdav",
                 RemoteUri = retry ? "" : "https://backup.example.test/archives/fixture.zip",
                 CreatedAtUtc = DateTime.UtcNow, Size = new FileInfo(path).Length

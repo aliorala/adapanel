@@ -24,7 +24,7 @@ vi.mock("../api/panelSettings", () => ({ getPanelPreferences: vi.fn() }));
 
 type State = {
   expandedLocation: string;
-  backups: api.BackupRecord[]; loading: boolean; busy: boolean; notice: string; noticeError: boolean;
+  backups: api.BackupRecord[]; listConfirmed: boolean; loading: boolean; busy: boolean; notice: string; noticeError: boolean;
   listLoad: { message: Ref<string> }; chainLoad: { message: Ref<string> }; chain: api.BackupChain | null;
   chainRecord: api.BackupRecord | null; chainLoading: boolean; verification: api.BackupVerificationResult | null;
   browseEntries: api.BackupEntry[]; browseRecord: api.BackupRecord | null; browseLoading: boolean;
@@ -103,6 +103,22 @@ async function mount() {
   const state = (app.mount({}).$ as unknown as { setupState: State }).setupState; await flush(); return state;
 }
 
+it("keeps the list count unconfirmed until the first list request succeeds", async () => {
+  const pending = deferred<api.BackupRecord[]>(); vi.mocked(api.getBackups).mockReturnValueOnce(pending.promise);
+  const state = await mount(); expect(state.listConfirmed).toBe(false);
+  expect(renderMarkup(state)).toMatch(/class="status-pill"[^>]*>…<\/span>/); expect(renderMarkup(state)).not.toContain("0 panel.backup.records");
+  pending.resolve([]); await flush(); expect(state.listConfirmed).toBe(true); expect(state.backups).toEqual([]);
+  expect(renderMarkup(state)).toContain("0 panel.backup.records");
+});
+it("marks a failed refresh count unconfirmed while preserving rows and supports retry", async () => {
+  const state = await mount(); expect(state.listConfirmed).toBe(true);
+  vi.mocked(api.getBackups).mockRejectedValueOnce(new Error("list unavailable")); await state.refresh();
+  expect(state.listConfirmed).toBe(false); expect(state.backups).toEqual([record()]);
+  expect(renderMarkup(state)).toMatch(/class="status-pill"[^>]*>—<\/span>/); expect(renderMarkup(state)).not.toContain("1 panel.backup.records");
+  await state.refresh(); expect(state.listConfirmed).toBe(true);
+  expect(renderMarkup(state)).toContain("1 panel.backup.records");
+});
+
 it.each(["Customer", "Reseller", "Administrator"])("explains a projected location accurately for %s without hiding backup health", async role => {
   const state = await mount(); useAuthStore().session!.user!.role = role;
   state.backups = [{ ...record(), path: "", localMissing: true, remoteUri: "https://storage.example.test/archive.zip", warnings: [{ messageKey: "backup.database_dump_empty", target: "postgresql/Foo", detail: "" }] }];
@@ -121,6 +137,18 @@ it("keeps the administrator's local archive location and copy control", async ()
   expect(html).toContain("/backups/first.zip");
   expect(html).toContain("panel.backup.location.copy");
   expect(html).not.toContain("panel.backup.location.scopedHidden");
+});
+it.each([
+  ["site", "owner-id", true],
+  ["site", "", true],
+  ["subscription", "owner-id", false],
+  ["subscription", "", false]
+])("renders remote retry by backup type %s with owner stamp %j", async (type, subscriptionUserId, visible) => {
+  const state = await mount();
+  state.backups = [{ ...record(), type: String(type), subscriptionUserId: String(subscriptionUserId), status: "created_remote_failed", targetType: "ftp", contentHash: "a".repeat(64) }];
+  const html = renderMarkup(state);
+  if (visible) expect(html).toContain("panel.backup.retryRemote");
+  else expect(html).not.toContain("panel.backup.retryRemote");
 });
 
 it("keeps the newest list when an older response finishes last", async () => {
@@ -270,6 +298,18 @@ it("restores only the immutable selected item snapshot", async () => {
   const state = await mount(); await state.openBrowser(record()); state.selectedItems = ["files/a.txt"];
   shared.confirm.mockImplementationOnce(async options => { state.selectedItems = ["files/b.txt"]; await options.action(); return true; });
   await state.restoreSelectedItems(); expect(api.restoreBackupItems).toHaveBeenCalledExactlyOnceWith("first", ["files/a.txt"], "", ""); expect(state.notice).toBe("panel.backup.itemsRestoredAll");
+});
+it.each([
+  ["/restored/site", "panel.backup.itemsRestoredAll"],
+  ["", "panel.backup.itemsRestoredScoped"],
+  ["   ", "panel.backup.itemsRestoredScoped"]
+])("reports granular restoration without an empty target label for %j", async (targetRoot, messageKey) => {
+  const state = await mount(); await state.openBrowser(record()); state.selectedItems = ["files/a.txt", "files/b.txt"];
+  vi.mocked(api.restoreBackupItems).mockResolvedValueOnce({ restoredCount: 2, targetRoot });
+  await state.restoreSelectedItems();
+  expect(api.restoreBackupItems).toHaveBeenCalledExactlyOnceWith("first", ["files/a.txt", "files/b.txt"], "", "");
+  expect(state.notice).toBe(messageKey); expect(state.noticeError).toBe(false);
+  expect(shared.translate).toHaveBeenCalledWith(messageKey, { items: 2, count: 2, target: targetRoot });
 });
 it("retains the newly edited granular selection when an earlier restore finishes", async () => {
   const state = await mount(); await state.openBrowser(record()); state.selectedItems = ["files/a.txt"];

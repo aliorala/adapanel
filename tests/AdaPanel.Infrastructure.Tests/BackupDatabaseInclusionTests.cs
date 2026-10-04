@@ -140,8 +140,12 @@ public sealed class BackupDatabaseInclusionTests
                 ? Task.FromResult(new SiteDto { Name = "site", PhysicalPath = Root }) : throw new NotSupportedException(method.Name));
             var preferences = Fake<IPanelPreferencesService>((method, _) => method.Name == "GetAsync"
                 ? Task.FromResult(new PanelPreferencesDto { DefaultBackupRoot = Path.Combine(Root, "backups") }) : throw new NotSupportedException(method.Name));
-            var scopes = Fake<ICustomerScopeService>((method, _) => method.Name == "GetScopeAsync"
-                ? Task.FromResult(new CustomerScope(["site"], 0, 0, 0, 0, 0)) : throw new NotSupportedException(method.Name));
+            var scopes = Fake<ICustomerScopeService>((method, _) => method.Name switch
+            {
+                "GetScopeAsync" => Task.FromResult(new CustomerScope(["site"], 0, 0, 0, 0, 0)),
+                "GetSiteOwnerUserIdAsync" => Task.FromResult<Guid?>(Owner),
+                _ => throw new NotSupportedException(method.Name)
+            });
             var ownership = Fake<IDatabaseOwnershipService>((method, _) => method.Name == "GetAllAsync"
                 ? Task.FromResult<IReadOnlyCollection<(string, string, Guid, string)>>([("postgres", "foo", Owner, "site"), ("postgresql", "Foo", Owner, "site")])
                 : throw new NotSupportedException(method.Name));

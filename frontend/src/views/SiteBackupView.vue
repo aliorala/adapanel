@@ -1,6 +1,5 @@
 <template>
   <section class="panel backup-view">
-  <button v-if="!isAdmin" class="secondary compact" @click="router.push({ query: { section: 'backup' } })">{{ t("panel.backup.manageScoped") }}</button>
 
     <!-- Ortak `.section-head` devralindi: kapsamli `.bk-header` kopyasi ayni isi yapiyordu ama
          `align-items: center` ile. Baslik blogu UC satir (ustbaslik + baslik + site adi),
@@ -13,13 +12,38 @@
         <h2>{{ t("panel.backup.siteTitle") }}</h2>
         <p class="meta">{{ siteName || t("panel.php.selectSite") }}</p>
       </div>
-      <button class="secondary compact" :disabled="loading" @click="refresh">{{ t("panel.backup.refresh") }}</button>
+      <div class="row-actions">
+        <button v-if="!isAdmin" class="secondary compact" @click="router.push({ query: { section: 'backup' } })">{{ t("panel.backup.manageScoped") }}</button>
+        <button class="secondary compact" :disabled="loading" @click="refresh">{{ t("panel.backup.refresh") }}</button>
+      </div>
     </div>
 
-    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
+
+    <section v-if="createResult" class="form-surface create-result" aria-labelledby="backup-result-title">
+      <div class="section-head">
+        <h3 id="backup-result-title">{{ t("panel.backup.lastCreateResult") }}</h3>
+        <span :class="['status-pill', { warn: createResult.status === 'created_with_errors' || createResult.status === 'created_remote_failed' || createResult.warnings.length > 0 }]">
+          {{ t(`panel.backup.status.${createResult.status}`) }}
+        </span>
+      </div>
+      <strong class="backup-name">{{ createResult.name }}</strong>
+      <p class="meta">{{ formatDate(createResult.createdAtUtc) }} · {{ formatSize(createResult.size) }}</p>
+      <ul v-if="createResult.warnings.length" class="backup-warnings">
+        <li v-for="(warning, index) in createResult.warnings" :key="index">
+          <strong>{{ t(warning.messageKey, { target: warning.target }) }}</strong>
+          <span v-if="warning.target && !t(warning.messageKey, { target: warning.target }).includes(warning.target)">{{ warning.target }}</span>
+          <small v-if="warning.detail">{{ warning.detail }}</small>
+        </li>
+      </ul>
+    </section>
 
     <div v-if="siteName" class="form-surface bk-create">
       <h3>{{ t("panel.backup.createTitle") }}</h3>
+      <div class="scope-heading">
+        <h4>{{ t("panel.backup.scopeTitle") }}</h4>
+        <p class="field-hint">{{ t("panel.backup.scopeHint") }}</p>
+      </div>
       <!-- `chk` -> ortak `toggle-field`: kapsamli kopya birebir ayni uc ozelligi yaziyordu
            (flex + center + 8px). Gorunen fark iki tane: etiket rengi ortak `--text-soft`e
            gelir ve boyu 0.86rem yerine govde boyunda (13.5px) olur — ayni formdaki oteki
@@ -35,10 +59,15 @@
         :message="databasesLoad.message.value"
         @retry="loadDatabases" />
       <p v-if="databasesLoading" class="empty-state" role="status">{{ t("panel.common.loading") }}</p>
+      <p v-else-if="!canReadDatabases" class="field-hint">{{ t("panel.backup.databasePermissionHint") }}</p>
+      <p v-else-if="!databasesLoad.message.value && availableDatabases.length === 0" class="field-hint">{{ t("panel.backup.databaseEmptyHint") }}</p>
 
       <div v-if="availableDatabases.length > 0" class="db-block">
-        <span class="field-label">{{ t("panel.backup.scopeDatabases") }}</span>
-        <div class="scope-grid">
+        <div class="section-head">
+          <span class="field-label">{{ t("panel.backup.scopeDatabases") }}</span>
+          <span class="meta">{{ t("panel.backup.databaseSelection", { count: selectedDbKeys.length }) }}</span>
+        </div>
+        <div class="scope-grid database-options">
           <label v-for="db in availableDatabases" :key="`${db.engine}:${db.name}`" class="toggle-field">
             <input v-model="selectedDbKeys" type="checkbox" :value="`${db.engine}:${db.name}`" />
             {{ db.name }} <small>({{ db.engine }})</small>
@@ -46,6 +75,9 @@
         </div>
       </div>
 
+      <details class="backup-options">
+        <summary>{{ t("panel.backup.advancedOptions") }}</summary>
+        <div class="backup-options-body">
       <!--
         ARTIMSAL / TAM seçimi. Sunucu bunu ZATEN destekliyordu (`BackupSiteRequest` →
         `BackupArchiveRequest.Incremental` + `FullBackupEveryDays`, aralık 1..365) ve
@@ -89,6 +121,8 @@
       <p v-if="scope.incremental" class="notice warn-banner encryption-loss" role="status">
         {{ t("panel.backup.encryptionChainWarning") }}
       </p>
+        </div>
+      </details>
 
       <!-- Yedek ALINIRKEN ekran donmuş görünmesin: uç işi arka plana almıyor, istek uçuştayken
            yedek GERÇEKTEN sürüyor (bkz. composables/useRunningTask.ts).
@@ -108,7 +142,7 @@
            kartin TAM GENISLIGINE geriliyordu: sayfayi bastan sona kesen mavi bir bant, panelin
            baska hicbir yerinde olmayan bir agirlik. -->
       <div class="form-actions">
-        <button class="compact" v-bind="writeGate(busy || databasesLoading)" @click="createBackup">
+        <button class="compact" v-bind="writeGate(!canCreateBackup)" @click="createBackup">
           {{ busy ? t("panel.backup.creating") : t("panel.backup.createButton") }}
         </button>
       </div>
@@ -117,8 +151,10 @@
     <div class="bk-list">
       <div class="section-head">
         <h3>{{ t("panel.backup.listTitle") }}</h3>
-        <span class="meta">{{ listLoaded ? siteBackups.length : "…" }}</span>
+        <span class="meta">{{ listLoaded ? siteBackups.length : loading ? "…" : "—" }}</span>
       </div>
+      <p v-if="!isAdmin" class="field-hint">{{ t("panel.backup.siteRestoreHint") }}</p>
+      <SectionLoadError v-if="listLoad.message.value" :message="listLoad.message.value" @retry="refresh" />
 
       <!--
         GÜN GRUPLARI (Yedekler ekranıyla AYNI kaynaktan: composables/useDayGroups.ts). Gruplama
@@ -202,6 +238,19 @@
                   </span>
                 </strong>
                 <span class="meta">{{ formatDate(record.createdAtUtc) }} · {{ formatSize(record.size) }}</span>
+                <span v-if="record.status === 'created_with_errors' || record.status === 'created_remote_failed'" class="status-pill warn backup-outcome">
+                  {{ t(`panel.backup.status.${record.status}`) }}
+                </span>
+                <details v-if="record.warnings?.length" class="backup-row-warnings">
+                  <summary>{{ t("panel.backup.warningsBadge", { count: record.warnings.length }) }}</summary>
+                  <ul class="backup-warnings">
+                    <li v-for="(warning, index) in record.warnings" :key="index">
+                      <strong>{{ t(warning.messageKey, { target: warning.target }) }}</strong>
+                      <span v-if="warning.target && !t(warning.messageKey, { target: warning.target }).includes(warning.target)">{{ warning.target }}</span>
+                      <small v-if="warning.detail">{{ warning.detail }}</small>
+                    </li>
+                  </ul>
+                </details>
 
                 <!-- Yedeğin DİSKTEKİ yeri. Tam yol satırı bozmasın diye açılır bir alanda ve
                      KENDİ İÇİNDE yatay kayan bir kutuda; kısaltılmaz, çünkü kullanıcı bu yolu
@@ -254,7 +303,7 @@
                 <button class="secondary compact" :disabled="downloadingId === record.id" @click="download(record)">
                   {{ downloadingId === record.id ? t("panel.backup.downloading") : t("panel.backup.download") }}
                 </button>
-                <span class="action-divider" aria-hidden="true"></span>
+                <span v-if="isAdmin" class="action-divider" aria-hidden="true"></span>
                 <button class="danger compact" v-bind="writeGate(restoringId === record.id)" v-if="isAdmin" @click="restore(record)">
                   {{ restoringId === record.id ? t("panel.backup.restoring") : t("panel.backup.restore") }}
                 </button>
@@ -264,10 +313,10 @@
         </section>
       </div>
       <!-- Yedek listesi gelmeden "yedek yok" yazıyordu; var olan yedekler yokmuş gibi görünüyordu. -->
-      <p v-else-if="!listLoaded" class="empty-state" role="status" aria-live="polite">
+      <p v-else-if="loading && !listLoaded" class="empty-state" role="status" aria-live="polite">
         {{ t("panel.common.loading") }}
       </p>
-      <p v-else class="empty-state">{{ t("panel.backup.empty") }}</p>
+      <p v-else-if="listLoaded && !listLoad.message.value" class="empty-state">{{ t("panel.backup.empty") }}</p>
     </div>
   </section>
 </template>
@@ -288,6 +337,7 @@ import {
   type BackupRecord
 } from "../api/backup";
 import { getDatabaseEngines, getDatabaseWorkspace } from "../api/databases";
+import { getMyDatabases } from "../api/myDatabases";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import RunningTaskBanner from "../components/RunningTaskBanner.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
@@ -305,7 +355,7 @@ const { t } = useI18n();
 const { confirm } = useConfirm();
 // Askidaki abonelikte YAZMA dugmeleri basilmadan once pasiflesir ve sebebini soyler
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri (yenile, indir) kapiya girmez.
-const { writeGate } = useSubscriptionGate();
+const { writeGate, locked } = useSubscriptionGate();
 const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 
@@ -322,15 +372,24 @@ const isAdmin = computed(() => authStore.session?.user?.role === "Administrator"
 // anahtar görüyordu.
 const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();
 const backups = ref<BackupRecord[]>([]);
+const createResult = ref<BackupRecord | null>(null);
+const listLoad = useSectionError();
 const availableDatabases = ref<{ engine: string; name: string }[]>([]);
 // Boş liste "yedeklenecek veritabanı yok" demektir; okunamadıysa AYRI söylenir — aksi hâlde
 // kullanıcı veritabanı seçmeden yedek alıp yedeğini eksik sanmadan taşırdı.
 const databasesLoad = useSectionError();
 const selectedDbKeys = ref<string[]>([]);
 const databasesLoading = ref(false);
-let disposed = false, siteGeneration = 0, listRequest = 0;
+let disposed = false, siteGeneration = 0, listRequest = 0, databaseRequest = 0, passwordRevision = 0;
 const session = getSessionEpoch();
-const isCurrent = () => !disposed && session === getSessionEpoch();
+const originalSession = authStore.session, actorId = originalSession?.user?.id, actorRole = originalSession?.user?.role;
+const isCurrent = () => !disposed && session === getSessionEpoch() && authStore.session === originalSession && authStore.session?.isAuthenticated === true &&
+  authStore.session.user?.id === actorId && authStore.session.user?.role === actorRole;
+const canReadDatabases = computed(() => isCurrent() && (isAdmin.value ||
+  (["Customer", "Reseller"].includes(actorRole ?? "") && (!authStore.session?.isSubUser ||
+    (authStore.session.allowedSections ?? []).some(section => section.toLowerCase() === "database")))));
+const canCreateBackup = computed(() => isCurrent() && !!siteName.value && !busy.value && !databasesLoading.value && !locked.value &&
+  selectedDbKeys.value.every(key => canReadDatabases.value && availableDatabases.value.some(db => `${db.engine}:${db.name}` === key)));
 
 /**
  * Yedek kapsamı + ARTIMSAL seçimi.
@@ -348,6 +407,7 @@ const scope = reactive({
 });
 // Bu yedeğe özel şifreleme parolası (boş = panelde kayıtlı parola, o da yoksa şifresiz).
 const encryptionPassword = ref("");
+watch(encryptionPassword, () => { passwordRevision++; }, { flush: "sync" });
 onBeforeUnmount(() => { disposed = true; encryptionPassword.value = ""; });
 
 // Süren yedek GÖRÜNÜR: uç işi arka plana almadığı için istek uçuştayken yedek gerçekten sürüyor.
@@ -413,6 +473,7 @@ watch(siteName, () => {
   encryptionPassword.value = "";
   selectedDbKeys.value = [];
   notice.value = "";
+  createResult.value = null;
   expandedLocation.value = "";
   dayDefaultsApplied.value = false;
   collapsedDays.value = new Set();
@@ -486,31 +547,47 @@ watch(
   });
 
 async function refresh() {
-  if (!isCurrent()) return;
+  if (!isCurrent()) return false;
   const request = ++listRequest;
   loading.value = true;
   try {
     const result = await getBackups();
-    if (!isCurrent() || request !== listRequest) return;
+    if (!isCurrent() || request !== listRequest) return false;
     backups.value = result;
     listLoaded.value = true;
+    listLoad.clear();
+    return true;
   } catch (error) {
-    if (isCurrent() && request === listRequest) showNotice(resolveApiMessage(error), true);
+    if (isCurrent() && request === listRequest) listLoad.capture(error);
+    return false;
   } finally {
-    if (request === listRequest) loading.value = false;
+    if (isCurrent() && request === listRequest) loading.value = false;
   }
 }
 
+watch(canReadDatabases, allowed => {
+  databaseRequest++; availableDatabases.value = []; selectedDbKeys.value = [];
+  databasesLoading.value = false; databasesLoad.clear();
+  if (allowed) void loadDatabases();
+}, { flush: "sync" });
+
 async function loadDatabases() {
-  if (!isCurrent() || databasesLoading.value) return;
+  if (!isCurrent() || databasesLoading.value || !canReadDatabases.value) return;
+  const request = ++databaseRequest;
+  const current = () => isCurrent() && request === databaseRequest && canReadDatabases.value;
   databasesLoading.value = true;
   try {
+    if (!isAdmin.value) {
+      const rows = await getMyDatabases();
+      if (current()) { availableDatabases.value = rows; databasesLoad.clear(); }
+      return;
+    }
     const engines = await getDatabaseEngines();
-    if (!isCurrent()) return;
+    if (!current()) return;
     const list: { engine: string; name: string }[] = [];
     const failed: string[] = [];
     for (const engine of engines.filter((item) => item.installed)) {
-      if (!isCurrent()) return;
+      if (!current()) return;
       try {
         const workspace = await getDatabaseWorkspace(engine.engine);
         for (const db of workspace.databases ?? []) {
@@ -520,25 +597,27 @@ async function loadDatabases() {
         failed.push(engine.displayName || engine.engine);
       }
     }
-    if (!isCurrent()) return;
+    if (!current()) return;
     availableDatabases.value = list;
     if (failed.length) databasesLoad.message.value = t("panel.backup.databasesPartial", { engines: failed.join(", ") });
     else databasesLoad.clear();
   } catch (error) {
-    if (!isCurrent()) return;
+    if (!current()) return;
     availableDatabases.value = [];
     databasesLoad.capture(error);
   } finally {
-    databasesLoading.value = false;
+    if (current()) databasesLoading.value = false;
   }
 }
 
 async function createBackup() {
-  if (!isCurrent() || busy.value || databasesLoading.value || !siteName.value) {
+  if (!isCurrent() || !canCreateBackup.value) {
     return;
   }
   busy.value = true;
   const site = siteName.value, generation = siteGeneration;
+  const submittedPasswordRevision = passwordRevision;
+  createResult.value = null;
   const current = () => isCurrent() && siteName.value === site && generation === siteGeneration;
   runningBackup.begin(`${t("panel.backup.running.creating")}: ${siteName.value}`);
   try {
@@ -546,7 +625,7 @@ async function createBackup() {
       const [engine, ...rest] = key.split(":");
       return { engine, databaseName: rest.join(":") };
     });
-    await backupSite(site, {
+    const result = await backupSite(site, {
       includeFiles: scope.includeFiles,
       includeConfig: scope.includeConfig,
       includeMail: scope.includeMail,
@@ -558,9 +637,17 @@ async function createBackup() {
     }, { encryptionPassword: encryptionPassword.value });
     if (!current()) return;
     // Parola tek seferliktir; formda asılı kalıp bir sonraki yedeğe sessizce taşınmaz.
-    encryptionPassword.value = "";
-    showNotice(t("panel.backup.created"), false);
-    await refresh();
+    if (passwordRevision === submittedPasswordRevision) encryptionPassword.value = "";
+    createResult.value = result;
+    const warnings = result.warnings ?? [];
+    const partial = result.status === "created_with_errors" || result.status === "created_remote_failed" || warnings.length > 0;
+    const messageKey = result.status === "created_remote_failed" ? "panel.backup.createdRemoteFailed" :
+      result.status === "created_with_errors" ? "panel.backup.createdWithErrors" : warnings.length ? "panel.backup.createdWithWarnings" : "panel.backup.created";
+    const lines = [t(messageKey)];
+    const refreshed = await refresh();
+    if (!current()) return;
+    if (!refreshed && listLoad.message.value) lines.push(listLoad.message.value);
+    showNotice(lines.join("\n"), partial || !refreshed);
   } catch (error) {
     if (current()) showNotice(resolveApiMessage(error), true);
   } finally {
@@ -634,6 +721,84 @@ function formatDate(iso: string): string {
 .db-block {
   display: grid;
   gap: var(--sp-8);
+}
+
+.scope-heading h4,
+.scope-heading p,
+.create-result p {
+  margin: 0;
+}
+
+.scope-heading,
+.create-result,
+.backup-options-body {
+  display: grid;
+  gap: var(--sp-8);
+  min-width: 0;
+}
+
+.database-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: var(--sp-8);
+}
+
+.database-options .toggle-field {
+  padding: var(--sp-10);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  overflow-wrap: anywhere;
+}
+
+.database-options .toggle-field:has(input:checked) {
+  border-color: var(--accent-1);
+  background: var(--surface-2);
+}
+
+.database-options input {
+  flex-shrink: 0;
+}
+
+.backup-options {
+  border-block: 1px solid var(--panel-border);
+  padding-block: var(--sp-10);
+}
+
+.backup-options summary,
+.backup-row-warnings summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-soft);
+  overflow-wrap: anywhere;
+}
+
+.backup-options[open] summary {
+  margin-bottom: var(--sp-12);
+}
+
+.backup-warnings {
+  margin: 0;
+  padding-left: 1.25em;
+}
+
+.backup-warnings li {
+  padding-block: var(--sp-4);
+  overflow-wrap: anywhere;
+}
+
+.backup-warnings li > * {
+  display: block;
+}
+
+.backup-name,
+.bk-id > strong {
+  overflow-wrap: anywhere;
+}
+
+.backup-outcome {
+  justify-self: start;
+  white-space: normal;
 }
 
 /* Formun KAPANIS SATIRI: gonder dugmesi saga hizali, kart genisligine gerilmez. */

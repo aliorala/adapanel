@@ -206,7 +206,7 @@ public sealed class BackupTenantProjectionTests
             Record = new BackupRecordDto
             {
                 Id = "backup-1", Name = "site.zip.enc", Type = subscription ? "subscription" : "site",
-                Source = subscription ? Owner.ToString("N") : "site.example", SubscriptionUserId = subscription ? Owner.ToString("N") : "",
+                Source = subscription ? Owner.ToString("N") : "site.example", SubscriptionUserId = Owner.ToString("N"),
                 Path = @"C:\private-server-root\backups\site.zip.enc", PreservedPath = @"C:\private-server-root\preserved",
                 RestoredPath = @"C:\private-server-root\restored", Format = "zip", Status = "created_with_errors",
                 Encrypted = true, Compressed = true, Size = 123, CreatedAtUtc = new DateTime(2026, 10, 3, 0, 0, 0, DateTimeKind.Utc),

@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using AdaPanel.Api.Security;
+using AdaPanel.Core.Common;
 using AdaPanel.Infrastructure.Security;
 using AdaPanel.Core.Entities;
 using AdaPanel.Core.Enums;
@@ -172,6 +173,7 @@ public sealed class CookieSessionValidationTests
         // degisiklik cereze de yansir ve test hicbir seyi olcmezdi.
         private readonly string girisAnindakiKarma;
         private readonly UserRole girisAnindakiRol;
+        private readonly string girisKaniti;
 
         private Duzenek(SqliteConnection baglanti, AdaPanelDbContext dbContext, PanelUser kullanici)
         {
@@ -180,6 +182,7 @@ public sealed class CookieSessionValidationTests
             Kullanici = kullanici;
             girisAnindakiKarma = kullanici.PasswordHash;
             girisAnindakiRol = kullanici.Role;
+            girisKaniti = AcceptedIdentityEvidence.Create(kullanici);
         }
 
         public AdaPanelDbContext DbContext { get; }
@@ -248,7 +251,7 @@ public sealed class CookieSessionValidationTests
             Sema(),
             new CookieAuthenticationOptions(),
             new ClaimsPrincipal(kimlik),
-            new AuthenticationProperties(),
+            new AuthenticationProperties { Parameters = { [CookieSessionValidator.AcceptedIdentityParameter] = girisKaniti } },
             new CookieOptions());
 
         public async Task<CookieValidatePrincipalContext> DogrulaAsync(

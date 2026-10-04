@@ -397,32 +397,14 @@ public sealed partial class BackupService(
     }
 
     /// <summary>
-    /// Bir yedek kaydının KONUSU olan abonelik sahibi: abonelik yedeğinde kaydın kendi alanı,
-    /// site yedeğinde sitenin atandığı müşteri. Ölçülemezse <c>null</c> (tahmin edilmez).
+    /// Arşiv oluşturulurken doğrulanan abonelik sahibi. Sahibi bilinmeyen/karma arşivin
+    /// denetim kaydı da yöneticide kalır; güncel site ataması geçmiş içeriği devretmez.
     /// </summary>
-    private async Task<Guid?> ResolveAuditSubjectAsync(BackupRecordDto record, CancellationToken cancellationToken)
+    private static Task<Guid?> ResolveAuditSubjectAsync(BackupRecordDto record, CancellationToken cancellationToken)
     {
-        if (Guid.TryParseExact(record.SubscriptionUserId, "N", out var abonelik))
-        {
-            return abonelik;
-        }
-
-        if (customerScopes is null || !string.Equals(record.Type, "site", StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        try
-        {
-            return await customerScopes.GetSiteOwnerUserIdAsync(record.Source, cancellationToken);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            // Sahiplik okunamadıysa kayıt yine yazılır, yalnızca konusu boş kalır: denetim
-            // kaydını hiç yazmamak, eksik yazmaktan kötüdür.
-            logger?.LogWarning(exception, "Yedek denetim kaydi icin site sahibi okunamadi: {Site}", record.Source);
-            return null;
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<Guid?>(Guid.TryParseExact(record.SubscriptionUserId, "N", out var owner)
+            && owner != Guid.Empty ? owner : null);
     }
 
     // =====================================================================================
@@ -1181,6 +1163,10 @@ public sealed partial class BackupService(
         using var sourceLease = await EnterSourceAsync("site", site.Name, cancellationToken);
         using var siteUse = await target.ReserveAsync(cancellationToken);
         if (beforeBackup is not null) await beforeBackup(cancellationToken);
+        // A site name can be reassigned without transferring its databases or historical
+        // archives. Share only content explicitly measured as belonging to this owner.
+        // Unknown/mixed content remains a valid administrator-only backup.
+        var archiveOwner = await ResolveSiteArchiveOwnerAsync(site.Name, request, cancellationToken);
         var preferences = await preferencesService.GetAsync(cancellationToken);
         // YER kararı bir kez verilir; hem yerel klasör hem UZAK yol bundan türetilir.
         //
@@ -1192,7 +1178,7 @@ public sealed partial class BackupService(
         var backupsDirectory = placement.LocalDirectory;
 
         // ZİNCİR KARARI ARŞİVDEN ÖNCE VERİLİR: hangi dosyaların yazılacağı buna bağlı.
-        var plan = await ResolveChainPlanAsync("site", site.Name, request, cancellationToken);
+        var plan = await ResolveChainPlanAsync("site", site.Name, request, cancellationToken, archiveOwner);
         var artimsal = plan.Stamp is { } damga && damga.Mode == BackupChainPlanner.ModeIncremental;
 
         // DOSYA ADI DA aynı temizlikten geçmiş değeri kullanır (placement.Source): klasörü
@@ -1346,9 +1332,31 @@ public sealed partial class BackupService(
             cancellationToken,
             plan.Stamp,
             plan.Stamp is null ? null : indeks,
+            subscriptionUserId: archiveOwner,
             contentWarnings: icerikUyarilari,
             includedDatabases: includedDatabases,
             includedComponents: includedComponents);
+    }
+
+    private async Task<string> ResolveSiteArchiveOwnerAsync(
+        string siteName, BackupSiteRequest request, CancellationToken cancellationToken)
+    {
+        if (customerScopes is null) return string.Empty;
+        var owner = await customerScopes.GetSiteOwnerUserIdAsync(siteName, cancellationToken);
+        if (owner is null || owner == Guid.Empty) return string.Empty;
+        var databases = (request.Databases ?? [])
+            .Where(database => !string.IsNullOrWhiteSpace(database.Engine) && !string.IsNullOrWhiteSpace(database.DatabaseName))
+            .ToArray();
+        if (databases.Length == 0) return owner.Value.ToString("N");
+        if (databaseOwnership is null) return string.Empty;
+        var ownership = await databaseOwnership.GetAllAsync(cancellationToken);
+        foreach (var database in databases)
+        {
+            var matches = ownership.Where(record => DatabaseResourceIdentity.Same(
+                record.Engine, record.DatabaseName, database.Engine, database.DatabaseName)).ToArray();
+            if (matches.Length == 0 || matches.Any(record => record.OwnerUserId != owner)) return string.Empty;
+        }
+        return owner.Value.ToString("N");
     }
 
     // =====================================================================================
@@ -1486,7 +1494,8 @@ public sealed partial class BackupService(
         string type,
         string source,
         BackupArchiveRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? siteArchiveOwner = null)
     {
         // Artımsal istenmiyorsa zincir de kurulmaz: zincirsiz yedek tek başına geri yüklenir ve
         // hiçbir budama kuralını kısıtlamaz. (Eski davranış birebir korunur.)
@@ -1496,8 +1505,11 @@ public sealed partial class BackupService(
         }
 
         var kayitlar = await GetBackupsAsync(cancellationToken);
+        bool SameArchiveOwner(BackupRecordDto record) => siteArchiveOwner is null ||
+            string.Equals(record.SubscriptionUserId, siteArchiveOwner, StringComparison.OrdinalIgnoreCase);
         var sonZincir = kayitlar
             .Where(record => BackupSourceIdentity.Same(record, type, source)
+                && SameArchiveOwner(record)
                 && !string.IsNullOrWhiteSpace(record.ChainId))
             .OrderByDescending(record => record.CreatedAtUtc)
             .Select(record => record.ChainId)
@@ -1515,7 +1527,10 @@ public sealed partial class BackupService(
 
             // Son halkanın DOSYASI yerinde değilse üstüne artımsal koymak, doğduğu anda kopuk bir
             // zincir üretmek olurdu. Ölçülmeyen şeye güvenilmez.
-            if (sonHalka is not null && !BackupChainPlanner.Resolve(kayitlar, sonHalka.Id, IsUsableBackup).Broken)
+            // Check every member, not only the latest link: a legacy/mixed chain must
+            // never lend another tenant's database dump or file index to a new archive.
+            if (sonHalka is not null && zincir.All(SameArchiveOwner) &&
+                !BackupChainPlanner.Resolve(kayitlar, sonHalka.Id, IsUsableBackup).Broken)
             {
                 oncekiIndeks = await ReadFileIndexAsync(sonHalka, cancellationToken);
             }

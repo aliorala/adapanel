@@ -280,5 +280,6 @@
 
   "auth.two_factor_already_enabled": "İki adımlı doğrulama zaten etkin. Yeniden kurmak için önce mevcut parolanızla kapatın.",
   "auth.two_factor_setup_changed": "Hesabın doğrulama ayarları değişti. Durumu yenileyip işlemi tekrar deneyin.",
-  "auth.two_factor_recovery_incomplete": "Doğrulama ayarlarının kaydı tamamlanamadı. Hesap durumunu yenileyin; giriş yapamıyorsanız sunucu yöneticinize başvurun."
+  "auth.two_factor_recovery_incomplete": "Doğrulama ayarlarının kaydı tamamlanamadı. Hesap durumunu yenileyin; giriş yapamıyorsanız sunucu yöneticinize başvurun.",
+  "backup.ownership_unconfirmed": "Seçilen veritabanlarının bu siteyle aynı hesaba ait olduğu doğrulanamadı. Yedekleme başlamadı. Veritabanı seçimini kontrol edin veya yöneticinizden sahiplik kayıtlarını doğrulamasını isteyin."
 }

@@ -280,5 +280,6 @@
 
   "auth.two_factor_already_enabled": "Two-factor authentication is already enabled. Disable it with your current password before setting it up again.",
   "auth.two_factor_setup_changed": "The account's authentication settings changed. Refresh the status and try again.",
-  "auth.two_factor_recovery_incomplete": "The authentication settings could not be saved completely. Refresh the account status; contact your server administrator if you cannot sign in."
+  "auth.two_factor_recovery_incomplete": "The authentication settings could not be saved completely. Refresh the account status; contact your server administrator if you cannot sign in.",
+  "backup.ownership_unconfirmed": "The selected databases could not be confirmed as belonging to the same account as this site. The backup did not start. Check your database selection or ask your administrator to verify the ownership records."
 }
