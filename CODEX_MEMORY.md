@@ -1,9 +1,12 @@
 # AdaPanel Codex Memory
 
-## 2026-10-04 — R37 doğrulandı; 0.8.82 paketleniyor
+## 2026-10-04 — R36+R37 içeren 0.8.82 yayımlandı ve doğrulandı
 
-Geçici durum: kaynak sürümleri 0.8.82; yayın henüz doğrulanmadı. Son doğrulanmış yayın 0.8.81.
-R36+R37 birlikte paketlenecek. Canlı kurulum ve kaynak/Git geçmişi push yok.
+Kaynaklar ve public latest 0.8.82. Yayın 2026-10-04T05:22:25Z / 08:22:25 İstanbul.
+https://github.com/aliorala/adapanel/releases/tag/0.8.82
+https://github.com/aliorala/adapanel/releases/download/0.8.82/AdaPanelSetup.exe
+91,088,707 bytes; SHA256 07B250EF2232E611DFFA22924984B8523F715DA2704BB107AFE6AF0DEC720AA6.
+Source local commit db1ab4a. Yalnız installer+release notes yayımlandı; canlı kurulum ve source push yok.
 
 R37 Files Delete/Move/Copy HTTP: immutable request/principal, R36 PublicationUse ile source+target
 site generation pin, beklemeler/öge yazımları sonrası actor/SID/stamp/delegation/scope onayı.
@@ -36,8 +39,12 @@ proof; desktop/errors-en320/form-en320 also saved. Last desktop alignment CSS us
 action column after desktopcapture. Preview11957 terminal; __audit37 files removed; tab37closed,
 viewportreset. Fresh usertab inventory still no liveAdaPanel; no installedversion measurement.
 
-Packaging root90001 running release082-package.log. Componentaudit22Passed3standardlargeSkipped;
-privacy12/12, actual release-note0findings, parser/versionguardpassed. Package/publish next.
+Packaging root90001 terminalexit0: publish170files/0findings, installer version0.8.82 verified.
+Publisher55520 terminalexit0: downloaded uploaded asset hash equals local hash; public API latest/tag,
+title/body exactUTF8, singleasset bytes/digest match. Proof release082-published-verification.json.
+Componentaudit22Passed3standardlargeSkipped; privacy12/12, release-note0findings, parser/versionguardpassed.
+All root processes terminal:22576RED,8369types,89749editorRED,50020firstFE,2242finalFE,
+94289target,27404fullNET,90001package,55520publish,11957preview. No live test/preview/process remains.
 Only preexisting tests/AdaPanel.Infrastructure.Tests/TestResults/ must remain untouched/untracked.
 All agents source frozen/done; root sole.NET. Continuous unbudgeted goal ACTIVE, never complete.
 
