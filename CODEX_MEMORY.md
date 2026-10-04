@@ -1,5 +1,25 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R43+R44 içeren 0.8.86 yayımlandı ve doğrulandı
+
+PUBLIC latest ve kaynak0.8.86. Published2026-10-04T10:07:05Z /13:07:05İstanbul.
+https://github.com/aliorala/adapanel/releases/tag/0.8.86
+https://github.com/aliorala/adapanel/releases/download/0.8.86/AdaPanelSetup.exe
+91,120,865bytes SHA2561CB0AA091564DCF7C7D590FACE6BB8112639F9930FFA5771520E25FDA8AB3AED.
+Kaynaklocalcommit53cbfb8; kaynakpush/liveinstall yok. .85installer değiştirilmedi.
+Paket38528TERMINALexit0: publish170files/0findings,installer.86/0findings. Freshcomponentaudit
+22passed3standardlargeSkipped0fail bu tur PS5ileayrıkoşuldu; yalnıztekrarıskip. NativePS5publisher
+35776TERMINALexit0, publicinstallerindirildiSHAequalslocal. KimliksizAPI latest/tag/name+fullUTF8body/
+singleassetuploaded/bytes/digest doğrulandı. Proof .tmp/audit-20261004/release086-published-verification.json.
+ProofscriptPS5BOMlessliteralUnicodeGitpath nedeniylecommitokuyamadı; publickanıtlarbaşarılıydı.
+ScriptactualResolvePathvar kullanacakşekildedüzeltildi, sourcecommitPS7gitile53cbfb8ölçülüpmetadatayazıldı.
+Test/preview/package/publisher hepsiTERMINAL, C#sourcesfrozen. Broad9048/9048(Core2+Infra9046;
+realSAM2excluded),FE2240/2240/types/Vite,152assetsallSHAequal6indexassets,TR/EN5614equal.
+İlk sandboxbaselinefixturekuramamasısonrasıkalan14exacttempGUIDroot12:47:34 oluşumzamanı,
+canonicalparent/prefix/size/no-reparse doğrulanıpyalnızownedfixturekökleritemizlendi.
+Öncedenvarolan TestResults/ untoucheduntracked. GoalACTIVE. R45 aday aşağıda saltokuma; runtimekanıtyok.
+Finalimage actualsaved .tmp/audit-20261004/round44-permission-result-tr390.png, path D:/... (not /D:/...).
+
 ## 2026-10-04 — R44 doğrulandı; 0.8.86 paket/yayın hazırlanıyor
 
 Kaynak sürüm0.8.86, publiclatest13:00kontrolü0.8.85, .86tagyok. Henüz .86 yayımlanmadı.
@@ -34,7 +54,14 @@ Freshcomponents18686exit0,22Passed3standardlargeSkipped0Failed (PS7TLSfail→nat
 Package audit duplicate skip kullanılabilir; .tools/inno/ISCC.exe mevcut. Release parser+privacy12/12,
 actualnotesprivacy0findings. verify-release086.ps1 hazır, yalnızpublisherdownloadverifyexit0sonrasıçalıştır.
 Doküman docs/audit-2026-10-04.md:R44 güncel. TestResults/ eskiuntrackedkorunur,commitdışı.
-GoalACTIVE bitmişişaretleme. Bu batchkaynaklarıcommit/paket/yayın henüzbekliyor.
+GoalACTIVE bitmişişaretleme. Kaynaklocalcommit53cbfb8. Paket38528 şuankomutrun; yayınhenüzbekliyor.
+
+R45 adayı saltokuma: FilesController Move223–230/Copy281–288 audit awaitsonrası publication
+revalidateyok ve nestedresult.Workspace.PhysicalPath customer/reseller içinProjectWorkspaceuygulanmıyor.
+FileService405–407/483–485 finalworkspace callbacksizGetWorkspaceAsync, sonapprovaleskiDestination'ı
+onaylıyor. Actualcontroller+SQLite+ownedtemp auditlatch sid/scopechange +nestedpathredaction +final
+foreignworkspace snapshot testi önceREDölç. Önceki mutasyonetkisi geri alınmışgibiiddiaetme.
+Serveragent saltokumabildi, rootcontrollerkodunu gördü; henüzruntimekanıtyok, R44paketeeklenmedi.
 
 ## 2026-10-04 — R43 doğrulandı (henüz yayımlanmadı)
 
