@@ -103,21 +103,50 @@
         <div v-if="workspace?.isDirectory" class="toolbar-group">
           <!-- ÇOKLU seçim: yirmi dosyayı tek tek seçtirmek Plesk'te de yok. Gönderim SIRAYLA
                (bkz. uploadSelectedFiles). -->
-          <label class="upload-button" :class="{ disabled: uploadBusy || locked || !workspace?.isDirectory }" :title="lockReason || undefined">
-            <input type="file" multiple v-bind="writeGate(uploadBusy || !workspace?.isDirectory)" @change="uploadSelectedFiles" />
+          <label class="upload-button" :class="{ disabled: fileMutationBusy || locked || loading || Boolean(workspaceLoad.message.value) || !workspace?.isDirectory }" :title="lockReason || undefined">
+            <input type="file" multiple v-bind="writeGate(fileMutationBusy || loading || Boolean(workspaceLoad.message.value) || !workspace?.isDirectory)" @change="uploadSelectedFiles" />
             <span>{{ uploadBusy ? uploadProgressLabel : t("panel.files.upload") }}</span>
           </label>
           <!-- Oluşturma düğmeleri yalnız KLASÖR görünümünde anlamlı: bir dosya açıkken
                `workspace.path` o dosyanın yoludur ve altına klasör/dosya yaratmak sessizce
                yanlış yere yazmak olurdu. -->
-          <button class="secondary compact" v-bind="writeGate(createBusy || permissionsBusy || loading || Boolean(workspaceLoad.message.value) || !workspace?.isDirectory)" @click="createFolder">
+          <button class="secondary compact" v-bind="writeGate(fileMutationBusy || loading || Boolean(workspaceLoad.message.value) || !workspace?.isDirectory)" @click="createFolder">
             {{ t("panel.files.createFolder") }}
           </button>
-          <button class="secondary compact" v-bind="writeGate(createBusy || permissionsBusy || loading || Boolean(workspaceLoad.message.value) || !workspace?.isDirectory)" @click="createNewFile">
+          <button class="secondary compact" v-bind="writeGate(fileMutationBusy || loading || Boolean(workspaceLoad.message.value) || !workspace?.isDirectory)" @click="createNewFile">
             {{ t("panel.files.createFile") }}
           </button>
         </div>
       </div>
+
+      <section v-if="archiveOperation && archiveOperation.status !== 'confirming'"
+        class="archive-state" :class="{ 'is-error': Boolean(archiveOperation.error), 'is-success': archiveOperation.status === 'succeeded' }"
+        :role="archiveOperation.error ? 'alert' : 'status'"
+        :aria-busy="archiveOperation.status === 'running' || archiveOperation.status === 'refreshing'">
+        <div class="archive-heading">
+          <svg class="archive-symbol" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <template v-if="archiveOperation.error"><path d="m12 3 10 18H2L12 3Z" /><path d="M12 9v5m0 3h.01" /></template>
+            <template v-else-if="archiveOperation.status === 'succeeded'"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></template>
+            <template v-else><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M11 3v3h2v3h-2v3h2m-2 4h2v2h-2z" /></template>
+          </svg>
+          <h3 v-if="archiveOperation.status === 'refreshing'">{{ t('panel.files.archiveRefreshing') }}</h3>
+          <h3 v-else-if="archiveOperation.status === 'failed'">{{ t('panel.files.archiveFailed') }}</h3>
+          <h3 v-else-if="archiveOperation.status === 'succeeded'">{{ t(archiveOperation.kind === 'extract' ? 'panel.files.archiveExtractSucceeded' : 'panel.files.archiveCompressSucceeded') }}</h3>
+          <h3 v-else>{{ t(archiveOperation.kind === 'extract' ? 'panel.files.archiveExtractRunning' : 'panel.files.archiveCompressRunning') }}</h3>
+        </div>
+        <dl class="archive-scope">
+          <div><dt>{{ t('panel.files.archiveSource') }}</dt><dd>{{ archiveOperation.sourcePath }}</dd></div>
+          <div><dt>{{ t('panel.files.archiveDestination') }}</dt><dd>{{ archiveOperation.destinationPath }}</dd></div>
+        </dl>
+        <p v-if="archiveOperation.error" class="archive-error">{{ archiveOperation.error }}</p>
+        <p v-if="archiveOperation.error" class="meta">{{ t('panel.files.archiveFailedHint') }}</p>
+        <p v-else-if="archiveOperation.status === 'running'" class="meta">{{ t('panel.files.archivePendingHint') }}</p>
+        <p v-if="archiveOperation.refreshError" class="meta">{{ t('panel.files.archiveRefreshFailed') }}</p>
+        <div v-if="archiveOperation.status === 'failed' || archiveOperation.status === 'succeeded'" class="archive-actions">
+          <button v-if="archiveOperation.status === 'failed'" type="button" class="secondary compact" :disabled="fileMutationBusy || loading" @click="refreshArchiveListing">{{ t('panel.files.archiveRefresh') }}</button>
+          <button type="button" class="link-button" @click="dismissArchiveOperation">{{ t('panel.files.archiveClose') }}</button>
+        </div>
+      </section>
 
       <!-- YÜKLEME İLERLEMESİ. Düğme metni zaten "3/20" diyor ama bir SAYI, kalan işin ne kadar
            olduğunu bir bakışta anlatmaz; çubuk oranı gösterir. Ölçü DOSYA BAŞINADIR (uç bayt
@@ -192,17 +221,17 @@
              (ad/sayı yazdırma) yerinde duruyor; bu yerleşim onun yerine geçmez, önüne geçer. -->
         <div v-if="selection.count.value > 0" class="bulk-bar" role="status">
           <span class="status-pill">{{ t("panel.bulk.selectedCount", { count: selection.count.value }) }}</span>
-          <button class="secondary compact" v-bind="writeGate(bulk.busy.value || transferBusy || deleteBusy)" @click="startTransfer('move')">
+          <button class="secondary compact" v-bind="writeGate(fileMutationBusy)" @click="startTransfer('move')">
             {{ t("panel.files.move") }}
           </button>
-          <button class="secondary compact" v-bind="writeGate(bulk.busy.value || transferBusy || deleteBusy)" @click="startTransfer('copy')">
+          <button class="secondary compact" v-bind="writeGate(fileMutationBusy)" @click="startTransfer('copy')">
             {{ t("panel.files.copy") }}
           </button>
-          <button class="secondary compact" :disabled="bulk.busy.value || transferBusy || deleteBusy" @click="selection.clear">
+          <button class="secondary compact" :disabled="fileMutationBusy" @click="selection.clear">
             {{ t("panel.bulk.clearSelection") }}
           </button>
           <span class="bulk-spacer" aria-hidden="true"></span>
-          <button class="danger compact" v-bind="writeGate(bulk.busy.value || transferBusy || deleteBusy)" @click="removeSelected">
+          <button class="danger compact" v-bind="writeGate(fileMutationBusy)" @click="removeSelected">
             {{ t("panel.bulk.deleteSelected", { count: selection.count.value }) }}
           </button>
         </div>
@@ -213,26 +242,26 @@
         <form v-if="transferMode && selection.count.value > 0" class="transfer-form" @submit.prevent="runTransfer">
           <label>
             <span>{{ t("panel.files.destination") }}</span>
-            <input v-model="transferTarget" :disabled="transferBusy" :placeholder="siteRootPath" />
+            <input v-model="transferTarget" :disabled="fileMutationBusy" :placeholder="siteRootPath" />
             <small class="field-hint">{{ t("panel.files.destinationHint") }}</small>
           </label>
           <label>
             <span>{{ t("panel.files.destinationPick") }}</span>
-            <select v-model="transferTarget" :disabled="transferBusy">
+            <select v-model="transferTarget" :disabled="fileMutationBusy">
               <option :value="siteRootPath">{{ t("panel.files.destinationRoot") }}</option>
               <option v-if="parentTargetPath" :value="parentTargetPath">{{ t("panel.files.destinationParent") }}</option>
               <option v-for="folder in folderTargets" :key="folder.path" :value="folder.path">{{ folder.name }}</option>
             </select>
           </label>
           <label class="overwrite-field">
-            <input type="checkbox" v-model="transferOverwrite" :disabled="transferBusy" />
+            <input type="checkbox" v-model="transferOverwrite" :disabled="fileMutationBusy" />
             <span>{{ t("panel.files.overwrite") }}</span>
           </label>
           <div class="entry-actions">
-            <button type="submit" v-bind="writeGate(transferBusy || deleteBusy || !transferTarget)">
+            <button type="submit" v-bind="writeGate(fileMutationBusy || !transferTarget)">
               {{ transferMode === "move" ? t("panel.files.move") : t("panel.files.copy") }}
             </button>
-            <button type="button" class="secondary compact" :disabled="transferBusy" @click="transferMode = null">
+            <button type="button" class="secondary compact" :disabled="fileMutationBusy" @click="transferMode = null">
               {{ t("panel.common.cancel") }}
             </button>
           </div>
@@ -251,7 +280,7 @@
               <input
                 type="checkbox"
                 :checked="selection.allSelected(visiblePaths)"
-                :disabled="bulk.busy.value || transferBusy || deleteBusy"
+                :disabled="fileMutationBusy"
                 :aria-label="t('panel.bulk.selectAll')"
                 @change="selection.toggleAll(visiblePaths)" />
               <span class="mobile-select-label" aria-hidden="true">{{ t("panel.bulk.selectAll") }}</span>
@@ -269,7 +298,7 @@
                 <input
                   type="checkbox"
                   :checked="selection.isSelected(entry.path)"
-                  :disabled="bulk.busy.value || transferBusy || deleteBusy"
+                  :disabled="fileMutationBusy"
                   :aria-label="t('panel.bulk.selectRow', { name: entry.name })"
                   @change="selection.toggle(entry.path)" />
               </span>
@@ -354,14 +383,14 @@
                    çekmece satırı altı sütunun tamamını kaplar. -->
               <div class="drawer-actions" role="cell" aria-colspan="6">
                 <span class="drawer-label">{{ entry.name }}</span>
-                <button class="secondary compact" v-bind="writeGate(transferBusy || deleteBusy)" @click="renamePath(entry)">{{ t("panel.files.rename") }}</button>
-                <button class="secondary compact" v-bind="writeGate(archiveBusy)" @click="compress(entry.path)">{{ t("panel.files.compress") }}</button>
-                <button v-if="entry.extension.toLowerCase() === '.zip'" class="secondary compact" v-bind="writeGate(archiveBusy)" @click="extract(entry.path)">
+                <button class="secondary compact" v-bind="writeGate(fileMutationBusy)" @click="renamePath(entry)">{{ t("panel.files.rename") }}</button>
+                <button class="secondary compact" v-bind="writeGate(fileMutationBusy)" @click="compress(entry.path)">{{ t("panel.files.compress") }}</button>
+                <button v-if="entry.extension.toLowerCase() === '.zip'" class="secondary compact" v-bind="writeGate(fileMutationBusy)" @click="extract(entry.path)">
                   {{ t("panel.files.extract") }}
                 </button>
                 <!-- Yıkıcı eylem: ayırıcının ardında ve çekmecenin öbür ucunda. -->
                 <span class="drawer-divider" aria-hidden="true"></span>
-                <button class="danger compact" v-bind="writeGate(transferBusy || deleteBusy || bulk.busy.value)" @click="removePath(entry)">{{ t("panel.sites.delete") }}</button>
+                <button class="danger compact" v-bind="writeGate(fileMutationBusy)" @click="removePath(entry)">{{ t("panel.sites.delete") }}</button>
               </div>
             </div>
           </template>
@@ -383,14 +412,14 @@
       <label v-else-if="workspace" class="stacked-field">
         <span class="field-label">{{ t("panel.files.editor") }}</span>
         <span v-if="!canEditFile" id="file-content-state" class="field-hint" role="status">{{ t(workspace.contentUnavailableReasonKey || 'panel.files.contentUnmeasured') }}</span>
-        <textarea v-model="fileContent" :disabled="saving || loading || !canEditFile" :aria-describedby="!canEditFile ? 'file-content-state' : undefined" rows="18" spellcheck="false" class="file-editor"></textarea>
+        <textarea v-model="fileContent" :disabled="fileMutationBusy || loading || !canEditFile" :aria-describedby="!canEditFile ? 'file-content-state' : undefined" rows="18" spellcheck="false" class="file-editor"></textarea>
       </label>
 
       <!-- Kaydet BİRİNCİL, indir ikincil. Eskiden ikisi `action-row` içindeydi ve o sınıf
            `space-between` uyguladığı için düğmeler kartın iki ucuna savruluyordu; `toolbar-group`
            yalnız akış + boşluk verir, ikisi yan yana durur. -->
       <div v-if="workspace && !workspace.isDirectory" class="toolbar-group editor-actions">
-        <button v-bind="writeGate(saving || loading || !canEditFile || !isDirty)" @click="saveCurrentFile">
+        <button v-bind="writeGate(fileMutationBusy || loading || !canEditFile || !isDirty)" @click="saveCurrentFile">
           {{ saving ? t("panel.confirm.working") : t("panel.files.save") }}
         </button>
         <span v-if="isDirty" class="status-pill" role="status">{{ t("panel.files.unsaved") }}</span>
@@ -412,7 +441,7 @@
       <form v-if="workspace.path !== siteRootPath" class="permissions-row" :aria-busy="permissionsBusy" aria-describedby="file-permissions-scope" @submit.prevent="savePermissions">
         <label>
           <span class="field-label">{{ t("panel.security.principal") }}</span>
-          <input v-model="permissionPrincipal" :disabled="permissionsBusy" required autocomplete="off" spellcheck="false" placeholder="IIS_IUSRS" />
+          <input v-model="permissionPrincipal" :disabled="fileMutationBusy" required autocomplete="off" spellcheck="false" placeholder="IIS_IUSRS" />
         </label>
         <!-- SEÇENEKLER ANLAMLARIYLA YAZILIYOR. Liste yalnız "R / M / F" gösteriyordu; bunlar
              icacls'in ham kodlarıdır ve seçili değer olarak ekranda tek başına duran "M"
@@ -421,7 +450,7 @@
              yazıldı. Gönderilen değer aynı: R / M / F. -->
         <label>
           <span class="field-label">{{ t("panel.security.rights") }}</span>
-          <select v-model="permissionRights" :disabled="permissionsBusy">
+          <select v-model="permissionRights" :disabled="fileMutationBusy">
             <option value="R">{{ t("panel.security.rights.read") }}</option>
             <option value="M">{{ t("panel.security.rights.modify") }}</option>
             <option value="F">{{ t("panel.security.rights.full") }}</option>
@@ -592,6 +621,20 @@ const isFileViewActive = () => !disposed && fileEpoch === getSessionEpoch() &&
   authStore.session === fileSession && authStore.session?.isAuthenticated === true &&
   authStore.session.user?.id === fileActor && authStore.session.user?.role === fileRole;
 const archiveBusy = ref(false);
+type ArchiveOperation = {
+  kind: "compress" | "extract";
+  sourcePath: string;
+  destinationPath: string;
+  status: "confirming" | "running" | "refreshing" | "succeeded" | "failed";
+  error: string;
+  refreshError: string;
+};
+const archiveState = ref<ArchiveOperation | null>(null);
+let archiveContext: (() => boolean) | null = null;
+const archiveOperation = computed(() => archiveState.value && archiveContext?.() ? archiveState.value : null);
+watch(() => [authStore.session, authStore.session?.user?.id, authStore.session?.user?.role], () => {
+  if (!isFileViewActive()) archiveState.value = null;
+}, { flush: "sync" });
 let searchRequest = 0;
 function currentFileContext(trackRead = true) {
   const request = workspaceRequest, site = selectedSiteName.value, path = workspace.value?.path;
@@ -619,7 +662,7 @@ function beforeUnload(event: BeforeUnloadEvent) {
   if (isDirty.value || saving.value) { event.preventDefault(); event.returnValue = ""; }
 }
 onMounted(() => window.addEventListener("beforeunload", beforeUnload));
-onBeforeUnmount(() => { disposed = true; workspaceRequest++; window.removeEventListener("beforeunload", beforeUnload); });
+onBeforeUnmount(() => { disposed = true; archiveState.value = null; workspaceRequest++; window.removeEventListener("beforeunload", beforeUnload); });
 async function changeSite(event: Event) {
   if (!isFileViewActive()) return;
   const isCurrent = currentFileContext(false);
@@ -696,7 +739,7 @@ const permissionRights = ref("M");
 const createBusy = ref(false);
 const permissionsBusy = ref(false);
 const canSetPermissions = computed(() => isFileViewActive() && isAdmin.value && !locked.value &&
-  !createBusy.value && !permissionsBusy.value && !loading.value && !workspaceLoad.message.value &&
+  !fileMutationBusy.value && !loading.value && !workspaceLoad.message.value &&
   Boolean(workspace.value && siteRootPath.value && workspace.value.path.toLowerCase() !== siteRootPath.value.toLowerCase()));
 
 // TAŞI / KOPYALA hedef formu. `window.prompt` yerine ekranın kendi alanları: hedef listeden
@@ -751,6 +794,8 @@ const breadcrumb = computed(() => {
 // ÇOKLU YÜKLEME durumu. `uploadTotal` yalnızca gösterim içindir; asıl kural sıraya alma:
 // yirmi isteği paralel göndermek tarayıcının bağlantı havuzunu ve sunucuyu boşuna zorlar.
 const uploadBusy = ref(false);
+const fileMutationBusy = computed(() => archiveBusy.value || uploadBusy.value || saving.value || createBusy.value ||
+  permissionsBusy.value || transferBusy.value || deleteBusy.value || bulk.busy.value);
 const uploadDone = ref(0);
 const uploadTotal = ref(0);
 const uploadProgressLabel = computed(() =>
@@ -830,6 +875,7 @@ watch(selectedSiteName, async (siteName, previousSiteName) => {
 
   fileNavigationGeneration++;
   requestedWorkspacePath = "";
+  archiveState.value = null;
   workspace.value = null;
   searchResults.value = [];
   searchRan.value = false;
@@ -854,6 +900,7 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
   }
 
   if (path !== requestedWorkspacePath) {
+    archiveState.value = null;
     requestedWorkspacePath = path;
     fileNavigationGeneration++;
   }
@@ -873,6 +920,7 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
     fileContent.value = result.content || "";
     savedContent.value = fileContent.value;
     workspaceLoad.clear();
+    if (archiveOperation.value) archiveOperation.value.refreshError = "";
     // Artık listede olmayan yollar seçili kalmasın (silme/klasör değişimi sonrası).
     selection.keepOnly(workspace.value.entries.map((entry) => entry.path));
     return true;
@@ -880,6 +928,10 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
     if (!isFileViewActive() || request !== workspaceRequest || site !== selectedSiteName.value) return;
     // Hata hem şeritte hem listenin yerinde görünür: boş bir tablo "klasör boş" sanılmasın.
     workspaceLoad.capture(error);
+    if (archiveOperation.value) {
+      archiveOperation.value.refreshError = t("panel.files.archiveRefreshFailed");
+      workspaceLoad.message.value = archiveOperation.value.refreshError;
+    }
     showNotice(resolveApiMessage(error), true);
     return false;
   } finally {
@@ -928,7 +980,7 @@ async function uploadSelectedFiles(event: Event) {
  * kopyalandığını sandığı bir klasörün hiç var olmaması demekti.
  */
 async function uploadMany(files: File[], folders: string[]) {
-  if (!isFileViewActive() || uploadBusy.value || !workspace.value?.isDirectory) {
+  if (!isFileViewActive() || fileMutationBusy.value || !workspace.value?.isDirectory) {
     return;
   }
 
@@ -968,14 +1020,11 @@ async function uploadMany(files: File[], folders: string[]) {
         failures.push({ name: file.name, reason: resolveApiMessage(error) });
       }
     }
-  } finally {
-    uploadBusy.value = false;
-  }
-
-  if (!isCurrent()) return;
-  const refreshed = await refreshAfterFileOperation(hedef, isVisible);
-  if (!isVisible() || refreshed === undefined) return;
-  reportFileOperation(uploadOzeti(files.length, uploadDone.value, failures, folders), failures.length > 0 || folders.length > 0, refreshed);
+    if (!isCurrent()) return;
+    const refreshed = await refreshAfterFileOperation(hedef, isVisible);
+    if (!isVisible() || refreshed === undefined) return;
+    reportFileOperation(uploadOzeti(files.length, uploadDone.value, failures, folders), failures.length > 0 || folders.length > 0, refreshed);
+  } finally { uploadBusy.value = false; }
 }
 
 function reportFileOperation(message: string, failed: boolean, refreshed: boolean) {
@@ -1200,10 +1249,13 @@ async function extract(path: string) {
 }
 
 async function runArchive(path: string, extracting: boolean) {
-  if (!isFileViewActive() || archiveBusy.value || locked.value || loading.value || workspaceLoad.message.value || !workspace.value?.isDirectory) return;
+  if (!isFileViewActive() || fileMutationBusy.value || locked.value || loading.value || workspaceLoad.message.value || !workspace.value?.isDirectory) return;
   const isCurrent = currentFileContext(false);
   const destination = workspace.value.path;
   archiveBusy.value = true;
+  archiveContext = isCurrent;
+  archiveState.value = { kind: extracting ? "extract" : "compress", sourcePath: path, destinationPath: destination,
+    status: extracting ? "confirming" : "running", error: "", refreshError: "" };
   try {
     if (extracting) {
       const name = path.replace(/\\/g, "/").split("/").pop()!;
@@ -1212,8 +1264,10 @@ async function runArchive(path: string, extracting: boolean) {
         message: t("panel.files.extractConfirmMessage", { name, path: destination }),
         impact: [path, destination], tone: "danger", confirmLabel: t("panel.files.extractConfirmAction")
       });
-      if (!approved || !isCurrent() || locked.value) return;
+      if (!approved || !isCurrent() || locked.value) { archiveState.value = null; return; }
     }
+    archiveState.value!.status = "running";
+    clearNotice();
     const result = await (extracting ? extractPath(path) : compressPath(path));
     if (!isCurrent()) return;
     // The mutation response owns this newer workspace; older list reads cannot
@@ -1230,10 +1284,39 @@ async function runArchive(path: string, extracting: boolean) {
     fileContent.value = result.content;
     savedContent.value = result.content;
     selection.keepOnly(result.entries.map(entry => entry.path));
+    archiveState.value!.status = "succeeded";
     showNotice(t(extracting ? "panel.files.extracted" : "panel.files.compressed"), false);
   } catch (error) {
-    if (isCurrent()) showNotice(resolveApiMessage(error), true);
+    if (!isCurrent()) return;
+    const message = resolveApiMessage(error);
+    archiveState.value!.error = message;
+    archiveState.value!.status = "refreshing";
+    // Earlier extracted files or the published ZIP may remain despite a failed response.
+    // Remeasure the directory without claiming that those changes were rolled back.
+    await refresh(destination);
+    if (!isCurrent()) return;
+    archiveState.value!.status = "failed";
+    showNotice(message, true);
   } finally { archiveBusy.value = false; }
+}
+
+async function refreshArchiveListing() {
+  const operation = archiveOperation.value, isCurrent = archiveContext;
+  if (!operation || !isCurrent || fileMutationBusy.value || loading.value ||
+    (operation.status !== "succeeded" && operation.status !== "failed")) return;
+  const status = operation.status;
+  archiveBusy.value = true;
+  operation.status = "refreshing";
+  try {
+    await refresh(operation.destinationPath);
+    if (!isCurrent()) return;
+    operation.status = status;
+    if (operation.error) showNotice(operation.error, true);
+  } finally { archiveBusy.value = false; }
+}
+
+function dismissArchiveOperation() {
+  if (archiveOperation.value?.status === "succeeded" || archiveOperation.value?.status === "failed") archiveState.value = null;
 }
 
 async function savePermissions() {
@@ -1260,7 +1343,7 @@ async function savePermissions() {
  * başarısızlık burada doğrudan VERİ KAYBIDIR.
  */
 async function createFolder() {
-  if (!isFileViewActive() || locked.value || createBusy.value || permissionsBusy.value || loading.value || workspaceLoad.message.value || !workspace.value?.isDirectory) return;
+  if (!isFileViewActive() || locked.value || fileMutationBusy.value || loading.value || workspaceLoad.message.value || !workspace.value?.isDirectory) return;
   const isCurrent = currentFileContext(false);
   const parentPath = workspace.value.path;
   createBusy.value = true;
@@ -1291,7 +1374,7 @@ async function createFolder() {
  * Sunucudaki CreateNew, iki oturum aynı anda oluştursa da mevcut dosyanın ezilmesini engeller.
  */
 async function createNewFile() {
-  if (!isFileViewActive() || locked.value || createBusy.value || permissionsBusy.value || loading.value || workspaceLoad.message.value || !workspace.value?.isDirectory) return;
+  if (!isFileViewActive() || locked.value || fileMutationBusy.value || loading.value || workspaceLoad.message.value || !workspace.value?.isDirectory) return;
   const isCurrent = currentFileContext(false);
   const parentPath = workspace.value.path;
   createBusy.value = true;
@@ -1338,7 +1421,7 @@ async function createNewFile() {
  * dosya kullanımda...). Bu yüzden "yeniden adlandırıldı" yalnız `moved` doğruyken yazılır.
  */
 async function renamePath(entry: FileEntry) {
-  if (!isFileViewActive() || locked.value || transferBusy.value) return;
+  if (!isFileViewActive() || locked.value || fileMutationBusy.value) return;
   entry = { ...entry };
   const isCurrent = currentFileContext(false);
   const isVisible = currentFileContext(false);
@@ -1390,7 +1473,7 @@ function startTransfer(mode: "move" | "copy") {
 async function runTransfer() {
   const mode = transferMode.value;
   const targets = entries.value.filter((entry) => selection.isSelected(entry.path));
-  if (!isFileViewActive() || locked.value || transferBusy.value || !mode || targets.length === 0) {
+  if (!isFileViewActive() || locked.value || fileMutationBusy.value || !mode || targets.length === 0) {
     return;
   }
 
@@ -1501,7 +1584,7 @@ function transferOzeti(
  * dosyada normal onay yeter. Onay metni NEYİN silineceğini (tam yol) açıkça söyler.
  */
 async function removePath(entry: FileEntry) {
-  if (!isFileViewActive() || locked.value || deleteBusy.value || transferBusy.value || bulk.busy.value) return;
+  if (!isFileViewActive() || locked.value || fileMutationBusy.value) return;
   entry = { ...entry };
   const isFolder = entry.isDirectory;
   const isCurrent = currentFileContext(false);
@@ -1545,7 +1628,7 @@ async function removePath(entry: FileEntry) {
  * olursa döngü durmaz; özet "kaçı silindi, kaçı silinemedi ve neden" der.
  */
 async function removeSelected() {
-  if (!isFileViewActive() || locked.value || deleteBusy.value || transferBusy.value || bulk.busy.value) return;
+  if (!isFileViewActive() || locked.value || fileMutationBusy.value) return;
   const isCurrent = currentFileContext(false);
   const sourceFolder = workspace.value?.path || "";
   const targets = entries.value.filter((entry) => selection.isSelected(entry.path)).map(entry => ({ ...entry }));
@@ -1580,7 +1663,7 @@ async function removeSelected() {
 }
 
 async function saveCurrentFile(): Promise<boolean> {
-  if (!isFileViewActive() || !workspace.value || !canEditFile.value || saving.value || loading.value || locked.value) return false;
+  if (!isFileViewActive() || !workspace.value || !canEditFile.value || fileMutationBusy.value || loading.value || locked.value) return false;
   const path = workspace.value.path;
   const content = fileContent.value;
   const isCurrent = currentFileContext(false);
@@ -1653,6 +1736,34 @@ async function restore(record: BackupRecord) {
 .workspace-card {
   container: file-workspace / inline-size;
   min-width: 0;
+}
+
+.archive-state {
+  --archive-tone: var(--accent-1);
+  display: grid;
+  gap: var(--sp-12);
+  min-width: 0;
+  padding: var(--sp-16);
+  border: 1px solid color-mix(in srgb, var(--archive-tone) 35%, var(--panel-border));
+  border-left: 3px solid var(--archive-tone);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--archive-tone) 4%, var(--surface-1));
+}
+.archive-state.is-error { --archive-tone: var(--warn-1); }
+.archive-state.is-success { --archive-tone: var(--ok-1); }
+.archive-heading { display: flex; align-items: flex-start; gap: var(--sp-12); }
+.archive-heading h3 { flex: 1; min-width: 0; margin: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.archive-symbol { flex: 0 0 22px; width: 22px; height: 22px; color: var(--archive-tone); }
+.archive-scope { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-12); margin: 0; }
+.archive-scope > div { min-width: 0; }
+.archive-scope dt { color: var(--text-muted); font-size: var(--fs-xs); margin-bottom: var(--sp-4); }
+.archive-scope dd { margin: 0; color: var(--text-strong); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.archive-state p { margin: 0; line-height: 1.6; overflow-wrap: anywhere; }
+.archive-error { color: var(--text-strong); font-size: var(--fs-sm); }
+.archive-actions { display: flex; align-items: center; gap: var(--sp-8); flex-wrap: wrap; }
+@container file-workspace (max-width: 480px) {
+  .archive-scope { grid-template-columns: minmax(0, 1fr); }
+  .archive-actions button { max-width: 100%; white-space: normal; }
 }
 
 .mobile-select-label { display: none; }

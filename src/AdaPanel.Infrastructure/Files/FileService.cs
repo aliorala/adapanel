@@ -1092,7 +1092,8 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
 
     private static async Task WriteAtomicallyAsync(
         ResolvedTarget target, Func<Stream, CancellationToken, Task> write, CancellationToken cancellationToken,
-        Func<CancellationToken, Task>? beforePublication = null, bool failIfExists = false)
+        Func<CancellationToken, Task>? beforePublication = null, bool failIfExists = false,
+        DateTime? lastWriteTimeUtc = null)
     {
         // Aynı birimdeki geçici dosya tamamlanmadan mevcut site dosyasına dokunma.
         // Doğrudan File.Create, aktarımın ilk baytından önce eski içeriği siliyordu.
@@ -1106,6 +1107,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                 await write(output, cancellationToken);
                 await output.FlushAsync(cancellationToken);
             }
+            if (lastWriteTimeUtc is { } timestamp) File.SetLastWriteTimeUtc(temporary, timestamp);
             if (beforePublication is not null) await beforePublication(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             EnsureNoReparsePoints(target.SandboxRoot, target.PhysicalPath);
@@ -1284,14 +1286,21 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     }
 
     public Task<FileWorkspaceDto> ExtractAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default) =>
-        ExtractCoreAsync(request, null, cancellationToken);
+        ExtractCoreAsync(request, null, null, cancellationToken);
 
     public Task<FileWorkspaceDto> ExtractAsync(ArchiveFileRequest request,
         Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
-        ExtractCoreAsync(request, beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken);
+        ExtractCoreAsync(request, beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), null, cancellationToken);
+
+    public Task<FileWorkspaceDto> ExtractAsync(ArchiveFileRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation,
+        Func<long, CancellationToken, Task> beforeExtract, CancellationToken cancellationToken) =>
+        ExtractCoreAsync(request, beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)),
+            beforeExtract ?? throw new ArgumentNullException(nameof(beforeExtract)), cancellationToken);
 
     private async Task<FileWorkspaceDto> ExtractCoreAsync(ArchiveFileRequest request,
-        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
+        Func<SiteDto, CancellationToken, Task>? beforeMutation,
+        Func<long, CancellationToken, Task>? beforeExtract, CancellationToken cancellationToken)
     {
         var archivePath = NormalizeVirtualPath(request.Path);
         var destinationPath = string.IsNullOrWhiteSpace(request.DestinationPath)
@@ -1309,10 +1318,20 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         var destination = await ResolveTargetAsync(destinationPath, cancellationToken);
         EnsureSiteTarget(destination);
         await ApproveTransferAsync(archive, destination, beforeMutation, cancellationToken);
+
+        // Keep the measured archive open without write/delete sharing through quota and extraction.
+        await using var input = new FileStream(archive.PhysicalPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+            81920, FileOptions.Asynchronous | FileOptions.RandomAccess);
+        using var zip = OpenArchive(input);
+        var contentBytes = MeasureArchiveContentBytes(zip, cancellationToken);
+        if (beforeExtract is not null)
+        {
+            await beforeExtract(contentBytes, cancellationToken);
+            await ApproveTransferAsync(archive, destination, beforeMutation, cancellationToken);
+        }
         EnsureNoReparsePoints(destination.SandboxRoot, destination.PhysicalPath);
         Directory.CreateDirectory(destination.PhysicalPath);
 
-        using var zip = ZipFile.OpenRead(archive.PhysicalPath);
         foreach (var entry in zip.Entries)
         {
             if (ExtractEntryReady is not null) await ExtractEntryReady(entry.FullName, cancellationToken);
@@ -1336,11 +1355,78 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-            entry.ExtractToFile(outputPath, overwrite: true);
+            await WriteAtomicallyAsync(destination with { PhysicalPath = outputPath },
+                (output, token) => CopyVerifiedArchiveEntryAsync(entry, output, token), cancellationToken,
+                token => ApproveTransferAsync(archive, destination, beforeMutation, token),
+                lastWriteTimeUtc: entry.LastWriteTime.UtcDateTime);
         }
 
         await ApproveTransferAsync(archive, destination, beforeMutation, cancellationToken);
         return await ReadMutationWorkspaceAsync(destinationPath, beforeMutation, cancellationToken);
+    }
+
+    private static ZipArchive OpenArchive(Stream input)
+    {
+        try { return new ZipArchive(input, ZipArchiveMode.Read, leaveOpen: true); }
+        catch (InvalidDataException) { throw new AppException("files.invalid_archive", 400, 400); }
+    }
+
+    private static long MeasureArchiveContentBytes(ZipArchive zip, CancellationToken token)
+    {
+        try
+        {
+            long total = 0;
+            foreach (var entry in zip.Entries)
+            {
+                token.ThrowIfCancellationRequested();
+                if (entry.Length < 0) throw new InvalidDataException();
+                total = checked(total + entry.Length);
+            }
+            return total;
+        }
+        catch (Exception error) when (error is InvalidDataException or OverflowException)
+        { throw new AppException("files.invalid_archive", 400, 400); }
+    }
+
+    private static async Task CopyVerifiedArchiveEntryAsync(ZipArchiveEntry entry, Stream output, CancellationToken token)
+    {
+        try
+        {
+            await using var source = entry.Open();
+            var remaining = entry.Length;
+            var buffer = new byte[81920];
+            var crc = uint.MaxValue;
+            while (remaining > 0)
+            {
+                token.ThrowIfCancellationRequested();
+                var read = await source.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), token);
+                token.ThrowIfCancellationRequested();
+                if (read == 0) throw new InvalidDataException();
+                for (var i = 0; i < read; i++) crc = ArchiveCrcTable[(crc ^ buffer[i]) & 255] ^ (crc >> 8);
+                await output.WriteAsync(buffer.AsMemory(0, read), token);
+                remaining -= read;
+            }
+            // .NET 8 decompression does not validate CRC or the declared uncompressed length.
+            // A one-byte EOF probe detects extra content without writing beyond the quota measurement.
+            var extra = await source.ReadAsync(buffer.AsMemory(0, 1), token);
+            token.ThrowIfCancellationRequested();
+            if (extra != 0 || ~crc != entry.Crc32) throw new InvalidDataException();
+        }
+        catch (InvalidDataException) { throw new AppException("files.invalid_archive", 400, 400); }
+    }
+
+    private static readonly uint[] ArchiveCrcTable = CreateArchiveCrcTable();
+
+    private static uint[] CreateArchiveCrcTable()
+    {
+        var table = new uint[256];
+        for (uint i = 0; i < table.Length; i++)
+        {
+            var value = i;
+            for (var bit = 0; bit < 8; bit++) value = (value >> 1) ^ ((value & 1) == 0 ? 0 : 0xEDB88320u);
+            table[i] = value;
+        }
+        return table;
     }
 
     public async Task<IReadOnlyCollection<FileEntryDto>> SearchAsync(SearchFilesRequest request, CancellationToken cancellationToken = default) =>
@@ -1622,21 +1708,12 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             throw new AppException("files.invalid_archive", 400, 400);
         }
 
-        // AÇILDIĞINDA kaplayacağı yer ölçülür (sıkıştırılmış boyut DEĞİL): "zip bombası" tam olarak
-        // bu ikisinin arasındaki farktır — 1 MB'lık bir arşiv 10 GB açabilir ve kotayı sıkıştırılmış
-        // boyuta göre denetlemek o saldırıyı hiç görmezdi.
-        //
-        // Girdi listesi arşivin merkezî dizininden gelir ve ZipFile.OpenRead onu zaten belleğe
-        // almıştır; yani bu döngü ExtractAsync'in kendi döngüsünden fazladan bir risk üretmez.
-        using var zip = ZipFile.OpenRead(archive.PhysicalPath);
-        long toplam = 0;
-        foreach (var entry in zip.Entries)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            toplam += entry.Length;
-        }
-
-        return toplam;
+        // Advisory metadata measurement for trusted callers. HTTP extraction measures its own
+        // retained archive and verifies actual entry length/CRC before each file is published.
+        await using var input = new FileStream(archive.PhysicalPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+            81920, FileOptions.Asynchronous | FileOptions.RandomAccess);
+        using var zip = OpenArchive(input);
+        return MeasureArchiveContentBytes(zip, cancellationToken);
     }
 
     private async Task<FileWorkspaceDto> BuildVirtualRootWorkspaceAsync(string normalizedPath, CancellationToken cancellationToken)

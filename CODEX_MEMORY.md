@@ -1,5 +1,48 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R41 doğrulandı, yerel; public son sürüm hâlâ 0.8.84
+
+Bu turun değişiklikleri henüz yayımlanmadı. Kaynak sürüm dosyaları 0.8.84; aynı public paketi
+yeniden yazmayın. R41 ve sonraki tamamlanan işleri yeni bir sürüme dahil edin. Son public
+GitHub API doğrulaması yine 0.8.84 /91,110,768 bayt /6E011F19...CE5453 oldu.
+Kullanıcının .75 ekranı için yanıt verildi: kurulum sonrası geçici paket temizlenince
+IsPackageReady=false normal olabilir; bu kurulum başarısızlığı kanıtı değildir. Ctrl+F5 ve
+zorunlu Güncelleme denetle sonrası mevcut .75 kalıyorsa .84 kurulumu doğrulanmış değildir.
+Canlı panel adresi önceki soruya rağmen yok; URL sorusunu tekrar etmeyin, kurulu sürüm iddia etmeyin.
+
+R41 ZIP: aynı FileStream(FileShare.Read)+ZipArchive kota callback ve çıkarma boyunca tutulur.
+Controller ayrı measure/reopen yapmaz; checked toplam, actual bounded entry length+CRC ve
+atomic temporary publication eski hedefi korur. ZIP timestamp korunur. Eski overloadlar durur;
+per-entry/final authority ve reparse kontrolü korunur. Önceki başarılı girdiler geri alınmaz.
+FTP: requested home→atalar reparse denetimi son approval await sonrası; recovery dışa dönmüş
+home üzerinde ACL cleanup yapmaz, kendi yeni hesabını temizler. Panel infrastructure home
+junctionları korunur. Yeni testler yalnız disposable temp kökler, gerçek SQLite ve fake SAM/IIS/ACL.
+Baseline 41403 terminal: ZIP9RED6green +FTP10RED5green. Final new backend32=ZIP15+FTP17.
+R40 FileExtractAwaitBoundaryTests literal approval count yerine gerçek ikinci entry marker'ı
+bekler, sentinel assertions aynı. Build76330 terminal0 /0warning0error; targeted187/187.
+Broad32722 terminal0: Core2+Infra8911=8913/8913, fail0skip0. FtpCreateRollbackTests iki gerçek
+SAM-account testi bilinçli filtre dışında: outside-sandbox OS token ADMIN true. Bu koşuya
+tamamen tüm testler çalıştı demeyin. Yeni fake boundary17 bunlarla karıştırılmamalı.
+
+FE: archiveOperation kalıcı progress/source/destination/result/error; failed POST ardından
+GET ile reconciliation, ayrı listing error/retry. Eski failure başarıya çevrilmez. Dosya
+mutations mutual fileMutationBusy; upload lock follow-up GET boyunca. Yeni POST başlamadan
+clearNotice, confirmcancel eski notice korur. Nav/actor/unmount late results korunur.
+Yeni FE17: başlangıç8RED4green, notice2RED; finalrelated242/242. Full95488 terminal0:
+113files2193/2193 +typecheck. Vite/wwwroot sync passed,6indexassets present; FE5593/API291
+TR/EN parity. Chrome fake API only, TR390doc380/380card300/300, EN320doc310/310card230/230,
+desktop1440doc1440/1440. Appconsoleerror0; extensionerrors excluded. HMR reset sonrası
+EN final akış tekrarlandı. Final TR image round41-archive-final-mobile.png; EN/mobile,
+desktop success ve pending proof saklandı. round41-ui-integrity.json. Tab41closed,
+viewport reset; __audit41 fixture removed; Vite76362 CtrlC terminal. Allagents FINALFREEZE.
+Eski untracked TestResults/ dokunulmadı, commit dışı. .NET TRX round41-targeted.trx,
+round41-broad_net8.0_20261004110148.trx ve 20261004110452.trx. Tüm prosesler terminal.
+
+Sonraki adaylar: Compress controller immutable principal/final authority + scoped response;
+FTP descendant junction policy: grant/recovery `/T /C`, `/L` yok, home-chain kontrolü alt
+ağacı kapsamaz. Bu kaynakla kesin, native outside ACL etkisi henüz ölçülmedi. İzole testle
+doğrulayın; canlı SAM/IIS/ACL'ye dokunmayın. Continuous unbudgeted goal ACTIVE, NOT complete.
+
 ## 2026-10-04 — R40 içeren 0.8.84 yayımlandı ve doğrulandı
 
 PUBLIC latest ve kaynaklar0.8.84. Yayın2026-10-04T07:25:52Z /10:25:52İstanbul.

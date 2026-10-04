@@ -5578,5 +5578,18 @@
   "panel.files.extractConfirmMessage": "“{name}” arşivi şu klasöre açılacak: {path}. Aynı adlı mevcut dosyaların üzerine yazılır. Devam etmeden önce gerekli yedekleri aldığınızdan emin olun.",
   "panel.files.extractConfirmAction": "Arşivi aç",
   "files.search_truncated_files": "5.000 dosyalık tarama sınırına ulaşıldı. Arama tamamlanmamış olabilir; daha dar bir klasörde yeniden arayın.",
-  "files.search_truncated_results": "100 sonuç sınırına ulaşıldı. Başka eşleşmeler olabilir; arama ifadesini veya klasörü daraltın."
+  "files.search_truncated_results": "100 sonuç sınırına ulaşıldı. Başka eşleşmeler olabilir; arama ifadesini veya klasörü daraltın.",
+  "panel.files.archiveCompressRunning": "ZIP arşivi oluşturuluyor",
+  "panel.files.archiveExtractRunning": "ZIP arşivi açılıyor",
+  "panel.files.archiveRefreshing": "Klasörün son durumu okunuyor",
+  "panel.files.archiveCompressSucceeded": "ZIP arşivi oluşturuldu",
+  "panel.files.archiveExtractSucceeded": "ZIP arşivi açıldı",
+  "panel.files.archiveFailed": "Arşiv işlemi tamamlanamadı",
+  "panel.files.archiveFailedHint": "Bazı dosyalar değişmiş olabilir. Yeniden işlem yapmadan önce klasörün son durumunu kontrol edin.",
+  "panel.files.archiveRefreshFailed": "İşlemden sonraki dosya listesi doğrulanamadı. Klasör listesini yeniden yükleyin.",
+  "panel.files.archiveSource": "İşlenen öğe",
+  "panel.files.archiveDestination": "Hedef klasör",
+  "panel.files.archiveClose": "İşlem sonucunu kapat",
+  "panel.files.archiveRefresh": "Klasör listesini yenile",
+  "panel.files.archivePendingHint": "İşlem sürüyor. Tamamlanana kadar başka dosya değişikliği başlatılamaz."
 }

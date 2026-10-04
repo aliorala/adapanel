@@ -485,12 +485,16 @@ public sealed partial class FtpService(
             await SiteMutationGuard.CaptureAsync(iisSiteService, new ConcurrencyLock(), request.SiteName, cancellationToken);
         var expectedAccount = await ReadAccountAsync(userName, cancellationToken);
         using var accountLease = await FtpAccountLifecycle.EnterAsync(userName, cancellationToken);
+        string? approvedHomePath = null;
         async Task Approve(CancellationToken token)
         {
             await EnsureAccountUnchangedAsync(userName, expectedAccount, token);
             if (target is not null) await target.ValidateAsync(token);
             if (beforeMutation is not null) await beforeMutation(await iisSiteService.GetSiteAsync(request.SiteName, token), token);
             token.ThrowIfCancellationRequested();
+            // A lexical site path can become a junction while an account/native call awaits.
+            // Inspect the requested home after the last awaited approval, before each effect.
+            if (approvedHomePath is not null) EnsureHomePathBoundary(approvedHomePath);
         }
         await Approve(cancellationToken);
 
@@ -523,6 +527,7 @@ public sealed partial class FtpService(
             await target.ReserveAsync(async (_, token) => await Approve(token), cancellationToken);
 
         var homePath = await ResolveHomePathAsync(request, cancellationToken);
+        approvedHomePath = homePath;
         await Approve(cancellationToken);
         Directory.CreateDirectory(homePath);
         await EnsureFtpInfrastructureAsync(false, cancellationToken, Approve);
@@ -694,6 +699,9 @@ public sealed partial class FtpService(
 
         await DeneAsync("acl-geri-alma", async () =>
         {
+            // Recovery must not follow a home/ancestor replaced after the original grant.
+            // Other owned cleanup (FTP links and a newly created account) still proceeds.
+            EnsureHomePathBoundary(homePath);
             var sonuc = await RunCommandAsync(
                 "icacls.exe",
                 $"\"{homePath}\" /remove:g \"{userName}\" /T /C",
@@ -726,6 +734,21 @@ public sealed partial class FtpService(
         return notlar.Count == 0
             ? string.Empty
             : $"{Environment.NewLine}GeriAlmaUyarilari:{Environment.NewLine}{string.Join(Environment.NewLine, notlar)}";
+    }
+
+    private static void EnsureHomePathBoundary(string homePath)
+    {
+        // Only the requested home chain is checked here. The two panel-managed FTP home
+        // junctions intentionally point at this directory and are not part of this chain.
+        for (string? current = Path.GetFullPath(homePath); current is not null; current = Path.GetDirectoryName(current))
+        {
+            FileAttributes attributes;
+            try { attributes = File.GetAttributes(current); }
+            catch (FileNotFoundException) { continue; } // A new ordinary home may not exist yet.
+            catch (DirectoryNotFoundException) { continue; }
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                throw new AppException("ftp.home_outside_site", 403, 403);
+        }
     }
 
     public Task SetFtpPasswordAsync(SetFtpPasswordRequest request, CancellationToken cancellationToken = default) =>

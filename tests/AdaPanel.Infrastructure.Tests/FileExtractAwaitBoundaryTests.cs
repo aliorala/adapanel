@@ -27,16 +27,20 @@ public sealed class FileExtractAwaitBoundaryTests
             await release.Task.WaitAsync(deadline.Token);
         }
 
-        if (!authorizationWait)
-            fixture.Service.ExtractEntryReady = async (entry, _) =>
-            {
-                if (entry == "nested/second.txt") await WaitAtBoundary();
-            };
-        var destinationApprovals = 0;
+        var secondEntry = false;
+        fixture.Service.ExtractEntryReady = async (entry, _) =>
+        {
+            secondEntry = entry == "nested/second.txt";
+            if (secondEntry && !authorizationWait) await WaitAtBoundary();
+        };
+        var approvalPaused = false;
         async Task Approve(SiteDto site, CancellationToken _)
         {
-            // Destination preparation, first entry, then the second entry's actual callback.
-            if (site.Name == "target.test" && ++destinationApprovals == 3) await WaitAtBoundary();
+            if (site.Name == "target.test" && secondEntry && !approvalPaused)
+            {
+                approvalPaused = true;
+                await WaitAtBoundary();
+            }
         }
 
         var request = new ArchiveFileRequest { Path = "sites/source.test/archive.zip", DestinationPath = "sites/target.test/output" };

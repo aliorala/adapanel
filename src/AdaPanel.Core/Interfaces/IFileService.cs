@@ -146,6 +146,11 @@ public interface IFileService
         Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Authorized archive extraction is not implemented.");
 
+    Task<FileWorkspaceDto> ExtractAsync(ArchiveFileRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation,
+        Func<long, CancellationToken, Task> beforeExtract, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Measured archive extraction is not implemented.");
+
     Task<IReadOnlyCollection<FileEntryDto>> SearchAsync(SearchFilesRequest request, CancellationToken cancellationToken = default);
 
     Task<FileSearchResultDto> SearchMeasuredAsync(SearchFilesRequest request, CancellationToken cancellationToken = default) =>

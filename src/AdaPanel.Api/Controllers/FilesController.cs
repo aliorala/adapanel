@@ -338,15 +338,11 @@ public sealed class FilesController(
         // de ağır bir iştir.
         using var kapsam = await AgirIseGirisAsync(cancellationToken, publication.Principal);
 
-        // KOTA: arşiv açmak, sıkıştırılmış boyutun KATLARI kadar yer açabilir — kotanın en sessiz
-        // deliniş yolu buydu. Ölçüm arşivin AÇILMIŞ boyutu üzerinden yapılır (bkz.
-        // IFileService.MeasureArchiveContentBytesAsync) ve iş başlamadan önce reddedilir.
-        await EnsureDiskQuotaAsync(
-            string.IsNullOrWhiteSpace(request.DestinationPath) ? request.Path : request.DestinationPath,
-            async ct => (await fileService.MeasureArchiveContentBytesAsync(request.Path, ct), string.Empty),
-            cancellationToken, publication.Principal);
-
-        var workspace = await fileService.ExtractAsync(request, publication.ApproveAsync, cancellationToken);
+        // Ölçülen ZIP, kota beklemesi ve çıkarma boyunca hizmette aynı açık dosya olarak tutulur.
+        var workspace = await fileService.ExtractAsync(request, publication.ApproveAsync,
+            (bytes, token) => EnsureDiskQuotaAsync(
+                string.IsNullOrWhiteSpace(request.DestinationPath) ? request.Path : request.DestinationPath,
+                _ => Task.FromResult((bytes, string.Empty)), token, publication.Principal), cancellationToken);
         await publication.RevalidateAsync(cancellationToken);
 
         // Çıkarma, arşivin içeriğiyle var olan dosyaların ÜZERİNE yazabilir; yani içerik kaybının

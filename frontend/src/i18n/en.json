@@ -5578,5 +5578,18 @@
   "panel.files.extractConfirmMessage": "The archive “{name}” will be extracted to: {path}. Existing files with the same names will be overwritten. Make sure you have any necessary backups before continuing.",
   "panel.files.extractConfirmAction": "Extract archive",
   "files.search_truncated_files": "The scan reached its 5,000-file limit. The search may be incomplete; search within a narrower folder.",
-  "files.search_truncated_results": "The search reached its 100-result limit. More matches may exist; narrow your query or folder."
+  "files.search_truncated_results": "The search reached its 100-result limit. More matches may exist; narrow your query or folder.",
+  "panel.files.archiveCompressRunning": "Creating ZIP archive",
+  "panel.files.archiveExtractRunning": "Extracting ZIP archive",
+  "panel.files.archiveRefreshing": "Reading the current folder state",
+  "panel.files.archiveCompressSucceeded": "ZIP archive created",
+  "panel.files.archiveExtractSucceeded": "ZIP archive extracted",
+  "panel.files.archiveFailed": "Archive operation did not complete",
+  "panel.files.archiveFailedHint": "Some files may have changed. Check the current folder state before starting another operation.",
+  "panel.files.archiveRefreshFailed": "The file list after the operation could not be verified. Reload the folder listing.",
+  "panel.files.archiveSource": "Selected item",
+  "panel.files.archiveDestination": "Destination folder",
+  "panel.files.archiveClose": "Dismiss operation result",
+  "panel.files.archiveRefresh": "Refresh folder listing",
+  "panel.files.archivePendingHint": "The operation is in progress. Other file changes are unavailable until it finishes."
 }
