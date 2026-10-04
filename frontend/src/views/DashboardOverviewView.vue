@@ -72,10 +72,12 @@
       yani bir tık uzakta ve tarayıcının kendi metin aramasıyla yine bulunabilir.
     -->
     <section class="panel">
+      <p v-if="overviewError" class="notice error measurement-notice" role="alert"><span>{{ t('panel.monitor.overviewFailed') }}</span><button class="secondary compact" :disabled="loading" @click="emit('retryOverview')">{{ t('panel.common.retry') }}</button></p>
+      <p v-else-if="overview && (cpuValue === null || memoryValue === null || overview.disksMeasured !== true || overview.networkMeasured !== true)" class="notice warn" role="status">{{ t('panel.monitor.partialMeasurement') }}</p>
       <div v-if="overview" class="resource-grid">
-        <ResourceMetric kind="cpu" :label="t('panel.system.cpu')" :value="overview.cpuUsagePercent" :detail="overview.logicalProcessorCount + ' ' + t('panel.system.cores')" />
-        <ResourceMetric kind="memory" :label="t('panel.system.memory')" :value="overview.memoryUsagePercent" :detail="formatBytes(overview.usedMemoryBytes) + ' / ' + formatBytes(overview.totalMemoryBytes)" />
-        <ResourceMetric kind="disk" :label="primaryDisk?.name || t('panel.system.disks')" :value="primaryDisk?.usagePercent ?? null" :detail="primaryDisk ? formatBytes(primaryDisk.usedBytes) + ' / ' + formatBytes(primaryDisk.totalBytes) : t('panel.common.notAvailable')" :hint="primaryDisk ? t('panel.system.free') + ': ' + formatBytes(primaryDisk.freeBytes) : ''" />
+        <ResourceMetric kind="cpu" :label="t('panel.system.cpu')" :value="cpuValue" :detail="overview.logicalProcessorCount + ' ' + t('panel.system.cores')" />
+        <ResourceMetric kind="memory" :label="t('panel.system.memory')" :value="memoryValue" :detail="memoryValue === null ? '' : formatBytes(overview.usedMemoryBytes) + ' / ' + formatBytes(overview.totalMemoryBytes)" />
+        <ResourceMetric kind="disk" :label="primaryDisk?.name || t('panel.system.disks')" :value="diskValue" :detail="primaryDisk && diskValue !== null ? formatBytes(primaryDisk.usedBytes) + ' / ' + formatBytes(primaryDisk.totalBytes) : ''" :hint="primaryDisk && diskValue !== null ? t('panel.system.free') + ': ' + formatBytes(primaryDisk.freeBytes) : ''" />
       </div>
 
       <div class="summary-grid">
@@ -198,10 +200,10 @@
                 :class="['mini-row', 'disk-row', { warn: diskTone(disk) === 'warn', danger: diskTone(disk) === 'danger' }]">
                 <span>{{ disk.name }}</span>
                 <span class="disk-usage">
-                  {{ disk.usagePercent.toFixed(1) }}%
+                  {{ overviewConfirmed !== false && disk.measured ? disk.usagePercent.toFixed(1) + '%' : t('panel.monitor.unmeasured') }}
                   <span v-if="diskTone(disk)" :class="['status-pill', diskTone(disk)]">{{ diskToneLabel(disk) }}</span>
                 </span>
-                <span>{{ formatBytes(disk.freeBytes) }}</span>
+                <span>{{ overviewConfirmed !== false && disk.measured ? formatBytes(disk.freeBytes) : '—' }}</span>
               </div>
             </div>
           </article>
@@ -222,9 +224,10 @@
 
           <div v-for="network in overview.networkInterfaces.slice(0, 4)" :key="network.name" class="mini-row network-row">
             <span>{{ network.name }}</span>
-            <span>{{ formatSpeed(network.bytesReceivedPerSecond) }}</span>
-            <span>{{ formatSpeed(network.bytesSentPerSecond) }}</span>
+            <span>{{ overviewConfirmed !== false && network.ratesMeasured ? formatSpeed(network.bytesReceivedPerSecond) : '—' }}</span>
+            <span>{{ overviewConfirmed !== false && network.ratesMeasured ? formatSpeed(network.bytesSentPerSecond) : '—' }}</span>
           </div>
+          <p v-if="!overview.networkInterfaces.length" class="meta">{{ t(overviewConfirmed !== false && overview.networkMeasured ? 'panel.system.networkEmpty' : 'panel.monitor.unmeasured') }}</p>
         </div>
 
       </section>
@@ -329,6 +332,7 @@ import { formatBytes as sharedFormatBytes } from "../utils/bytes";
 import { formatDateTime, formatTimeSpan as sharedFormatTimeSpan } from "../utils/datetime";
 
 type DiskUsage = {
+  measured: boolean;
   name: string;
   usagePercent: number;
   freeBytes: number;
@@ -337,12 +341,17 @@ type DiskUsage = {
 };
 
 type NetworkInterface = {
+  ratesMeasured: boolean;
   name: string;
   bytesReceivedPerSecond: number;
   bytesSentPerSecond: number;
 };
 
 type SystemOverview = {
+  cpuMeasured: boolean;
+  memoryMeasured: boolean;
+  disksMeasured: boolean;
+  networkMeasured: boolean;
   machineName: string;
   operatingSystem: string;
   osArchitecture: string;
@@ -371,6 +380,8 @@ type AuditItem = {
 
 const props = defineProps<{
   overview: SystemOverview | null;
+  overviewConfirmed?: boolean;
+  overviewError?: string;
   loading: boolean;
   sitesCount: number;
   totalBindingCount: number;
@@ -424,6 +435,7 @@ const attentionTone = computed(() => {
 const emit = defineEmits<{
   (event: "navigate", sectionId: string): void;
   (event: "retryPanelUpdate"): void;
+  (event: "retryOverview"): void;
 }>();
 
 // Yalnızca kullanıcının rolünde mevcut olan bölümlere kısayol göster (boş ekrana götürmesin).
@@ -489,6 +501,9 @@ async function copyAccess(url: string) {
 }
 
 const primaryDisk = computed(() => props.overview?.disks[0] ?? null);
+const cpuValue = computed(() => props.overviewConfirmed !== false && props.overview?.cpuMeasured === true ? props.overview.cpuUsagePercent : null);
+const memoryValue = computed(() => props.overviewConfirmed !== false && props.overview?.memoryMeasured === true ? props.overview.memoryUsagePercent : null);
+const diskValue = computed(() => props.overviewConfirmed !== false && primaryDisk.value?.measured === true ? primaryDisk.value.usagePercent : null);
 
 /*
  * DİSK TABLOSU: EN DOLU DİSK EN ÜSTTE.
@@ -499,7 +514,7 @@ const primaryDisk = computed(() => props.overview?.disks[0] ?? null);
  * üst bileşenin verisini (ve kaynak göstergesinin okuduğu `disks[0]`ı) değiştirirdi.
  */
 const sortedDisks = computed(() => [...(props.overview?.disks ?? [])]
-  .sort((a, b) => b.usagePercent - a.usagePercent));
+  .sort((a, b) => (a.measured === true ? 1 : 0) - (b.measured === true ? 1 : 0) || b.usagePercent - a.usagePercent));
 
 /* Disk satırları ortak kaynak göstergesiyle aynı %80 / %90 eşiklerini kullanır. */
 const METER_WARN_PERCENT = 80;
@@ -512,6 +527,7 @@ const METER_DANGER_PERCENT = 90;
  * disk hakkında söylenecek bir şey yoktur (her satırı yeşile boyamak gürültüdür).
  */
 function diskTone(disk: DiskUsage): "" | "warn" | "danger" {
+  if (props.overviewConfirmed === false || disk.measured !== true) return "";
   if (disk.usagePercent >= METER_DANGER_PERCENT) {
     return "danger";
   }
@@ -547,6 +563,9 @@ function formatTimeSpan(value: string): string {
 </script>
 
 <style scoped>
+.measurement-notice { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-12); flex-wrap: wrap; }
+.measurement-notice span { flex: 1 1 240px; }
+.measurement-notice button { flex: 0 0 auto; width: auto; }
 .overview-stack {
   --metric-lg: clamp(1.4rem, 2.8vw, 2rem);
   --metric-md: clamp(1.15rem, 2vw, 1.4rem);

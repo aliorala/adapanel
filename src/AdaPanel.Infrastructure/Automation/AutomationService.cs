@@ -1267,7 +1267,7 @@ public sealed class AutomationService(
         // Disk doluluk
         var threshold = Math.Clamp(state.DiskUsageThresholdPercent, 50, 99);
         var overview = await systemMonitoringService.GetOverviewAsync(cancellationToken);
-        foreach (var disk in overview.Disks)
+        foreach (var disk in overview.Disks.Where(SystemMetricValidity.Disk))
         {
             if (disk.UsagePercent >= threshold)
             {
@@ -1281,7 +1281,7 @@ public sealed class AutomationService(
 
         // RAM (bellek) doluluk
         var memoryThreshold = Math.Clamp(state.MemoryUsageThresholdPercent, 50, 99);
-        if (overview.MemoryUsagePercent >= memoryThreshold)
+        if (SystemMetricValidity.Memory(overview) && overview.MemoryUsagePercent >= memoryThreshold)
         {
             alerts.Add((
                 "memory",

@@ -5448,5 +5448,16 @@
   "panel.notifications.settingsChangedTitle": "Testten önce ayarları kontrol edin",
   "panel.notifications.settingsChangedHint": "Yenile ile kayıtlı ayarları yükleyin ve alıcıyı kontrol edin. Kaydedilmemiş taslağınız korunur.",
   "panel.errorReports.settingsChangedTitle": "Göndermeden önce ayarları kontrol edin",
-  "panel.errorReports.settingsChangedHint": "Yenile ile kayıtlı ayarları yükleyin ve gönderilecek adresi kontrol edin. Kaydedilmemiş taslağınız korunur."
+  "panel.errorReports.settingsChangedHint": "Yenile ile kayıtlı ayarları yükleyin ve gönderilecek adresi kontrol edin. Kaydedilmemiş taslağınız korunur.",
+  "panel.monitor.unmeasured": "Ölçülemedi",
+  "panel.monitor.partialMeasurement": "Bazı kaynaklar ölçülemedi. Bu değerler — ile gösteriliyor; kullanılabilir ölçümler izlenmeye devam ediyor.",
+  "panel.monitor.overviewFailed": "Güncel sunucu ölçümleri alınamadı. Son okunan sunucu bilgileri gösteriliyor; kullanım değerleri yeniden ölçülene kadar gizli.",
+  "panel.monitor.ratePending": "Ağ hızını hesaplamak için iki geçerli ölçüm gerekiyor. Bekleyen değerler — ile gösteriliyor.",
+  "panel.monitor.historyGaps": "Ölçülemeyen aralıklar grafikte boş bırakılır.",
+  "panel.processes.sortLabel": "Süreçleri sırala",
+  "panel.health.resultUnconfirmed": "İşlem sonucu doğrulanamadı. Güncel durumu yenileyip kalan bulguları kontrol edin.",
+  "panel.health.domainsNeedAttention": "İncelenecek bulgular var",
+  "panel.health.lastKnownServices": "Son okunan hizmet listesi gösteriliyor. Güncel durum doğrulanana kadar yeniden başlatma kapalı.",
+  "panel.monitor.measurementFailed": "Kaynak ölçümü doğrulanamadı. Yenileyip tekrar deneyin.",
+  "health.restart_unverified": "Yeniden başlatma komutu tamamlandı, ancak hizmetin çalıştığı doğrulanamadı. Güncel durumunu kontrol edin."
 }

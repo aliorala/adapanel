@@ -10,50 +10,52 @@ using Microsoft.Extensions.Logging;
 namespace AdaPanel.Infrastructure.Services;
 
 [SupportedOSPlatform("windows")]
-public sealed class SystemMonitoringService(ILogger<SystemMonitoringService> logger) : ISystemMonitoringService, IDisposable
+public sealed class SystemMonitoringService : ISystemMonitoringService, IDisposable
 {
+    private readonly ILogger<SystemMonitoringService> logger;
+    private readonly SystemMonitoringSources sources;
     private readonly object syncRoot = new();
-    private readonly PerformanceCounter? cpuCounter = CreateCpuCounter(logger);
+    private readonly PerformanceCounter? cpuCounter;
     private readonly Dictionary<string, NetworkSample> previousNetworkSamples = new(StringComparer.OrdinalIgnoreCase);
     private const int MaxHistorySamples = 1440; // 1 dk × 1440 ≈ son 24 saat (kalıcı izleme geçmişi, bellek-içi halka)
     private readonly LinkedList<SystemHistorySampleDto> history = new();
     private bool disposed;
 
+    public SystemMonitoringService(ILogger<SystemMonitoringService> logger)
+    {
+        this.logger = logger;
+        cpuCounter = CreateCpuCounter(logger);
+        sources = new SystemMonitoringSources
+        {
+            ReadCpu = () => cpuCounter?.NextValue(),
+            ReadMemory = ReadMemoryStatus,
+            ReadDisks = ReadDisks,
+            ReadNetwork = ReadNetworkSnapshots
+        };
+    }
+
+    internal SystemMonitoringService(ILogger<SystemMonitoringService> logger, SystemMonitoringSources sources)
+    {
+        this.logger = logger;
+        this.sources = sources;
+    }
+
     public Task<SystemOverviewDto> GetOverviewAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        lock (syncRoot) ObjectDisposedException.ThrowIf(disposed, this);
 
-        var currentUtc = DateTime.UtcNow;
+        var currentUtc = sources.Clock.GetUtcNow().UtcDateTime;
         var uptime = TimeSpan.FromMilliseconds(Environment.TickCount64);
         var bootTimeUtc = currentUtc - uptime;
-        var memoryStatus = ReadMemoryStatus();
-        var totalMemory = Convert.ToInt64(memoryStatus.TotalPhysicalMemory);
-        var availableMemory = Convert.ToInt64(memoryStatus.AvailablePhysicalMemory);
-        var usedMemory = Math.Max(0, totalMemory - availableMemory);
-        var memoryUsagePercent = totalMemory == 0 ? 0 : Math.Round(usedMemory * 100d / totalMemory, 2);
-
-        var disks = DriveInfo.GetDrives()
-            .Where(drive => drive.IsReady && drive.DriveType is DriveType.Fixed or DriveType.Removable)
-            .Select(drive =>
-            {
-                var usedBytes = Math.Max(0, drive.TotalSize - drive.AvailableFreeSpace);
-                var usagePercent = drive.TotalSize == 0 ? 0 : Math.Round(usedBytes * 100d / drive.TotalSize, 2);
-
-                return new DiskUsageDto
-                {
-                    Name = drive.Name,
-                    Label = drive.VolumeLabel,
-                    Format = drive.DriveFormat,
-                    TotalBytes = drive.TotalSize,
-                    FreeBytes = drive.AvailableFreeSpace,
-                    UsedBytes = usedBytes,
-                    UsagePercent = usagePercent
-                };
-            })
-            .OrderBy(drive => drive.Name)
-            .ToArray();
-
-        var networkInterfaces = ReadNetworkInterfaces(currentUtc);
+        var memory = ReadMemory(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        var disks = ReadDiskMeasurements(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        var network = ReadNetworkInterfaces(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        var cpu = ReadCpuUsage(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var overview = new SystemOverviewDto
         {
@@ -65,14 +67,18 @@ public sealed class SystemMonitoringService(ILogger<SystemMonitoringService> log
             CurrentServerTimeUtc = currentUtc,
             BootTimeUtc = bootTimeUtc,
             Uptime = uptime,
-            CpuUsagePercent = ReadCpuUsage(),
+            CpuUsagePercent = cpu ?? 0,
+            CpuMeasured = cpu.HasValue,
             LogicalProcessorCount = Environment.ProcessorCount,
-            TotalMemoryBytes = totalMemory,
-            AvailableMemoryBytes = availableMemory,
-            UsedMemoryBytes = usedMemory,
-            MemoryUsagePercent = memoryUsagePercent,
-            Disks = disks,
-            NetworkInterfaces = networkInterfaces
+            TotalMemoryBytes = memory.Total,
+            AvailableMemoryBytes = memory.Available,
+            UsedMemoryBytes = memory.Total - memory.Available,
+            MemoryUsagePercent = memory.Total == 0 ? 0 : Math.Round((memory.Total - memory.Available) * 100d / memory.Total, 2),
+            MemoryMeasured = memory.Measured,
+            Disks = disks.Items,
+            DisksMeasured = disks.Measured,
+            NetworkInterfaces = network.Items,
+            NetworkMeasured = network.Measured
         };
 
         return Task.FromResult(overview);
@@ -83,15 +89,19 @@ public sealed class SystemMonitoringService(ILogger<SystemMonitoringService> log
         var overview = await GetOverviewAsync(cancellationToken);
         var sample = new SystemHistorySampleDto
         {
-            TimestampUtc = DateTime.UtcNow,
+            TimestampUtc = overview.CurrentServerTimeUtc,
             CpuPercent = overview.CpuUsagePercent,
+            CpuMeasured = overview.CpuMeasured,
             MemoryPercent = overview.MemoryUsagePercent,
-            NetworkDownBytesPerSec = overview.NetworkInterfaces.Sum(item => item.BytesReceivedPerSecond),
-            NetworkUpBytesPerSec = overview.NetworkInterfaces.Sum(item => item.BytesSentPerSecond)
+            MemoryMeasured = overview.MemoryMeasured,
+            NetworkMeasured = overview.NetworkMeasured,
+            NetworkDownBytesPerSec = overview.NetworkMeasured ? overview.NetworkInterfaces.Sum(item => item.BytesReceivedPerSecond) : 0,
+            NetworkUpBytesPerSec = overview.NetworkMeasured ? overview.NetworkInterfaces.Sum(item => item.BytesSentPerSecond) : 0
         };
 
         lock (syncRoot)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             history.AddLast(sample);
             while (history.Count > MaxHistorySamples)
             {
@@ -105,7 +115,13 @@ public sealed class SystemMonitoringService(ILogger<SystemMonitoringService> log
         cancellationToken.ThrowIfCancellationRequested();
         lock (syncRoot)
         {
-            return Task.FromResult<IReadOnlyList<SystemHistorySampleDto>>(history.ToList());
+            return Task.FromResult<IReadOnlyList<SystemHistorySampleDto>>(history.Select(sample => new SystemHistorySampleDto
+            {
+                TimestampUtc = sample.TimestampUtc, CpuPercent = sample.CpuPercent, CpuMeasured = sample.CpuMeasured,
+                MemoryPercent = sample.MemoryPercent, MemoryMeasured = sample.MemoryMeasured,
+                NetworkMeasured = sample.NetworkMeasured, NetworkDownBytesPerSec = sample.NetworkDownBytesPerSec,
+                NetworkUpBytesPerSec = sample.NetworkUpBytesPerSec
+            }).ToArray());
         }
     }
 
@@ -167,74 +183,132 @@ public sealed class SystemMonitoringService(ILogger<SystemMonitoringService> log
 
     public void Dispose()
     {
-        if (disposed)
+        lock (syncRoot)
         {
-            return;
-        }
-
-        cpuCounter?.Dispose();
-        disposed = true;
-    }
-
-    private double ReadCpuUsage()
-    {
-        if (cpuCounter is null)
-        {
-            return 0;
-        }
-
-        try
-        {
-            return Math.Round(cpuCounter.NextValue(), 2);
-        }
-        catch (Exception exception)
-        {
-            logger.LogWarning(exception, "CPU usage could not be sampled.");
-            return 0;
+            if (disposed) return;
+            cpuCounter?.Dispose();
+            disposed = true;
         }
     }
 
-    private IReadOnlyCollection<NetworkInterfaceDto> ReadNetworkInterfaces(DateTime sampleUtc)
+    private double? ReadCpuUsage(CancellationToken cancellationToken)
     {
         lock (syncRoot)
         {
-            var snapshots = NetworkInterface.GetAllNetworkInterfaces()
-                .Where(network => network.NetworkInterfaceType != NetworkInterfaceType.Loopback)
-                .Where(network => network.OperationalStatus == OperationalStatus.Up)
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var value = sources.ReadCpu();
+                return value.HasValue && double.IsFinite(value.Value) && value.Value is >= 0 and <= 100
+                    ? Math.Round(value.Value, 2) : null;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning(exception, "CPU usage could not be sampled.");
+                return null;
+            }
+        }
+    }
+
+    private (long Total, long Available, bool Measured) ReadMemory(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var value = sources.ReadMemory();
+            return value.TotalPhysicalMemory is > 0 and <= long.MaxValue && value.AvailablePhysicalMemory <= value.TotalPhysicalMemory
+                ? ((long)value.TotalPhysicalMemory, (long)value.AvailablePhysicalMemory, true) : (0, 0, false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        { logger.LogWarning(exception, "Memory usage could not be sampled."); return (0, 0, false); }
+    }
+
+    private (IReadOnlyCollection<DiskUsageDto> Items, bool Measured) ReadDiskMeasurements(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var disks = sources.ReadDisks().Select(drive =>
+            {
+                var measured = drive.TotalBytes > 0 && drive.FreeBytes >= 0 && drive.FreeBytes <= drive.TotalBytes;
+                return new DiskUsageDto
+                {
+                    Name = drive.Name, Label = drive.Label, Format = drive.Format, Measured = measured,
+                    TotalBytes = measured ? drive.TotalBytes : 0, FreeBytes = measured ? drive.FreeBytes : 0,
+                    UsedBytes = measured ? drive.TotalBytes - drive.FreeBytes : 0,
+                    UsagePercent = measured ? Math.Round((drive.TotalBytes - drive.FreeBytes) * 100d / drive.TotalBytes, 2) : 0
+                };
+            }).OrderBy(drive => drive.Name).ToArray();
+            return (disks, disks.All(disk => disk.Measured));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        { logger.LogWarning(exception, "Disk usage could not be sampled."); return ([], false); }
+    }
+
+    private (IReadOnlyCollection<NetworkInterfaceDto> Items, bool Measured) ReadNetworkInterfaces(CancellationToken cancellationToken)
+    {
+        lock (syncRoot)
+        {
+            try
+            {
+            cancellationToken.ThrowIfCancellationRequested();
+            var native = sources.ReadNetwork();
+            cancellationToken.ThrowIfCancellationRequested();
+            // Capture monotonic time at the counters, inside their shared sampling gate.
+            // Request start time and wall-clock adjustments must not alter a traffic rate.
+            var sampledAt = sources.Clock.GetTimestamp();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var snapshots = native
                 .Select(network =>
                 {
-                    var statistics = network.GetIPv4Statistics();
-                    var currentSample = new NetworkSample(statistics.BytesReceived, statistics.BytesSent, sampleUtc);
+                    var valid = !string.IsNullOrWhiteSpace(network.Id) && seen.Add(network.Id) &&
+                        network.BytesReceived >= 0 && network.BytesSent >= 0;
+                    var currentSample = new NetworkSample(network.BytesReceived, network.BytesSent, sampledAt);
 
                     previousNetworkSamples.TryGetValue(network.Id, out var previousSample);
-                    previousNetworkSamples[network.Id] = currentSample;
+                    if (valid) previousNetworkSamples[network.Id] = currentSample;
+                    else previousNetworkSamples.Remove(network.Id);
 
                     var bytesReceivedPerSecond = 0d;
                     var bytesSentPerSecond = 0d;
+                    var measured = false;
 
-                    if (previousSample is not null)
+                    if (valid && previousSample is not null && currentSample.SampledAt > previousSample.SampledAt &&
+                        currentSample.BytesReceived >= previousSample.BytesReceived && currentSample.BytesSent >= previousSample.BytesSent)
                     {
-                        var elapsedSeconds = Math.Max(0.001, (currentSample.SampledAtUtc - previousSample.SampledAtUtc).TotalSeconds);
-                        bytesReceivedPerSecond = Math.Max(0, currentSample.BytesReceived - previousSample.BytesReceived) / elapsedSeconds;
-                        bytesSentPerSecond = Math.Max(0, currentSample.BytesSent - previousSample.BytesSent) / elapsedSeconds;
+                        var elapsedSeconds = sources.Clock.GetElapsedTime(previousSample.SampledAt, currentSample.SampledAt).TotalSeconds;
+                        if (double.IsFinite(elapsedSeconds) && elapsedSeconds > 0)
+                        {
+                            bytesReceivedPerSecond = (currentSample.BytesReceived - previousSample.BytesReceived) / elapsedSeconds;
+                            bytesSentPerSecond = (currentSample.BytesSent - previousSample.BytesSent) / elapsedSeconds;
+                            measured = double.IsFinite(bytesReceivedPerSecond) && double.IsFinite(bytesSentPerSecond);
+                        }
                     }
 
                     return new NetworkInterfaceDto
                     {
                         Name = network.Name,
-                        Type = network.NetworkInterfaceType.ToString(),
-                        Status = network.OperationalStatus.ToString(),
-                        TotalBytesReceived = currentSample.BytesReceived,
-                        TotalBytesSent = currentSample.BytesSent,
-                        BytesReceivedPerSecond = Math.Round(bytesReceivedPerSecond, 2),
-                        BytesSentPerSecond = Math.Round(bytesSentPerSecond, 2)
+                        Type = network.Type,
+                        Status = network.Status,
+                        TotalBytesReceived = valid ? currentSample.BytesReceived : 0,
+                        TotalBytesSent = valid ? currentSample.BytesSent : 0,
+                        RatesMeasured = measured,
+                        BytesReceivedPerSecond = measured ? Math.Round(bytesReceivedPerSecond, 2) : 0,
+                        BytesSentPerSecond = measured ? Math.Round(bytesSentPerSecond, 2) : 0
                     };
                 })
                 .OrderByDescending(network => network.BytesReceivedPerSecond + network.BytesSentPerSecond)
                 .ThenBy(network => network.Name)
                 .ToArray();
 
-            return snapshots;
+            foreach (var removed in previousNetworkSamples.Keys.Where(id => !seen.Contains(id)).ToArray())
+                previousNetworkSamples.Remove(removed);
+            return (snapshots, snapshots.All(network => network.RatesMeasured));
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                previousNetworkSamples.Clear();
+                logger.LogWarning(exception, "Network usage could not be sampled.");
+                return ([], false);
+            }
         }
     }
 
@@ -253,7 +327,34 @@ public sealed class SystemMonitoringService(ILogger<SystemMonitoringService> log
         }
     }
 
-    private static MemoryStatus ReadMemoryStatus()
+    private static IReadOnlyCollection<SystemDiskSnapshot> ReadDisks()
+    {
+        var result = new List<SystemDiskSnapshot>();
+        foreach (var drive in DriveInfo.GetDrives())
+        {
+            try
+            {
+                if (drive.DriveType is not (DriveType.Fixed or DriveType.Removable)) continue;
+                if (!drive.IsReady && drive.DriveType == DriveType.Removable) continue;
+                result.Add(new(drive.Name, drive.VolumeLabel, drive.DriveFormat, drive.TotalSize, drive.AvailableFreeSpace));
+            }
+            catch (IOException) { result.Add(new(drive.Name, string.Empty, string.Empty, 0, 0)); }
+            catch (UnauthorizedAccessException) { result.Add(new(drive.Name, string.Empty, string.Empty, 0, 0)); }
+        }
+        return result;
+    }
+
+    private static IReadOnlyCollection<SystemNetworkSnapshot> ReadNetworkSnapshots() => NetworkInterface.GetAllNetworkInterfaces()
+        .Where(network => network.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+        .Where(network => network.OperationalStatus == OperationalStatus.Up)
+        .Select(network =>
+        {
+            var statistics = network.GetIPv4Statistics();
+            return new SystemNetworkSnapshot(network.Id, network.Name, network.NetworkInterfaceType.ToString(),
+                network.OperationalStatus.ToString(), statistics.BytesReceived, statistics.BytesSent);
+        }).ToArray();
+
+    private static SystemMemorySnapshot ReadMemoryStatus()
     {
         var nativeStatus = new MemoryStatusEx
         {
@@ -265,7 +366,7 @@ public sealed class SystemMonitoringService(ILogger<SystemMonitoringService> log
             throw new InvalidOperationException("GlobalMemoryStatusEx call failed.");
         }
 
-        return new MemoryStatus(nativeStatus.TotalPhys, nativeStatus.AvailPhys);
+        return new SystemMemorySnapshot(nativeStatus.TotalPhys, nativeStatus.AvailPhys);
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -286,7 +387,5 @@ public sealed class SystemMonitoringService(ILogger<SystemMonitoringService> log
         public ulong AvailExtendedVirtual;
     }
 
-    private sealed record MemoryStatus(ulong TotalPhysicalMemory, ulong AvailablePhysicalMemory);
-
-    private sealed record NetworkSample(long BytesReceived, long BytesSent, DateTime SampledAtUtc);
+    private sealed record NetworkSample(long BytesReceived, long BytesSent, long SampledAt);
 }

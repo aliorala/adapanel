@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import { UserFacingError } from "../utils/apiError";
 
 type ApiEnvelope<T> = { success: boolean; data: T; message: string; code: number };
 
@@ -118,12 +119,24 @@ export type DnsServerHealth = {
 
 export async function getDnsServerHealth() {
   const response = await apiClient.get<ApiEnvelope<DnsServerHealth>>("/dns/server/health");
-  return response.data.data;
+  return measuredDnsHealth(response.data);
 }
 
 export async function repairDnsServer(applyDelayedAutoStart = true) {
   const response = await apiClient.post<ApiEnvelope<DnsServerHealth>>("/dns/server/repair", { applyDelayedAutoStart });
-  return response.data.data;
+  return measuredDnsHealth(response.data);
+}
+
+function measuredDnsHealth(envelope: ApiEnvelope<DnsServerHealth>): DnsServerHealth {
+  const row = envelope?.data;
+  if (envelope?.success !== true || !row || [row.installed, row.delayedAutoStart, row.publiclyBound, row.needsRepair].some(value => typeof value !== "boolean") ||
+    [row.serviceStatus, row.startMode, row.details, row.lastAutoRepairStatus].some(value => typeof value !== "string") ||
+    !["Running", "Stopped", "NotInstalled", "Unknown", "StartPending", "StopPending", "ContinuePending", "PausePending", "Paused"].includes(row.serviceStatus) ||
+    !Number.isSafeInteger(row.zoneCount) || row.zoneCount < 0 ||
+    [row.listeningAddresses, row.expectedAddresses, row.missingAddresses].some(values => !Array.isArray(values) || values.some(value => typeof value !== "string")) ||
+    (row.lastAutoRepairUtc !== null && typeof row.lastAutoRepairUtc !== "string") ||
+    (row.lastAutoRepairSucceeded != null && typeof row.lastAutoRepairSucceeded !== "boolean")) throw new UserFacingError("dns.health_unmeasurable");
+  return row;
 }
 
 // Sunucu-geneli DNS şablonu (Plesk "DNS template"): yeni site bölgeleri bununla seed edilir.

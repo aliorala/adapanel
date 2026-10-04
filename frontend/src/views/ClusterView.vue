@@ -152,14 +152,14 @@
             </div>
             <div class="metric">
               <span class="tile-label">{{ t("panel.cluster.metricCpu") }}</span>
-              <strong :class="['metric-number', dolulukSinifi(row.info.overview.cpuUsagePercent)]">
-                {{ yuzde(row.info.overview.cpuUsagePercent) }}
+              <strong :class="['metric-number', dolulukSinifi(cpuPercent(row))]">
+                {{ yuzde(cpuPercent(row)) }}
               </strong>
             </div>
             <div class="metric">
               <span class="tile-label">{{ t("panel.cluster.metricMemory") }}</span>
-              <strong :class="['metric-number', dolulukSinifi(row.info.overview.memoryUsagePercent)]">
-                {{ yuzde(row.info.overview.memoryUsagePercent) }}
+              <strong :class="['metric-number', dolulukSinifi(memoryPercent(row))]">
+                {{ yuzde(memoryPercent(row)) }}
               </strong>
             </div>
             <!-- DISK OLCULEMEDIYSE "%0" DEGIL "—". `enDoluDisk` disk listesi bos gelince 0
@@ -538,7 +538,19 @@ function dolulukSinifi(value: number | null) {
 function enDoluDisk(row: ClusterNodeStatus): number | null {
   const disks = row.info?.overview.disks ?? [];
   // Ortalama DEĞİL en kötü disk: sunucuyu durduran şey disklerin ortalaması değil, dolan ilk diski.
-  return disks.length === 0 ? null : Math.max(...disks.map((disk) => disk.usagePercent));
+  return !row.reachable || row.info?.overview.disksMeasured !== true || disks.length === 0 ||
+    disks.some(disk => disk.measured !== true || measuredPercent(disk.usagePercent) === null)
+    ? null : Math.max(...disks.map(disk => disk.usagePercent));
+}
+
+function measuredPercent(value: number): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100 ? value : null;
+}
+function cpuPercent(row: ClusterNodeStatus): number | null {
+  return row.reachable && row.info?.overview.cpuMeasured === true ? measuredPercent(row.info.overview.cpuUsagePercent) : null;
+}
+function memoryPercent(row: ClusterNodeStatus): number | null {
+  return row.reachable && row.info?.overview.memoryMeasured === true ? measuredPercent(row.info.overview.memoryUsagePercent) : null;
 }
 
 function uyariSayisi(row: ClusterNodeStatus) {

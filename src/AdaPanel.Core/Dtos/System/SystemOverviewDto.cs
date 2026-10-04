@@ -20,6 +20,8 @@ public sealed class SystemOverviewDto
 
     public double CpuUsagePercent { get; init; }
 
+    public bool CpuMeasured { get; init; }
+
     public int LogicalProcessorCount { get; init; }
 
     public long TotalMemoryBytes { get; init; }
@@ -29,6 +31,12 @@ public sealed class SystemOverviewDto
     public long UsedMemoryBytes { get; init; }
 
     public double MemoryUsagePercent { get; init; }
+
+    public bool MemoryMeasured { get; init; }
+
+    public bool DisksMeasured { get; init; }
+
+    public bool NetworkMeasured { get; init; }
 
     public IReadOnlyCollection<DiskUsageDto> Disks { get; init; } = [];
 

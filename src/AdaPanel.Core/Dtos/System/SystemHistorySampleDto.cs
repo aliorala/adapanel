@@ -10,7 +10,13 @@ public sealed class SystemHistorySampleDto
 
     public double CpuPercent { get; set; }
 
+    public bool CpuMeasured { get; set; }
+
     public double MemoryPercent { get; set; }
+
+    public bool MemoryMeasured { get; set; }
+
+    public bool NetworkMeasured { get; set; }
 
     public double NetworkDownBytesPerSec { get; set; }
 

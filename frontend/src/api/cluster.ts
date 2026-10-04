@@ -36,12 +36,16 @@ export type ClusterNodeInfo = {
   siteCount: number;
   defaultSiteRoot: string;
   overview: {
+    cpuMeasured?: boolean;
+    memoryMeasured?: boolean;
+    disksMeasured?: boolean;
+    networkMeasured?: boolean;
     cpuUsagePercent: number;
     memoryUsagePercent: number;
     totalMemoryBytes: number;
     usedMemoryBytes: number;
     uptime: string;
-    disks: { name: string; label: string; usagePercent: number; totalBytes: number; freeBytes: number }[];
+    disks: { name: string; label: string; measured?: boolean; usagePercent: number; totalBytes: number; freeBytes: number }[];
   };
   services: { name: string; label: string; status: string }[];
 };

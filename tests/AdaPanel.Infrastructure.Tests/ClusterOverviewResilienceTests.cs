@@ -320,7 +320,8 @@ public sealed class ClusterOverviewResilienceTests : IDisposable
                     SecureEntryPath = "gizli-" + node.Label,
                     SiteCount = SiteSayisi.TryGetValue(node.Label, out var sayi) ? sayi : 1,
                     DefaultSiteRoot = @"C:\inetpub\wwwroot",
-                    Overview = new SystemOverviewDto { Disks = [new DiskUsageDto { Name = "C:", UsagePercent = 40 }] },
+                    Overview = new SystemOverviewDto { DisksMeasured = true,
+                        Disks = [new DiskUsageDto { Name = "C:", Measured = true, TotalBytes = 1000, FreeBytes = 600, UsedBytes = 400, UsagePercent = 40 }] },
                     Services = [new ServiceHealthDto { Name = "W3SVC", Status = "Running" }]
                 },
                 string.Empty,

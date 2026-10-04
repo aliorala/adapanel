@@ -5448,5 +5448,16 @@
   "panel.notifications.settingsChangedTitle": "Check the settings before testing",
   "panel.notifications.settingsChangedHint": "Refresh to load the saved settings and check the recipient. Your unsaved draft is preserved.",
   "panel.errorReports.settingsChangedTitle": "Check the settings before sending",
-  "panel.errorReports.settingsChangedHint": "Refresh to load the saved settings and check the destination. Your unsaved draft is preserved."
+  "panel.errorReports.settingsChangedHint": "Refresh to load the saved settings and check the destination. Your unsaved draft is preserved.",
+  "panel.monitor.unmeasured": "Not measured",
+  "panel.monitor.partialMeasurement": "Some resources could not be measured. They are shown as — while available measurements continue to update.",
+  "panel.monitor.overviewFailed": "Current server measurements could not be retrieved. The last read server details are shown; usage values are hidden until measured again.",
+  "panel.monitor.ratePending": "Network speed needs two valid measurements. Pending values are shown as —.",
+  "panel.monitor.historyGaps": "Unmeasured intervals are left blank in the chart.",
+  "panel.processes.sortLabel": "Sort processes",
+  "panel.health.resultUnconfirmed": "The operation's result could not be verified. Refresh the current status and check the remaining findings.",
+  "panel.health.domainsNeedAttention": "Findings need attention",
+  "panel.health.lastKnownServices": "The last read service list is shown. Restart is disabled until the current status is confirmed.",
+  "panel.monitor.measurementFailed": "Resource measurements could not be verified. Refresh and try again.",
+  "health.restart_unverified": "The restart command completed, but the service could not be verified as running. Check its current status."
 }

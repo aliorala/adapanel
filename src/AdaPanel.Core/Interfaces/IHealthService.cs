@@ -7,4 +7,7 @@ public interface IHealthService
     Task<IReadOnlyCollection<ServiceHealthDto>> GetHealthAsync(CancellationToken cancellationToken = default);
 
     Task<ServiceHealthDto> RestartServiceAsync(string name, CancellationToken cancellationToken = default);
+
+    Task<ServiceHealthDto> RestartServiceAsync(string name, Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken = default);
 }

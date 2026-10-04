@@ -273,5 +273,6 @@
   "notifications.settings_invalid": "SMTP ayarları geçersiz. Portu ve e-posta adreslerini kontrol edin.",
   "notifications.settings_revision_required": "Ekrandaki bildirim ayarlarının güncelliği doğrulanamadı. Yenileyip tekrar deneyin.",
   "notifications.settings_changed": "Bildirim ayarları değişti; test başlatılmadı. Güncel hedefi kontrol edin.",
-  "errorReporting.settings_revision_required": "Ekrandaki rapor gönderim ayarlarının güncelliği doğrulanamadı. Yenileyip tekrar deneyin."
+  "errorReporting.settings_revision_required": "Ekrandaki rapor gönderim ayarlarının güncelliği doğrulanamadı. Yenileyip tekrar deneyin.",
+  "health.restart_unverified": "Yeniden başlatma komutu tamamlandı, ancak hizmetin çalıştığı doğrulanamadı. Güncel durumunu kontrol edin."
 }

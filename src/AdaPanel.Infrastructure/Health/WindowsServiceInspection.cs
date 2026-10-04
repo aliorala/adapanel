@@ -23,6 +23,7 @@ internal static class WindowsServiceInspection
                 result[name] = "Unknown";
             }
         }
+        token.ThrowIfCancellationRequested();
         return result;
     }, token);
 

@@ -237,7 +237,7 @@ public sealed class AuditCoverageTests
         ["SecurityController.cs#\"security.bruteforce_settings_changed\"#\"security:bruteforce\""] = "Kaba-kuvvet koruması PANEL GİRİŞİNİ korur; bir aboneliğin kaynağı değil.",
         ["SecurityController.cs#\"security.bruteforce_unbanned\"#$\"security:bruteforce:{request.IpAddress}\""] = "Yasak bir IP'ye aittir, bir aboneliğe değil; IP'den kiracı türetmek tahmindir.",
         ["ServerHealthController.cs#\"server.domains.refreshed\"#\"server\""] = "Sunucudaki bütün alan adlarının dış-bakış ölçümü.",
-        ["ServerHealthController.cs#\"server.service.restarted\"#$\"service:{request.Name}\""] = "Windows hizmeti sunucu genelidir; yeniden başlatmak bütün kiracıları etkiler.",
+        ["ServerHealthController.cs#\"server.service.restarted\"#$\"service:{health.Name}\""] = "Windows hizmeti sunucu genelidir; yeniden başlatmak bütün kiracıları etkiler.",
         ["SetupController.cs#\"setup.initialized\"#\"panel\""] = "İlk kurulum: henüz hiçbir abonelik yok.",
         ["SitesController.cs#\"sites.import.completed\"#\"sites\""] = "İçe aktarılan siteler tanım gereği HENÜZ hiçbir aboneliğe atanmamıştır; atama ayrı bir işlemdir.",
         ["SslController.cs#\"ssl.renew_all\"#\"ssl:*\""] = "Tek çağrıda sunucudaki HER sitenin sertifikası yenilenir; tek konusu yok.",

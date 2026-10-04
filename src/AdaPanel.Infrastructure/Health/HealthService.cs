@@ -1,4 +1,3 @@
-using System.Text.Json;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Health;
 using AdaPanel.Core.Enums;
@@ -16,6 +15,11 @@ namespace AdaPanel.Infrastructure.Health;
 /// </summary>
 public sealed class HealthService(AdaPanelDbContext dbContext) : IHealthService
 {
+    internal Func<string, CancellationToken, Task<CommandResult>> RestartCommand { get; init; }
+        = ProcessRunner.RunPowerShellStrictAsync;
+    internal Func<IReadOnlyCollection<string>, CancellationToken, Task<Dictionary<string, string>>> ReadStatuses { get; init; }
+        = (names, token) => WindowsServiceInspection.ReadAsync(names, token);
+
     private static readonly Target[] CoreServices =
     [
         new("W3SVC", "IIS — Web (W3SVC)"),
@@ -32,6 +36,7 @@ public sealed class HealthService(AdaPanelDbContext dbContext) : IHealthService
     {
         var targets = await ResolveTargetsAsync(cancellationToken);
         var statuses = await QueryStatusesAsync(targets.Select(target => target.Name).ToArray(), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         return targets
             .Select(target => new ServiceHealthDto
             {
@@ -42,26 +47,42 @@ public sealed class HealthService(AdaPanelDbContext dbContext) : IHealthService
             .ToArray();
     }
 
-    public async Task<ServiceHealthDto> RestartServiceAsync(string name, CancellationToken cancellationToken = default)
+    public Task<ServiceHealthDto> RestartServiceAsync(string name, CancellationToken cancellationToken = default)
+        => RestartCoreAsync(name, null, cancellationToken);
+
+    public Task<ServiceHealthDto> RestartServiceAsync(string name, Func<CancellationToken, Task> beforeMutation,
+        CancellationToken cancellationToken = default)
+        => RestartCoreAsync(name, beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken);
+
+    private async Task<ServiceHealthDto> RestartCoreAsync(string name, Func<CancellationToken, Task>? beforeMutation,
+        CancellationToken cancellationToken)
     {
         var targets = await ResolveTargetsAsync(cancellationToken);
         var target = targets.FirstOrDefault(item => string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase))
             ?? throw new AppException("health.unknown_service", 404, 404);
 
-        var result = await ProcessRunner.RunPowerShellStrictAsync(
+        cancellationToken.ThrowIfCancellationRequested();
+        if (beforeMutation is not null) await beforeMutation(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = await RestartCommand(
             BuildRestartScript(target.Name),
             cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!result.Success)
         {
             throw new AppException("health.restart_failed", 500, 500, result.StandardError);
         }
 
         var statuses = await QueryStatusesAsync([target.Name], cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        var status = statuses.TryGetValue(target.Name, out var measured) ? measured : "Unknown";
+        if (status != "Running")
+            throw new AppException("health.restart_unverified", 500, 500, $"Service: {target.Name}; measured status: {status}.");
         return new ServiceHealthDto
         {
             Name = target.Name,
             Label = target.Label,
-            Status = statuses.TryGetValue(target.Name, out var status) ? status : "Unknown"
+            Status = status
         };
     }
 
@@ -85,20 +106,29 @@ public sealed class HealthService(AdaPanelDbContext dbContext) : IHealthService
         return targets;
     }
 
-    private static Task<Dictionary<string, string>> QueryStatusesAsync(IReadOnlyCollection<string> names, CancellationToken cancellationToken)
-        => WindowsServiceInspection.ReadAsync(names, cancellationToken);
+    private Task<Dictionary<string, string>> QueryStatusesAsync(IReadOnlyCollection<string> names, CancellationToken cancellationToken)
+        => ReadStatuses(names, cancellationToken);
 
     internal static string BuildRestartScript(string name)
     {
         var safe = name.Replace("'", "''");
         return $$"""
             $name = '{{safe}}'
-            $service = Get-Service -Name $name -ErrorAction SilentlyContinue
-            if ($service) { Restart-Service -Name $name -Force -ErrorAction Stop }
+            # Enumerate strictly: a failed direct Get-Service lookup can hide access errors as absence.
+            # Filter literal identities, then mutate the measured object; names may contain wildcard characters.
+            $services = @(Get-Service -ErrorAction Stop | Where-Object {
+                [string]::Equals([string]$_.Name, $name, [System.StringComparison]::OrdinalIgnoreCase)
+            })
+            if ($services.Count -gt 1) { throw 'Service identity is ambiguous.' }
+            if ($services.Count -eq 1) { Restart-Service -InputObject $services[0] -Force -ErrorAction Stop }
             else {
-                $task = Get-ScheduledTask -TaskName $name -TaskPath '\' -ErrorAction Stop
-                Stop-ScheduledTask -InputObject $task -ErrorAction Stop
-                Start-ScheduledTask -InputObject $task -ErrorAction Stop
+                $tasks = @(Get-ScheduledTask -TaskPath '\' -ErrorAction Stop | Where-Object {
+                    [string]::Equals([string]$_.TaskName, $name, [System.StringComparison]::OrdinalIgnoreCase) -and
+                    [string]::Equals([string]$_.TaskPath, '\', [System.StringComparison]::OrdinalIgnoreCase)
+                })
+                if ($tasks.Count -ne 1) { throw 'Scheduled task identity is missing or ambiguous.' }
+                Stop-ScheduledTask -InputObject $tasks[0] -ErrorAction Stop
+                Start-ScheduledTask -InputObject $tasks[0] -ErrorAction Stop
             }
             """;
     }

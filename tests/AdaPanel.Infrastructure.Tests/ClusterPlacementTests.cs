@@ -104,10 +104,11 @@ public sealed class ClusterPlacementTests
         {
             Overview = new SystemOverviewDto
             {
+                DisksMeasured = true,
                 Disks =
                 [
-                    new DiskUsageDto { Name = "C:", UsagePercent = 10 },
-                    new DiskUsageDto { Name = "D:", UsagePercent = 98 }
+                    new DiskUsageDto { Name = "C:", Measured = true, TotalBytes = 1000, FreeBytes = 900, UsedBytes = 100, UsagePercent = 10 },
+                    new DiskUsageDto { Name = "D:", Measured = true, TotalBytes = 1000, FreeBytes = 20, UsedBytes = 980, UsagePercent = 98 }
                 ]
             }
         };
@@ -163,7 +164,9 @@ public sealed class ClusterPlacementTests
                     SiteCount = siteSayisi,
                     Overview = new SystemOverviewDto
                     {
-                        Disks = [new DiskUsageDto { Name = "C:", UsagePercent = diskYuzde }]
+                        DisksMeasured = true,
+                        Disks = [new DiskUsageDto { Name = "C:", Measured = true, TotalBytes = 1000,
+                            FreeBytes = (long)(1000 - diskYuzde * 10), UsedBytes = (long)(diskYuzde * 10), UsagePercent = diskYuzde }]
                     }
                 }
                 : null

@@ -10,12 +10,14 @@ vi.mock("../router", () => ({ default: {} }));
 async function render(serviceStatus: string, failed: boolean) {
   return renderToString(createSSRApp({ ...ServerHealthView, setup: () => ({
     t: (key: string) => key, loading: false, notice: "", noticeError: false,
+    actionBusy: false, canReload: true, canRepairDns: true, canRefreshDomains: true, canRestart: () => true,
+    servicesLoad: { message: { value: "" } }, servicesConfirmed: true, dnsConfirmed: serviceStatus !== "Unknown", domainsConfirmed: true, hasUnresolvedFindings: false,
     load: vi.fn(), SectionLoadError, dnsLoad: { message: { value: "" } },
     dns: { serviceStatus, installed: serviceStatus !== "Unknown", publiclyBound: true,
       needsRepair: false, listeningAddresses: [], expectedAddresses: [], missingAddresses: [] },
     dnsBusy: false, dnsDetailsIsDiagnostic: false, startModeText: () => "Auto",
     domains: { totalSites: 1, updatedSites: 0, failedSites: failed ? 1 : 0, results: [], serverFindings: [] },
-    domainsLoading: false, domainCheckFailed: failed, onarilacakVar: false, domainsBusy: false,
+    domainsLoading: false, domainsRepaired: false, domainCheckFailed: failed, onarilacakVar: false, domainsBusy: false,
     refreshAllDomains: vi.fn(), domainsLoad: { message: { value: "" } }, domainReport: [],
     services: [], loaded: true
   }) } as Component));

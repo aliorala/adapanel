@@ -8,16 +8,18 @@
         </div>
         <span class="meta">{{ loading ? t("panel.system.loading") : formatUtc(overview?.currentServerTimeUtc ?? null) }}</span>
       </div>
+      <p v-if="overviewError" class="notice error measurement-notice" role="alert"><span>{{ t('panel.monitor.overviewFailed') }}</span><button class="secondary compact" :disabled="loading" @click="emit('retryOverview')">{{ t('panel.common.retry') }}</button></p>
+      <p v-else-if="overview && (cpuValue === null || memoryValue === null || overview.disksMeasured !== true || overview.networkMeasured !== true)" class="notice warn" role="status">{{ t('panel.monitor.partialMeasurement') }}</p>
       <p v-if="historyError" class="notice error" role="alert">{{ historyError }}</p>
       <!-- Ortak kaynak göstergeleri ana sayfayla aynı durum eşiklerini kullanır. -->
       <div v-if="overview" class="resource-grid">
-        <ResourceMetric kind="cpu" :label="t('panel.system.cpu')" :value="overview.cpuUsagePercent" :detail="overview.logicalProcessorCount + ' ' + t('panel.system.cores')">
-          <svg v-if="cpuSpark" class="meter-spark cpu" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"><polyline :points="cpuSpark" /></svg>
+        <ResourceMetric kind="cpu" :label="t('panel.system.cpu')" :value="cpuValue" :detail="overview.logicalProcessorCount + ' ' + t('panel.system.cores')">
+          <svg v-if="hasCpuTrend" class="meter-spark cpu" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"><polyline v-for="(points, index) in cpuSparks" :key="index" :points="points" /></svg>
         </ResourceMetric>
-        <ResourceMetric kind="memory" :label="t('panel.system.memory')" :value="overview.memoryUsagePercent" :detail="formatBytes(overview.usedMemoryBytes) + ' / ' + formatBytes(overview.totalMemoryBytes)">
-          <svg v-if="memSpark" class="meter-spark mem" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"><polyline :points="memSpark" /></svg>
+        <ResourceMetric kind="memory" :label="t('panel.system.memory')" :value="memoryValue" :detail="memoryValue === null ? '' : formatBytes(overview.usedMemoryBytes) + ' / ' + formatBytes(overview.totalMemoryBytes)">
+          <svg v-if="hasMemTrend" class="meter-spark mem" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"><polyline v-for="(points, index) in memSparks" :key="index" :points="points" /></svg>
         </ResourceMetric>
-        <ResourceMetric kind="disk" :label="primaryDisk?.name || t('panel.system.disks')" :value="primaryDisk?.usagePercent ?? null" :detail="primaryDisk ? formatBytes(primaryDisk.usedBytes) + ' / ' + formatBytes(primaryDisk.totalBytes) : t('panel.common.notAvailable')" :hint="primaryDisk ? t('panel.system.free') + ': ' + formatBytes(primaryDisk.freeBytes) : ''" />
+        <ResourceMetric kind="disk" :label="primaryDisk?.name || t('panel.system.disks')" :value="diskValue" :detail="primaryDisk && diskValue !== null ? formatBytes(primaryDisk.usedBytes) + ' / ' + formatBytes(primaryDisk.totalBytes) : ''" :hint="primaryDisk && diskValue !== null ? t('panel.system.free') + ': ' + formatBytes(primaryDisk.freeBytes) : ''" />
       </div>
     </section>
 
@@ -61,7 +63,7 @@
              kutu. Boş kutu "burada bir şey yok" diye okunur; oysa doğrusu "henüz gelmedi".
              Aynı sayfanın üst şeridi zaten durumu söylüyordu, alt panelleri sessiz bırakmak
              tutarsızdı. -->
-        <p v-else class="meta" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+        <p v-else class="meta" role="status" aria-live="polite">{{ t(loading ? 'panel.common.loading' : 'panel.monitor.unmeasured') }}</p>
       </section>
 
       <section class="panel">
@@ -87,13 +89,13 @@
             :class="['mini-row', 'disk-row', { warn: diskTone(disk) === 'warn', danger: diskTone(disk) === 'danger' }]">
             <span>{{ disk.name }}</span>
             <span>
-              {{ disk.usagePercent.toFixed(1) }}%
+              {{ overviewConfirmed !== false && disk.measured ? disk.usagePercent.toFixed(1) + '%' : t('panel.monitor.unmeasured') }}
               <span v-if="diskTone(disk)" :class="['status-pill', diskTone(disk)]">{{ diskToneLabel(disk) }}</span>
             </span>
-            <span>{{ formatBytes(disk.freeBytes) }}</span>
+            <span>{{ overviewConfirmed !== false && disk.measured ? formatBytes(disk.freeBytes) : '—' }}</span>
           </div>
         </div>
-        <p v-else class="meta" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+        <p v-else class="meta" role="status" aria-live="polite">{{ t(loading ? 'panel.common.loading' : 'panel.monitor.unmeasured') }}</p>
       </section>
     </div>
 
@@ -119,19 +121,20 @@
              arayüzün yükü taşıdığını tek bakışta veren şeydir. -->
         <div v-for="network in overview.networkInterfaces" :key="network.name" class="mini-row network-row">
           <span>{{ network.name }}</span>
-          <span>{{ formatSpeed(network.bytesReceivedPerSecond) }}</span>
-          <span>{{ formatSpeed(network.bytesSentPerSecond) }}</span>
-          <span>{{ formatSpeed(network.bytesReceivedPerSecond + network.bytesSentPerSecond) }}</span>
+          <span>{{ overviewConfirmed !== false && network.ratesMeasured ? formatSpeed(network.bytesReceivedPerSecond) : '—' }}</span>
+          <span>{{ overviewConfirmed !== false && network.ratesMeasured ? formatSpeed(network.bytesSentPerSecond) : '—' }}</span>
+          <span>{{ overviewConfirmed !== false && network.ratesMeasured ? formatSpeed(network.bytesReceivedPerSecond + network.bytesSentPerSecond) : '—' }}</span>
         </div>
 
         <!-- Ağ arayüzü listesi BOŞ dönebilir (kapalı/filtrelenmiş arayüzler). Eskiden geriye
              yalnız başlık satırı kalıyordu: tablo "yüklenmedi" mi "hiç arayüz yok" mu
              söylemiyordu. -->
         <div v-if="overview.networkInterfaces.length === 0" class="mini-row">
-          <span class="meta">{{ t("panel.system.networkEmpty") }}</span>
+          <span class="meta">{{ t(overviewConfirmed !== false && overview.networkMeasured ? 'panel.system.networkEmpty' : 'panel.monitor.unmeasured') }}</span>
         </div>
       </div>
-      <p v-else class="meta" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+      <p v-else class="meta" role="status" aria-live="polite">{{ t(loading ? 'panel.common.loading' : 'panel.monitor.unmeasured') }}</p>
+      <p v-if="overviewConfirmed !== false && overview?.networkInterfaces.some(network => !network.ratesMeasured)" class="field-hint">{{ t('panel.monitor.ratePending') }}</p>
 
       <!-- GRAFİĞİN ÖLÇEĞİ YOKTU: kutunun içinde iki eğri vardı ama ne eksen, ne ızgara, ne de
            tek bir sayı. Kullanıcı bir tepenin 2 KB/sn mi 200 MB/sn mi olduğunu okuyamıyor,
@@ -155,8 +158,8 @@
             <line class="net-grid" x1="0" y1="1" x2="100" y2="1" vector-effect="non-scaling-stroke" />
             <line class="net-grid" x1="0" y1="14" x2="100" y2="14" vector-effect="non-scaling-stroke" />
             <line class="net-axis" x1="0" y1="27" x2="100" y2="27" vector-effect="non-scaling-stroke" />
-            <polyline class="down" :points="netDownSpark" />
-            <polyline class="up" :points="netUpSpark" />
+            <polyline v-for="(points, index) in netDownSparks" :key="'down-' + index" class="down" :points="points" />
+            <polyline v-for="(points, index) in netUpSparks" :key="'up-' + index" class="up" :points="points" />
           </svg>
         </div>
         <!-- X EKSENİNİN SOL UCU SABİT BİR CÜMLEYDİ ("Son ~24 saat") VE ÖLÇÜMLE İLGİSİ YOKTU.
@@ -175,6 +178,7 @@
           <span><i class="legend-dot down"></i>{{ t("panel.system.download") }}</span>
           <span><i class="legend-dot up"></i>{{ t("panel.system.upload") }}</span>
         </div>
+        <p class="field-hint">{{ t('panel.monitor.historyGaps') }}</p>
       </div>
     </section>
 
@@ -187,7 +191,7 @@
           <p class="meta">{{ t("panel.processes.subtitle") }}</p>
         </div>
         <div class="row-actions">
-          <select v-model="processSort" class="compact-select">
+          <select v-model="processSort" class="compact-select" :aria-label="t('panel.processes.sortLabel')">
             <option value="cpu">{{ t("panel.processes.sortCpu") }}</option>
             <option value="memory">{{ t("panel.processes.sortMemory") }}</option>
           </select>
@@ -243,8 +247,8 @@
               </div>
               <span class="proc-num">{{ item.processId }}</span>
               <span class="proc-num">
-                <span :class="['proc-bar', cpuSeverity(item.cpuPercent)]" :style="{ '--fill': Math.min(100, item.cpuPercent) + '%' }"></span>
-                {{ item.cpuPercent.toFixed(1) }}%
+                <span v-if="snapshot.cpuBaselineReady" :class="['proc-bar', cpuSeverity(item.cpuPercent)]" :style="{ '--fill': Math.min(100, item.cpuPercent) + '%' }"></span>
+                {{ snapshot.cpuBaselineReady ? item.cpuPercent.toFixed(1) + '%' : '—' }}
               </span>
               <span class="proc-num">{{ formatBytes(item.workingSetBytes) }}</span>
               <span class="proc-num">{{ formatUptime(item.uptimeSeconds) }}</span>
@@ -311,6 +315,7 @@ import { formatBytes as sharedFormatBytes } from "../utils/bytes";
 import { formatDateTime, formatTimeSpan as sharedFormatTimeSpan } from "../utils/datetime";
 
 type DiskUsage = {
+  measured: boolean;
   name: string;
   usagePercent: number;
   freeBytes: number;
@@ -319,12 +324,17 @@ type DiskUsage = {
 };
 
 type NetworkInterface = {
+  ratesMeasured: boolean;
   name: string;
   bytesReceivedPerSecond: number;
   bytesSentPerSecond: number;
 };
 
 type SystemOverview = {
+  cpuMeasured: boolean;
+  memoryMeasured: boolean;
+  disksMeasured: boolean;
+  networkMeasured: boolean;
   machineName: string;
   operatingSystem: string;
   osArchitecture: string;
@@ -343,12 +353,18 @@ type SystemOverview = {
 
 const props = defineProps<{
   overview: SystemOverview | null;
+  overviewConfirmed?: boolean;
+  overviewError?: string;
   loading: boolean;
 }>();
 
 const { t } = useI18n();
+const emit = defineEmits<{ (event: "retryOverview"): void }>();
 
 const primaryDisk = computed(() => props.overview?.disks[0] ?? null);
+const cpuValue = computed(() => props.overviewConfirmed !== false && props.overview?.cpuMeasured === true ? props.overview.cpuUsagePercent : null);
+const memoryValue = computed(() => props.overviewConfirmed !== false && props.overview?.memoryMeasured === true ? props.overview.memoryUsagePercent : null);
+const diskValue = computed(() => props.overviewConfirmed !== false && primaryDisk.value?.measured === true ? primaryDisk.value.usagePercent : null);
 
 /*
  * EN DOLU DİSK EN ÜSTTE — panodaki `sortedDisks` ile aynı gerekçe ve aynı kod.
@@ -358,7 +374,7 @@ const primaryDisk = computed(() => props.overview?.disks[0] ?? null);
  * bileşenin verisini (ve kaynak göstergesinin okuduğu `disks[0]`ı) değiştirirdi.
  */
 const sortedDisks = computed(() => [...(props.overview?.disks ?? [])]
-  .sort((a, b) => b.usagePercent - a.usagePercent));
+  .sort((a, b) => (a.measured === true ? 1 : 0) - (b.measured === true ? 1 : 0) || b.usagePercent - a.usagePercent));
 
 // Plesk-benzeri "derin izleme": sunucu dakikada bir CPU/RAM/ağ örnekler (kalıcı geçmiş halkası); izleme ekranı
 // bu geçmişi çekip küçük SVG sparkline'larla trend gösterir → sayfa yenilense de DOLU gelir (~24 saatlik pencere).
@@ -374,7 +390,7 @@ async function pollHistory() {
   if (!isActive() || document.hidden || historyInFlight) return;
   historyInFlight = true;
   try {
-    await systemStore.fetchHistory();
+    await systemStore.fetchHistory(isActive);
     if (isActive()) historyError.value = "";
   } catch {
     if (isActive()) historyError.value = t("panel.monitor.historyFailed");
@@ -383,17 +399,19 @@ async function pollHistory() {
   }
 }
 
-const cpuSeries = computed(() => systemStore.history.map((sample) => sample.cpuPercent));
-const memSeries = computed(() => systemStore.history.map((sample) => sample.memoryPercent));
-const netDownSeries = computed(() => systemStore.history.map((sample) => sample.networkDownBytesPerSec));
-const netUpSeries = computed(() => systemStore.history.map((sample) => sample.networkUpBytesPerSec));
+const cpuSeries = computed(() => systemStore.history.map(sample => sample.cpuMeasured === true ? sample.cpuPercent : null));
+const memSeries = computed(() => systemStore.history.map(sample => sample.memoryMeasured === true ? sample.memoryPercent : null));
+const netDownSeries = computed(() => systemStore.history.map(sample => sample.networkMeasured === true ? sample.networkDownBytesPerSec : null));
+const netUpSeries = computed(() => systemStore.history.map(sample => sample.networkMeasured === true ? sample.networkUpBytesPerSec : null));
 
-const cpuSpark = computed(() => spark(cpuSeries.value, 100));
-const memSpark = computed(() => spark(memSeries.value, 100));
-const netScale = computed(() => Math.max(1, ...netDownSeries.value, ...netUpSeries.value));
-const netDownSpark = computed(() => spark(netDownSeries.value, netScale.value));
-const netUpSpark = computed(() => spark(netUpSeries.value, netScale.value));
-const hasNetTrend = computed(() => systemStore.history.length > 1);
+const cpuSparks = computed(() => sparks(cpuSeries.value, 100));
+const memSparks = computed(() => sparks(memSeries.value, 100));
+const netScale = computed(() => Math.max(1, ...[...netDownSeries.value, ...netUpSeries.value].filter((value): value is number => value !== null)));
+const netDownSparks = computed(() => sparks(netDownSeries.value, netScale.value));
+const netUpSparks = computed(() => sparks(netUpSeries.value, netScale.value));
+const hasCpuTrend = computed(() => cpuSparks.value.length > 0);
+const hasMemTrend = computed(() => memSparks.value.length > 0);
+const hasNetTrend = computed(() => netDownSparks.value.length > 0 || netUpSparks.value.length > 0);
 
 /** Grafiğin sol ucu: pencereyi UYDURMAK yerine ilk örneğin kendi zaman damgasını yazar. */
 const trendStartLabel = computed(() =>
@@ -491,7 +509,7 @@ onMounted(() => {
   void pollProcesses();
   processTimer = window.setInterval(() => void pollProcesses(), 2000);
   processSlowTimer = window.setTimeout(() => {
-    processWaitedLong.value = true;
+    if (isActive()) processWaitedLong.value = true;
   }, 4000);
 });
 
@@ -540,21 +558,18 @@ function formatUptime(seconds: number) {
 }
 
 // Değer dizisini 100×28 viewBox içinde bir polyline "points" dizgesine çevirir (üst=yüksek değer).
-function spark(values: number[], maxValue: number): string {
-  if (values.length < 2) {
-    return "";
-  }
-
+function sparks(values: (number | null)[], maxValue: number): string[] {
+  if (values.length < 2) return [];
   const max = maxValue > 0 ? maxValue : 1;
-  const count = values.length;
-  return values
-    .map((value, index) => {
-      const x = (index / (count - 1)) * 100;
-      const ratio = Math.max(0, Math.min(1, value / max));
-      const y = 27 - ratio * 26;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
+  const segments: string[] = []; let points: string[] = [];
+  const finish = () => { if (points.length > 1) segments.push(points.join(" ")); points = []; };
+  values.forEach((value, index) => {
+    if (value === null || !Number.isFinite(value)) { finish(); return; }
+    const x = (index / (values.length - 1)) * 100;
+    const y = 27 - Math.max(0, Math.min(1, value / max)) * 26;
+    points.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+  });
+  finish(); return segments;
 }
 
 /*
@@ -572,6 +587,7 @@ const METER_DANGER_PERCENT = 90;
  * hakkında söylenecek bir şey yoktur (her satırı yeşile boyamak gürültüdür).
  */
 function diskTone(disk: DiskUsage): "" | "warn" | "danger" {
+  if (props.overviewConfirmed === false || disk.measured !== true) return "";
   if (disk.usagePercent >= METER_DANGER_PERCENT) {
     return "danger";
   }
@@ -607,6 +623,9 @@ function formatTimeSpan(value: string): string {
 </script>
 
 <style scoped>
+.measurement-notice { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-12); flex-wrap: wrap; }
+.measurement-notice span { flex: 1 1 240px; }
+.measurement-notice button { flex: 0 0 auto; width: auto; }
 /* 18px ÖLÇEK DIŞIYDI (bkz. styles/base.css `--sp-*`) ve panoda aynı liste 16'ya taşınmıştı;
    iki ekran yan yana açıldığında dikey ritimleri tutmuyordu. 16 SEÇİLDİ: `.panel`in kendi iç
    dolgusu da 16, yani panelden panele boşluk ile panelin içindeki boşluk artık AYNI sayı. */

@@ -2,6 +2,8 @@ namespace AdaPanel.Core.Dtos.System;
 
 public sealed class DiskUsageDto
 {
+    public bool Measured { get; init; }
+
     public string Name { get; init; } = string.Empty;
 
     public string Label { get; init; } = string.Empty;
@@ -16,4 +18,3 @@ public sealed class DiskUsageDto
 
     public double UsagePercent { get; init; }
 }
-

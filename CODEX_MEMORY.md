@@ -1,5 +1,61 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R29 yerelde tamamlandı; yayımdaki kurucu hâlâ 0.8.77
+
+R29 sunucu ölçümleri/hizmet sonuçları/ilgili UI düzeltmeleri tam doğrulandı, henüz
+paketlenmedi. Versiyon0.8.77 korundu; yayın içerikleri R28 durumundadır. Kullanıcının
+0.8.75 paket hazırdeğil sorusu yanıtlandı: kurulumsonrası stagedpakettemizliği normal,
+bu ifade0.8.76+UI'da düzeltilmişti; publicGitHubAPI latest0.8.77 tekrar doğrulandı.
+
+SystemOverview CPU/Memory/Disks/Network Measured; Disk.Measured; NIC.RatesMeasured;
+historyflaglar eklendi. Native read-only source seam (internal) ile gerçek service
+testleri. CPU invalid/exception/null unknown; memory/disk/NICpartialfailure diğerölçümleri
+korur; tümnumericfinite. NIC counter+monotonic timestamp aynılock; first/reset/removed/
+failedbaseline unknown, wallclock/requeststart spikes yok. History outward deepcopies.
+Advisor incomplete system flag+validpartialwarnings; Automation invalidmetricten
+notification/cooldownyok; Cluster auto-placement ancak tüm diskleri ölçülmüş adaylar.
+Legacy cluster nodeflags missing→unknown/otomatikadaydeğil, düğümlerdegüncellemegerekir.
+
+Health restart strictnativeinventory→literaltekInputObject; serviceprobeerror→taskfallback
+yok. ExacttargetRunning readback yoksa health.restart_unverified, successaudit yok.
+Controller currentDBadmin/active/role/credentialstamp callbackbeforecommand; request
+snapshot/audit measuredidentity; finalCTchecks. Gerçeknativeişlemyok, scripttestfakecmdlet.
+
+FE systemstore request/epoch/resetownership; API envelope/shape/finitevalidity; unknown
+meterneutraldashed+—; graphgapsegments; failedreadretry; stalevalueshidden; clusterflags.
+ServerHealth sharedread/writegate, confirmedflags, sessionactor/unmountguards; unknown
+servicerestartdisabled; falsewrongtarget/Stoppedresultsnotgreen; completedDomainUpdatedSites
+notremainingwork; AlreadyCurrent confirmationfindingsvisible. İlkprocessCPUbaseline —.
+
+Testkanıtı: initial90=60RED30green (37metric36RED,33health24RED); extended130=27RED103green
+(32consumer27RED5green,37metric+41health+20oldgreen); consumersfixedsonfullgreen.
+FE102targetedgreen; root12realSSR +old3=15green; full **87file1.517/1.517**, types/Vitegreen,
+wwwrootsync. C# final **Infrastructure7.953+Core2=7.955**, failed/skipped0; build0warnings/errors.
+İlkfull ikiAuditCoverage statickey fixture+bir SiteSettings rewrite/create testtimingyarışı
+buldu. Statickeyhealth.Name'a uydu; SiteSettings publisherhook latch ile açıkken contender
+kontrolünüassert eder, proddeğişmedi. İlgili56green→tekrarfullgreen session80446exit0.
+Loglar .tmp/audit-20261004/round29-*; finalTRX ...032659Core/...032957Infra. FE/APIlocales5461/276
+matching; diffcheckclean. No activecompiler/test/preview. Preview44482 CtrlCexit1intentional.
+
+BrowserrealVue+Pinia/API sahteadapter/fetch:390darkTRmonitor,320lightENhealth,1440darkTR
+monitor/pano. widths380/380,310/310,1430/1430,errors0. Measurementrecovery, stoppedrestart
+error, failedread0enabledrestart/0goodcards, retryrecovery,2graphsegmentsverified.
+Screenshots round29-monitor-unknown-mobile.png,round29-health-result-en320.png,
+round29-monitor-desktop.png aynı.tmpaltında saved+viewed. auditTab29closed,viewportreset,
+__audit29 filesremoved,original__preview346/4182bytespreserved. GerçekSMTP/webhook/report
+ve canlıkurulum yapılmadı. Preexisting untracked tests/.../TestResults/ korunur, eklenmez.
+
+**Sıradaki R30 aday doğrulandı (edit yok):** SystemOverviewScope IsRestricted=true
+Customer/Reseller Home'da tüketilmiyor. SetupWizard Homev-if onlysection; ?section=home
+yaMenüHome müşteriyi DashboardOverviewView'a getirir. DTO runtimeflag spread ilekorunuyor
+ama TS/type/UIyok. Restrictedservercards/partialMeasurementwarn/serverinfo/network yerine
+tenantözet+sakinrolekapsamı göster; version/timekorunabilir. Dashboard onMounted
+getServerIpAddresses admin-onlyuç çağrısı müşteriHome'da403+yanlışlocalhostreferansı üretiyor.
+Role/scope ile GETveadminreferenceUIkapısıgerekir. Candidatefiles stores/system.ts,
+DashboardOverviewView,MonitoringView,SetupWizard; mevcutbackendDTO yeterli. Yeni test
+gerçekrestrictedGET+Customer/ResellerHomeSSR, metrics/falsewarningyok/IPGET0/adminpositive.
+Agentpolling_audit kanıt verdi; tümagentler completed/freeze. Süreklihedef aktif.
+
 ## 2026-10-04 — R28 tamamlandı; R27+R28 içeren 0.8.77 yayımlandı/doğrulandı
 
 Yayımdaki kurucu **0.8.77**; latest/draft=false/prerelease=false. Yayın zamanı

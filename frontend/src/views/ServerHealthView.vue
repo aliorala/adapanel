@@ -9,13 +9,15 @@
         <h2>{{ t("panel.health.title") }}</h2>
         <p class="meta">{{ t("panel.health.subtitle") }}</p>
       </div>
-      <button class="secondary compact" :disabled="loading" @click="load">{{ t("panel.health.refresh") }}</button>
+      <button class="secondary compact" :disabled="!canReload" @click="load">{{ loading ? t('panel.common.loading') : t("panel.health.refresh") }}</button>
     </div>
 
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
-    <SectionLoadError v-if="dnsLoad.message.value" :message="dnsLoad.message.value" @retry="load" />
-    <SectionLoadError v-else-if="dns?.serviceStatus === 'Unknown'" :message="t('dns.health_unmeasurable')" @retry="load" />
+    <section v-if="dnsLoad.message.value || dns?.serviceStatus === 'Unknown'" class="health-read-error">
+      <h3>{{ t('panel.health.dnsTitle') }}</h3>
+      <SectionLoadError :message="dnsLoad.message.value || t('dns.health_unmeasurable')" :busy="!canReload" @retry="load" />
+    </section>
 
     <!-- DNS erişilebilirliği: servisin "Running" olması YETMEZ, 53 portunun genel IP'de
          dinlemesi gerekir. Bu kart o farkı gösterir ve tek tıkla onarır. -->
@@ -30,7 +32,7 @@
       alan adlarının DNS'ini dış sağlayıcıda tutan kurulumda tamamen normaldir. Ölçülmemiş
       bir arızaya kırmızı vermek, panelin en sık tekrarlanan yalanıdır.
     -->
-    <article v-if="dns && dns.serviceStatus !== 'Unknown'" :class="['dns-card', !dns.installed ? 'idle' : (dns.needsRepair ? 'bad' : dns.publiclyBound ? 'good' : 'idle')]">
+    <article v-if="dns && dnsConfirmed && dns.serviceStatus !== 'Unknown'" :class="['dns-card', !dns.installed ? 'idle' : (dns.needsRepair ? 'bad' : dns.publiclyBound ? 'good' : 'idle')]">
       <div class="dns-head">
         <span :class="['state-dot', !dns.installed ? 'dot-idle' : (dns.needsRepair ? 'dot-danger' : dns.publiclyBound ? 'dot-ok' : 'dot-idle')]"></span>
         <div class="health-name">
@@ -48,7 +50,7 @@
         <!-- Onarım düğmesi YALNIZCA onarılacak bir şey varken görünür. Her zaman durduğunda
              kullanıcı "demek ki sorun var" diye tekrar tekrar basıyor, hiçbir şey değişmiyor
              (çünkü zaten sorun yok) ve panel bozukmuş gibi hissettiriyordu. -->
-        <button v-if="dns.needsRepair" class="secondary compact" :disabled="dnsBusy" @click="repairDns">
+        <button v-if="dns.needsRepair" class="secondary compact" :disabled="!canRepairDns" @click="repairDns">
           {{ dnsBusy ? t("panel.health.dnsRepairing") : t("panel.health.dnsRepair") }}
         </button>
       </div>
@@ -132,18 +134,21 @@
     <!-- Yuklenirken kart NE IYI NE KOTU gorunur. Onceden veri gelmeden 'good' + yesil nokta
          basiliyordu: kullanici "her sey yolunda" diye bakip gecerken kart birden kirmiziya
          donuyordu. Olculmemis bir seyi "saglikli" gostermek, panelin en cok tekrarlanan hatasi. -->
-    <article :class="['dns-card', domainsLoading || !domains ? 'idle' : (domainCheckFailed || onarilacakVar ? 'bad' : 'good')]">
+    <article :class="['dns-card', domainsLoading || !domainsConfirmed || !domains ? 'idle' : (domainCheckFailed || onarilacakVar ? 'bad' : 'good')]">
       <div class="dns-head">
-        <span :class="['state-dot', domainsLoading || !domains ? 'dot-idle' : (domainCheckFailed || onarilacakVar ? 'dot-danger' : 'dot-ok')]"></span>
+        <span :class="['state-dot', domainsLoading || !domainsConfirmed || !domains ? 'dot-muted' : (domainCheckFailed || onarilacakVar ? 'dot-danger' : 'dot-ok')]"></span>
         <div class="health-name">
           <strong>{{ t("panel.health.domainsTitle") }}</strong>
           <span class="svc-id">{{ t("panel.health.domainsHint") }}</span>
         </div>
         <span v-if="domainsLoading" class="status-pill">{{ t("panel.health.domainsLoading") }}</span>
-        <span v-else-if="domainCheckFailed" class="status-pill danger">{{ t("panel.health.statusUnknown") }}</span>
-        <span v-else-if="domains" :class="['status-pill', domains.updatedSites > 0 ? 'danger' : 'ok']">
+        <span v-else-if="!domainsConfirmed || domainCheckFailed" class="status-pill">{{ t("panel.health.statusUnknown") }}</span>
+        <span v-else-if="onarilacakVar && domains?.updatedSites === 0" class="status-pill warn">{{ t('panel.health.domainsNeedAttention') }}</span>
+        <span v-else-if="domains" :class="['status-pill', onarilacakVar ? 'danger' : 'ok']">
           {{
-            domains.updatedSites > 0
+            domainsRepaired
+              ? t('panel.health.domainsDone', { updated: domains.updatedSites, total: domains.totalSites })
+              : domains.updatedSites > 0
               ? t("panel.health.domainsStale", { count: domains.updatedSites, total: domains.totalSites })
               : t("panel.health.domainsCurrent", { total: domains.totalSites })
           }}
@@ -152,9 +157,9 @@
              hiç eksik yokken de düğmeyi görüp basıyor, hiçbir şey değişmiyor ve panel çalışmıyor
              sanıyordu. (İşlem zaten idempotent; sorun düğmenin varlığının yanlış sinyal vermesiydi.) -->
         <button
-          v-if="!domainsLoading && onarilacakVar"
+          v-if="domainsConfirmed && !domainsLoading && onarilacakVar"
           class="secondary compact"
-          :disabled="domainsBusy"
+          :disabled="!canRefreshDomains"
           @click="refreshAllDomains">
           {{ domainsBusy ? t("panel.health.domainsRefreshing") : t("panel.health.domainsRefresh") }}
         </button>
@@ -166,9 +171,9 @@
              yerine denemek mumkun olmali. Sessiz bir baglanti olarak duruyor ki asil dugmeyle
              karistirilmasin. -->
         <button
-          v-if="!domainsLoading && !onarilacakVar"
+          v-if="domainsConfirmed && !domainsLoading && !onarilacakVar"
           class="ghost compact"
-          :disabled="domainsBusy"
+          :disabled="!canRefreshDomains"
           @click="refreshAllDomains">
           {{ domainsBusy ? t("panel.health.domainsRefreshing") : t("panel.health.domainsForce") }}
         </button>
@@ -179,9 +184,9 @@
            yaninda onarma dugmesi cikiyor, kullanici neyin eksik oldugunu goremiyordu. -->
       <!-- PANELIN NE OLCTUGU. Kara kutu olmamali: "eksik yok" derken neye baktigini
            gostermezse, yanlis olcum sessizce dogru sonuc gibi gorunur. -->
-      <SectionLoadError v-if="domainsLoad.message.value" :message="domainsLoad.message.value" @retry="load" />
+      <SectionLoadError v-if="domainsLoad.message.value" :message="domainsLoad.message.value" :busy="!canReload" @retry="load" />
 
-      <p v-if="!domainsLoading && domains" class="measure-line">
+      <p v-if="domainsConfirmed && !domainsLoading && domains" class="measure-line">
         {{ t("panel.health.domainsMeasured", {
           total: domains.totalSites,
           stale: domains.updatedSites,
@@ -194,7 +199,7 @@
            komsu satirdan ayirt EDILEMEDEN ciziliyordu. Iki seviye de base.css'in paylasilan
            durum renkleriyle anlatiliyor; metin zaten bulgunun kendisini yazdigi icin renk tek
            kanal degil, vurgudur. -->
-      <ul v-if="domains?.serverFindings?.length" class="server-findings">
+      <ul v-if="domainsConfirmed && domains?.serverFindings?.length" class="server-findings">
         <li
           v-for="bulgu in domains.serverFindings"
           :key="bulgu.key + bulgu.detail"
@@ -205,23 +210,23 @@
       </ul>
 
       <!-- Ne yapıldığını kayıt kayıt göster: "onarıldı" demek tek başına güven vermez. -->
-      <dl v-if="domainReport.length" class="dns-facts">
+      <dl v-if="domainsConfirmed && domainReport.length" class="dns-facts">
         <div v-for="row in domainReport" :key="row.siteName">
           <dt>{{ row.siteName }}</dt>
           <dd :class="{ 'danger-text': row.error }">
             <template v-if="row.error">{{ row.error }}</template>
-            <template v-else-if="row.alreadyCurrent">{{ t("panel.health.domainsRowCurrent") }}</template>
+            <template v-else-if="row.alreadyCurrent && !row.findings.some(finding => !finding.repaired || finding.needsConfirmation)">{{ t("panel.health.domainsRowCurrent") }}</template>
             <template v-else>
               {{ row.addedDnsRecords.join(", ") || "—" }}
               <!-- Bulgular: eklenen kayit sayisiyla anlatilamayan sorunlar. Gosterilmezse
                    uretilseler bile kullaniciya HIC ULASMIYORLAR. -->
-              <span v-for="bulgu in row.findings ?? []" :key="bulgu.key" class="row-finding">
-                · {{ t(bulgu.key) }}
-              </span>
               <span v-if="row.appliedMailRecords">
                 · {{ t("panel.health.domainsRowMail", { count: row.appliedMailRecords }) }}
               </span>
             </template>
+            <span v-for="bulgu in row.findings ?? []" :key="bulgu.key" class="row-finding" :class="{ 'warn-text': !bulgu.repaired || bulgu.needsConfirmation }">
+              · {{ t(bulgu.key) }}
+            </span>
           </dd>
         </div>
       </dl>
@@ -239,35 +244,37 @@
       </div>
     </div>
 
+    <SectionLoadError v-if="servicesLoad.message.value" :message="servicesLoad.message.value" :busy="!canReload" @retry="load" />
+    <p v-if="services.length && !servicesConfirmed" class="field-hint">{{ t('panel.health.lastKnownServices') }}</p>
     <p v-if="loading && !services.length" class="meta">{{ t("panel.common.loading") }}</p>
 
     <div v-else-if="services.length" class="health-list">
       <article v-for="svc in services" :key="svc.name" class="health-row">
         <div class="health-id">
-          <span :class="['state-dot', dotClass(svc.status)]"></span>
+          <span :class="['state-dot', servicesConfirmed ? dotClass(svc.status) : 'dot-muted']"></span>
           <div class="health-name">
             <strong>{{ serviceLabel(svc, t) }}</strong>
             <span class="svc-id">{{ svc.name }}</span>
           </div>
         </div>
-        <span :class="['status-pill', pillClass(svc.status)]">{{ statusText(svc.status) }}</span>
+        <span :class="['status-pill', servicesConfirmed ? pillClass(svc.status) : '']">{{ statusText(servicesConfirmed ? svc.status : 'Unknown') }}</span>
         <button
           v-if="svc.status !== 'NotInstalled'"
           class="secondary compact"
-          :disabled="busyName === svc.name"
+          :disabled="!canRestart(svc.name)"
           @click="restart(svc.name)">
           {{ busyName === svc.name ? t("panel.health.restarting") : t("panel.health.restart") }}
         </button>
         <span v-else class="na">—</span>
       </article>
     </div>
-    <p v-else-if="loaded" class="meta">{{ t("panel.health.empty") }}</p>
+    <p v-else-if="loaded && servicesConfirmed" class="meta">{{ t("panel.health.empty") }}</p>
   </section>
 </template>
 
 <script setup lang="ts">
 import { serviceLabel } from '../utils/serviceLabel';
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   getServerHealth,
@@ -283,6 +290,9 @@ import SectionLoadError from "../components/SectionLoadError.vue";
 import { useNotice, useSectionError, useServerText } from "../composables/useNotice";
 import { looksLikeMessageKey, splitCompositeMessage } from "../utils/apiError";
 import { formatDateTime } from "../utils/datetime";
+import { getSessionEpoch } from "../api/client";
+import { useAuthStore } from "../stores/auth";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
 const services = ref<ServiceHealth[]>([]);
@@ -292,6 +302,12 @@ const dnsBusy = ref(false);
 const loading = ref(false);
 const loaded = ref(false);
 const busyName = ref("");
+const servicesLoad = useSectionError();
+const servicesConfirmed = ref(false), dnsConfirmed = ref(false), domainsConfirmed = ref(false);
+const auth = useAuthStore(), mountedEpoch = getSessionEpoch(), actor = auth.session?.user?.id, role = auth.session?.user?.role;
+const { locked } = useSubscriptionGate();
+let disposed = false;
+const current = () => !disposed && mountedEpoch === getSessionEpoch() && auth.session?.user?.id === actor && auth.session?.user?.role === role;
 const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();
 // Sunucudan gelen serbest metin (anahtar mi, olculmus teshis mi) TEK kuralla cozulur.
 const { serverText } = useServerText();
@@ -342,6 +358,7 @@ function startModeText(value: string): string {
   return key ? t(key) : (value ?? "");
 }
 const domains = ref<DomainRefreshSummary | null>(null);
+const domainsRepaired = ref(false);
 const domainCheckFailed = computed(() => Boolean(domains.value &&
   (domains.value.failedSites > 0 || domains.value.results.some(row => Boolean(row.error)))));
 const domainsLoad = useSectionError();
@@ -349,6 +366,19 @@ const domainReport = ref<DomainRefreshResult[]>([]);
 const domainsBusy = ref(false);
 // Ilk denetim bitene kadar true: kart bu sure boyunca notr gorunur.
 const domainsLoading = ref(true);
+const actionBusy = computed(() => !!busyName.value || dnsBusy.value || domainsBusy.value);
+const canReload = computed(() => current() && !loading.value && !actionBusy.value);
+const canWrite = computed(() => canReload.value && role === "Administrator" && !locked.value);
+function canRestart(name: string) {
+  return canWrite.value && servicesConfirmed.value && services.value.some(row => row.name === name && ["Running", "Stopped"].includes(row.status));
+}
+const canRepairDns = computed(() => canWrite.value && dnsConfirmed.value && dns.value?.installed === true && dns.value.serviceStatus !== "Unknown" && dns.value.needsRepair);
+const canRefreshDomains = computed(() => canWrite.value && domainsConfirmed.value);
+const hasUnresolvedFindings = computed(() => unresolvedFindings(domains.value));
+function unresolvedFindings(summary: DomainRefreshSummary | null) {
+  return !!summary && [...summary.serverFindings, ...summary.results.flatMap(row => row.findings)]
+    .some(finding => !finding.repaired || finding.needsConfirmation);
+}
 
 /**
  * Onarmanın yapacağı bir iş var mı?
@@ -359,82 +389,73 @@ const domainsLoading = ref(true);
  * bir sorun kullanıcıya hiç ulaşmıyordu.
  */
 const onarilacakVar = computed(
-  () => (domains.value?.updatedSites ?? 0) > 0 || (domains.value?.serverFindings?.length ?? 0) > 0
+  () => (!domainsRepaired.value && (domains.value?.updatedSites ?? 0) > 0) || hasUnresolvedFindings.value
 );
 
 onMounted(load);
+onUnmounted(() => { disposed = true; });
 
 async function load() {
+  if (!canReload.value) return;
   loading.value = true;
+  domainsLoading.value = true;
   notice.value = "";
-  try {
-    services.value = await getServerHealth();
-    loaded.value = true;
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    loading.value = false;
-  }
-
-  // DNS kartı bağımsız yüklenir: ölçüm başarısız olsa bile servis listesi görünmeye devam eder.
-  try {
-    dns.value = await getDnsServerHealth();
-    dnsLoad.clear();
-  } catch (error) {
-    // Kartın kaybolması "DNS kurulu değil" gibi okunuyordu; ölçülemediğini AÇIKÇA söylüyoruz.
-    dns.value = null;
-    dnsLoad.capture(error);
-  }
-
-  // Alan adı denetimi de bağımsız ve SALT OKUNUR: hiçbir şey değiştirmez, yalnız eksiği sayar.
-  try {
-    domains.value = await inspectDomains();
-    domainReport.value = domains.value.results.filter((row) => row.error || !row.alreadyCurrent);
-    domainsLoad.clear();
-  } catch (error) {
-    // Ölçüm YAPILAMADI ile "eksik yok" ayrı şeyler; ikincisini göstermek yeşil yalan olurdu.
-    domains.value = null;
-    domainReport.value = [];
-    domainsLoad.capture(error);
-  } finally {
-    domainsLoading.value = false;
-  }
+  // Read independently, while reserving the whole refresh against writes.
+  await Promise.all([
+    (async () => { try { const result = await getServerHealth(); if (!current()) return; services.value = result; loaded.value = true; servicesConfirmed.value = true; servicesLoad.clear(); }
+      catch (error) { if (current()) { servicesConfirmed.value = false; servicesLoad.capture(error); } } })(),
+    (async () => { try { const result = await getDnsServerHealth(); if (!current()) return; dns.value = result; dnsConfirmed.value = result.serviceStatus !== "Unknown"; dnsLoad.clear(); }
+      catch (error) { if (current()) { dnsConfirmed.value = false; dnsLoad.capture(error); } } })(),
+    (async () => { try { const result = await inspectDomains(); if (!current()) return; domains.value = result; domainsRepaired.value = false; domainsConfirmed.value = true; domainReport.value = result.results.filter(row => row.error || !row.alreadyCurrent || row.findings.length); domainsLoad.clear(); }
+      catch (error) { if (current()) { domainsConfirmed.value = false; domainsLoad.capture(error); } } })()
+  ]);
+  if (current()) { loading.value = false; domainsLoading.value = false; }
 }
 
 async function refreshAllDomains() {
+  if (!canRefreshDomains.value) return;
   domainsBusy.value = true;
   notice.value = "";
   try {
     const summary = await refreshDomains();
+    if (!current()) return;
     domains.value = summary;
+    domainsRepaired.value = true;
+    domainsConfirmed.value = true;
+    domainsLoad.clear();
     // Tazelemeden SONRA tüm satırlar gösterilir: hangi alan adına ne eklendiği (ya da hiçbir şey
     // eklenmediği) görünmeden işlem "yapıldı mı" belirsiz kalır.
     domainReport.value = summary.results;
-    showNotice(
-      t("panel.health.domainsDone", { updated: summary.updatedSites, total: summary.totalSites }),
-      summary.failedSites > 0,
-    );
+    const incomplete = summary.failedSites > 0 || summary.results.some(row => !!row.error) || unresolvedFindings(summary);
+    showNotice(incomplete ? t("panel.health.resultUnconfirmed") : t("panel.health.domainsDone", { updated: summary.updatedSites, total: summary.totalSites }), incomplete);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) { domainsConfirmed.value = false; showNotice(resolveApiMessage(error), true); }
   } finally {
-    domainsBusy.value = false;
+    if (current()) domainsBusy.value = false;
   }
 }
 
 async function repairDns() {
+  if (!canRepairDns.value) return;
   dnsBusy.value = true;
   notice.value = "";
   try {
-    dns.value = await repairDnsServer(true);
+    const result = await repairDnsServer(true);
+    if (!current()) return;
+    dns.value = result;
+    dnsConfirmed.value = result.serviceStatus !== "Unknown";
+    dnsLoad.clear();
+    const repaired = result.installed && result.serviceStatus === "Running" && result.publiclyBound && !result.needsRepair;
     showNotice(
-      dns.value.publiclyBound ? t("panel.health.dnsRepaired") : t("panel.health.dnsStillBad"),
-      !dns.value.publiclyBound
+      repaired ? t("panel.health.dnsRepaired") : t("panel.health.dnsStillBad"),
+      !repaired
     );
-    services.value = await getServerHealth();
+    try { const measuredServices = await getServerHealth(); if (!current()) return; services.value = measuredServices; servicesConfirmed.value = true; servicesLoad.clear(); }
+    catch (error) { if (current()) { servicesConfirmed.value = false; servicesLoad.capture(error); } }
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) { dnsConfirmed.value = false; showNotice(resolveApiMessage(error), true); }
   } finally {
-    dnsBusy.value = false;
+    if (current()) dnsBusy.value = false;
   }
 }
 
@@ -444,19 +465,22 @@ function formatDate(value: string) {
 }
 
 async function restart(name: string) {
+  if (!canRestart(name)) return;
   busyName.value = name;
   notice.value = "";
   try {
     const updated = await restartService(name);
-    const index = services.value.findIndex((svc) => svc.name === updated.name);
+    if (!current()) return;
+    const index = services.value.findIndex((svc) => svc.name.toLowerCase() === updated.name.toLowerCase());
     if (index >= 0) {
       services.value[index] = updated;
     }
-    showNotice(t("panel.health.restartedNotice", { name: updated.label }), false);
+    const restarted = updated.status === "Running";
+    showNotice(restarted ? t("panel.health.restartedNotice", { name: updated.label }) : t("panel.health.resultUnconfirmed"), !restarted);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) { servicesConfirmed.value = false; showNotice(resolveApiMessage(error), true); }
   } finally {
-    busyName.value = "";
+    if (current()) busyName.value = "";
   }
 }
 
@@ -486,6 +510,8 @@ function dotClass(status: string) {
   display: grid;
   gap: var(--sp-12);
 }
+.health-read-error { display: grid; gap: var(--sp-8); }
+.health-read-error h3 { margin: 0; }
 
 .health-list {
   display: grid;

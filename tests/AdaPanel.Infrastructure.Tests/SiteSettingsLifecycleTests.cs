@@ -153,22 +153,37 @@ public sealed class SiteSettingsLifecycleTests
     public async Task SettingsKeepTheirGenerationPinnedThroughoutFileAndPermissionWork(string route, string mutation)
     {
         using var f = await Fixture.Create();
-        Task? contender = null;
-        f.BeforeSideEffect = () => { f.BeforeSideEffect = null; contender = f.Mutate(mutation); };
-        if (route == "repair")
+        var entered = Signal();
+        var release = Signal();
+        f.BeforeSideEffect = () =>
         {
-            // Other test classes share the IIS gate. Keep the permission phase (and its
-            // generation pin) open until this contender actually reaches that gate.
-            f.PermissionCommand = async _ =>
-            {
-                await Capture(() => contender!).WaitAsync(Deadline);
-                return new CommandResult();
-            };
+            f.BeforeSideEffect = null;
+            entered.TrySetResult();
+            // The publisher hook is synchronous. Run its caller on another worker so the
+            // test can await the contender without letting publication release its pin.
+            release.Task.WaitAsync(Deadline).GetAwaiter().GetResult();
+        };
+        var action = Task.Run(() => f.Invoke(route));
+        Exception? mutationError;
+        try
+        {
+            await Task.WhenAny(entered.Task, action).WaitAsync(Deadline);
+            Assert.True(entered.Task.IsCompleted, "Settings ended before the controlled file/permission phase.");
+            Assert.False(action.IsCompleted);
+            var commits = f.Commits;
+            mutationError = await Capture(() => f.Mutate(mutation)).WaitAsync(Deadline);
+            // A shared IIS queue may delay this check, but it must finish while the
+            // original operation is still pinned, before its file/permission work ends.
+            Assert.False(action.IsCompleted);
+            Assert.False(release.Task.IsCompleted);
+            Assert.Equal(commits, f.Commits);
         }
-        await f.Invoke(route).WaitAsync(Deadline);
-        Assert.NotNull(contender);
-        Assert.Equal("sites.target_changed", Assert.IsType<AppException>(
-            await Capture(() => contender).WaitAsync(Deadline)).MessageKey);
+        finally
+        {
+            release.TrySetResult();
+            await action.WaitAsync(Deadline);
+        }
+        Assert.Equal("sites.target_changed", Assert.IsType<AppException>(mutationError).MessageKey);
         Assert.Equal(f.SitePath, f.Current.PhysicalPath);
         await f.Native.UpdatePhysicalPathAsync(f.Name, f.RequestedPath);
     }

@@ -1,15 +1,15 @@
 <template>
-  <article class="resource-metric" :class="[kind, tone]">
+  <article class="resource-metric" :class="[kind, tone, { unmeasured: percent === null }]">
     <div class="resource-metric-heading"><span class="resource-metric-dot" aria-hidden="true"></span>{{ label }}</div>
     <div class="resource-metric-reading">
-      <div class="resource-metric-ring" :style="{ '--progress': `${percent ?? 0}%` }" :role="percent === null ? 'img' : 'meter'" :aria-label="percent === null ? label + ': ' + t('panel.common.notAvailable') : label" :aria-valuemin="percent === null ? undefined : 0" :aria-valuemax="percent === null ? undefined : 100" :aria-valuenow="percent ?? undefined">
+      <div class="resource-metric-ring" :style="{ '--progress': `${percent ?? 0}%` }" :role="percent === null ? 'img' : 'meter'" :aria-label="percent === null ? label + ': ' + t('panel.monitor.unmeasured') : label" :aria-valuemin="percent === null ? undefined : 0" :aria-valuemax="percent === null ? undefined : 100" :aria-valuenow="percent ?? undefined">
         <strong class="resource-metric-value">{{ percent === null ? '—' : `${percent.toFixed(1)}%` }}</strong>
       </div>
       <div class="resource-metric-details">
         <span>{{ detail }}</span>
         <span v-if="hint">{{ hint }}</span>
         <span v-if="tone" class="status-pill" :class="tone">{{ t(tone === 'danger' ? 'panel.common.severityCritical' : 'panel.common.severityWarning') }}</span>
-        <span v-if="percent === null">{{ t('panel.common.notAvailable') }}</span>
+        <span v-if="percent === null" class="measurement-label">{{ t('panel.monitor.unmeasured') }}</span>
       </div>
     </div>
     <slot />
@@ -21,7 +21,7 @@ import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 const props = withDefaults(defineProps<{ label: string; value: number | null; detail: string; hint?: string; kind?: 'cpu' | 'memory' | 'disk' }>(), { kind: 'cpu' });
 const { t } = useI18n();
-const percent = computed(() => typeof props.value === 'number' && Number.isFinite(props.value) ? Math.max(0, Math.min(100, props.value)) : null);
+const percent = computed(() => typeof props.value === 'number' && Number.isFinite(props.value) && props.value >= 0 && props.value <= 100 ? props.value : null);
 const tone = computed(() => percent.value === null || percent.value < 80 ? '' : percent.value >= 90 ? 'danger' : 'warn');
 </script>
 
@@ -35,6 +35,8 @@ const tone = computed(() => percent.value === null || percent.value < 80 ? '' : 
 .resource-metric.disk { --metric-accent: var(--resource-disk); }
 .resource-metric.warn { --metric-ink: var(--warn-1); }
 .resource-metric.danger { --metric-ink: var(--danger-1); }
+.resource-metric.unmeasured { --metric-accent: var(--text-muted); --metric-ink: var(--text-muted); border-style: dashed; }
+.measurement-label { font-weight: 600; color: var(--text-soft); }
 .resource-metric-heading { min-height: 20px; display: flex; align-items: center; gap: 7px; color: var(--text-soft); font-weight: 600; }
 .resource-metric-dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--metric-accent); }
 .resource-metric-reading { display: flex; align-items: center; gap: 16px; min-width: 0; }

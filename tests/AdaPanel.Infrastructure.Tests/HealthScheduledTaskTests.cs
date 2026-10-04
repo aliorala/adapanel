@@ -53,9 +53,9 @@ public sealed class HealthScheduledTaskTests
     public void Restart_uses_the_registered_execution_type(bool service)
     {
         var result = ScriptTestHost.Run($$"""
-            function Get-Service { param($Name, $ErrorAction) {{(service ? "[pscustomobject]@{Status='Running'}" : "return $null")}} }
-            function Get-ScheduledTask { param($TaskName, $TaskPath, $ErrorAction) [pscustomobject]@{State='Running'} }
-            function Restart-Service { param($Name,[switch]$Force,$ErrorAction) Write-Output 'SERVICE-RESTART' }
+            function Get-Service { param($Name, $ErrorAction) {{(service ? "[pscustomobject]@{Name='AdaStalwart';Status='Running'}" : "return $null")}} }
+            function Get-ScheduledTask { param($TaskName, $TaskPath, $ErrorAction) [pscustomobject]@{TaskName='AdaStalwart';TaskPath='\';State='Running'} }
+            function Restart-Service { param($Name,$InputObject,[switch]$Force,$ErrorAction) Write-Output 'SERVICE-RESTART' }
             function Stop-ScheduledTask { param($InputObject,$ErrorAction) Write-Output 'TASK-STOP' }
             function Start-ScheduledTask { param($InputObject,$ErrorAction) Write-Output 'TASK-START' }
             {{HealthService.BuildRestartScript("AdaStalwart")}}

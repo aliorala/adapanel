@@ -141,7 +141,12 @@ public sealed class AdvisorService(
         try
         {
             var overview = await systemMonitoringService.GetOverviewAsync(cancellationToken);
-            foreach (var disk in overview.Disks)
+            var memoryMeasured = SystemMetricValidity.Memory(overview);
+            if (!memoryMeasured || !overview.DisksMeasured || overview.Disks.Any(disk => !SystemMetricValidity.Disk(disk)))
+            {
+                failed.Add("system");
+            }
+            foreach (var disk in overview.Disks.Where(SystemMetricValidity.Disk))
             {
                 if (disk.UsagePercent >= 95)
                 {
@@ -153,7 +158,7 @@ public sealed class AdvisorService(
                 }
             }
 
-            if (overview.MemoryUsagePercent >= 90)
+            if (memoryMeasured && overview.MemoryUsagePercent >= 90)
             {
                 items.Add(new AdvisorItemDto { Id = "memory-high", Severity = "warning", TitleKey = "advisor.memory.high", Detail = $"%{overview.MemoryUsagePercent:F0}", ActionSection = "monitor" });
             }

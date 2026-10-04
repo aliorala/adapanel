@@ -280,6 +280,9 @@
     <DashboardOverviewView
       v-if="activeSection === 'home'"
       :overview="systemStore.overview"
+      :overview-confirmed="systemStore.overviewConfirmed"
+      :overview-error="systemStore.overviewError"
+      @retry-overview="systemStore.fetchOverview().catch(() => {})"
       :loading="systemStore.loading"
       :sites-count="sitesStore.sites.length"
       :total-binding-count="totalBindingCount"
@@ -313,6 +316,9 @@
     <MonitoringView
       v-else-if="activeSection === 'monitor'"
       :overview="systemStore.overview"
+      :overview-confirmed="systemStore.overviewConfirmed"
+      :overview-error="systemStore.overviewError"
+      @retry-overview="systemStore.fetchOverview().catch(() => {})"
       :loading="systemStore.loading" />
 
     <SecurityView v-else-if="activeSection === 'security' && isAdmin" />
@@ -647,7 +653,7 @@ import SectionLoadError from "../components/SectionLoadError.vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import MainLayout from "../layouts/MainLayout.vue";
-import { readSecureEntryPath, setSessionExpiredHandler } from "../api/client";
+import { getSessionEpoch, readSecureEntryPath, setSessionExpiredHandler } from "../api/client";
 import { getFtpUsers } from "../api/ftp";
 import {
   emptyBranding,
@@ -1781,9 +1787,10 @@ async function saveSecuritySettings() {
 
 function startRefreshLoop() {
   stopRefreshLoop();
+  const overviewEpoch = getSessionEpoch();
   refreshHandle = window.setInterval(() => {
-    if (mode.value === "dashboard") {
-      void systemStore.fetchOverview();
+    if (mode.value === "dashboard" && overviewEpoch === getSessionEpoch() && !document.hidden && !systemStore.loading) {
+      void systemStore.fetchOverview().catch(() => {});
     }
   }, 15000);
 

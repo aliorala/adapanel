@@ -1,4 +1,5 @@
 using AdaPanel.Core.Dtos.Cluster;
+using AdaPanel.Infrastructure.Support;
 
 namespace AdaPanel.Infrastructure.Cluster;
 
@@ -35,6 +36,8 @@ public static class ClusterPlacement
     {
         var candidates = (rows ?? [])
             .Where(row => row.Node.Enabled && row.Reachable && row.Info is not null)
+            .Where(row => row.Info!.Overview.DisksMeasured && row.Info.Overview.Disks.Count > 0 &&
+                row.Info.Overview.Disks.All(SystemMetricValidity.Disk))
             .ToList();
 
         if (candidates.Count == 0)
@@ -69,8 +72,8 @@ public static class ClusterPlacement
     /// </summary>
     /// <remarks>
     /// Ortalama değil en kötü disk alınır: sunucuyu durduran şey disklerin ortalaması değil, dolan
-    /// ilk diskidir. Hiç disk raporlanmadıysa 0 döner — bu bir ölçüm değil, "eşitlik bozucu yok"
-    /// demektir ve karar bir sonraki anahtara (etikete) düşer.
+    /// ilk diskidir. Hiç disk raporlanmadıysa yardımcı 0 döner; Select böyle bir düğümü
+    /// ölçülmüş kapasite olmadığından adaylara almaz.
     /// </remarks>
     public static double MaxDiskUsagePercent(ClusterNodeInfoDto info)
     {

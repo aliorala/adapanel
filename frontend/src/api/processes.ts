@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import { UserFacingError } from "../utils/apiError";
 
 type ApiEnvelope<T> = { success: boolean; data: T; message: string; code: number };
 
@@ -53,5 +54,15 @@ export async function getProcessSnapshot(sortBy: "cpu" | "memory" = "cpu", limit
   const response = await apiClient.get<ApiEnvelope<ProcessSnapshot>>(
     `/monitoring/processes?limit=${limit}&sortBy=${sortBy}`
   );
-  return response.data.data;
+  const value = response.data?.data;
+  const number = (n: number) => typeof n === "number" && Number.isFinite(n) && n >= 0;
+  if (response.data?.success !== true || !value || typeof value.capturedAtUtc !== "string" || !value.capturedAtUtc.trim() ||
+    typeof value.cpuBaselineReady !== "boolean" || value.sortBy !== sortBy ||
+    [value.sampleWindowSeconds, value.totalCpuPercent, value.logicalProcessorCount, value.totalMemoryBytes, value.usedMemoryBytes,
+      value.availableMemoryBytes, value.memoryUsagePercent, value.totalProcessCount].some(n => !number(n)) ||
+    !Array.isArray(value.processes) || !value.processes.every(row => row &&
+      [row.name, row.category, row.label, row.detail].every(text => typeof text === "string") &&
+      [row.processId, row.cpuPercent, row.workingSetBytes, row.privateMemoryBytes, row.memoryPercent, row.threadCount, row.uptimeSeconds].every(number) &&
+      (row.startTimeUtc === null || typeof row.startTimeUtc === "string"))) throw new UserFacingError("panel.processes.failed");
+  return value;
 }
