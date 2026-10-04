@@ -1,7 +1,8 @@
 # AdaPanel Codex Memory
-## 2026-10-04 — R35 doğrulandı, 0.8.81 paketleniyor
 
-Kaynaklar0.8.81; henüz bu kayıt yazılırken public0.8.80. Canlı kurulum yok.
+## 2026-10-04 — R35 içeren 0.8.81 yayımlandı ve doğrulandı
+
+Kaynaklar ve publiclatest0.8.81, yayın07:08:42İstanbul04Ekim. Canlı kurulum yok.
 R35 FileService.Compress source=target destroys source toemptyZIP confirmed; existingtarget
 removedbeforecopy andnestedjunction leak alsoRED. Fix acceptedvirtualpaths snapshot beforeawait,
 invalidsame/descendanttarget beforemutation; existingWriteAtomically helper stagescompleteZIP,
@@ -31,9 +32,12 @@ schedulelist1128/1128desktop312/312mobile (baseline320/1240). Draft10:45keepsacc
 Appconsole0 (walletChromeextensions excluded). Screenshotsround35-schedules-desktop/mobile,
 round35-schedules-before-mobile,round35-schedule-form-en320.png. No liveaccount/file effects.
 Freshrelease081components22Passed3largeSkipped0Failed, privacy12/12+parser+versionguardgreen.
-Package66417RUNNING logrelease081-package.log uses -IsccPath .tools/inno/ISCC.exe and
--SkipComponentAudit onlyafterfreshseparateaudit. Mandatoryverifiersnotbypassed. Nextpackage
-finish thenstandardCurlpublish/redownloadSHA/publicverification; finaldocs+localcommit.
+Package66417exit0, -IsccPath .tools/inno/ISCC.exe. Freshcomponentaudit repeated22Passed3Skipped,
+so redundantpackageaudit skipped. Mandatoryverifiers170files+installer0findings/version0.8.81.
+Publisher9660exit0; publiclatest/tag/title/bodyexact, draftfalse/prereleasefalse, size/digestverified.
+DownloadedSHA9DCE7152BE6AA88EF939788212885ACF281D233704F36B38E817F5505BA86B2A,91067827bytes.
+https://github.com/aliorala/adapanel/releases/tag/0.8.81 sourcecommit24d6f00.
+Proofrelease081-published-verification.json. Allprocessesterminal, finaldocscomplete.
 Do notpushsource/history. PreexistingTestResults/ untouched/untracked. Goalstaysactive.
 
 ## 2026-10-04 — R33 + R34 içeren 0.8.80 yayımlandı ve doğrulandı
