@@ -1,4 +1,5 @@
 {
+  "files.archive_target_invalid": "ZIP hedefi kaynak dosyanın kendisi veya sıkıştırılan klasörün içi olamaz. Farklı bir hedef seçin.",
   "common.unexpected_error": "Beklenmeyen bir hata oluştu.",
   "backup.selection_download_required": "Seçilen dosyaları almak için Seçilenleri indir işlemini kullanın. Sunucudaki dosyalar değiştirilmedi.",
   "backup.items_not_found": "Seçilen öğelerin bazıları arşivde bulunamadı. Listeyi yenileyip yeniden seçin.",

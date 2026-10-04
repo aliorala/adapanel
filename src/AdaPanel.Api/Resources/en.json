@@ -1,4 +1,5 @@
 {
+  "files.archive_target_invalid": "The ZIP target cannot be the source file itself or a location inside the folder being compressed. Choose a different target.",
   "common.unexpected_error": "An unexpected error occurred.",
   "backup.selection_download_required": "Use Download selected to retrieve the selected files. Server files were not changed.",
   "backup.items_not_found": "Some selected items were not found in the archive. Refresh the list and select them again.",

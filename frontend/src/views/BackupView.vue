@@ -938,7 +938,7 @@
         </button>
       </div>
 
-      <div class="data-table">
+      <div class="data-table schedule-list">
         <div class="data-row table-head schedule-row">
           <span>{{ t("panel.backup.schedule.customer") }}</span>
           <span>{{ t("panel.backup.statusColumn") }}</span>
@@ -948,42 +948,44 @@
           <span>{{ t("panel.backup.schedule.lastRun") }}</span>
           <span>{{ t("panel.software.action") }}</span>
         </div>
-        <div v-for="schedule in schedulePager.items.value" :key="schedule.userId" class="data-row schedule-row">
-          <div class="cell-main">
+        <div v-for="schedule in schedulePager.items.value" :key="schedule.userId" class="data-row schedule-row" role="group" :aria-label="t('panel.backup.schedule.editTitle', { name: schedule.userName || schedule.userId })">
+          <div class="cell-main schedule-customer" :data-label="t('panel.backup.schedule.customer')">
             <strong>{{ schedule.userName || schedule.userId }}</strong>
             <small>{{ schedule.planName || t("panel.backup.schedule.noPlan") }}</small>
           </div>
-          <div class="cell-main">
+          <div class="cell-main schedule-state" :data-label="t('panel.backup.statusColumn')">
             <span :class="['status-pill', schedule.enabled ? 'ok' : '']">
               {{ schedule.enabled ? t("panel.status.enabled") : t("panel.status.disabled") }}
             </span>
-            <small v-if="schedule.throttledByQuota" class="quota-warn">
-              {{ t("panel.backup.schedule.throttled", { hours: schedule.intervalHours }) }}
-            </small>
           </div>
-          <div class="cell-main">
+          <div class="cell-main schedule-timing" :data-label="t('panel.schedule.mode')">
             <!-- Özet metni TEK KAYNAKTAN (api/schedule.ts): "her gün 03:00" ile form alanları
                  birbirinden sapamasın. -->
             <strong>{{ programOzeti(scheduleToPlan(schedule), t) }}</strong>
             <small>{{ t("panel.backup.schedule.nextRun") }}: {{ formatDate(schedule.nextRunUtc) }}</small>
+            <small v-if="schedule.throttledByQuota" class="quota-warn">
+              {{ schedule.scheduleMode === 'interval'
+                ? t("panel.backup.schedule.throttled", { hours: schedule.intervalHours })
+                : t("panel.backup.schedule.throttledCalendar", { schedule: programOzeti(scheduleToPlan(schedule), t) }) }}
+            </small>
           </div>
-          <div class="cell-main">
+          <div class="cell-main schedule-retention" :data-label="t('panel.backup.schedule.retentionColumn')">
             <strong>{{ retentionLabel(schedule) }}</strong>
             <small>{{ targetLabel(schedule.targetType) }}</small>
           </div>
-          <div class="cell-main">
+          <div class="cell-main schedule-method" :data-label="t('panel.backup.schedule.mode')">
             <strong>{{ schedule.incremental ? t("panel.backup.mode.incremental") : t("panel.backup.mode.full") }}</strong>
             <small v-if="schedule.incremental">
               {{ t("panel.backup.schedule.fullEvery") }}: {{ schedule.fullBackupEveryDays }}
             </small>
           </div>
-          <div class="cell-main">
+          <div class="cell-main schedule-result" :data-label="t('panel.backup.schedule.lastRun')">
             <span :class="['status-pill', lastStatusTone(schedule.lastStatus)]">{{ lastStatusLabel(schedule) }}</span>
             <small>{{ formatDate(schedule.lastRunUtc) }}</small>
             <!-- Kısmi başarısızlık SEBEBİYLE birlikte durur; "çalıştı" demek yetmez. -->
             <small v-if="schedule.lastDetails" class="last-details">{{ schedule.lastDetails }}</small>
           </div>
-          <div class="row-actions">
+          <div class="row-actions schedule-actions">
             <button class="secondary compact row-button" :disabled="busy" @click="openScheduleForm(schedule.userId)">
               {{ t("panel.common.edit") }}
             </button>
@@ -1031,7 +1033,7 @@
       <form v-if="scheduleForm" class="form-surface schedule-form" @submit.prevent="saveSchedule">
         <div class="section-head">
           <div>
-            <h3>{{ t("panel.backup.schedule.editTitle", { name: scheduleForm.userName || scheduleForm.userId }) }}</h3>
+            <h3 ref="scheduleFormHeading" tabindex="-1">{{ t("panel.backup.schedule.editTitle", { name: scheduleForm.userName || scheduleForm.userId }) }}</h3>
             <p class="meta">{{ scheduleForm.planName || t("panel.backup.schedule.noPlan") }}</p>
           </div>
           <button type="button" class="secondary compact" @click="closeScheduleForm">
@@ -1042,18 +1044,31 @@
         <!-- Kota kullanıcının GİRDİĞİ sıklığı kabul etmemiş olabilir: sunucu KOTAYA ÇEKİLMİŞ
              değeri döner ve form onunla tazelenir. -->
         <p v-if="scheduleThrottled" class="notice warn" role="alert">
-          {{ t("panel.backup.schedule.throttled", { hours: scheduleForm.plan.intervalHours }) }}
+          {{ scheduleQuotaMessage }}
         </p>
 
-        <div class="form-grid">
+        <div class="schedule-draft" role="status">
+          <span class="field-label">{{ t('panel.backup.schedule.draftSummary') }}</span>
+          <strong>{{ programOzeti(scheduleForm.plan, t) }}</strong>
+          <span class="meta">{{ t(scheduleForm.enabled ? 'panel.backup.schedule.enabled' : 'panel.backup.schedule.disabledHint') }}</span>
+          <p v-if="scheduleForm.plan.mode !== 'interval'" class="field-hint">{{ t('panel.backup.schedule.serverClockHint') }}</p>
+        </div>
+
+        <fieldset class="schedule-group">
+          <legend>{{ t('panel.schedule.mode') }}</legend>
+          <div class="form-grid">
           <label class="check-field">
             <input v-model="scheduleForm.enabled" type="checkbox" />
             <span>{{ t("panel.backup.schedule.enabled") }}</span>
           </label>
-          <!-- Abonelik programı da SAAT seçebilir: sunucu geneli programla aynı alanlar, aynı
-               bileşen. Kota YALNIZCA aralık modunda daraltır (takvim modu zaten günde en çok
-               bir tur üretir). -->
+          <!-- Sunucu geneli ve abonelik programları aynı zamanlama alanlarını kullanır. -->
           <BackupScheduleFields :plan="scheduleForm.plan" />
+          </div>
+        </fieldset>
+
+        <fieldset class="schedule-group">
+          <legend>{{ t('panel.backup.schedule.storageSettings') }}</legend>
+          <div class="form-grid">
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.backup.schedule.retentionDays") }}</span>
             <input v-model.number="scheduleForm.retentionDays" type="number" min="0" max="3650" />
@@ -1062,7 +1077,8 @@
             <span class="field-label">{{ t("panel.backup.schedule.keepCount") }}</span>
             <input v-model.number="scheduleForm.keepCount" type="number" min="0" max="1000" />
           </label>
-        </div>
+          </div>
+          <p class="field-hint">{{ t('panel.backup.schedule.retentionHint') }}</p>
 
         <div class="form-grid">
           <label class="check-field">
@@ -1077,8 +1093,10 @@
         <p v-if="scheduleForm.incremental" class="notice encryption-loss" role="status">
           {{ t("panel.backup.encryptionChainWarning") }}
         </p>
+        </fieldset>
 
-        <span class="field-label">{{ t("panel.backup.schedule.scope") }}</span>
+        <fieldset class="schedule-group">
+        <legend>{{ t("panel.backup.schedule.scope") }}</legend>
         <div class="scope-grid">
           <label class="check-field">
             <input v-model="scheduleForm.includeFiles" type="checkbox" />
@@ -1098,7 +1116,10 @@
           </label>
         </div>
         <p class="field-hint">{{ t("panel.backup.subscription.mailNote") }}</p>
+        </fieldset>
 
+        <fieldset class="schedule-group">
+        <legend>{{ t('panel.backup.targetType') }}</legend>
         <div class="form-grid">
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.backup.targetType") }}</span>
@@ -1133,6 +1154,7 @@
             </label>
           </template>
         </div>
+        </fieldset>
 
         <!-- Plan kotası KALICI olarak görünür: kullanıcı sıklığı yazarken sınırı bilmelidir. -->
         <p v-if="scheduleForm.maxBackupsPerDay > 0" class="field-hint">
@@ -1149,7 +1171,7 @@
 
 <script setup lang="ts">
 import { getFormattingLocale } from '../utils/locale';
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import BackupRestoreResult from "../components/BackupRestoreResult.vue";
@@ -1835,7 +1857,9 @@ type ScheduleFormState = {
 };
 
 const scheduleForm = ref<ScheduleFormState | null>(null);
+const scheduleFormHeading = ref<HTMLElement | null>(null);
 const scheduleThrottled = ref(false);
+const scheduleQuotaMessage = ref("");
 let scheduleDraft = 0;
 watch(scheduleForm, () => { scheduleDraft++; }, { deep: true, flush: "sync" });
 
@@ -2840,7 +2864,14 @@ async function openScheduleForm(userId: string) {
   busy.value = true;
   try {
     const dto = await getBackupSchedule(userId);
-    if (isCurrent()) applyScheduleToForm(dto);
+    if (isCurrent()) {
+      applyScheduleToForm(dto);
+      await nextTick();
+      if (isCurrent()) {
+        scheduleFormHeading.value?.focus?.({ preventScroll: true });
+        scheduleFormHeading.value?.scrollIntoView?.({ block: "start" });
+      }
+    }
   } catch (error) {
     if (isCurrent()) {
       scheduleForm.value = null;
@@ -2871,8 +2902,16 @@ function reportScheduleResult(message: string, failed = false, includeList = fal
   publishReadOutcome(readOutcomeNotice);
 }
 
+function quotaMessageForSchedule(dto: SubscriptionBackupSchedule) {
+  return dto.scheduleMode === "interval"
+    ? t("panel.backup.schedule.throttled", { hours: dto.intervalHours })
+    : t("panel.backup.schedule.throttledCalendar", { schedule: programOzeti(scheduleToPlan(dto), t) });
+}
+
 function applyScheduleToForm(dto: SubscriptionBackupSchedule) {
   scheduleThrottled.value = dto.throttledByQuota;
+  // This describes the accepted program, not the editable draft shown below it.
+  scheduleQuotaMessage.value = dto.throttledByQuota ? quotaMessageForSchedule(dto) : "";
   scheduleForm.value = {
     userId: dto.userId,
     userName: dto.userName,
@@ -2940,7 +2979,7 @@ async function saveSchedule() {
     if (dto.throttledByQuota) {
       // Kaydedildi AMA istenen sıklıkla değil: sebebi (plan kotası) söylenmeden "kaydedildi"
       // demek, kullanıcının kurmadığı bir programı kurdu sanmasıdır.
-      reportScheduleResult(t("panel.backup.schedule.throttled", { hours: dto.intervalHours }), true);
+      reportScheduleResult(quotaMessageForSchedule(dto), true);
       return;
     }
 
@@ -3143,6 +3182,62 @@ function statusTone(status: string) {
 .schedule-row .row-actions {
   align-content: start;
   gap: var(--sp-6);
+}
+
+.schedules-panel { container: backup-schedules / inline-size; min-width: 0; }
+.schedule-row .cell-main { min-width: 0; overflow-wrap: anywhere; }
+
+@container backup-schedules (max-width: 1240px) {
+  .schedule-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 410px), 1fr));
+    gap: var(--sp-12);
+    border: 0;
+    background: transparent;
+    overflow: visible;
+  }
+  .schedule-list > .table-head { display: none; }
+  .schedule-list > .schedule-row:not(.table-head) {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--sp-16) var(--sp-12);
+    padding: var(--sp-16);
+    border: 1px solid var(--panel-border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-0);
+  }
+  .schedule-row .cell-main::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    font-weight: 400;
+  }
+  .schedule-row .schedule-customer::before,
+  .schedule-row .schedule-state::before { display: none; }
+  .schedule-customer > strong { font-size: var(--fs-md); }
+  .schedule-state { align-items: flex-end; text-align: right; }
+  .schedule-state .status-pill { max-width: 100%; }
+  .schedule-timing, .schedule-result, .schedule-actions { grid-column: 1 / -1; }
+  .schedule-row .schedule-result {
+    padding-top: var(--sp-12);
+    border-top: 1px solid var(--panel-border);
+  }
+  .schedule-result .status-pill { max-width: 100%; white-space: normal; }
+  .schedule-row .schedule-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-self: end;
+    padding-top: var(--sp-8);
+  }
+  .schedule-actions > button { flex: 1 1 auto; min-height: 36px; }
+  .schedule-actions > .danger {
+    flex-basis: 100%;
+    background: transparent;
+    color: var(--danger-text);
+    border-color: color-mix(in srgb, var(--danger-text) 35%, var(--panel-border));
+  }
+  .schedule-list > .empty-state { grid-column: 1 / -1; }
 }
 
 .last-details {
@@ -3562,6 +3657,35 @@ function statusTone(status: string) {
   display: grid;
   gap: var(--sp-12);
 }
+.schedule-form h3 { scroll-margin-top: var(--sp-20); }
+.schedule-form > .notice.warn {
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border-color: color-mix(in srgb, var(--warn-text) 35%, var(--panel-border));
+}
+
+.schedule-draft {
+  display: grid;
+  gap: var(--sp-6);
+  padding: var(--sp-12);
+  border: 1px solid var(--panel-border);
+  border-left: 3px solid var(--accent-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-0);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.schedule-draft p { margin: 0; }
+.schedule-group {
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-12);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: var(--sp-12);
+}
+.schedule-group legend { padding: 0 var(--sp-6); color: var(--text-strong); font-weight: 600; }
 
 .schedule-add {
   align-items: end;

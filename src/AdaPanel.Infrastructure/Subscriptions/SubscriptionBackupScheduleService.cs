@@ -225,18 +225,40 @@ public sealed class SubscriptionBackupScheduleService(
                     if (current is null || !current.Enabled || ScheduleContext(current) != expectedContext)
                         throw new AppException("backup.schedule_changed", 409, 409);
                 });
+                async Task EnsureStillDueAsync(CancellationToken token)
+                {
+                    // A manual run may have completed after this batch was loaded, or a plan
+                    // may have changed while another subscription held the global/source gate.
+                    // Keep the batch's calendar instant so a long queue cannot lose catch-up
+                    // eligibility, but measure the latest run and quota before producing.
+                    var current = Bul(await LoadAsync(token), userId);
+                    if (current is null || !current.Enabled || ScheduleContext(current) != expectedContext)
+                        throw new AppException("backup.schedule_changed", 409, 409);
+                    var currentPlan = await KotayaCekilmisPlanAsync(current, userId, token);
+                    token.ThrowIfCancellationRequested();
+                    if (!BackupSchedule.ZamaniGeldi(currentPlan.Plan, current.LastRunUtc, simdi, dilim))
+                        throw new ScheduledRunNoLongerDueException();
+                }
                 await concurrencyLock.RunExclusiveAsync(
                     ConcurrencyKeys.SubscriptionBackup,
                     async () =>
                     {
                         await approval.CheckAsync(cancellationToken);
-                        await CalistirAsync(userId, kayit, cancellationToken, approval, expectedContext);
+                        await EnsureStillDueAsync(cancellationToken);
+                        await CalistirAsync(userId, kayit, cancellationToken, approval, expectedContext,
+                            EnsureStillDueAsync);
                     },
                     cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
+            }
+            catch (ScheduledRunNoLongerDueException)
+            {
+                // No archive was produced. Preserve the preceding execution's outcome and
+                // continue with the next subscription; this is not a failed backup attempt.
+                logger.LogDebug("Abonelik yedek turunun zamani kuyrukta degisti: {UserId}", userId);
             }
             // SÜZGEÇ DAR TUTULUYOR: "409" tek başına yetmez, çünkü yedek yolunda başka 409'lar da
             // var (örn. kota). Yalnız çalışan-iş kaydının çakışma anahtarları ("runningjob.*")
@@ -278,7 +300,8 @@ public sealed class SubscriptionBackupScheduleService(
     /// güncellenmediği için her turda yeniden denenip sunucuyu meşgul ederdi.
     /// </remarks>
     private async Task CalistirAsync(Guid userId, ScheduleRecord kayit, CancellationToken cancellationToken,
-        BackupExecutionApproval? approval = null, string? expectedContext = null)
+        BackupExecutionApproval? approval = null, string? expectedContext = null,
+        Func<CancellationToken, Task>? beforeScheduledBackup = null)
     {
         var ozet = new StringBuilder();
         var durum = "completed";
@@ -300,9 +323,20 @@ public sealed class SubscriptionBackupScheduleService(
                 RemotePassword = UzakParolaCoz(kayit),
                 RemoteRegion = kayit.RemoteRegion
             };
-            var record = approval is null
+            async Task BeforeProductionAsync(CancellationToken token)
+            {
+                if (approval is not null) await approval.CheckAsync(token);
+                if (beforeScheduledBackup is not null)
+                {
+                    await beforeScheduledBackup(token);
+                    // Quota resolution itself awaits JSON reads. Recheck the configured
+                    // program before admitting the producer after that wait too.
+                    if (approval is not null) await approval.CheckAsync(token);
+                }
+            }
+            var record = approval is null && beforeScheduledBackup is null
                 ? await backupService.BackupSubscriptionAsync(request, cancellationToken)
-                : await backupService.BackupSubscriptionAsync(request, approval.CheckAsync, cancellationToken);
+                : await backupService.BackupSubscriptionAsync(request, BeforeProductionAsync, cancellationToken);
 
             var mod = string.Equals(record.BackupMode, "incremental", StringComparison.OrdinalIgnoreCase)
                 ? $"artimsal (zincir #{record.ChainIndex})"
@@ -364,7 +398,7 @@ public sealed class SubscriptionBackupScheduleService(
         {
             throw;
         }
-        catch (Exception exception) when (approval?.Rejected(exception) != true)
+        catch (Exception exception) when (exception is not ScheduledRunNoLongerDueException && approval?.Rejected(exception) != true)
         {
             durum = "failed";
             ozet.Clear();
@@ -412,6 +446,8 @@ public sealed class SubscriptionBackupScheduleService(
 
     /// <summary>Kotaya çekilmiş program + kotanın devreye girip girmediği.</summary>
     private sealed record KotaliPlan(BackupSchedulePlan Plan, bool Throttled, int MaxBackupsPerDay);
+
+    private sealed class ScheduledRunNoLongerDueException : Exception { }
 
     /// <summary>
     /// Kayıttaki programı plan kotasına çeker.

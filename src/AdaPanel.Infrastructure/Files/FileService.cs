@@ -66,6 +66,10 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// </remarks>
     private const int KopyaOgeButcesi = 200_000;
 
+    internal Func<string, Stream> OpenCompressionFile { get; set; } = static path =>
+        new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+
     public async Task<FileWorkspaceDto> GetWorkspaceAsync(string path, CancellationToken cancellationToken = default)
     {
         var normalizedPath = NormalizeVirtualPath(path);
@@ -956,7 +960,12 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     public async Task<FileWorkspaceDto> CompressAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default)
     {
         var sourcePath = NormalizeVirtualPath(request.Path);
+        var destinationPath = string.IsNullOrWhiteSpace(request.DestinationPath)
+            ? sourcePath.TrimEnd('/') + ".zip"
+            : NormalizeVirtualPath(request.DestinationPath);
+        cancellationToken.ThrowIfCancellationRequested();
         var source = await ResolveTargetAsync(sourcePath, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         EnsureSiteTarget(source);
         EnsureNotSiteRoot(source);
         if (!File.Exists(source.PhysicalPath) && !Directory.Exists(source.PhysicalPath))
@@ -964,30 +973,82 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             throw new AppException("files.not_found", 404, 404);
         }
 
-        var destinationPath = string.IsNullOrWhiteSpace(request.DestinationPath)
-            ? sourcePath.TrimEnd('/') + ".zip"
-            : NormalizeVirtualPath(request.DestinationPath);
         var destination = await ResolveTargetAsync(destinationPath, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         EnsureSiteTarget(destination);
         EnsureNotSiteRoot(destination);
+        if (string.Equals(source.PhysicalPath, destination.PhysicalPath, StringComparison.OrdinalIgnoreCase) ||
+            (Directory.Exists(source.PhysicalPath) && destination.PhysicalPath.StartsWith(
+                source.PhysicalPath.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new AppException("files.archive_target_invalid", 400, 400);
+        }
+
         Directory.CreateDirectory(Path.GetDirectoryName(destination.PhysicalPath) ?? destination.SandboxRoot);
-
-        if (File.Exists(destination.PhysicalPath))
-        {
-            File.Delete(destination.PhysicalPath);
-        }
-
-        if (Directory.Exists(source.PhysicalPath))
-        {
-            ZipFile.CreateFromDirectory(source.PhysicalPath, destination.PhysicalPath, CompressionLevel.Optimal, includeBaseDirectory: true);
-        }
-        else
-        {
-            using var archive = ZipFile.Open(destination.PhysicalPath, ZipArchiveMode.Create);
-            archive.CreateEntryFromFile(source.PhysicalPath, Path.GetFileName(source.PhysicalPath), CompressionLevel.Optimal);
-        }
-
+        await WriteAtomicallyAsync(destination,
+            (output, token) => WriteCompressedSourceAsync(source, output, token), cancellationToken);
         return await GetWorkspaceAsync(BuildParentPath(destinationPath), cancellationToken);
+    }
+
+    private async Task WriteCompressedSourceAsync(ResolvedTarget source, Stream output, CancellationToken cancellationToken)
+    {
+        using var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true);
+        var parent = Path.GetDirectoryName(source.PhysicalPath)!;
+        if (File.Exists(source.PhysicalPath))
+        {
+            await AddFileAsync(new FileInfo(source.PhysicalPath));
+            return;
+        }
+
+        // Reject links rather than silently publishing an incomplete archive. Check
+        // each directory before traversing and each file immediately before opening.
+        var directories = new Stack<string>();
+        directories.Push(source.PhysicalPath);
+        while (directories.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var path = directories.Pop();
+            EnsureNoReparsePoints(source.SandboxRoot, path);
+            var directory = new DirectoryInfo(path);
+            var hasEntries = false;
+            foreach (var entry in directory.EnumerateFileSystemInfos())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                hasEntries = true;
+                if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                    throw new AppException("files.path_outside_root", 400, 400);
+                if (entry is DirectoryInfo child)
+                    directories.Push(child.FullName);
+                else if (entry is FileInfo file)
+                    await AddFileAsync(file);
+            }
+            if (!hasEntries)
+                SetTimestamp(archive.CreateEntry(EntryName(path) + "/"), directory.LastWriteTime);
+        }
+
+        string EntryName(string path) => Path.GetRelativePath(parent, path).Replace('\\', '/');
+
+        async Task AddFileAsync(FileInfo file)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureNoReparsePoints(source.SandboxRoot, file.FullName);
+            await using var input = OpenCompressionFile(file.FullName);
+            var entry = archive.CreateEntry(EntryName(file.FullName), CompressionLevel.Optimal);
+            SetTimestamp(entry, file.LastWriteTime);
+            await using var compressed = entry.Open();
+            await input.CopyToAsync(compressed, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        static void SetTimestamp(ZipArchiveEntry entry, DateTime value)
+        {
+            // ZIP's DOS timestamp cannot represent dates outside this range;
+            // CreateEntryFromFile uses the same fallback for such source files.
+            entry.LastWriteTime = value.Year is < 1980 or > 2107
+                ? new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero)
+                : new DateTimeOffset(value);
+        }
     }
 
     public async Task<FileWorkspaceDto> ExtractAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default)

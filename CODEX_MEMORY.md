@@ -1,4 +1,40 @@
 # AdaPanel Codex Memory
+## 2026-10-04 — R35 doğrulandı, 0.8.81 paketleniyor
+
+Kaynaklar0.8.81; henüz bu kayıt yazılırken public0.8.80. Canlı kurulum yok.
+R35 FileService.Compress source=target destroys source toemptyZIP confirmed; existingtarget
+removedbeforecopy andnestedjunction leak alsoRED. Fix acceptedvirtualpaths snapshot beforeawait,
+invalidsame/descendanttarget beforemutation; existingWriteAtomically helper stagescompleteZIP,
+safe stackwalk rejectsreparse, asyncCT-aware copy + finalcheck. Standardbinary/hidden/empty/
+basefolder/timestamps preserved. Tests25, baseline14RED4green +7extra cases. Midcopy fake
+stream IOException/CT/ignoredCT measured; source/oldZIP preserved/tempremoved. GeneralFileAPI
+actor/sitewait authority outsidecurrentboundary; nextauditcandidate, notclaimedclosed.
+ScheduleDue refreshes LastRun/currentplan afterglobalgate andproducer sourcewaiting; preserves
+batchcalendar instant, manualbypass, neighborcontinuation andoutcome/prune afterproductionstarts.
+17newtests baseline7RED6green+4extra. Peerreviewsnoadditionalconcretefinding, allC#frozen.
+Combinedbaseline31=21RED10green; targeted589/589. NewC#42, full.NET8317Infra+2Core=8319/8319,
+fail0skip0, root74526exit0 build0warnings/errors. TRX round35-full...070223Infra. Testwarnings
+CS9107+xUnit2009 fixedbeforefullbuild. No .NETrunningnow.
+FE scheduleAPI strict envelope/DTO/userGuid/read/list/save/run/delete; wrongGETidentity cannot
+changePUTtarget, failed save/run/delete nogreensuccess. D/N andcaseGUIDsame preserved.
+Acceptedquota scheduleQuotaMessage snapshot; draftchanges no longer rewrite accepted warning.
+58newFEtests: initial44RED12green+2quotaRED; targeted220green. Finalfull100files1876/1876,
+types/Vitegreen34519exit0. Firsttypes4replaceAll unsupportedES target corrected toregexreplace,
+no libtarget expansion. TR/EN5528parity,wwwrootsyncdone. AllFEsourcefrozen.
+RootUI schedules-panel container responsivecards replaces1240px minwidth under1240pxpanels;
+metadata labels + accessiblegroup names + visibleactions. Formfieldsetgroups, live draftsummary,
+serverclock/zero-retention hints, acceptedquotawarning amber. Edit nextTick focuses+scrollsheading
+underexistingrequest/actorguard; nooffscreenform. Baselineformtop1143.8→6.8px/1000vh.
+Chrome3 auditTab35 CLOSED, viewport32RESET, preview63554stopped, __audit35filesREMOVED.
+ActualVue/Pinia fakeAPI:1440darkTR,390darkTR,320lightEN. doc1440/1440,380/380,310/310;
+schedulelist1128/1128desktop312/312mobile (baseline320/1240). Draft10:45keepsaccepted03:30.
+Appconsole0 (walletChromeextensions excluded). Screenshotsround35-schedules-desktop/mobile,
+round35-schedules-before-mobile,round35-schedule-form-en320.png. No liveaccount/file effects.
+Freshrelease081components22Passed3largeSkipped0Failed, privacy12/12+parser+versionguardgreen.
+Package66417RUNNING logrelease081-package.log uses -IsccPath .tools/inno/ISCC.exe and
+-SkipComponentAudit onlyafterfreshseparateaudit. Mandatoryverifiersnotbypassed. Nextpackage
+finish thenstandardCurlpublish/redownloadSHA/publicverification; finaldocs+localcommit.
+Do notpushsource/history. PreexistingTestResults/ untouched/untracked. Goalstaysactive.
 
 ## 2026-10-04 — R33 + R34 içeren 0.8.80 yayımlandı ve doğrulandı
 

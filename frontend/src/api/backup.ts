@@ -524,33 +524,74 @@ export type SubscriptionBackupSchedulePayload = {
   remotePassword: string;
 };
 
+/** The route uses a Guid; its N/D spelling must not change the subscription identity. */
+function scheduleUserIdentity(value: unknown): string | null {
+  if (typeof value !== "string" || !/^(?:[\da-f]{32}|[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12})$/i.test(value)) return null;
+  return value.replace(/-/g, "").toLowerCase();
+}
+
+function isMeasuredSchedule(value: unknown): value is SubscriptionBackupSchedule {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Partial<SubscriptionBackupSchedule>;
+  const integer = (number: unknown, min: number, max = Number.MAX_SAFE_INTEGER) => typeof number === "number" && Number.isSafeInteger(number) && number >= min && number <= max;
+  const date = (text: unknown) => text === null || (typeof text === "string" && Number.isFinite(Date.parse(text)));
+  const flags = [row.enabled, row.incremental, row.includeFiles, row.includeDatabases, row.includeMail, row.includeFtp, row.remotePasswordSet, row.throttledByQuota];
+  const text = [row.userName, row.remoteUrl, row.remoteUserName, row.remoteRegion, row.lastStatus, row.lastDetails, row.planId, row.planName];
+  return scheduleUserIdentity(row.userId) !== null && flags.every(flag => typeof flag === "boolean") && text.every(field => typeof field === "string") &&
+    typeof row.scheduleMode === "string" && ["interval", "daily", "weekly", "monthly"].includes(row.scheduleMode) &&
+    typeof row.targetType === "string" && !!row.targetType.trim() &&
+    integer(row.intervalHours, 1, 720) && integer(row.scheduleHour, 0, 23) && integer(row.scheduleMinute, 0, 59) &&
+    integer(row.scheduleDayOfWeek, 0, 6) && integer(row.scheduleDayOfMonth, 1, 31) &&
+    (row.scheduleSecondHour == null || integer(row.scheduleSecondHour, 0, 23)) &&
+    (row.scheduleSecondMinute === undefined || integer(row.scheduleSecondMinute, 0, 59)) &&
+    integer(row.retentionDays, 0, 3650) && integer(row.keepCount, 0, 1000) && integer(row.fullBackupEveryDays, 1, 365) &&
+    integer(row.maxBackupsPerDay, 0) && date(row.lastRunUtc) && date(row.nextRunUtc);
+}
+
+function measuredSchedule(envelope: ApiEnvelope<SubscriptionBackupSchedule>, userId: string) {
+  const row = envelope?.data;
+  if (envelope?.success !== true || !isMeasuredSchedule(row) || scheduleUserIdentity(row.userId) !== scheduleUserIdentity(userId)) {
+    throw new UserFacingError("panel.backup.schedule.resultUnconfirmed");
+  }
+  return row;
+}
+
 export async function getBackupSchedules() {
   const response = await apiClient.get<ApiEnvelope<SubscriptionBackupSchedule[]>>("/backup/schedules");
-  return response.data.data;
+  const rows = response.data?.data;
+  if (response.data?.success !== true || !Array.isArray(rows) || !rows.every(isMeasuredSchedule) ||
+    new Set(rows.map(row => scheduleUserIdentity(row.userId))).size !== rows.length) {
+    throw new UserFacingError("panel.backup.schedule.resultUnconfirmed");
+  }
+  return rows;
 }
 
 /** Programı olmayan abonelikte VARSAYILANLARLA dolu bir kayıt döner (yeni program formu için). */
 export async function getBackupSchedule(userId: string) {
   const response = await apiClient.get<ApiEnvelope<SubscriptionBackupSchedule>>(
     `/backup/schedules/${encodeURIComponent(userId)}`);
-  return response.data.data;
+  return measuredSchedule(response.data, userId);
 }
 
 export async function updateBackupSchedule(userId: string, payload: SubscriptionBackupSchedulePayload) {
   const response = await apiClient.put<ApiEnvelope<SubscriptionBackupSchedule>>(
     `/backup/schedules/${encodeURIComponent(userId)}`, payload);
-  return response.data.data;
+  return measuredSchedule(response.data, userId);
 }
 
 export async function deleteBackupSchedule(userId: string) {
-  await apiClient.delete<ApiEnvelope<object>>(`/backup/schedules/${encodeURIComponent(userId)}`);
+  const response = await apiClient.delete<ApiEnvelope<{ userId: string }>>(`/backup/schedules/${encodeURIComponent(userId)}`);
+  const identity = scheduleUserIdentity(response.data?.data?.userId);
+  if (response.data?.success !== true || identity === null || identity !== scheduleUserIdentity(userId)) {
+    throw new UserFacingError("panel.backup.schedule.resultUnconfirmed");
+  }
 }
 
 /** Programı beklemeden şimdi çalıştırır (günlük kota bu yolu engellemez). */
 export async function runBackupScheduleNow(userId: string) {
   const response = await apiClient.post<ApiEnvelope<SubscriptionBackupSchedule>>(
     `/backup/schedules/${encodeURIComponent(userId)}/run`, {});
-  return response.data.data;
+  return measuredSchedule(response.data, userId);
 }
 
 export async function restoreBackup(backupId: string, targetPath: string, encryptionPassword = "") {
