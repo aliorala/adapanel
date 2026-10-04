@@ -1,4 +1,5 @@
 using AdaPanel.Core.Dtos.Ftp;
+using AdaPanel.Core.Dtos.Sites;
 
 namespace AdaPanel.Core.Interfaces;
 
@@ -20,9 +21,18 @@ public interface IFtpService
 
     Task<FtpUserDto> CreateFtpUserAsync(CreateFtpUserRequest request, CancellationToken cancellationToken = default);
 
+    Task<FtpUserDto> CreateFtpUserAsync(CreateFtpUserRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) => throw new NotSupportedException();
+
     Task SetFtpPasswordAsync(SetFtpPasswordRequest request, CancellationToken cancellationToken = default);
 
+    Task SetFtpPasswordAsync(SetFtpPasswordRequest request,
+        Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) => throw new NotSupportedException();
+
     Task DeleteFtpUserAsync(string userName, CancellationToken cancellationToken = default);
+
+    Task DeleteFtpUserAsync(string userName,
+        Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) => throw new NotSupportedException();
 
     /// <summary>FTPS zorunlu mu (panel "yalnız güvenli FTP"). Varsayılan false.</summary>
     Task<bool> GetRequireSslAsync(CancellationToken cancellationToken = default);

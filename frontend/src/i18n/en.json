@@ -4315,7 +4315,7 @@
   "panel.files.move": "Move",
   "panel.files.copy": "Copy",
   "panel.files.destination": "Destination folder",
-  "panel.files.destinationHint": "Path of an EXISTING folder under the site root; the folder is not created automatically.",
+  "panel.files.destinationHint": "Enter an existing folder under the site root. The folder is not created automatically.",
   "panel.files.destinationPick": "Pick from the list",
   "panel.files.destinationRoot": "Site root folder",
   "panel.files.destinationParent": "Parent folder",
@@ -5528,5 +5528,8 @@
   "panel.account.hideRecoveryCodes": "Hide codes",
   "auth.two_factor_already_enabled": "Two-factor authentication is already enabled. Disable it with your current password before setting it up again.",
   "auth.two_factor_setup_changed": "The account's authentication settings changed. Refresh the status and try again.",
-  "auth.two_factor_recovery_incomplete": "The authentication settings could not be saved completely. Refresh the account status; contact your server administrator if you cannot sign in."
+  "auth.two_factor_recovery_incomplete": "The authentication settings could not be saved completely. Refresh the account status; contact your server administrator if you cannot sign in.",
+  "panel.files.resultUnconfirmed": "The file operation result could not be verified. Refresh the folder before trying again.",
+  "panel.files.refreshAfterOperationFailed": "The operation result was received, but the folder could not be refreshed. Use Refresh to check the current list.",
+  "ftp.user_changed": "The FTP account changed while this operation was waiting. Refresh the account list and try again."
 }

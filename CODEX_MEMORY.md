@@ -1,5 +1,61 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R36 yerelde doğrulandı; son yayın hâlâ 0.8.81
+
+R36 HENÜZ YAYIMLANMADI; kaynak sürümleri 0.8.81 kaldı. Publiclatest yeniden okundu0.8.81,
+R35 paketi07:08:42İstanbul. Canlı kurulum/hesap/dosya yok; kullanıcı kurulu sürümü ölçülmedi.
+Chrome3 usertab envanterinde canlıAdaPanel yok. Canlı adres asyncsoruldu; yanıt gelmedi.
+Eski0.8.75 'Paket hazır değil' kurulum sonrası stagingtemizliğini anlatabilir; tekbaşına failure
+değil. YeniUI R26'danberi current/available/unconfirmed ayrılıyor; latestcheckfail eşit sürümle
+başarı sayılmaz. Kullanıcıya0.8.81sonyayın ve canlıkurulumdoğrulanmadığı söylendi.
+
+File HTTP Upload/Write/Compress artık acceptedactor/SID/stamp/delegation/parent/section/site/
+suspension revalidation; initialSQLwaitöncesi siteintentcapture + immutableprincipal/requests.
+SiteMutationGuard reserve uzunIO'da genelIISlocktutmadan sitegeneration pin. FileService actual
+resolvedSiteDto callback ilk etkiöncesi ve WriteAtomically finalpublishöncesi. Authorized create-only
+staging + atomic no-overwrite; trusted overloads unchanged. R35ZIPreparse/cancel/preservation
+duruyor. NewFileActorAuthority, threefail-closed IFileServiceoverloads, PublicationUse helper.
+FilePublicationAuthorityTests61 + oldFileUploadQuota4 genuineDI fixture; no quotaassertweakening.
+
+FTP Create/Password/Delete mutableaccountmetadata snapshot + same-name case-insensitivelease;
+acceptedactor/sourceadmin delegation active/role/stamp/SID callbacks; HTTPcreatesitepin and
+trustedprovisionerexistingintent preserved. FtpActorAuthority, FtpAccountLifecycle, 3IFtpService
+overloads; NativeCommand/NativeScript instancefakeboundary defaultsProcessRunnerunchanged.
+Rollback nowonly newaccountcreatedbythiscall or ACL/homeeffectbegan; rejectedexisting-recreate
+doesn't stripuntouchedpermissions. FtpAccountLifecycleTests41 allfake native; normaladmin/reseller/
+token/trusted/orphan cleanup positives. Peerreview nootherconcreteissues inchangedboundary.
+
+Initialbackend78=63RED15green (file44/6,FTP19/9); firsttarget590/590green. Review7fail had4genuine
+FTP +3SQLfixturetimeout; corrected wrong Users→actualpanel_users latch, actual3FileRED OLD→NEW
+thenfixinitialcaptureorder. ReviewFTP41green. Newbackend102total. Finalroot4673exit0 fullbuild
+0warning0error; full.NET Infra8419 +Core2 =8421/8421 fail0skip0. round36-final-build/backend.log,
+TRXround36-full...074729. AllC#frozen; no.NETlive now. No source/testeditafterfinal exceptdocs.
+
+FE api/files strictmove/copy/rename/upload envelope+path/item/count/workspacevalidation,
+partialfail/emptytarget/copywarning preserved. FilesView actor/session/epoch + separate navigation
+generation guards transfer/rename/upload; readGETlast-wins retained. Same-folderneutralrefresh
+doesn't dropqueue/results; changedsite/path stopsnewPOST. Measuredsuccess+failedGET keptseparate;
+workspaceLoad message no longer incorrectlyclaims operationfailed. Testsnew58 (API35/view23),
+initial55=44RED11green then5reviewRED from2neutralrefresh+3inlineassertions. Target70/70inclold12.
+FinalfullFE102files1934/1934,types/Vitegreen88815exit0. ExistingFileWorkspaceRaces fixtureonly
+addsrealactorforFilesView. Roottemplatebusyselection+target+overwrite+rename; responsive790px
+containerfilelist, accessiblelabels+headers, mobileactionsdrawer/formnowrapfixed, searcharialabel.
+TR/EN5531parity,API285parity; ftp.user_changed bothsurfaces+2FEresultkeys. wwwrootsynced6refsOK.
+
+Chrome3 auditTab36 CLOSED, viewport32RESET, Vite11183CtrlCterminal. __audit36filesREMOVED.
+ActualVue/Pinia fakeAPIonly:1440darkTR doc1440/1440/table1178/1178;390darkTR doc380/380/table302/302
+(before302/762);320lightENdoc310/310/table232/232. Drawer302/302; overwriteform232/242→232/232.
+Pendingcontrolsdisabledverified; neutralrefreshduringheldcopy+release+GETerror showsmeasuredcopy
+andseparatelisterror; sampleeditorrobots.txt saves+dirtyclears. Appconsoleerrors0 excludingChrome
+wallet extensions. Screenshots .tmp/audit-20261004/round36-files-{before-mobile,desktop,mobile,
+mobile-overview,refresh-error-en320}.png. Finalproofprefermobile-overview.
+
+Nextcandidate: remainingFilesController read/download/delete/move/copy/extract awaitedauthority,
+andGetWorkspace creatingmissingdirs (unprovenuntiltests). R36doesNOTclaimthesefixed. FTP external
+Windowswriters notnativefulltransactionguarantee. Continuousgoalactive; no source/Githistorypush.
+Preexisting tests/AdaPanel.Infrastructure.Tests/TestResults/ remainsuntouched/untracked.
+Allrootprocesses terminal:59330target,69398reviewred,11787reviewverified,4673full,88815FE,11183Vite.
+
 ## 2026-10-04 — R35 içeren 0.8.81 yayımlandı ve doğrulandı
 
 Kaynaklar ve publiclatest0.8.81, yayın07:08:42İstanbul04Ekim. Canlı kurulum yok.

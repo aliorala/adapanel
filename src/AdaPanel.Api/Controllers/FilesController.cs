@@ -1,10 +1,15 @@
 ﻿using AdaPanel.Api.Extensions;
 using AdaPanel.Api.Security;
+using System.Security.Claims;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Files;
+using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.Files;
+using AdaPanel.Infrastructure.Iis;
+using AdaPanel.Infrastructure.Security;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -107,27 +112,28 @@ public sealed class FilesController(
     [RequestSizeLimit(PanelServerLimits.FileUploadMaxBytes)]
     public async Task<ActionResult<ApiResponse<object>>> UploadAsync([FromQuery] string path, IFormFile file, CancellationToken cancellationToken)
     {
-        await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, path, allowRoot: false, cancellationToken);
-
         var virtualPath = $"{(path ?? string.Empty).TrimEnd('/', '\\')}/{file.FileName}".TrimStart('/', '\\');
+        var length = file.Length;
+        using var publication = await CapturePublicationAsync([path ?? string.Empty, virtualPath], cancellationToken);
         // Üzerine yükleme mevcut dosyayı değiştirir: kota yalnız net büyümeyi sayar.
         // Aksi halde kotası dolmuş müşteri aynı dosyayı küçülterek bile onaramaz.
         await EnsureDiskQuotaAsync(path, async ct =>
         {
             var existing = await fileService.MeasureAsync([virtualPath], ct);
-            return (Math.Max(0, file.Length - existing.TotalBytes), string.Empty);
+            return (Math.Max(0, length - existing.TotalBytes), string.Empty);
         }, cancellationToken);
 
         await using var stream = file.OpenReadStream();
-        var savedPath = await fileService.SaveUploadAsync(virtualPath, stream, cancellationToken);
-        await WriteAuditAsync("files.uploaded", savedPath, $"File uploaded ({file.Length} bytes).", cancellationToken);
+        var savedPath = await fileService.SaveUploadAsync(virtualPath, stream, publication.ApproveAsync, cancellationToken);
+        await WriteAuditAsync("files.uploaded", savedPath, $"File uploaded ({length} bytes).", cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { path = savedPath }, "files.uploaded"));
     }
 
     [HttpPut]
     public async Task<ActionResult<ApiResponse<FileWorkspaceDto>>> WriteAsync([FromBody] WriteFileRequest request, CancellationToken cancellationToken)
     {
-        await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.Path, allowRoot: false, cancellationToken);
+        request = new WriteFileRequest { Path = request.Path, Content = request.Content, FailIfExists = request.FailIfExists };
+        using var publication = await CapturePublicationAsync([request.Path], cancellationToken);
 
         // KOTA: yazma da diski büyütür. Ölçülen şey DELTA'dır (yeni içerik − hedefte hâlihazırda
         // duran dosya), gelen içeriğin tamamı değil — aksi hâlde kotası dolmuş bir kullanıcı,
@@ -143,7 +149,7 @@ public sealed class FilesController(
             },
             cancellationToken);
 
-        var workspace = await fileService.WriteAsync(request, cancellationToken);
+        var workspace = await fileService.WriteAsync(request, publication.ApproveAsync, cancellationToken);
 
         // İÇERİK YAZILMAZ, yalnız boyutu: bir dosyanın gövdesi (yapılandırma, bağlantı dizesi,
         // müşteri verisi) denetim kaydına kopyalanırsa kayıt, korumaya çalıştığı sırların ikinci
@@ -297,16 +303,14 @@ public sealed class FilesController(
     [HttpPost("compress")]
     public async Task<ActionResult<ApiResponse<FileWorkspaceDto>>> CompressAsync([FromBody] ArchiveFileRequest request, CancellationToken cancellationToken)
     {
-        await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.Path, allowRoot: false, cancellationToken);
-        if (!string.IsNullOrWhiteSpace(request.DestinationPath))
-        {
-            await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.DestinationPath, allowRoot: false, cancellationToken);
-        }
+        request = new ArchiveFileRequest { Path = request.Path, DestinationPath = request.DestinationPath };
+        using var publication = await CapturePublicationAsync(string.IsNullOrWhiteSpace(request.DestinationPath)
+            ? [request.Path] : [request.Path, request.DestinationPath], cancellationToken);
 
         // EŞZAMANLILIK TAVANI KAPSAM DENETİMİNDEN SONRA: yer ayırmadan önce isteğin meşru olduğu
         // bilinmeli, yoksa kapsam dışı bir istek de kiracının bütçesini tüketirdi.
         using var kapsam = await AgirIseGirisAsync(cancellationToken);
-        var workspace = await fileService.CompressAsync(request, cancellationToken);
+        var workspace = await fileService.CompressAsync(request, publication.ApproveAsync, cancellationToken);
         await WriteAuditAsync(
             "files.compressed",
             request.Path,
@@ -485,6 +489,74 @@ public sealed class FilesController(
         // KURALIN KENDİSİ ortak yerde ve bağımlılıksız (bkz. FileQuotaGuard): burada yalnız "kimin
         // kotası" sorusu cevaplanır, "sığıyor mu" sorusu değil.
         FileQuotaGuard.EnsureRoom(scope.MaxDiskMb, kullanim, gelenBayt, kesilmeSebebi);
+    }
+
+    private async Task<PublicationUse> CapturePublicationAsync(string[] paths, CancellationToken token)
+    {
+        var principal = new ClaimsPrincipal(User.Identities.Select(identity => new ClaimsIdentity(identity)));
+        var services = HttpContext.RequestServices;
+        var db = services.GetRequiredService<AdaPanelDbContext>();
+        var sessions = services.GetRequiredService<SessionRevocationStore>();
+        var sites = services.GetRequiredService<IIisSiteService>();
+        var gates = services.GetRequiredService<IConcurrencyLock>();
+        var targets = new Dictionary<string, SiteMutationGuard.Target>(StringComparer.OrdinalIgnoreCase);
+        PublicationUse? use = null;
+        try
+        {
+            var names = paths.Select(path => (path ?? string.Empty).Replace('\\', '/')
+                    .Split('/', StringSplitOptions.RemoveEmptyEntries))
+                .Select(segments => segments.Length >= 2 && string.Equals(segments[0], "sites", StringComparison.OrdinalIgnoreCase)
+                    ? segments[1] : throw new AdaPanel.Core.Common.AppException("files.site_required", 400, 400))
+                .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase);
+            // Capture the requested generation before actor/scope database waits. A replacement
+            // during those waits must not become the newly approved destination of this request.
+            foreach (var name in names)
+                targets.Add(name, await SiteMutationGuard.CaptureAsync(sites, gates, name, token));
+            var actor = await FileActorAuthority.CaptureAsync(db, customerScopes, sessions, principal, token);
+            async Task Revalidate(CancellationToken currentToken)
+            {
+                await actor.RevalidateAsync(db, customerScopes, sessions, principal, currentToken);
+                foreach (var path in paths)
+                    await CustomerAccess.EnsureFilesPathAsync(customerScopes, principal, path, allowRoot: false, currentToken);
+                currentToken.ThrowIfCancellationRequested();
+            }
+            use = new PublicationUse(targets, Revalidate);
+            await Revalidate(token);
+            foreach (var target in use.Targets.Values)
+                use.Pins.Add(await target.ReserveAsync((_, currentToken) => Revalidate(currentToken), token));
+            return use;
+        }
+        catch
+        {
+            if (use is not null) use.Dispose();
+            else foreach (var target in targets.Values.Reverse()) target.Dispose();
+            throw;
+        }
+    }
+
+    private sealed class PublicationUse(Dictionary<string, SiteMutationGuard.Target> targets,
+        Func<CancellationToken, Task> revalidate) : IDisposable
+    {
+        internal Dictionary<string, SiteMutationGuard.Target> Targets { get; } = targets;
+        internal List<IDisposable> Pins { get; } = [];
+        public Task ApproveAsync(SiteDto measured, CancellationToken token)
+        {
+            if (!Targets.TryGetValue(measured.Name, out var target))
+                throw new AdaPanel.Core.Common.AppException("auth.site_forbidden", 403, 403);
+            return target.RunAsync(async _ =>
+            {
+                // Validate the actual snapshot used to resolve the file, as well as
+                // the site's fresh identity. A later matching read cannot bless a
+                // different root that the file service resolved in between.
+                target.ValidateSnapshot(measured);
+                await revalidate(token);
+            }, token);
+        }
+        public void Dispose()
+        {
+            foreach (var pin in Pins.AsEnumerable().Reverse()) pin.Dispose();
+            foreach (var target in Targets.Values.Reverse()) target.Dispose();
+        }
     }
 
     /// <summary>

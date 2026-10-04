@@ -2,6 +2,7 @@
 using System.IO.Compression;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Files;
+using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
 
@@ -118,15 +119,29 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         };
     }
 
-    public async Task<FileWorkspaceDto> WriteAsync(WriteFileRequest request, CancellationToken cancellationToken = default)
+    public Task<FileWorkspaceDto> WriteAsync(WriteFileRequest request, CancellationToken cancellationToken = default) =>
+        WriteCoreAsync(request, null, cancellationToken);
+
+    public Task<FileWorkspaceDto> WriteAsync(WriteFileRequest request,
+        Func<SiteDto, CancellationToken, Task> beforePublication, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(beforePublication);
+        return WriteCoreAsync(request, beforePublication, cancellationToken);
+    }
+
+    private async Task<FileWorkspaceDto> WriteCoreAsync(WriteFileRequest request,
+        Func<SiteDto, CancellationToken, Task>? beforePublication, CancellationToken cancellationToken)
     {
         var normalizedPath = NormalizeVirtualPath(request.Path);
+        var content = request.Content ?? string.Empty;
+        var failIfExists = request.FailIfExists;
         var target = await ResolveTargetAsync(normalizedPath, cancellationToken);
         EnsureSiteTarget(target);
         EnsureNotSiteRoot(target);
+        await ApprovePublicationAsync(target, beforePublication, cancellationToken);
         Directory.CreateDirectory(Path.GetDirectoryName(target.PhysicalPath) ?? target.SandboxRoot);
 
-        if (request.FailIfExists)
+        if (failIfExists && beforePublication is null)
         {
             // VARLIK DENETİMİ AYRI BİR ADIM DEĞİL: `File.Exists` ile bakıp sonra yazmak, iki adım
             // arasında dosyayı oluşturan ikinci bir istek için AÇIK bir yarış bırakır ve o
@@ -181,7 +196,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                 await using (akis)
                 {
                     await using var yazici = new StreamWriter(akis, new UTF8Encoding(false));
-                    await yazici.WriteAsync((request.Content ?? string.Empty).AsMemory(), cancellationToken);
+                    await yazici.WriteAsync(content.AsMemory(), cancellationToken);
                 }
             }
             catch
@@ -215,9 +230,9 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                 // PHP ve benzeri kaynak dosyalarına içerikte olmayan bir BOM ekleme.
                 // Kota hesabı da yalnız içeriğin UTF-8 baytlarını ölçer.
                 await using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true);
-                await writer.WriteAsync((request.Content ?? string.Empty).AsMemory(), token);
+                await writer.WriteAsync(content.AsMemory(), token);
                 await writer.FlushAsync(token);
-            }, cancellationToken);
+            }, cancellationToken, token => ApprovePublicationAsync(target, beforePublication, token), failIfExists);
         }
 
         return await GetWorkspaceAsync(normalizedPath, cancellationToken);
@@ -897,19 +912,33 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         return await GetWorkspaceAsync(normalizedPath, cancellationToken);
     }
 
-    public async Task<string> SaveUploadAsync(string path, Stream stream, CancellationToken cancellationToken = default)
+    public Task<string> SaveUploadAsync(string path, Stream stream, CancellationToken cancellationToken = default) =>
+        SaveUploadCoreAsync(path, stream, null, cancellationToken);
+
+    public Task<string> SaveUploadAsync(string path, Stream stream,
+        Func<SiteDto, CancellationToken, Task> beforePublication, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(beforePublication);
+        return SaveUploadCoreAsync(path, stream, beforePublication, cancellationToken);
+    }
+
+    private async Task<string> SaveUploadCoreAsync(string path, Stream stream,
+        Func<SiteDto, CancellationToken, Task>? beforePublication, CancellationToken cancellationToken)
     {
         var normalizedPath = NormalizeVirtualPath(path);
         var target = await ResolveTargetAsync(normalizedPath, cancellationToken);
         EnsureSiteTarget(target);
         EnsureNotSiteRoot(target);
+        await ApprovePublicationAsync(target, beforePublication, cancellationToken);
         Directory.CreateDirectory(Path.GetDirectoryName(target.PhysicalPath) ?? target.SandboxRoot);
-        await WriteAtomicallyAsync(target, (destination, token) => stream.CopyToAsync(destination, token), cancellationToken);
+        await WriteAtomicallyAsync(target, (destination, token) => stream.CopyToAsync(destination, token), cancellationToken,
+            token => ApprovePublicationAsync(target, beforePublication, token));
         return normalizedPath;
     }
 
     private static async Task WriteAtomicallyAsync(
-        ResolvedTarget target, Func<Stream, CancellationToken, Task> write, CancellationToken cancellationToken)
+        ResolvedTarget target, Func<Stream, CancellationToken, Task> write, CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforePublication = null, bool failIfExists = false)
     {
         // Aynı birimdeki geçici dosya tamamlanmadan mevcut site dosyasına dokunma.
         // Doğrudan File.Create, aktarımın ilk baytından önce eski içeriği siliyordu.
@@ -923,9 +952,20 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                 await write(output, cancellationToken);
                 await output.FlushAsync(cancellationToken);
             }
+            if (beforePublication is not null) await beforePublication(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             EnsureNoReparsePoints(target.SandboxRoot, target.PhysicalPath);
-            if (File.Exists(target.PhysicalPath))
+            if (failIfExists)
+            {
+                // No-overwrite publication is atomic too. A concurrent creator wins;
+                // only the Move error is interpreted as an existing destination.
+                try { File.Move(temporary, target.PhysicalPath); }
+                catch (IOException) when (File.Exists(target.PhysicalPath) || Directory.Exists(target.PhysicalPath))
+                { throw new AppException("files.already_exists", 409, 409); }
+                catch (UnauthorizedAccessException) when (Directory.Exists(target.PhysicalPath))
+                { throw new AppException("files.already_exists", 409, 409); }
+            }
+            else if (File.Exists(target.PhysicalPath))
             {
                 // Windows ReplaceFile hedefin özel ACL'lerini korur; yeni dosyanın
                 // klasörden devraldığı izinlerle kullanıcının izinlerini ezme.
@@ -957,7 +997,18 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         return (Path.GetFileName(target.PhysicalPath), "application/octet-stream", target.PhysicalPath);
     }
 
-    public async Task<FileWorkspaceDto> CompressAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default)
+    public Task<FileWorkspaceDto> CompressAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default) =>
+        CompressCoreAsync(request, null, cancellationToken);
+
+    public Task<FileWorkspaceDto> CompressAsync(ArchiveFileRequest request,
+        Func<SiteDto, CancellationToken, Task> beforePublication, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(beforePublication);
+        return CompressCoreAsync(request, beforePublication, cancellationToken);
+    }
+
+    private async Task<FileWorkspaceDto> CompressCoreAsync(ArchiveFileRequest request,
+        Func<SiteDto, CancellationToken, Task>? beforePublication, CancellationToken cancellationToken)
     {
         var sourcePath = NormalizeVirtualPath(request.Path);
         var destinationPath = string.IsNullOrWhiteSpace(request.DestinationPath)
@@ -968,6 +1019,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         cancellationToken.ThrowIfCancellationRequested();
         EnsureSiteTarget(source);
         EnsureNotSiteRoot(source);
+        await ApprovePublicationAsync(source, beforePublication, cancellationToken);
         if (!File.Exists(source.PhysicalPath) && !Directory.Exists(source.PhysicalPath))
         {
             throw new AppException("files.not_found", 404, 404);
@@ -977,6 +1029,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         cancellationToken.ThrowIfCancellationRequested();
         EnsureSiteTarget(destination);
         EnsureNotSiteRoot(destination);
+        await ApprovePublicationAsync(destination, beforePublication, cancellationToken);
         if (string.Equals(source.PhysicalPath, destination.PhysicalPath, StringComparison.OrdinalIgnoreCase) ||
             (Directory.Exists(source.PhysicalPath) && destination.PhysicalPath.StartsWith(
                 source.PhysicalPath.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
@@ -987,7 +1040,12 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
 
         Directory.CreateDirectory(Path.GetDirectoryName(destination.PhysicalPath) ?? destination.SandboxRoot);
         await WriteAtomicallyAsync(destination,
-            (output, token) => WriteCompressedSourceAsync(source, output, token), cancellationToken);
+            (output, token) => WriteCompressedSourceAsync(source, output, token), cancellationToken,
+            async token =>
+            {
+                await ApprovePublicationAsync(source, beforePublication, token);
+                await ApprovePublicationAsync(destination, beforePublication, token);
+            });
         return await GetWorkspaceAsync(BuildParentPath(destinationPath), cancellationToken);
     }
 
@@ -1444,7 +1502,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         EnsureNoReservedSegments(basePath, segments.Skip(2));
 
         var subPath = string.Join(Path.DirectorySeparatorChar, segments.Skip(2));
-        return ResolveSandboxTarget(Path.Combine(basePath, subPath), basePath);
+        return ResolveSandboxTarget(Path.Combine(basePath, subPath), basePath) with { Site = site };
     }
 
     /// <summary>
@@ -1649,7 +1707,17 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             ".asp" or ".aspx" or ".cs" or ".py";
     }
 
-    private readonly record struct ResolvedTarget(string PhysicalPath, string SandboxRoot, bool IsVirtualRoot);
+    private static async Task ApprovePublicationAsync(ResolvedTarget target,
+        Func<SiteDto, CancellationToken, Task>? beforePublication, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (beforePublication is not null)
+            await beforePublication(target.Site ?? throw new AppException("files.site_required", 400, 400), token);
+        token.ThrowIfCancellationRequested();
+    }
+
+    private readonly record struct ResolvedTarget(string PhysicalPath, string SandboxRoot, bool IsVirtualRoot,
+        SiteDto? Site = null);
 
     /// <summary>Klasör kopyalamanın sonucu: iş bitti mi, ve kullanıcıya söylenecek EKSİKLİK anahtarı.</summary>
     /// <remarks>

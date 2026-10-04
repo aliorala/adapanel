@@ -42,9 +42,9 @@ function deferred<T>() {
 async function mount<T>(view: Component): Promise<T> {
   const renderer = createRenderer<object, object>({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
   const pinia = createPinia(); setActivePinia(pinia);
-  if (view === BackupView) {
-    useAuthStore().session = { isAuthenticated: true, requiresSetupWizard: false,
+  useAuthStore().session = { isAuthenticated: true, requiresSetupWizard: false,
       user: { id: "admin", role: "Administrator", userName: "admin", email: "admin@example.test", preferredLanguage: "en", isActive: true, isTwoFactorEnabled: false, lastLoginAtUtc: null } };
+  if (view === BackupView) {
     useAuthStore().users = [{ id: "customer", role: "Customer", userName: "customer" }] as never;
   }
   useSitesStore().sites = [{ name: "a.test" }, { name: "b.test" }] as never;

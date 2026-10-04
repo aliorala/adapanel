@@ -4,6 +4,10 @@ using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Ftp;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
+using AdaPanel.Data.Persistence;
+using AdaPanel.Infrastructure.Database;
+using AdaPanel.Infrastructure.Iis;
+using AdaPanel.Infrastructure.Security;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -138,7 +142,27 @@ public sealed class FtpController(
     [HttpPost("users")]
     public async Task<ActionResult<ApiResponse<FtpUserDto>>> CreateUserAsync([FromBody] CreateFtpUserRequest request, CancellationToken cancellationToken)
     {
-        await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
+        request = new CreateFtpUserRequest { UserName = request.UserName, Password = request.Password,
+            SiteName = request.SiteName, HomePath = request.HomePath };
+        var actor = new FtpActorAuthority(User);
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService,
+            HttpContext.RequestServices.GetRequiredService<IConcurrencyLock>(), request.SiteName, cancellationToken);
+        await ValidateActorAsync(actor, cancellationToken);
+        using var actorLease = await DatabaseLifecycle.EnterSubscriptionAsync(actor.UserId, cancellationToken);
+        async Task BeforeMutation(AdaPanel.Core.Dtos.Sites.SiteDto current, CancellationToken token)
+        {
+            target.ValidateSnapshot(current);
+            await ValidateActorAsync(actor, token);
+            await CustomerAccess.EnsureSiteAsync(customerScopes, actor.Principal, request.SiteName, token);
+            if (!actor.Principal.IsInRole("Administrator") && !string.IsNullOrWhiteSpace(request.HomePath))
+            {
+                var root = string.IsNullOrWhiteSpace(current.ApplicationRootPath) ? current.PhysicalPath : current.ApplicationRootPath;
+                if (!PathContainment.IsRootOrInside(root, request.HomePath))
+                    throw new AppException("ftp.home_outside_site", 403, 403);
+            }
+            token.ThrowIfCancellationRequested();
+        }
+        await CustomerAccess.EnsureSiteAsync(customerScopes, actor.Principal, request.SiteName, cancellationToken);
 
         // GÜVENLİK (çapraz-kiracı): admin DIŞINDAKİ kullanıcılar ana dizini kendi sitelerinin
         // klasörünün dışına gösteremez.
@@ -161,7 +185,8 @@ public sealed class FtpController(
             }
         }
 
-        var user = await ftpService.CreateFtpUserAsync(request, cancellationToken);
+        var user = await ftpService.CreateFtpUserAsync(request, BeforeMutation, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         // PAROLA YAZILMAZ: request.Password kayda hiç girmez. Yazılan şey hesabın kimliği,
         // hangi siteye bağlandığı ve hangi ana dizine yazma hakkı aldığıdır — bir olaydan sonra
@@ -202,8 +227,14 @@ public sealed class FtpController(
     [HttpPost("users/password")]
     public async Task<ActionResult<ApiResponse<object>>> SetPasswordAsync([FromBody] SetFtpPasswordRequest request, CancellationToken cancellationToken)
     {
-        await EnsureFtpUserScopeAsync(request.UserName, cancellationToken);
-        await ftpService.SetFtpPasswordAsync(request, cancellationToken);
+        request = new SetFtpPasswordRequest { UserName = request.UserName, Password = request.Password };
+        var actor = new FtpActorAuthority(User);
+        await ValidateActorAsync(actor, cancellationToken);
+        using var actorLease = await DatabaseLifecycle.EnterSubscriptionAsync(actor.UserId, cancellationToken);
+        var expected = await CaptureAccountAsync(actor, request.UserName, cancellationToken);
+        await ftpService.SetFtpPasswordAsync(request,
+            (current, token) => ApproveAccountAsync(actor, expected, current, token), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         // Yalnız OLGU yazılır ("değiştirildi"), değer değil.
         await auditService.AuditAsync(
@@ -219,16 +250,49 @@ public sealed class FtpController(
     [HttpDelete("users/{userName}")]
     public async Task<ActionResult<ApiResponse<object>>> DeleteUserAsync(string userName, CancellationToken cancellationToken)
     {
-        await EnsureFtpUserScopeAsync(userName, cancellationToken);
+        var actor = new FtpActorAuthority(User);
+        await ValidateActorAsync(actor, cancellationToken);
+        using var actorLease = await DatabaseLifecycle.EnterSubscriptionAsync(actor.UserId, cancellationToken);
+        var expected = await CaptureAccountAsync(actor, userName, cancellationToken);
 
         // SAHİP SİLMEDEN ÖNCE ÇÖZÜLÜR: hesap kaldırıldıktan sonra hangi siteye ait olduğu artık
         // hiçbir yerden okunamaz; kaydı sonradan kiracıya bağlamak İMKÂNSIZ olurdu.
         var sahip = await FtpKullanicisininSahibiAsync(userName, cancellationToken);
 
-        await ftpService.DeleteFtpUserAsync(userName, cancellationToken);
+        await ftpService.DeleteFtpUserAsync(userName,
+            (current, token) => ApproveAccountAsync(actor, expected, current, token), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         await auditService.AuditAsync(HttpContext, "ftp.user.deleted", userName, "FTP account was removed.", sahip);
         return Ok(ApiResponse<object>.Ok(new { userName }, "ftp.user_deleted"));
     }
+
+    private Task ValidateActorAsync(FtpActorAuthority actor, CancellationToken token) => actor.ValidateAsync(
+        HttpContext.RequestServices.GetRequiredService<AdaPanelDbContext>(),
+        HttpContext.RequestServices.GetRequiredService<SessionRevocationStore>(), token);
+
+    private async Task<FtpUserDto?> CaptureAccountAsync(FtpActorAuthority actor, string userName, CancellationToken token)
+    {
+        var users = await ftpService.GetFtpUsersAsync(token);
+        var expected = users.SingleOrDefault(user => string.Equals(user.UserName, userName.Trim(), StringComparison.OrdinalIgnoreCase));
+        await ApproveAccountAsync(actor, expected, expected, token);
+        return expected;
+    }
+
+    private async Task ApproveAccountAsync(FtpActorAuthority actor, FtpUserDto? expected, FtpUserDto? current, CancellationToken token)
+    {
+        await ValidateActorAsync(actor, token);
+        if (AccountIdentity(expected) != AccountIdentity(current))
+            throw new AppException("ftp.user_changed", 409, 409);
+        // A missing record is accepted only for the documented administrator orphan-cleanup
+        // path. Scoped accounts always need the unchanged, measured site association.
+        if (CustomerAccess.IsScoped(actor.Principal))
+            await CustomerAccess.EnsureSiteAsync(customerScopes, actor.Principal, current?.SiteName ?? "", token);
+        token.ThrowIfCancellationRequested();
+    }
+
+    private static string AccountIdentity(FtpUserDto? value) => value is null ? "missing" :
+        System.Text.Json.JsonSerializer.Serialize(new { name = value.UserName.Trim().ToUpperInvariant(),
+            site = value.SiteName.Trim().ToUpperInvariant(), value.HomePath, value.CreatedAtUtc, value.IsEnabled });
 
     /// <summary>
     /// Sitenin ABONELİK SAHİBİ — kaydın kiracıya görünmesini sağlayan alan.

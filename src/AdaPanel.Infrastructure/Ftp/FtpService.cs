@@ -2,8 +2,11 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Ftp;
+using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Iis;
 using AdaPanel.Infrastructure.Options;
+using AdaPanel.Infrastructure.Services;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -27,6 +30,23 @@ public sealed partial class FtpService(
     private const int PassivePortStart = 50000;
     private const int PassivePortEnd = 51000;
     private readonly string dataRoot = Path.GetFullPath(Environment.ExpandEnvironmentVariables(runtimeOptions.Value.DataRoot));
+
+    // Per-instance transport seams keep lifecycle tests off native accounts and IIS.
+    // Production uses exactly the existing command/strict-PowerShell execution paths.
+    internal Func<string, string, CancellationToken, Task<CommandResult>>? NativeCommand { get; set; }
+    internal Func<string, bool, CancellationToken, Task<CommandResult>>? NativeScript { get; set; }
+
+    private Task<CommandResult> RunCommandAsync(string fileName, string arguments, CancellationToken cancellationToken) =>
+        NativeCommand is { } command ? command(fileName, arguments, cancellationToken)
+            : ProcessRunner.RunAsync(fileName, arguments, cancellationToken: cancellationToken);
+
+    private Task<CommandResult> RunScriptAsync(string script, CancellationToken cancellationToken) =>
+        NativeScript is { } command ? command(script, false, cancellationToken)
+            : ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+
+    private Task<CommandResult> RunStrictScriptAsync(string script, CancellationToken cancellationToken) =>
+        NativeScript is { } command ? command(script, true, cancellationToken)
+            : ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
 
     public async Task<FtpServerStatusDto> EnsureServerAsync(CancellationToken cancellationToken = default)
     {
@@ -217,7 +237,7 @@ public sealed partial class FtpService(
             } | ConvertTo-Json -Depth 5 -Compress
             """;
 
-        var sonuc = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        var sonuc = await RunScriptAsync(script, cancellationToken);
         if (!sonuc.Success || string.IsNullOrWhiteSpace(sonuc.StandardOutput))
         {
             return null;
@@ -344,8 +364,18 @@ public sealed partial class FtpService(
         return list;
     }
 
-    public async Task<FtpUserDto> CreateFtpUserAsync(CreateFtpUserRequest request, CancellationToken cancellationToken = default)
+    public Task<FtpUserDto> CreateFtpUserAsync(CreateFtpUserRequest request, CancellationToken cancellationToken = default) =>
+        CreateFtpUserCoreAsync(request, null, cancellationToken);
+
+    public Task<FtpUserDto> CreateFtpUserAsync(CreateFtpUserRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        CreateFtpUserCoreAsync(request, beforeMutation, cancellationToken);
+
+    private async Task<FtpUserDto> CreateFtpUserCoreAsync(CreateFtpUserRequest request,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
+        request = new CreateFtpUserRequest { UserName = request.UserName, Password = request.Password,
+            SiteName = request.SiteName, HomePath = request.HomePath };
         var userName = NormalizeUserName(request.UserName);
         if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Trim().Length < 8)
         {
@@ -353,6 +383,22 @@ public sealed partial class FtpService(
         }
 
         EnsureCommandSafePassword(request.Password);
+
+        // Interactive callers pin the site generation through native effects/publication.
+        // Trusted provisioning already owns its exclusive site intent and uses the old overload;
+        // independently capturing that unfinished site here would reject its own creation.
+        using var target = beforeMutation is null ? null :
+            await SiteMutationGuard.CaptureAsync(iisSiteService, new ConcurrencyLock(), request.SiteName, cancellationToken);
+        var expectedAccount = await ReadAccountAsync(userName, cancellationToken);
+        using var accountLease = await FtpAccountLifecycle.EnterAsync(userName, cancellationToken);
+        async Task Approve(CancellationToken token)
+        {
+            await EnsureAccountUnchangedAsync(userName, expectedAccount, token);
+            if (target is not null) await target.ValidateAsync(token);
+            if (beforeMutation is not null) await beforeMutation(await iisSiteService.GetSiteAsync(request.SiteName, token), token);
+            token.ThrowIfCancellationRequested();
+        }
+        await Approve(cancellationToken);
 
         // KULLANICI ADI DA BİR SAHİPLİK İDDİASIDIR — ve hiç sorulmuyordu.
         //
@@ -379,15 +425,20 @@ public sealed partial class FtpService(
         // dizin oluşturma denetimden önce çalışıyordu.
         await EnsureUserNameIsClaimableAsync(userName, request.SiteName, cancellationToken);
 
+        using var siteUse = target is null ? null :
+            await target.ReserveAsync(async (_, token) => await Approve(token), cancellationToken);
+
         var homePath = await ResolveHomePathAsync(request, cancellationToken);
+        await Approve(cancellationToken);
         Directory.CreateDirectory(homePath);
-        await EnsureFtpInfrastructureAsync(false, cancellationToken);
+        await EnsureFtpInfrastructureAsync(false, cancellationToken, Approve);
 
         // BU ÇAĞRI hesabı gerçekten AÇTI mı? Geri alma yalnız BUNA bakar (gerekçe: RollbackCreateAsync).
         var hesabiBuCagriActi = false;
         if (!await UserExistsAsync(userName, cancellationToken))
         {
-            var createResult = await ProcessRunner.RunAsync("net.exe", $"user \"{userName}\" \"{request.Password}\" /add /y", cancellationToken: cancellationToken);
+            await Approve(cancellationToken);
+            var createResult = await RunCommandAsync("net.exe", $"user \"{userName}\" \"{request.Password}\" /add /y", cancellationToken: cancellationToken);
             if (!createResult.Success)
             {
                 throw new AppException("ftp.user_create_failed", 500, 500, BuildCommandDetails(createResult));
@@ -402,7 +453,7 @@ public sealed partial class FtpService(
         // SONUÇ ARTIK ATILMIYOR: aşağıdaki DTO'ya konur ve uç denetim kaydına yazar. Eskiden
         // yalnız günlüğe yazılıyordu, yani hesap eksik açıldığında bile panel sade "oluşturuldu"
         // diyordu ve kırk iki gün sonra kimse buraya bakmıyordu.
-        var parolaSuresiz = await EnsurePasswordNeverExpiresAsync(userName, cancellationToken);
+        bool? parolaSuresiz;
 
         // YARIM KALAN OLUŞTURMA ÖKSÜZ HESAP BIRAKIYORDU (19.08.2026, ölçüldü).
         //
@@ -418,9 +469,16 @@ public sealed partial class FtpService(
         // yolu artık YAPILANLARI GERİ ALIYOR: oluşturma ya tamamlanır ya da sunucuda iz bırakmaz —
         // "SALDIRI_reddedilen_istek_sunucuda_HICBIR_iz_birakmaz" testinin koruduğu ilkenin aynısı,
         // bu kez reddedilen değil YARIM KALAN istek için.
+        // A rejected retry can refer to a working account whose ACL/home was never touched.
+        // Cleanup must not remove that existing access merely because an approval expired.
+        var permissionsMayHaveChanged = false;
         try
         {
-            var aclResult = await ProcessRunner.RunAsync(
+            await Approve(cancellationToken);
+            parolaSuresiz = await EnsurePasswordNeverExpiresAsync(userName, cancellationToken);
+            await Approve(cancellationToken);
+            permissionsMayHaveChanged = true;
+            var aclResult = await RunCommandAsync(
                 "icacls.exe",
                 $"\"{homePath}\" /grant \"{userName}:(OI)(CI)M\" /T /C",
                 cancellationToken: cancellationToken);
@@ -429,68 +487,67 @@ public sealed partial class FtpService(
                 throw new AppException("ftp.acl_failed", 500, 500, BuildCommandDetails(aclResult));
             }
 
+            await Approve(cancellationToken);
             await ConfigureUserHomeAsync(userName, homePath, cancellationToken);
+
+            var record = new FtpUserState
+            {
+                UserName = userName,
+                SiteName = request.SiteName.Trim(),
+                HomePath = homePath,
+                IsEnabled = true,
+                CreatedAtUtc = DateTime.UtcNow
+            };
+
+            // KAYIT ATOMİK YAZILMALI. Kilitsiz oku-değiştir-yaz burada ÖKSÜZ WINDOWS HESABI bırakıyordu:
+            // gerçek hesap yukarıda `net user /add` ile çoktan açılıyor, panel kaydı ancak burada
+            // yazılıyor. Eşzamanlı bir silme işlemi bu yazımı ezerse hesap Windows'ta parolasıyla
+            // var olmaya devam eder ama panel onu HİÇ görmez: listelenemez, silinemez, denetlenemez —
+            // ve site klasöründeki ACL'i durur.
+            await fileStore.UpdateAsync(
+                StatePath,
+                Array.Empty<FtpUserState>(),
+                mevcut =>
+                {
+                    var liste = mevcut.ToList();
+                    var index = liste.FindIndex(item => string.Equals(item.UserName, userName, StringComparison.OrdinalIgnoreCase));
+                    if (index >= 0)
+                    {
+                        liste[index] = record;
+                    }
+                    else
+                    {
+                        liste.Add(record);
+                    }
+
+                    return liste.ToArray();
+                },
+                Approve, cancellationToken);
+            return new FtpUserDto
+            {
+                UserName = record.UserName,
+                SiteName = record.SiteName,
+                HomePath = record.HomePath,
+                CreatedAtUtc = record.CreatedAtUtc,
+                IsEnabled = true,
+                ExistsOnSystem = true,
+                PasswordNeverExpires = parolaSuresiz,
+                ServerAddress = Environment.MachineName,
+                Port = FtpPort
+            };
         }
-        catch (AppException hata)
+        catch (AppException error)
         {
-            // Geri alma sonucu HATA METNİNE eklenir: temizlik de başarısız olduysa operatör bunu
-            // görmeli, yoksa "geri alındı" varsayıp sunucuda duran hesabı hiç aramaz.
-            var geriAlmaNotu = await RollbackCreateAsync(userName, homePath, hesabiBuCagriActi);
-            throw new AppException(hata.MessageKey, hata.Code, hata.HttpStatusCode, hata.Details + geriAlmaNotu);
+            var recovery = hesabiBuCagriActi || permissionsMayHaveChanged
+                ? await RollbackCreateAsync(userName, homePath, hesabiBuCagriActi) : string.Empty;
+            throw new AppException(error.MessageKey, error.Code, error.HttpStatusCode, error.Details + recovery);
         }
         catch
         {
-            // AppException dışındaki her şey de (IO hatası, iptal, beklenmeyen istisna) aynı öksüzü
-            // doğurur; geri alma istisnanın TÜRÜNE bağlı olamaz. Özgün istisna olduğu gibi yükselir.
-            await RollbackCreateAsync(userName, homePath, hesabiBuCagriActi);
+            if (hesabiBuCagriActi || permissionsMayHaveChanged)
+                await RollbackCreateAsync(userName, homePath, hesabiBuCagriActi);
             throw;
         }
-
-        var record = new FtpUserState
-        {
-            UserName = userName,
-            SiteName = request.SiteName.Trim(),
-            HomePath = homePath,
-            IsEnabled = true,
-            CreatedAtUtc = DateTime.UtcNow
-        };
-
-        // KAYIT ATOMİK YAZILMALI. Kilitsiz oku-değiştir-yaz burada ÖKSÜZ WINDOWS HESABI bırakıyordu:
-        // gerçek hesap yukarıda `net user /add` ile çoktan açılıyor, panel kaydı ancak burada
-        // yazılıyor. Eşzamanlı bir silme işlemi bu yazımı ezerse hesap Windows'ta parolasıyla
-        // var olmaya devam eder ama panel onu HİÇ görmez: listelenemez, silinemez, denetlenemez —
-        // ve site klasöründeki ACL'i durur.
-        await fileStore.UpdateAsync(
-            StatePath,
-            Array.Empty<FtpUserState>(),
-            mevcut =>
-            {
-                var liste = mevcut.ToList();
-                var index = liste.FindIndex(item => string.Equals(item.UserName, userName, StringComparison.OrdinalIgnoreCase));
-                if (index >= 0)
-                {
-                    liste[index] = record;
-                }
-                else
-                {
-                    liste.Add(record);
-                }
-
-                return liste.ToArray();
-            },
-            cancellationToken);
-        return new FtpUserDto
-        {
-            UserName = record.UserName,
-            SiteName = record.SiteName,
-            HomePath = record.HomePath,
-            CreatedAtUtc = record.CreatedAtUtc,
-            IsEnabled = true,
-            ExistsOnSystem = true,
-            PasswordNeverExpires = parolaSuresiz,
-            ServerAddress = Environment.MachineName,
-            Port = FtpPort
-        };
     }
 
     /// <summary>
@@ -543,7 +600,7 @@ public sealed partial class FtpService(
 
         await DeneAsync("acl-geri-alma", async () =>
         {
-            var sonuc = await ProcessRunner.RunAsync(
+            var sonuc = await RunCommandAsync(
                 "icacls.exe",
                 $"\"{homePath}\" /remove:g \"{userName}\" /T /C",
                 cancellationToken: CancellationToken.None);
@@ -562,7 +619,7 @@ public sealed partial class FtpService(
         {
             await DeneAsync("hesap-silme", async () =>
             {
-                var sonuc = await ProcessRunner.RunAsync("net.exe", $"user \"{userName}\" /delete", cancellationToken: CancellationToken.None);
+                var sonuc = await RunCommandAsync("net.exe", $"user \"{userName}\" /delete", cancellationToken: CancellationToken.None);
 
                 // "Komut hata vermedi" yetmez: hesabın GERÇEKTEN gittiği ölçülür.
                 if (await UserExistsAsync(userName, CancellationToken.None))
@@ -577,8 +634,17 @@ public sealed partial class FtpService(
             : $"{Environment.NewLine}GeriAlmaUyarilari:{Environment.NewLine}{string.Join(Environment.NewLine, notlar)}";
     }
 
-    public async Task SetFtpPasswordAsync(SetFtpPasswordRequest request, CancellationToken cancellationToken = default)
+    public Task SetFtpPasswordAsync(SetFtpPasswordRequest request, CancellationToken cancellationToken = default) =>
+        SetFtpPasswordCoreAsync(request, null, cancellationToken);
+
+    public Task SetFtpPasswordAsync(SetFtpPasswordRequest request,
+        Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        SetFtpPasswordCoreAsync(request, beforeMutation, cancellationToken);
+
+    private async Task SetFtpPasswordCoreAsync(SetFtpPasswordRequest request,
+        Func<FtpUserDto?, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
+        request = new SetFtpPasswordRequest { UserName = request.UserName, Password = request.Password };
         var userName = NormalizeUserName(request.UserName);
         if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Trim().Length < 8)
         {
@@ -586,6 +652,15 @@ public sealed partial class FtpService(
         }
 
         EnsureCommandSafePassword(request.Password);
+        var expected = await ReadAccountAsync(userName, cancellationToken);
+        using var accountLease = await FtpAccountLifecycle.EnterAsync(userName, cancellationToken);
+        async Task Approve(CancellationToken token)
+        {
+            await EnsureAccountUnchangedAsync(userName, expected, token);
+            if (beforeMutation is not null) await beforeMutation(ToAccountDto(expected), token);
+            token.ThrowIfCancellationRequested();
+        }
+        await Approve(cancellationToken);
 
         // PANELİN YÖNETMEDİĞİ HESABIN PAROLASI DEĞİŞTİRİLEMEZ (K6 zincirinin son halkası).
         //
@@ -608,8 +683,10 @@ public sealed partial class FtpService(
             throw new AppException("ftp.user_not_found", 404, 404);
         }
 
+        await Approve(cancellationToken);
+
         // net user <ad> <parola> (/add YOK) parolayı değiştirir.
-        var result = await ProcessRunner.RunAsync(
+        var result = await RunCommandAsync(
             "net.exe",
             $"user \"{userName}\" \"{request.Password}\" /y",
             cancellationToken: cancellationToken);
@@ -620,23 +697,43 @@ public sealed partial class FtpService(
 
         // Parola değişimi sayacı sıfırlar; bayrak burada da teyit edilir. Bu ayrıca bu düzeltmeden
         // ÖNCE açılmış (süresi dolan) hesapların kendiliğinden iyileşme yoludur.
+        await Approve(cancellationToken);
         await EnsurePasswordNeverExpiresAsync(userName, cancellationToken);
     }
 
-    public async Task DeleteFtpUserAsync(string userName, CancellationToken cancellationToken = default)
+    public Task DeleteFtpUserAsync(string userName, CancellationToken cancellationToken = default) =>
+        DeleteFtpUserCoreAsync(userName, null, cancellationToken);
+
+    public Task DeleteFtpUserAsync(string userName,
+        Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        DeleteFtpUserCoreAsync(userName, beforeMutation, cancellationToken);
+
+    private async Task DeleteFtpUserCoreAsync(string userName,
+        Func<FtpUserDto?, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
         var normalizedUserName = NormalizeUserName(userName);
+        var expected = await ReadAccountAsync(normalizedUserName, cancellationToken);
+        using var accountLease = await FtpAccountLifecycle.EnterAsync(normalizedUserName, cancellationToken);
+        async Task Approve(CancellationToken token)
+        {
+            await EnsureAccountUnchangedAsync(normalizedUserName, expected, token);
+            if (beforeMutation is not null) await beforeMutation(ToAccountDto(expected), token);
+            token.ThrowIfCancellationRequested();
+        }
+        await Approve(cancellationToken);
         await RemoveUserAuthorizationAsync(normalizedUserName, cancellationToken);
 
         if (await UserExistsAsync(normalizedUserName, cancellationToken))
         {
-            var result = await ProcessRunner.RunAsync("net.exe", $"user \"{normalizedUserName}\" /delete", cancellationToken: cancellationToken);
+            await Approve(cancellationToken);
+            var result = await RunCommandAsync("net.exe", $"user \"{normalizedUserName}\" /delete", cancellationToken: cancellationToken);
             if (!result.Success)
             {
                 // net.exe başarısızsa (lokalizasyon/kilit) PowerShell Remove-LocalUser ile dene.
                 var psScript = $"$ErrorActionPreference='SilentlyContinue'; " +
                     $"Remove-LocalUser -Name '{normalizedUserName.Replace("'", "''")}'";
-                await ProcessRunner.RunPowerShellAsync(psScript, cancellationToken);
+                await Approve(cancellationToken);
+                await RunScriptAsync(psScript, cancellationToken);
 
                 // Yine de duruyorsa gerçek hata; yoksa silinmiş kabul et (idempotent).
                 if (await UserExistsAsync(normalizedUserName, cancellationToken))
@@ -654,8 +751,23 @@ public sealed partial class FtpService(
             mevcut => mevcut
                 .Where(item => !string.Equals(item.UserName, normalizedUserName, StringComparison.OrdinalIgnoreCase))
                 .ToArray(),
-            cancellationToken);
+            Approve, cancellationToken);
     }
+
+    private async Task<FtpUserState?> ReadAccountAsync(string name, CancellationToken token) =>
+        (await fileStore.ReadAsync(StatePath, Array.Empty<FtpUserState>(), token))
+            .SingleOrDefault(item => string.Equals(item.UserName.Trim(), name, StringComparison.OrdinalIgnoreCase));
+
+    private async Task EnsureAccountUnchangedAsync(string name, FtpUserState? expected, CancellationToken token)
+    {
+        var current = await ReadAccountAsync(name, token);
+        if (JsonSerializer.Serialize(current) != JsonSerializer.Serialize(expected))
+            throw new AppException("ftp.user_changed", 409, 409);
+        token.ThrowIfCancellationRequested();
+    }
+
+    private static FtpUserDto? ToAccountDto(FtpUserState? value) => value is null ? null : new FtpUserDto
+    { UserName = value.UserName, SiteName = value.SiteName, HomePath = value.HomePath, CreatedAtUtc = value.CreatedAtUtc, IsEnabled = value.IsEnabled };
 
     /// <summary>
     /// Kayıtlı FTP kullanıcılarının EKSİK ev bağlantısını tamamlar. Kaç tanesinin onarıldığını döner.
@@ -678,7 +790,8 @@ public sealed partial class FtpService(
     /// ayrı bir ilke ayarı GEREKTİRMEZ; panel zaten LocalSystem olarak koşar.
     /// </para>
     /// </remarks>
-    internal async Task<int> HealHomeLinksAsync(CancellationToken cancellationToken)
+    internal async Task<int> HealHomeLinksAsync(CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeMutation = null)
     {
         var records = await fileStore.ReadAsync(StatePath, Array.Empty<FtpUserState>(), cancellationToken);
         var onarilan = 0;
@@ -721,9 +834,11 @@ public sealed partial class FtpService(
                     continue;
                 }
 
+                if (beforeMutation is not null) await beforeMutation(cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 Directory.CreateDirectory(ust);
 
-                var sonuc = await ProcessRunner.RunAsync(
+                var sonuc = await RunCommandAsync(
                     "cmd.exe",
                     $"/c mklink /J \"{eksik}\" \"{hedef}\"",
                     cancellationToken: cancellationToken);
@@ -739,11 +854,15 @@ public sealed partial class FtpService(
         return onarilan;
     }
 
-    private async Task<FtpTlsMeasurement> EnsureFtpInfrastructureAsync(bool forceReconfigure, CancellationToken cancellationToken)
+    private async Task<FtpTlsMeasurement> EnsureFtpInfrastructureAsync(bool forceReconfigure, CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeMutation = null)
     {
         // IIS FTP rolü kurulu değilse New-WebFtpSite ve ftpServer config bölümleri bulunmaz → script
         // "ftp.site_configuration_failed" ile patlar (canlı VPS bulgusu). Classic ASP/PHP gibi OTOMATİK KUR (atlama yok).
-        await EnsureFtpFeatureInstalledAsync(cancellationToken);
+        await EnsureFtpFeatureInstalledAsync(cancellationToken, beforeMutation);
+
+        if (beforeMutation is not null) await beforeMutation(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var ftpRoot = Path.Combine(dataRoot, "ftp-root");
         Directory.CreateDirectory(Path.Combine(ftpRoot, "LocalUser"));
@@ -758,7 +877,7 @@ public sealed partial class FtpService(
         //
         // Bu cagri BILEREK hizli yolun USTUNDE: altyapi zaten hazir oldugunda da calisir, cunku
         // iyilestirilecek sey altyapi degil KULLANICI kayitlaridir.
-        await HealHomeLinksAsync(cancellationToken);
+        await HealHomeLinksAsync(cancellationToken, beforeMutation);
 
         // HIZLI YOL: altyapı bir kez tam kurulduysa (bayrak) ve FTPSVC çalışıyorsa ağır yeniden-kurulumu + FTPSVC
         // yeniden başlatmayı ATLA → 2. ve sonraki FTP kullanıcısı eklemesi saniyelerce beklemeden, anında olur.
@@ -866,7 +985,9 @@ public sealed partial class FtpService(
             }
             """;
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (beforeMutation is not null) await beforeMutation(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = await RunScriptAsync(script, cancellationToken);
         if (!result.Success)
         {
             throw new AppException("ftp.site_configuration_failed", 500, 500, BuildCommandDetails(result));
@@ -902,7 +1023,7 @@ public sealed partial class FtpService(
             return false;
         }
 
-        var probe = await ProcessRunner.RunPowerShellAsync(
+        var probe = await RunScriptAsync(
             "if ((Get-Service FTPSVC -ErrorAction SilentlyContinue).Status -eq 'Running') { 'up' } else { 'down' }",
             cancellationToken);
         return probe.Success && probe.StandardOutput.Contains("up", StringComparison.OrdinalIgnoreCase);
@@ -911,11 +1032,12 @@ public sealed partial class FtpService(
     // IIS FTP sunucu rolü (FTPSVC servisi) yoksa OTOMATİK KURAR. Windows Server: Web-Ftp-Server (+ yönetim
     // araçları); Windows Client (10/11): IIS-FTPServer (-All ile alt özellik IIS-FTPSvc dahil). PHP/Classic ASP
     // on-demand kurulumuyla aynı desen — "atlama yok". Kurulamazsa net hata fırlatır (sessiz başarısızlık yok).
-    private static async Task EnsureFtpFeatureInstalledAsync(CancellationToken cancellationToken)
+    private async Task EnsureFtpFeatureInstalledAsync(CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeMutation = null)
     {
         const string probe = "if (Get-Service FTPSVC -ErrorAction SilentlyContinue) { 'present' } else { 'absent' }";
 
-        var check = await ProcessRunner.RunPowerShellAsync(probe, cancellationToken);
+        var check = await RunScriptAsync(probe, cancellationToken);
         if (check.Success && check.StandardOutput.Contains("present", StringComparison.OrdinalIgnoreCase))
         {
             return;
@@ -925,9 +1047,11 @@ public sealed partial class FtpService(
             "if (Get-Command Install-WindowsFeature -ErrorAction SilentlyContinue) { " +
             "Install-WindowsFeature -Name Web-Ftp-Server -IncludeManagementTools -ErrorAction Stop | Out-Null } " +
             "else { Enable-WindowsOptionalFeature -Online -FeatureName IIS-FTPServer -All -NoRestart -ErrorAction Stop | Out-Null }";
-        var install = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (beforeMutation is not null) await beforeMutation(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        var install = await RunScriptAsync(script, cancellationToken);
 
-        var verify = await ProcessRunner.RunPowerShellAsync(probe, cancellationToken);
+        var verify = await RunScriptAsync(probe, cancellationToken);
         if (!(verify.Success && verify.StandardOutput.Contains("present", StringComparison.OrdinalIgnoreCase)))
         {
             throw new AppException(
@@ -1080,7 +1204,7 @@ public sealed partial class FtpService(
             Add-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization' -Value @{accessType='Allow';users=$userName;permissions=3}
             """;
 
-        var result = await ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
+        var result = await RunStrictScriptAsync(script, cancellationToken);
         if (!result.Success)
         {
             throw new AppException("ftp.site_configuration_failed", 500, 500, BuildCommandDetails(result));
@@ -1114,7 +1238,7 @@ public sealed partial class FtpService(
             }
             """;
 
-        var result = await ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
+        var result = await RunStrictScriptAsync(script, cancellationToken);
         if (!result.Success)
         {
             throw new AppException("ftp.user_delete_failed", 500, 500, BuildCommandDetails(result));
@@ -1217,9 +1341,9 @@ public sealed partial class FtpService(
         return Path.Combine(dataRoot, "ftp", request.UserName.Trim());
     }
 
-    private static async Task<bool> UserExistsAsync(string userName, CancellationToken cancellationToken)
+    private async Task<bool> UserExistsAsync(string userName, CancellationToken cancellationToken)
     {
-        var result = await ProcessRunner.RunAsync("net.exe", $"user \"{userName}\"", cancellationToken: cancellationToken);
+        var result = await RunCommandAsync("net.exe", $"user \"{userName}\"", cancellationToken: cancellationToken);
         return result.Success;
     }
 
@@ -1409,7 +1533,7 @@ else {{ [Console]::Out.WriteLine('ADAPANEL-SON=' + $hesap.PasswordExpires.ToStri
 
         try
         {
-            var sonuc = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+            var sonuc = await RunScriptAsync(script, cancellationToken);
             var cikti = sonuc.StandardOutput ?? string.Empty;
             if (sonuc.Success && cikti.Contains("ADAPANEL-SURESIZ", StringComparison.Ordinal))
             {

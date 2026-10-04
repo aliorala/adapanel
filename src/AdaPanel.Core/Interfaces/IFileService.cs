@@ -1,4 +1,5 @@
 using AdaPanel.Core.Dtos.Files;
+using AdaPanel.Core.Dtos.Sites;
 
 namespace AdaPanel.Core.Interfaces;
 
@@ -7,6 +8,10 @@ public interface IFileService
     Task<FileWorkspaceDto> GetWorkspaceAsync(string path, CancellationToken cancellationToken = default);
 
     Task<FileWorkspaceDto> WriteAsync(WriteFileRequest request, CancellationToken cancellationToken = default);
+
+    Task<FileWorkspaceDto> WriteAsync(WriteFileRequest request,
+        Func<SiteDto, CancellationToken, Task> beforePublication, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Authorized file publication is not implemented.");
 
     Task<FileWorkspaceDto> DeleteAsync(DeleteFileRequest request, CancellationToken cancellationToken = default);
 
@@ -76,6 +81,10 @@ public interface IFileService
 
     Task<string> SaveUploadAsync(string path, Stream stream, CancellationToken cancellationToken = default);
 
+    Task<string> SaveUploadAsync(string path, Stream stream,
+        Func<SiteDto, CancellationToken, Task> beforePublication, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Authorized file publication is not implemented.");
+
     /// <summary>
     /// İndirilecek dosyanın FİZİKSEL YOLUNU döndürür — içeriğini değil.
     /// <para>
@@ -92,6 +101,10 @@ public interface IFileService
     Task<(string FileName, string ContentType, string PhysicalPath)> DownloadAsync(string path, CancellationToken cancellationToken = default);
 
     Task<FileWorkspaceDto> CompressAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default);
+
+    Task<FileWorkspaceDto> CompressAsync(ArchiveFileRequest request,
+        Func<SiteDto, CancellationToken, Task> beforePublication, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Authorized file publication is not implemented.");
 
     Task<FileWorkspaceDto> ExtractAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default);
 

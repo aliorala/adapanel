@@ -135,7 +135,7 @@
       </div>
 
       <form v-if="workspace?.isDirectory" class="search-row" @submit.prevent="runSearch">
-        <input v-model="searchQuery" minlength="2" :placeholder="t('panel.files.searchHint')" />
+        <input v-model="searchQuery" minlength="2" :aria-label="t('panel.files.searchHint')" :placeholder="t('panel.files.searchHint')" />
         <button type="submit" class="secondary compact">{{ t("panel.files.search") }}</button>
       </form>
 
@@ -190,19 +190,19 @@
         <form v-if="transferMode && selection.count.value > 0" class="transfer-form" @submit.prevent="runTransfer">
           <label>
             <span>{{ t("panel.files.destination") }}</span>
-            <input v-model="transferTarget" :placeholder="siteRootPath" />
+            <input v-model="transferTarget" :disabled="transferBusy" :placeholder="siteRootPath" />
             <small class="field-hint">{{ t("panel.files.destinationHint") }}</small>
           </label>
           <label>
             <span>{{ t("panel.files.destinationPick") }}</span>
-            <select v-model="transferTarget">
+            <select v-model="transferTarget" :disabled="transferBusy">
               <option :value="siteRootPath">{{ t("panel.files.destinationRoot") }}</option>
               <option v-if="parentTargetPath" :value="parentTargetPath">{{ t("panel.files.destinationParent") }}</option>
               <option v-for="folder in folderTargets" :key="folder.path" :value="folder.path">{{ folder.name }}</option>
             </select>
           </label>
           <label class="overwrite-field">
-            <input type="checkbox" v-model="transferOverwrite" />
+            <input type="checkbox" v-model="transferOverwrite" :disabled="transferBusy" />
             <span>{{ t("panel.files.overwrite") }}</span>
           </label>
           <div class="entry-actions">
@@ -222,14 +222,16 @@
              çevirmek ızgara sütunlarını ve base.css'in bütün liste stilini kırardı; ARIA
              rolleri aynı bağı yapıya dokunmadan kurar (`columnheader` = `<th scope="col">`
              karşılığı). -->
-        <div class="data-table" role="table" :aria-label="t('panel.files.title')">
+        <div class="data-table files-table" role="table" :aria-label="t('panel.files.title')">
           <div class="data-row table-head files-row" role="row">
             <span class="select-cell" role="columnheader">
               <input
                 type="checkbox"
                 :checked="selection.allSelected(visiblePaths)"
+                :disabled="bulk.busy.value || transferBusy"
                 :aria-label="t('panel.bulk.selectAll')"
                 @change="selection.toggleAll(visiblePaths)" />
+              <span class="mobile-select-label" aria-hidden="true">{{ t("panel.bulk.selectAll") }}</span>
             </span>
             <span role="columnheader">{{ t("panel.files.name") }}</span>
             <span role="columnheader">{{ t("panel.files.kind") }}</span>
@@ -244,6 +246,7 @@
                 <input
                   type="checkbox"
                   :checked="selection.isSelected(entry.path)"
+                  :disabled="bulk.busy.value || transferBusy"
                   :aria-label="t('panel.bulk.selectRow', { name: entry.name })"
                   @change="selection.toggle(entry.path)" />
               </span>
@@ -258,7 +261,7 @@
                   {{ entry.name }}
                 </button>
               </div>
-              <span role="cell">{{ entry.isDirectory ? t("panel.files.folder") : entry.extension || t("panel.files.file") }}</span>
+              <span class="kind-cell" role="cell" :data-label="t('panel.files.kind')">{{ entry.isDirectory ? t("panel.files.folder") : entry.extension || t("panel.files.file") }}</span>
               <!-- KLASÖR BOYUTU İSTENDİĞİNDE hesaplanır. Hesaplanmamış klasör "0 B" göstermez:
                    sıfır ÖLÇÜLMÜŞ bir değerdir ve dolu bir klasörü boş göstermek kullanıcının
                    disk kararını yanlış sayıya dayandırması olurdu.
@@ -266,7 +269,7 @@
                    "—" ise ne olduğu belirsiz bir tire yerine "Boyutu hesapla" diyerek hem
                    ölçülmediğini söyler hem de çaresini gösterir. Bu, işlemler sütunundan bir
                    düğme daha eksiltir. -->
-              <span class="size-cell" role="cell">
+              <span class="size-cell" role="cell" :data-label="t('panel.files.sizeColumn')">
                 <template v-if="!entry.isDirectory">{{ boyutMetni(entry.size) }}</template>
                 <template v-else-if="folderSizes[entry.path]">
                   <span :title="folderSizes[entry.path].truncated ? kesikSebebi(folderSizes[entry.path]) : undefined">
@@ -284,7 +287,7 @@
                   {{ sizeBusyPath === entry.path ? t("panel.files.calcSizeBusy") : t("panel.files.calcSize") }}
                 </button>
               </span>
-              <span class="date-cell" role="cell">{{ tarihMetni(entry.lastModifiedUtc) }}</span>
+              <span class="date-cell" role="cell" :data-label="t('panel.files.modified')">{{ tarihMetni(entry.lastModifiedUtc) }}</span>
               <!-- EYLEM HİYERARŞİSİ. Satırda altı düğmeye kadar çıkılıyordu (İndir · Boyutu
                    hesapla · Yeniden adlandır · ZIP yap · Arşivi aç · Sil) ve hepsi aynı
                    ağırlıktaydı; sütun tek başına 430px ayırıyordu (eski CSS). Daha kötüsü,
@@ -324,7 +327,7 @@
                    çekmece satırı altı sütunun tamamını kaplar. -->
               <div class="drawer-actions" role="cell" aria-colspan="6">
                 <span class="drawer-label">{{ entry.name }}</span>
-                <button class="secondary compact" v-bind="writeGate()" @click="renamePath(entry)">{{ t("panel.files.rename") }}</button>
+                <button class="secondary compact" v-bind="writeGate(transferBusy)" @click="renamePath(entry)">{{ t("panel.files.rename") }}</button>
                 <button class="secondary compact" v-bind="writeGate(archiveBusy)" @click="compress(entry.path)">{{ t("panel.files.compress") }}</button>
                 <button v-if="entry.extension.toLowerCase() === '.zip'" class="secondary compact" v-bind="writeGate(archiveBusy)" @click="extract(entry.path)">
                   {{ t("panel.files.extract") }}
@@ -477,6 +480,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { backupDatabase, backupSite, getBackups, type BackupRecord } from "../api/backup";
+import { getSessionEpoch } from "../api/client";
 import {
   compressPath,
   copyEntries,
@@ -540,12 +544,22 @@ const savedContent = ref("");
 const saving = ref(false);
 const isDirty = computed(() => Boolean(workspace.value && !workspace.value.isDirectory) && fileContent.value !== savedContent.value);
 let workspaceRequest = 0;
+let fileNavigationGeneration = 0;
+let requestedWorkspacePath = "";
 let disposed = false;
+const fileSession = authStore.session;
+const fileActor = fileSession?.user?.id;
+const fileRole = fileSession?.user?.role;
+const fileEpoch = getSessionEpoch();
+const isFileViewActive = () => !disposed && fileEpoch === getSessionEpoch() &&
+  authStore.session === fileSession && authStore.session?.isAuthenticated === true &&
+  authStore.session.user?.id === fileActor && authStore.session.user?.role === fileRole;
 const archiveBusy = ref(false);
 let searchRequest = 0;
-function currentFileContext() {
+function currentFileContext(trackRead = true) {
   const request = workspaceRequest, site = selectedSiteName.value, path = workspace.value?.path;
-  return () => !disposed && request === workspaceRequest && site === selectedSiteName.value && path === workspace.value?.path;
+  const navigation = fileNavigationGeneration;
+  return () => isFileViewActive() && navigation === fileNavigationGeneration && (!trackRead || request === workspaceRequest) && site === selectedSiteName.value && path === workspace.value?.path;
 }
 useNavigationGuard(() => {
   if (saving.value) return false;
@@ -745,6 +759,8 @@ watch(selectedSiteName, async (siteName, previousSiteName) => {
     return;
   }
 
+  fileNavigationGeneration++;
+  requestedWorkspacePath = "";
   workspace.value = null;
   searchResults.value = [];
   searchRan.value = false;
@@ -756,7 +772,7 @@ watch(selectedSiteName, async (siteName, previousSiteName) => {
 });
 
 async function refresh(path = workspace.value?.path || siteRootPath.value) {
-  if (disposed || !await allowNavigation()) return;
+  if (!isFileViewActive() || !await allowNavigation() || !isFileViewActive()) return;
   const request = ++workspaceRequest;
   const site = selectedSiteName.value;
   if (!selectedSiteName.value || !(path === siteRootPath.value || path.startsWith(`${siteRootPath.value}/`))) {
@@ -765,6 +781,10 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
     return;
   }
 
+  if (path !== requestedWorkspacePath) {
+    requestedWorkspacePath = path;
+    fileNavigationGeneration++;
+  }
   loading.value = true;
   // Açık eylem çekmecesi de düşer: liste yeniden okunduğunda çekmecenin bağlı olduğu satır
   // silinmiş, taşınmış ya da başka bir sayfaya kaymış olabilir; açık kalan çekmece o an
@@ -776,18 +796,20 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
   folderSizes.value = {};
   try {
     const result = await getFileWorkspace(path);
-    if (disposed || request !== workspaceRequest || site !== selectedSiteName.value) return;
+    if (!isFileViewActive() || request !== workspaceRequest || site !== selectedSiteName.value) return;
     workspace.value = result;
     fileContent.value = result.content || "";
     savedContent.value = fileContent.value;
     workspaceLoad.clear();
     // Artık listede olmayan yollar seçili kalmasın (silme/klasör değişimi sonrası).
     selection.keepOnly(workspace.value.entries.map((entry) => entry.path));
+    return true;
   } catch (error) {
-    if (disposed || request !== workspaceRequest || site !== selectedSiteName.value) return;
+    if (!isFileViewActive() || request !== workspaceRequest || site !== selectedSiteName.value) return;
     // Hata hem şeritte hem listenin yerinde görünür: boş bir tablo "klasör boş" sanılmasın.
     workspaceLoad.capture(error);
     showNotice(resolveApiMessage(error), true);
+    return false;
   } finally {
     if (request === workspaceRequest) loading.value = false;
   }
@@ -834,7 +856,7 @@ async function uploadSelectedFiles(event: Event) {
  * kopyalandığını sandığı bir klasörün hiç var olmaması demekti.
  */
 async function uploadMany(files: File[], folders: string[]) {
-  if (disposed || uploadBusy.value || !workspace.value?.isDirectory) {
+  if (!isFileViewActive() || uploadBusy.value || !workspace.value?.isDirectory) {
     return;
   }
 
@@ -853,7 +875,10 @@ async function uploadMany(files: File[], folders: string[]) {
   }
 
   const hedef = workspace.value.path;
-  const isCurrent = currentFileContext();
+  const isCurrent = currentFileContext(false);
+  const isVisible = currentFileContext(false);
+  files = [...files];
+  folders = [...folders];
   const failures: { name: string; reason: string }[] = [];
   uploadBusy.value = true;
   uploadDone.value = 0;
@@ -861,11 +886,13 @@ async function uploadMany(files: File[], folders: string[]) {
 
   try {
     for (const file of files) {
-      if (disposed) return;
+      if (!isCurrent() || locked.value) return;
       try {
         await uploadFile(hedef, file);
+        if (!isCurrent()) return;
         uploadDone.value += 1;
       } catch (error) {
+        if (!isCurrent()) return;
         failures.push({ name: file.name, reason: resolveApiMessage(error) });
       }
     }
@@ -874,8 +901,21 @@ async function uploadMany(files: File[], folders: string[]) {
   }
 
   if (!isCurrent()) return;
-  await refresh(hedef);
-  showNotice(uploadOzeti(files.length, uploadDone.value, failures, folders), failures.length > 0 || folders.length > 0);
+  const refreshed = await refreshAfterFileOperation(hedef, isVisible);
+  if (!isVisible() || refreshed === undefined) return;
+  reportFileOperation(uploadOzeti(files.length, uploadDone.value, failures, folders), failures.length > 0 || folders.length > 0, refreshed);
+}
+
+function reportFileOperation(message: string, failed: boolean, refreshed: boolean) {
+  showNotice([message, refreshed ? "" : t("panel.files.refreshAfterOperationFailed")].filter(Boolean).join("\n\n"), failed || !refreshed);
+}
+
+async function refreshAfterFileOperation(path: string, isVisible: () => boolean) {
+  const refreshed = await refresh(path);
+  if (refreshed === false && isVisible()) {
+    workspaceLoad.message.value = t("panel.files.refreshAfterOperationFailed");
+  }
+  return refreshed;
 }
 
 /** Yükleme özeti — "tamamlandı" yalnız GERÇEKTEN hepsi olduğunda yazılır. */
@@ -1182,27 +1222,34 @@ async function createNewFile() {
  * dosya kullanımda...). Bu yüzden "yeniden adlandırıldı" yalnız `moved` doğruyken yazılır.
  */
 async function renamePath(entry: FileEntry) {
-  const newName = await prompt({
-    title: t("panel.files.renamePrompt"),
-    label: t("panel.files.name"),
-    defaultValue: entry.name
-  });
-  if (!newName || newName.trim() === entry.name) {
-    return;
-  }
-
+  if (!isFileViewActive() || locked.value || transferBusy.value) return;
+  entry = { ...entry };
+  const isCurrent = currentFileContext(false);
+  const isVisible = currentFileContext(false);
+  const sourceFolder = workspace.value?.path || "";
+  transferBusy.value = true;
   try {
+    const newName = await prompt({
+      title: t("panel.files.renamePrompt"),
+      label: t("panel.files.name"),
+      defaultValue: entry.name
+    });
+    if (!newName || newName.trim() === entry.name || !isCurrent() || locked.value) return;
     const result = await renameEntry(entry.path, newName.trim(), false);
-    await refresh(workspace.value?.path || "");
+    if (!isCurrent()) return;
+    const refreshed = await refreshAfterFileOperation(sourceFolder, isVisible);
+    if (!isVisible() || refreshed === undefined) return;
     const failure = result.items.find((item) => !item.moved);
     if (failure) {
-      showNotice(t("panel.bulk.failedItem", { name: entry.name, reason: hataMetni(failure.errorKey) }), true);
+      reportFileOperation(t("panel.bulk.failedItem", { name: entry.name, reason: hataMetni(failure.errorKey) }), true, refreshed);
       return;
     }
 
-    showNotice(t("panel.files.renamed"), false);
+    reportFileOperation(t("panel.files.renamed"), false, refreshed);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
+  } finally {
+    transferBusy.value = false;
   }
 }
 
@@ -1227,7 +1274,7 @@ function startTransfer(mode: "move" | "copy") {
 async function runTransfer() {
   const mode = transferMode.value;
   const targets = entries.value.filter((entry) => selection.isSelected(entry.path));
-  if (transferBusy.value || !mode || targets.length === 0) {
+  if (!isFileViewActive() || locked.value || transferBusy.value || !mode || targets.length === 0) {
     return;
   }
 
@@ -1240,6 +1287,10 @@ async function runTransfer() {
   }
 
   const paths = targets.map((entry) => entry.path);
+  const overwrite = transferOverwrite.value;
+  const sourceFolder = workspace.value?.path || "";
+  const isCurrent = currentFileContext(false);
+  const isVisible = currentFileContext(false);
   transferBusy.value = true;
   try {
     const failures: { name: string; reason: string }[] = [];
@@ -1250,13 +1301,15 @@ async function runTransfer() {
     let done = 0;
 
     if (mode === "move") {
-      const result = await moveEntries(paths, destination, transferOverwrite.value);
+      const result = await moveEntries(paths, destination, overwrite);
+      if (!isCurrent()) return;
       done = result.movedCount;
       for (const item of result.items.filter((satir) => !satir.moved)) {
         failures.push({ name: item.sourcePath, reason: hataMetni(item.errorKey) });
       }
     } else {
-      const result = await copyEntries(paths, destination, transferOverwrite.value);
+      const result = await copyEntries(paths, destination, overwrite);
+      if (!isCurrent()) return;
       done = result.copiedCount;
       for (const item of result.items) {
         if (!item.copied) {
@@ -1269,14 +1322,15 @@ async function runTransfer() {
 
     transferMode.value = null;
     selection.clear();
-    await refresh(workspace.value?.path || "");
-    showNotice(
+    const refreshed = await refreshAfterFileOperation(sourceFolder, isVisible);
+    if (!isVisible() || refreshed === undefined) return;
+    reportFileOperation(
       transferOzeti(mode, targets.length, done, failures, warnings),
-      failures.length > 0 || warnings.length > 0);
+      failures.length > 0 || warnings.length > 0, refreshed);
   } catch (error) {
     // İstek TÜMÜYLE reddedildi (hedef klasör yok, sanal alan dışı...): form açık kalır ki
     // kullanıcı hedefi düzeltip yeniden deneyebilsin.
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
   } finally {
     transferBusy.value = false;
   }
@@ -1459,6 +1513,13 @@ async function restore(record: BackupRecord) {
   display: grid;
   gap: 12px;
 }
+
+.workspace-card {
+  container: file-workspace / inline-size;
+  min-width: 0;
+}
+
+.mobile-select-label { display: none; }
 
 .site-picker {
   display: flex;
@@ -1656,17 +1717,18 @@ async function restore(record: BackupRecord) {
   gap: 5px;
 }
 
-.overwrite-field {
+.transfer-form .overwrite-field {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .overwrite-field input {
+  flex: 0 0 16px;
   width: 16px;
   height: 16px;
-  margin: 0;
+  margin: 2px 0 0;
 }
 
 @media (max-width: 900px) {
@@ -1926,13 +1988,48 @@ async function restore(record: BackupRecord) {
   box-shadow: none;
 }
 
-/*
- * DAR EKRAN. `.data-row` base.css'te 720px taban genişlik taşır ve tablo yatay kaydırılır; tek
- * sütuna düşürmek yalnızca ızgarayı bozar, satırı daraltmaz. Bu yüzden dosya listesi burada tek
- * sütuna DÜŞÜRÜLMÜYOR — telefonda tablo yana kaydırılarak okunur, sütun hizası korunur.
- * Yedek listesi ve form ızgarası (sabit taban genişliği olmayan, kısa içerikli satırlar) eskisi
- * gibi tek sütuna iner.
- */
+/* Keep file actions visible when the workspace is narrower than the six-column table. */
+@container file-workspace (max-width: 790px) {
+  .files-table .data-row { min-width: 0; }
+  .files-table .table-head { grid-template-columns: minmax(0, 1fr); }
+  .files-table .table-head > :not(.select-cell) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .files-table .table-head .select-cell { display: flex; gap: 10px; align-items: center; }
+  .mobile-select-label { display: inline; font-weight: 500; font-size: var(--fs-xs); }
+  .files-row:not(.table-head) {
+    grid-template-columns: 22px minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas: "select name name" ". kind size" ". date date" ". actions actions";
+    gap: 8px 10px;
+    padding-block: 14px;
+  }
+  .files-row:not(.table-head) .select-cell { grid-area: select; align-self: start; }
+  .files-row .cell-main { grid-area: name; }
+  .files-row .kind-cell { grid-area: kind; }
+  .files-row:not(.table-head) .size-cell { grid-area: size; text-align: left; white-space: normal; }
+  .files-row:not(.table-head) .date-cell { grid-area: date; white-space: normal; }
+  .files-row .entry-actions { grid-area: actions; justify-content: flex-end; }
+  .files-row [data-label] { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: var(--fs-xs); color: var(--text-muted); }
+  .files-row [data-label]::before { content: attr(data-label); font-weight: 600; }
+  .files-row .entry-name { overflow-wrap: anywhere; }
+  .files-row .size-calc { text-align: left; font-size: inherit; }
+  .files-table .actions-drawer { grid-template-columns: minmax(0, 1fr); }
+  .drawer-actions { padding-inline-start: 0; gap: 10px; }
+  .drawer-label { flex-basis: 100%; }
+  .drawer-actions button { flex: 1 1 110px; }
+  .drawer-divider { flex-basis: 100%; }
+  .breadcrumb { max-width: 100%; }
+  .action-row > .toolbar-group { min-width: 0; max-width: 100%; }
+  .transfer-form { grid-template-columns: minmax(0, 1fr); }
+  .transfer-form label { min-width: 0; }
+}
+
 @media (max-width: 900px) {
   .backup-row,
   .form-grid {

@@ -4315,7 +4315,7 @@
   "panel.files.move": "Taşı",
   "panel.files.copy": "Kopyala",
   "panel.files.destination": "Hedef klasör",
-  "panel.files.destinationHint": "Site kökü altında VAR OLAN bir klasörün yolu; klasör kendiliğinden oluşturulmaz.",
+  "panel.files.destinationHint": "Site kökünün altındaki mevcut klasörün yolunu girin. Klasör otomatik oluşturulmaz.",
   "panel.files.destinationPick": "Listeden seç",
   "panel.files.destinationRoot": "Site kök klasörü",
   "panel.files.destinationParent": "Üst klasör",
@@ -5528,5 +5528,8 @@
   "panel.account.hideRecoveryCodes": "Kodları gizle",
   "auth.two_factor_already_enabled": "İki adımlı doğrulama zaten etkin. Yeniden kurmak için önce mevcut parolanızla kapatın.",
   "auth.two_factor_setup_changed": "Hesabın doğrulama ayarları değişti. Durumu yenileyip işlemi tekrar deneyin.",
-  "auth.two_factor_recovery_incomplete": "Doğrulama ayarlarının kaydı tamamlanamadı. Hesap durumunu yenileyin; giriş yapamıyorsanız sunucu yöneticinize başvurun."
+  "auth.two_factor_recovery_incomplete": "Doğrulama ayarlarının kaydı tamamlanamadı. Hesap durumunu yenileyin; giriş yapamıyorsanız sunucu yöneticinize başvurun.",
+  "panel.files.resultUnconfirmed": "Dosya işleminin sonucu doğrulanamadı. Yeniden işlem yapmadan önce klasörü yenileyin.",
+  "panel.files.refreshAfterOperationFailed": "İşlem sonucu alındı, ancak klasör yenilenemedi. Yenile ile güncel listeyi kontrol edin.",
+  "ftp.user_changed": "FTP hesabı işlem beklerken değişti. Hesap listesini yenileyip yeniden deneyin."
 }

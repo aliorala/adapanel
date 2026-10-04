@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import { UserFacingError } from "../utils/apiError";
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -91,13 +92,18 @@ export async function updatePermissions(path: string, principal: string, rights:
 }
 
 export async function uploadFile(path: string, file: File) {
+  const expectedPath = filePathIdentity(`${path}/${file.name}`);
   const body = new FormData();
   body.append("file", file);
   const response = await apiClient.post<ApiEnvelope<{ path: string }>>("/files/upload", body, {
     params: { path },
     headers: { "Content-Type": "multipart/form-data" }
   });
-  return response.data.data;
+  const result = response.data?.data;
+  if (response.data?.success !== true || !result || typeof result.path !== "string" || filePathIdentity(result.path) !== expectedPath) {
+    throw new UserFacingError("panel.files.resultUnconfirmed");
+  }
+  return result;
 }
 
 /**
@@ -175,6 +181,35 @@ export type CopyResult = {
   workspace: FileWorkspace;
 };
 
+function filePathIdentity(path: string) {
+  return path.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").toLowerCase();
+}
+
+function measuredTransfer<T extends MoveResult | CopyResult>(
+  envelope: ApiEnvelope<T>, paths: readonly string[], destination: string, copied: boolean, newName?: string
+): T {
+  const result = envelope?.data;
+  const items = result?.items;
+  const count = result && (copied ? (result as CopyResult).copiedCount : (result as MoveResult).movedCount);
+  const expected = new Map(paths.map(path => [filePathIdentity(path), filePathIdentity(`${destination}/${newName ?? path.replace(/\\/g, "/").replace(/\/+$/, "").split("/").pop()}`)]));
+  const finished = (item: MoveItemResult | CopyItemResult) => copied ? (item as CopyItemResult).copied : (item as MoveItemResult).moved;
+  const rowIds = new Set<string>();
+  const validItems = Array.isArray(items) && items.length === expected.size && items.every(item => {
+    if (!item || typeof item.sourcePath !== "string" || typeof item.targetPath !== "string" || typeof item.errorKey !== "string" || typeof finished(item) !== "boolean") return false;
+    const source = filePathIdentity(item.sourcePath), target = expected.get(source);
+    if (!target || rowIds.has(source)) return false;
+    rowIds.add(source);
+    return (finished(item) || item.targetPath !== "") ? filePathIdentity(item.targetPath) === target : true;
+  });
+  const workspace = result?.workspace;
+  if (envelope?.success !== true || !result || !validItems || !Number.isSafeInteger(count) || !Number.isSafeInteger(result.failedCount) ||
+    count !== items!.filter(item => finished(item)).length || result.failedCount !== items!.filter(item => !finished(item)).length ||
+    !workspace || typeof workspace.path !== "string" || filePathIdentity(workspace.path) !== filePathIdentity(destination) || workspace.isDirectory !== true || !Array.isArray(workspace.entries)) {
+    throw new UserFacingError("panel.files.resultUnconfirmed");
+  }
+  return result;
+}
+
 /** Sanal yolun üst klasörü; kök seviyesindeki bir öge için boş dize. */
 function parentPathOf(path: string) {
   const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -184,13 +219,14 @@ function parentPathOf(path: string) {
 
 /** Bir ya da birden çok ögeyi başka klasöre taşır. Yanıt öge başına sonucu taşır. */
 export async function moveEntries(paths: string[], destinationPath: string, overwrite = false) {
+  paths = [...paths];
   const response = await apiClient.post<ApiEnvelope<MoveResult>>("/files/move", {
     paths,
     destinationPath,
     overwrite
   });
 
-  return response.data.data;
+  return measuredTransfer(response.data, paths, destinationPath, false);
 }
 
 /**
@@ -206,16 +242,17 @@ export async function renameEntry(path: string, newName: string, overwrite = fal
     overwrite
   });
 
-  return response.data.data;
+  return measuredTransfer(response.data, [path], parentPathOf(path), false, newName.trim());
 }
 
 /** Bir ya da birden çok ögeyi başka klasöre kopyalar. Yanıt öge başına sonucu taşır. */
 export async function copyEntries(paths: string[], destinationPath: string, overwrite = false) {
+  paths = [...paths];
   const response = await apiClient.post<ApiEnvelope<CopyResult>>("/files/copy", {
     paths,
     destinationPath,
     overwrite
   });
 
-  return response.data.data;
+  return measuredTransfer(response.data, paths, destinationPath, true);
 }
