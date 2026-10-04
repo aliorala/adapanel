@@ -285,5 +285,7 @@
   "backup.ownership_unconfirmed": "Seçilen veritabanlarının bu siteyle aynı hesaba ait olduğu doğrulanamadı. Yedekleme başlamadı. Veritabanı seçimini kontrol edin veya yöneticinizden sahiplik kayıtlarını doğrulamasını isteyin.",
   "ftp.user_changed": "FTP hesabı işlem beklerken değişti. Hesap listesini yenileyip yeniden deneyin.",
   "files.content_too_large": "Dosya 1 MB sınırını aştığı için içeriği düzenlemek üzere yüklenmedi. Özgün dosyayı indirebilirsiniz.",
-  "files.content_not_editable": "Dosya ikili veri içeriyor veya metin kodlaması doğrulanamadı. İçeriği korumak için düzenleme kapalıdır; özgün dosyayı indirebilirsiniz."
+  "files.content_not_editable": "Dosya ikili veri içeriyor veya metin kodlaması doğrulanamadı. İçeriği korumak için düzenleme kapalıdır; özgün dosyayı indirebilirsiniz.",
+  "files.acl_unverified": "İzin değişikliğinin tüm hedeflerde tamamlandığı doğrulanamadı.",
+  "ftp.user_status_unknown": "Windows FTP hesabının durumu doğrulanamadı. İşlem tamamlanmadı; yeniden deneyin."
 }

@@ -1,5 +1,7 @@
 ﻿using System.Text;
 using System.IO.Compression;
+using System.Globalization;
+using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Files;
 using AdaPanel.Core.Dtos.Sites;
@@ -78,6 +80,9 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     internal Func<string, Stream> OpenWorkspaceFile { get; set; } = static path =>
         new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+    internal Func<string, string, CancellationToken, Task<CommandResult>> PermissionCommand { get; set; } =
+        static (fileName, arguments, token) => ProcessRunner.RunAsync(fileName, arguments, cancellationToken: token);
 
     public Task<FileWorkspaceDto> GetWorkspaceAsync(string path, CancellationToken cancellationToken = default) =>
         GetWorkspaceCoreAsync(path, null, cancellationToken);
@@ -315,14 +320,25 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         return workspace;
     }
 
-    public async Task<FileWorkspaceDto> CreateDirectoryAsync(CreateDirectoryRequest request, CancellationToken cancellationToken = default)
+    public Task<FileWorkspaceDto> CreateDirectoryAsync(CreateDirectoryRequest request, CancellationToken cancellationToken = default) =>
+        CreateDirectoryCoreAsync(request, null, cancellationToken);
+
+    public Task<FileWorkspaceDto> CreateDirectoryAsync(CreateDirectoryRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        CreateDirectoryCoreAsync(request, beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken);
+
+    private async Task<FileWorkspaceDto> CreateDirectoryCoreAsync(CreateDirectoryRequest request,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
         var normalizedPath = NormalizeVirtualPath(request.Path);
         var target = await ResolveTargetAsync(normalizedPath, cancellationToken);
         EnsureSiteTarget(target);
         EnsureNotSiteRoot(target);
+        await ApprovePublicationAsync(target, beforeMutation, cancellationToken);
+        EnsureNoReparsePoints(target.SandboxRoot, target.PhysicalPath);
         Directory.CreateDirectory(target.PhysicalPath);
-        return await GetWorkspaceAsync(normalizedPath, cancellationToken);
+        await ApprovePublicationAsync(target, beforeMutation, cancellationToken);
+        return await ReadMutationWorkspaceAsync(normalizedPath, beforeMutation, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -974,30 +990,73 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// verilir: kabuk ayrıştırması devreden çıkar.
     /// </para>
     /// </summary>
-    public async Task<FileWorkspaceDto> SetPermissionsAsync(SetFilePermissionsRequest request, CancellationToken cancellationToken = default)
+    public Task<FileWorkspaceDto> SetPermissionsAsync(SetFilePermissionsRequest request, CancellationToken cancellationToken = default) =>
+        SetPermissionsCoreAsync(request, null, cancellationToken);
+
+    public Task<FileWorkspaceDto> SetPermissionsAsync(SetFilePermissionsRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        SetPermissionsCoreAsync(request, beforeMutation ?? throw new ArgumentNullException(nameof(beforeMutation)), cancellationToken);
+
+    private async Task<FileWorkspaceDto> SetPermissionsCoreAsync(SetFilePermissionsRequest request,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
         var normalizedPath = NormalizeVirtualPath(request.Path);
+        // Capture and validate every native argument before the first resolver/authority wait.
+        var principal = AclInputValidator.EnsurePrincipal(request.Principal);
+        var rights = AclInputValidator.EnsureRights(request.Rights);
         var target = await ResolveTargetAsync(normalizedPath, cancellationToken);
         EnsureSiteTarget(target);
         // Site kökünün TAMAMINA /T ile izin uygulamak diğer işlemlerde de yasak; burada eksikti.
         EnsureNotSiteRoot(target);
 
-        // Doğrulama TEK KAYNAKTAN gelir (bkz. AclInputValidator): aynı kural site izolasyonunda da
-        // geçerli ve kopyalanmış bir kural, birini sıkılaştırıp diğerini unutmanın yoludur.
-        var principal = AclInputValidator.EnsurePrincipal(request.Principal);
-        var rights = AclInputValidator.EnsureRights(request.Rights);
-
-        var result = await ProcessRunner.RunAsync(
+        await ApprovePublicationAsync(target, beforeMutation, cancellationToken);
+        EnsureNoReparsePoints(target.SandboxRoot, target.PhysicalPath);
+        var result = await PermissionCommand(
             "icacls.exe",
-            $"\"{target.PhysicalPath}\" /grant \"{principal}:{rights}\" /T /C",
-            cancellationToken: cancellationToken);
+            // /L changes a symbolic link itself rather than its external destination.
+            $"\"{target.PhysicalPath}\" /grant \"{principal}:{rights}\" /T /C /L",
+            cancellationToken);
+        await ApprovePublicationAsync(target, beforeMutation, cancellationToken);
+        var outcome = MeasurePermissionProcessing(result);
+        var workspace = await ReadMutationWorkspaceAsync(normalizedPath, beforeMutation, cancellationToken);
+        workspace.PermissionsVerified = outcome.Verified;
+        workspace.PermissionsDetail = outcome.Detail;
+        return workspace;
+    }
 
+    private Task<FileWorkspaceDto> ReadMutationWorkspaceAsync(string path,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken token) =>
+        GetWorkspaceCoreAsync(path, beforeMutation is null ? null : (site, currentToken) =>
+            beforeMutation(site ?? throw new AppException("files.site_required", 400, 400), currentToken), token);
+
+    private static readonly Regex PermissionSummary = new(
+        @"^[ \t]*Successfully processed ([0-9]+) files; Failed processing ([0-9]+) files[ \t]*\r?$",
+        RegexOptions.Multiline | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+
+    private static (bool? Verified, string Detail) MeasurePermissionProcessing(CommandResult result)
+    {
+        // This measures icacls processing, not the effective DACL or a user's effective access.
+        // /C can report failed files even when the process exits successfully. Do not publish
+        // arbitrary process output (paths, account names, or credentials) as a result detail.
         if (!result.Success)
+            throw new AppException("files.acl_failed", 500, 500, $"ACL command exited with code {result.ExitCode}.");
+        var summaries = PermissionSummary.Matches(result.StandardOutput + "\n" + result.StandardError);
+        long processed = 0;
+        var measured = 0;
+        foreach (Match summary in summaries)
         {
-            throw new AppException("files.acl_failed", 500, 500, result.StandardError);
+            if (!long.TryParse(summary.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var success) ||
+                !long.TryParse(summary.Groups[2].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var failed))
+                continue;
+            if (failed > 0 || success == 0)
+                throw new AppException("files.acl_failed", 500, 500,
+                    $"ACL command processed {success.ToString(CultureInfo.InvariantCulture)} item(s); failed processing {failed.ToString(CultureInfo.InvariantCulture)} item(s).");
+            measured++;
+            processed = success;
         }
-
-        return await GetWorkspaceAsync(normalizedPath, cancellationToken);
+        return summaries.Count == 1 && measured == 1
+            ? (true, $"ACL command processed {processed.ToString(CultureInfo.InvariantCulture)} item(s); failed processing 0 item(s).")
+            : (null, "ACL command exited successfully, but its processing summary could not be measured.");
     }
 
     public Task<string> SaveUploadAsync(string path, Stream stream, CancellationToken cancellationToken = default) =>

@@ -5553,5 +5553,14 @@
   "panel.ftp.tlsVerifiedHint": "The last change was applied and verified on the server.",
   "panel.ftp.tlsFailedHint": "The last change was not applied on the server; the saved policy is retained. Check the details and try again.",
   "panel.ftp.tlsUnknownHint": "Enforcement of the last change could not be verified. The selected preference does not confirm the current security state.",
-  "files.content_not_editable": "The file contains binary data or its text encoding could not be verified. Editing is disabled to preserve its contents; you can download the original file."
+  "files.content_not_editable": "The file contains binary data or its text encoding could not be verified. Editing is disabled to preserve its contents; you can download the original file.",
+  "panel.files.permissionsTitle": "Access permissions",
+  "panel.files.permissionsTarget": "Target of this change",
+  "panel.files.permissionsRootHint": "Bulk permission changes are unavailable for the entire site root. Open a subfolder or file to edit its permissions.",
+  "panel.files.permissionsFolderHint": "The selected permission applies to this folder and all its subfolders and files.",
+  "panel.files.permissionsFileHint": "The selected permission applies only to this file.",
+  "panel.files.permissionsUnverified": "The permission command ran, but completion on every target could not be verified. Check access.",
+  "files.acl_unverified": "Completion of the permission change on every target could not be verified.",
+  "ftp.user_status_unknown": "The Windows FTP account status could not be verified. The operation did not complete; try again.",
+  "panel.files.createTarget": "Create in: {path}"
 }

@@ -30,6 +30,10 @@ public interface IFileService
 
     Task<FileWorkspaceDto> CreateDirectoryAsync(CreateDirectoryRequest request, CancellationToken cancellationToken = default);
 
+    Task<FileWorkspaceDto> CreateDirectoryAsync(CreateDirectoryRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Authorized directory creation is not implemented.");
+
     /// <summary>
     /// Bir ya da birden çok ögeyi başka klasöre TAŞIR; tek öge + <c>NewName</c> ile YENİDEN ADLANDIRIR.
     /// </summary>
@@ -99,6 +103,10 @@ public interface IFileService
         throw new NotSupportedException("Authorized file transfer is not implemented.");
 
     Task<FileWorkspaceDto> SetPermissionsAsync(SetFilePermissionsRequest request, CancellationToken cancellationToken = default);
+
+    Task<FileWorkspaceDto> SetPermissionsAsync(SetFilePermissionsRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Authorized permission changes are not implemented.");
 
     Task<string> SaveUploadAsync(string path, Stream stream, CancellationToken cancellationToken = default);
 

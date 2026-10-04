@@ -63,11 +63,11 @@ public sealed class FilesController(
     [HttpGet]
     public async Task<ActionResult<ApiResponse<FileWorkspaceDto>>> GetWorkspaceAsync([FromQuery] string? path, CancellationToken cancellationToken)
     {
-        path ??= string.Empty;
-        using var read = await CaptureFileUseAsync([path], readOnly: true, cancellationToken);
+        var requestedPath = path ?? string.Empty;
+        using var read = await CaptureFileUseAsync([requestedPath], readOnly: true, cancellationToken);
 
         // Customer/Reseller için kök listesi yalnızca etkin sitelerini gösterir (diğer site adları sızmaz).
-        var normalized = (path ?? string.Empty).Replace('\\', '/').Trim('/');
+        var normalized = requestedPath.Replace('\\', '/').Trim('/');
         var scopedSites = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, read.Principal, cancellationToken);
         if (scopedSites is not null
             && (normalized.Length == 0 || string.Equals(normalized, "sites", StringComparison.OrdinalIgnoreCase)))
@@ -95,7 +95,7 @@ public sealed class FilesController(
             return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace));
         }
 
-        var result = await fileService.GetWorkspaceAsync(path, read.ApproveAsync, cancellationToken);
+        var result = await fileService.GetWorkspaceAsync(requestedPath, read.ApproveAsync, cancellationToken);
         await read.RevalidateAsync(cancellationToken);
         return Ok(ApiResponse<FileWorkspaceDto>.Ok(ProjectWorkspace(result, read.Principal)));
     }
@@ -179,10 +179,13 @@ public sealed class FilesController(
     [HttpPost("mkdir")]
     public async Task<ActionResult<ApiResponse<FileWorkspaceDto>>> CreateDirectoryAsync([FromBody] CreateDirectoryRequest request, CancellationToken cancellationToken)
     {
-        await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.Path, allowRoot: false, cancellationToken);
-        var workspace = await fileService.CreateDirectoryAsync(request, cancellationToken);
+        request = new CreateDirectoryRequest { Path = request.Path };
+        using var publication = await CapturePublicationAsync([request.Path], cancellationToken);
+        var workspace = await fileService.CreateDirectoryAsync(request, publication.ApproveAsync, cancellationToken);
+        await publication.RevalidateAsync(cancellationToken);
         await WriteAuditAsync("files.directory_created", request.Path, "Directory created.", cancellationToken);
-        return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace, "files.directory_created"));
+        await publication.RevalidateAsync(cancellationToken);
+        return Ok(ApiResponse<FileWorkspaceDto>.Ok(ProjectWorkspace(workspace, publication.Principal), "files.directory_created"));
     }
 
     /// <summary>
@@ -284,17 +287,25 @@ public sealed class FilesController(
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<FileWorkspaceDto>>> SetPermissionsAsync([FromBody] SetFilePermissionsRequest request, CancellationToken cancellationToken)
     {
-        var workspace = await fileService.SetPermissionsAsync(request, cancellationToken);
+        request = new SetFilePermissionsRequest { Path = request.Path, Principal = request.Principal, Rights = request.Rights };
+        // The attribute protects the initial HTTP boundary; retain that policy for the
+        // immutable actor that is revalidated after site/native/metadata waits as well.
+        if (!User.IsInRole("Administrator"))
+            throw new AdaPanel.Core.Common.AppException("auth.forbidden", 403, 403);
+        using var publication = await CapturePublicationAsync([request.Path], cancellationToken);
+        var workspace = await fileService.SetPermissionsAsync(request, publication.ApproveAsync, cancellationToken);
+        await publication.RevalidateAsync(cancellationToken);
+        var outcomeKey = workspace.PermissionsVerified == true ? "files.acl_updated" : "files.acl_unverified";
 
         // ACL değişikliği bir yetkilendirme olayıdır: kimin neye erişebildiğini değiştirir.
         // Kimin, hangi kullanıcıya, hangi hakkı verdiği tam olarak yazılır.
         await WriteAuditAsync(
-            "files.acl_updated",
+            outcomeKey,
             request.Path,
-            $"Permission '{request.Rights}' granted to '{request.Principal}'.",
+            $"ACL command for '{request.Principal}:{request.Rights}'. {workspace.PermissionsDetail}",
             cancellationToken);
-
-        return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace, "files.acl_updated"));
+        await publication.RevalidateAsync(cancellationToken);
+        return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace, outcomeKey));
     }
 
     [HttpPost("compress")]

@@ -39,6 +39,8 @@ public sealed partial class FtpService(
     // Production uses exactly the existing command/strict-PowerShell execution paths.
     internal Func<string, string, CancellationToken, Task<CommandResult>>? NativeCommand { get; set; }
     internal Func<string, bool, CancellationToken, Task<CommandResult>>? NativeScript { get; set; }
+    // Local SAM status seam; native process output is never interpreted as proof of absence.
+    internal Func<string, CancellationToken, Task<uint>>? NativeAccountStatus { get; set; }
 
     private Task<CommandResult> RunCommandAsync(string fileName, string arguments, CancellationToken cancellationToken) =>
         NativeCommand is { } command ? command(fileName, arguments, cancellationToken)
@@ -810,9 +812,11 @@ public sealed partial class FtpService(
             token.ThrowIfCancellationRequested();
         }
         await Approve(cancellationToken);
+        var exists = await UserExistsAsync(normalizedUserName, cancellationToken);
+        await Approve(cancellationToken);
         await RemoveUserAuthorizationAsync(normalizedUserName, cancellationToken);
 
-        if (await UserExistsAsync(normalizedUserName, cancellationToken))
+        if (exists)
         {
             await Approve(cancellationToken);
             var result = await RunCommandAsync("net.exe", $"user \"{normalizedUserName}\" /delete", cancellationToken: cancellationToken);
@@ -1462,8 +1466,27 @@ public sealed partial class FtpService(
 
     private async Task<bool> UserExistsAsync(string userName, CancellationToken cancellationToken)
     {
-        var result = await RunCommandAsync("net.exe", $"user \"{userName}\"", cancellationToken: cancellationToken);
-        return result.Success;
+        cancellationToken.ThrowIfCancellationRequested();
+        uint status;
+        try
+        {
+            status = NativeAccountStatus is { } query
+                ? await query(userName, cancellationToken)
+                : FtpLocalAccountStatus.Read(userName, cancellationToken);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception error)
+        {
+            // Keep native diagnostics useful without echoing a command, account data, or secrets.
+            throw new AppException("ftp.user_status_unknown", 503, 503, $"Local account lookup failed ({error.GetType().Name}).");
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        return status switch
+        {
+            FtpLocalAccountStatus.Success => true,
+            FtpLocalAccountStatus.UserNotFound => false,
+            _ => throw new AppException("ftp.user_status_unknown", 503, 503, $"NetUserGetInfo status={status}.")
+        };
     }
 
     /// <summary>
@@ -1544,9 +1567,9 @@ public sealed partial class FtpService(
     /// kullanamaz, çünkü <c>EnsureFtpUserScopeAsync</c> kayıtsız adı zaten 403'lüyor.
     /// </para>
     /// <para>
-    /// "Ölçemedik" durumu sessizce "sorun yok"a çevrilmiyor: <c>net.exe</c> hiç çalıştırılamazsa
-    /// <see cref="ProcessRunner"/> istisna fırlatır ve istek düşer; hesap yoksa çıkış kodu sıfır
-    /// olmaz. Yani <c>false</c> yalnızca gerçekten ölçülmüş "hesap yok" anlamına gelir.
+    /// Yalnız yerel SAM sorgusunun NERR_UserNotFound sonucu hesabın yokluğunu kanıtlar.
+    /// Erişim/işletim sistemi hatası ayrı 503 olur; net.exe çıkış kodundan veya yerelleştirilmiş
+    /// hata metninden "hesap yok" sonucu çıkarılmaz.
     /// </para>
     /// </remarks>
     private async Task EnsureUserNameIsClaimableAsync(string userName, string siteName, CancellationToken cancellationToken)

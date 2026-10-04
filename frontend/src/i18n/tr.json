@@ -5553,5 +5553,14 @@
   "panel.ftp.tlsVerifiedHint": "Son değişiklik sunucuda uygulanıp doğrulandı.",
   "panel.ftp.tlsFailedHint": "Son değişiklik sunucuda uygulanamadı; kayıtlı politika korunuyor. Ayrıntıları kontrol edip yeniden deneyin.",
   "panel.ftp.tlsUnknownHint": "Son değişikliğin sunucuda uygulanması doğrulanamadı. Seçili ayarı etkin güvenlik durumu olarak kabul etmeyin.",
-  "files.content_not_editable": "Dosya ikili veri içeriyor veya metin kodlaması doğrulanamadı. İçeriği korumak için düzenleme kapalıdır; özgün dosyayı indirebilirsiniz."
+  "files.content_not_editable": "Dosya ikili veri içeriyor veya metin kodlaması doğrulanamadı. İçeriği korumak için düzenleme kapalıdır; özgün dosyayı indirebilirsiniz.",
+  "panel.files.permissionsTitle": "Erişim izinleri",
+  "panel.files.permissionsTarget": "İşlemin uygulanacağı hedef",
+  "panel.files.permissionsRootHint": "Site kökünün tamamında toplu izin değişikliği yapılamaz. İzinlerini düzenlemek için bir alt klasör veya dosya açın.",
+  "panel.files.permissionsFolderHint": "Seçilen izin bu klasöre ve içindeki tüm alt klasör ve dosyalara uygulanır.",
+  "panel.files.permissionsFileHint": "Seçilen izin yalnız bu dosyaya uygulanır.",
+  "panel.files.permissionsUnverified": "İzin komutu çalıştı, ancak tüm hedeflerde tamamlandığı doğrulanamadı. Erişimi kontrol edin.",
+  "files.acl_unverified": "İzin değişikliğinin tüm hedeflerde tamamlandığı doğrulanamadı.",
+  "ftp.user_status_unknown": "Windows FTP hesabının durumu doğrulanamadı. İşlem tamamlanmadı; yeniden deneyin.",
+  "panel.files.createTarget": "Oluşturulacağı klasör: {path}"
 }

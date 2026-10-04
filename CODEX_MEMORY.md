@@ -1,5 +1,47 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R39 doğrulandı; R38+R39 için 0.8.83 hazırlanıyor
+
+Kaynak sürümleri ve release-body 0.8.83; henüz yayımlanmadı. Public tag ön kontrolü404.
+Son public release hâlâ0.8.82; canlı kurulu sürüm ölçülmedi. Kullanıcının0.8.75 sorusu için
+SelfUpdateService187–208/484–496/950–965 tekrar okundu: başarılı kurulum sonrası eski pending+EXE
+temizliği IsPackageReady=false yapar; bu tek başına hata değildir. Güncel kaynak başarılı check
+sonrası eşit sürümlerde Panel güncel gösterir; checkfailed eşitliği başarı saymaz.
+
+R39 mkdir/ACL HTTP immutable request+principal, actor/SID/delegation/sitegeneration pins,
+resolver/native/finalworkspace/audit sonrası validation. mkdir scoped response PhysicalPath boş,
+admin korunur. Get nullable path tek non-null local ile yakalanır (CS8604 giderildi).
+ACL PermissionCommand neutral seam; icacls /T /C /L. Nonzero exit veya bilinen failed/zero-effect
+summary=>acl_failed; tek ölçülmüş success>0/fail0=>PermissionsVerified=true; bilinmeyen/localized/
+multiple summary=>null+acl_unverified. Kısa fixed detail; effective DACL/access garantisi değildir.
+Descendant junction ve panel dışı filesystem yarışları tam transaction olarak çözülmedi.
+
+FTP NetUserGetInfo(null, username, level0), yalnız2221 absent;0present, diğerstatus/transport503
+ftp.user_status_unknown. Native buffer finally free, cancel korunur; Delete status ilkmutasyondan
+önce ölçülür. Eski native fake lifecycle fixture'lar aynı latch/assertion ile yeni seam'e taşındı.
+Sonraki SOMUT ADAY: HealHomeLinks snapshot-before-await/accountlease yok; Delete ile yarışarak
+silinmiş hesabın linkini yeniden yaratabilir. Lockorder create account→infrastructure olduğundan
+infrastructure→account eklemek deadlockriski; bu tur değiştirilmedi.
+
+FE strict createfile/mkdir/permissions response, createBusy prompt→POST→refresh; duplicate/stale
+context guard. Success+failedrefresh ayrı; unknownACLwarning. UI selectedtarget/scope hints,
+rootnoapplyform, pendingcontrolsdisabled, fileviewnocount, creationpromptparentpath.
+Yeni backend82=File54+FTP28; baseline76=53RED23green. Target38540exit0 968/968; nullablefixsonrası
+full64961exit0: Infra8745+Core2=8747/8747 fail0skip0, build0warning0error. TRX full20261004092650
+ve04092349. YeniFE49; final97411exit0 types+110files2115/2115+Vite. Versionbump sonrası Vite
+yenilendi+wwwrootsync. FE5564/API289 TR/ENparity;6indexassets mevcut. Privacy12/12+0findings,
+release-noteparser/versionguardgreen. Freshcomponents22Passed3standardSkipped0Failed.
+
+Chrome gerçekVue+fakeAPIonly; finalTR390doc390/390form306/306, EN320doc310/310form226/226.
+Unknown/verifiedpermission, pendingcontrols, file/folder/root scope ve newfileparentprompt görüldü.
+Finalimage .tmp/audit-20261004/round39-files-permissions-final-mobile.png; EN320 da mevcut.
+Başlangıç fixture script hazır değilken uyarı vardı, finalreload appconsoleerror0; deneyseli18n
+warning eski. ChromeauditTab39closed/viewportreset, Vite84190terminalCtrlC, __audit39 filesremoved.
+round39-ui-integrity.json kanıtı hazır. Baseline15168/target38540/FE97411/full64961 terminal.
+Tüm agents FINAL FREEZE; root sole.NET. Paketleme ve yayın bundan sonra yapılacak.
+Eski tests/AdaPanel.Infrastructure.Tests/TestResults/ dokunulmadan commit dışında tutulur.
+Canlı kurulum/gerçekmüşterimutasyonu/sourcepush yok. Sürekli hedef ACTIVE kalır.
+
 ## 2026-10-04 — R38 yerelde doğrulandı; son yayın 0.8.82
 
 R38 HENÜZ YAYIMLANMADI, version files0.8.82 kaldı. R37 public release0.8.82 önceki kanıtla aynı;

@@ -26,6 +26,8 @@ export type FileWorkspace = {
   content: string;
   contentLoaded?: boolean;
   contentUnavailableReasonKey?: string;
+  permissionsVerified?: boolean | null;
+  permissionsDetail?: string;
   entries: FileEntry[];
 };
 
@@ -86,7 +88,11 @@ export async function createFile(path: string, content = "") {
     failIfExists: true
   });
 
-  return response.data.data;
+  const result = measuredWorkspace(response.data, path);
+  if (result.isDirectory || result.contentLoaded !== true || result.content !== content || result.entries.length !== 0) {
+    throw new UserFacingError("panel.files.resultUnconfirmed");
+  }
+  return result;
 }
 
 export async function deletePath(path: string) {
@@ -106,7 +112,9 @@ export async function createDirectory(path: string) {
     path
   });
 
-  return response.data.data;
+  const result = measuredWorkspace(response.data, path);
+  if (!result.isDirectory) throw new UserFacingError("panel.files.resultUnconfirmed");
+  return result;
 }
 
 export async function updatePermissions(path: string, principal: string, rights: string) {
@@ -116,7 +124,12 @@ export async function updatePermissions(path: string, principal: string, rights:
     rights
   });
 
-  return response.data.data;
+  const result = measuredWorkspace(response.data, path);
+  if ((result.permissionsVerified != null && typeof result.permissionsVerified !== "boolean") ||
+    (result.permissionsDetail !== undefined && typeof result.permissionsDetail !== "string")) {
+    throw new UserFacingError("panel.files.resultUnconfirmed");
+  }
+  return { ...result, permissionsVerified: result.permissionsVerified ?? null, permissionsDetail: result.permissionsDetail ?? "" };
 }
 
 export async function uploadFile(path: string, file: File) {

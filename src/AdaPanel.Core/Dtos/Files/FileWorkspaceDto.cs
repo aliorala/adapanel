@@ -18,5 +18,10 @@ public sealed class FileWorkspaceDto
 
     public string ContentUnavailableReasonKey { get; set; } = string.Empty;
 
+    /// <summary>ACL command processing only; not a measurement of effective Windows access.</summary>
+    public bool? PermissionsVerified { get; set; }
+
+    public string PermissionsDetail { get; set; } = string.Empty;
+
     public FileEntryDto[] Entries { get; set; } = [];
 }

@@ -223,7 +223,8 @@ public sealed class FtpReadLifecycleTests
                 Fake<IPanelPreferencesService>((method, _) => method.Name == "GetAsync" ? Task.FromResult(new PanelPreferencesDto { ServerAddress = "192.0.2.10" })
                     : throw new NotSupportedException(method.Name)),
                 Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = root }))
-            { NativeCommand = NativeCommand, NativeScript = NativeScript };
+            { NativeCommand = (_, _, _) => throw new InvalidOperationException("Read paths must not invoke an account command."),
+                NativeAccountStatus = NativeAccountStatus, NativeScript = NativeScript };
             sessions = new SessionRevocationStore(store);
             services = new ServiceCollection().AddSingleton(Db).AddSingleton(sessions).AddSingleton<IConcurrencyLock, ConcurrencyLock>()
                 .AddSingleton<IFtpService>(Service).AddSingleton<ICustomerScopeService>(Scopes).AddSingleton<IIisSiteService>(sites)
@@ -302,13 +303,12 @@ public sealed class FtpReadLifecycleTests
             if (Interlocked.Increment(ref NativeCalls) == 1 && pause)
             { entered.TrySetResult(); await release.Task.WaitAsync(Token); }
         }
-        private async Task<CommandResult> NativeCommand(string executable, string arguments, CancellationToken token)
+        private async Task<uint> NativeAccountStatus(string userName, CancellationToken token)
         {
-            Assert.Equal("net.exe", executable);
-            Assert.StartsWith("user \"account_", arguments);
-            Assert.DoesNotContain("/", arguments);
+            Assert.StartsWith("account_", userName);
+            Assert.DoesNotContain("/", userName);
             await WaitNative();
-            return new CommandResult { ExitCode = 0 };
+            return 0;
         }
         private async Task<CommandResult> NativeScript(string script, bool strict, CancellationToken token)
         {

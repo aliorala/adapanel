@@ -48,7 +48,7 @@
             </option>
           </select>
         </template>
-        <span class="status-pill">{{ workspace?.entries.length ?? 0 }} {{ t("panel.files.items") }}</span>
+        <span v-if="workspace?.isDirectory && !loading && !workspaceLoad.message.value" class="status-pill">{{ workspace.entries.length }} {{ t("panel.files.items") }}</span>
       </div>
     </div>
 
@@ -110,10 +110,10 @@
           <!-- Oluşturma düğmeleri yalnız KLASÖR görünümünde anlamlı: bir dosya açıkken
                `workspace.path` o dosyanın yoludur ve altına klasör/dosya yaratmak sessizce
                yanlış yere yazmak olurdu. -->
-          <button class="secondary compact" v-bind="writeGate(!workspace?.isDirectory)" @click="createFolder">
+          <button class="secondary compact" v-bind="writeGate(createBusy || permissionsBusy || loading || Boolean(workspaceLoad.message.value) || !workspace?.isDirectory)" @click="createFolder">
             {{ t("panel.files.createFolder") }}
           </button>
-          <button class="secondary compact" v-bind="writeGate(!workspace?.isDirectory)" @click="createNewFile">
+          <button class="secondary compact" v-bind="writeGate(createBusy || permissionsBusy || loading || Boolean(workspaceLoad.message.value) || !workspace?.isDirectory)" @click="createNewFile">
             {{ t("panel.files.createFile") }}
           </button>
         </div>
@@ -372,13 +372,20 @@
         </a>
       </div>
 
-      <!-- İZİNLER, günlük dosya işlerinin değil YÖNETİMİN alanıdır: her açılışta kartın altında
-           aynı ağırlıkta durması, "her dosya için doldurulacak bir form" izlenimi veriyordu.
-           İşlev aynı; yalnızca ayırıcı çizgi ve daha küçük bir başlıkla ikincil sıraya alındı. -->
-      <form v-if="workspace && isAdmin" class="permissions-row" @submit.prevent="savePermissions">
+      <!-- Yönetim işleminin hedefi ve kapsamı, izin alanlarından önce gösterilir. -->
+      <section v-if="workspace && isAdmin && !loading && !workspaceLoad.message.value" class="permissions-section" aria-labelledby="file-permissions-title">
+        <header>
+          <h3 id="file-permissions-title">{{ t('panel.files.permissionsTitle') }}</h3>
+          <p v-if="workspace.path === siteRootPath" class="field-hint">{{ t('panel.files.permissionsRootHint') }}</p>
+          <template v-else>
+            <p class="permission-target"><span>{{ t('panel.files.permissionsTarget') }}</span><strong>{{ workspace.path }}</strong></p>
+            <p id="file-permissions-scope" class="field-hint">{{ t(workspace.isDirectory ? 'panel.files.permissionsFolderHint' : 'panel.files.permissionsFileHint') }}</p>
+          </template>
+        </header>
+      <form v-if="workspace.path !== siteRootPath" class="permissions-row" :aria-busy="permissionsBusy" aria-describedby="file-permissions-scope" @submit.prevent="savePermissions">
         <label>
           <span class="field-label">{{ t("panel.security.principal") }}</span>
-          <input v-model="permissionPrincipal" placeholder="IIS_IUSRS" />
+          <input v-model="permissionPrincipal" :disabled="permissionsBusy" required autocomplete="off" spellcheck="false" placeholder="IIS_IUSRS" />
         </label>
         <!-- SEÇENEKLER ANLAMLARIYLA YAZILIYOR. Liste yalnız "R / M / F" gösteriyordu; bunlar
              icacls'in ham kodlarıdır ve seçili değer olarak ekranda tek başına duran "M"
@@ -387,14 +394,15 @@
              yazıldı. Gönderilen değer aynı: R / M / F. -->
         <label>
           <span class="field-label">{{ t("panel.security.rights") }}</span>
-          <select v-model="permissionRights">
+          <select v-model="permissionRights" :disabled="permissionsBusy">
             <option value="R">{{ t("panel.security.rights.read") }}</option>
             <option value="M">{{ t("panel.security.rights.modify") }}</option>
             <option value="F">{{ t("panel.security.rights.full") }}</option>
           </select>
         </label>
-        <button type="submit" class="secondary compact" v-bind="writeGate()">{{ t("panel.files.permissions") }}</button>
+        <button type="submit" class="secondary compact" v-bind="writeGate(!canSetPermissions || !permissionPrincipal.trim())">{{ permissionsBusy ? t("panel.confirm.working") : t("panel.files.permissions") }}</button>
       </form>
+      </section>
     </section>
 
     <section v-else class="form-surface workspace-card">
@@ -636,6 +644,11 @@ const deleteBusy = ref(false);
 const visiblePaths = computed(() => filePager.items.value.map((entry) => entry.path));
 const permissionPrincipal = ref("IIS_IUSRS");
 const permissionRights = ref("M");
+const createBusy = ref(false);
+const permissionsBusy = ref(false);
+const canSetPermissions = computed(() => isFileViewActive() && isAdmin.value && !locked.value &&
+  !createBusy.value && !permissionsBusy.value && !loading.value && !workspaceLoad.message.value &&
+  Boolean(workspace.value && siteRootPath.value && workspace.value.path.toLowerCase() !== siteRootPath.value.toLowerCase()));
 
 // TAŞI / KOPYALA hedef formu. `window.prompt` yerine ekranın kendi alanları: hedef listeden
 // seçilebilir, üzerine yazma BİLİNÇLİ bir kutudur (varsayılan kapalı) ve iptal edilebilir.
@@ -833,7 +846,7 @@ async function openPath(path: string) {
   // Klasör değişince açık hedef formu ANLAMSIZ kalır: seçim gitti, hedef başka klasörün yolu.
   transferMode.value = null;
   filePager.reset();
-  await refresh(path);
+  return await refresh(path);
 }
 
 async function uploadSelectedFiles(event: Event) {
@@ -1131,16 +1144,18 @@ async function runArchive(operation: () => Promise<FileWorkspace>, messageKey: s
 }
 
 async function savePermissions() {
-  if (!workspace.value) {
-    return;
-  }
-
+  if (!canSetPermissions.value || !workspace.value) return;
+  const isCurrent = currentFileContext(false);
+  const path = workspace.value.path, principal = permissionPrincipal.value, rights = permissionRights.value;
+  permissionsBusy.value = true;
   try {
-    await updatePermissions(workspace.value.path, permissionPrincipal.value, permissionRights.value);
-    showNotice(t("panel.files.permissionsSaved"), false);
+    const result = await updatePermissions(path, principal, rights);
+    if (!isCurrent()) return;
+    if (result.permissionsVerified === true) showNotice(t("panel.files.permissionsSaved"), false);
+    else showNotice([t("panel.files.permissionsUnverified"), result.permissionsDetail].filter(Boolean).join("\n\n"), true);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  }
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
+  } finally { permissionsBusy.value = false; }
 }
 
 /*
@@ -1152,27 +1167,27 @@ async function savePermissions() {
  * başarısızlık burada doğrudan VERİ KAYBIDIR.
  */
 async function createFolder() {
-  if (disposed || locked.value || !workspace.value?.isDirectory) return;
-  const isCurrent = currentFileContext();
+  if (!isFileViewActive() || locked.value || createBusy.value || permissionsBusy.value || loading.value || workspaceLoad.message.value || !workspace.value?.isDirectory) return;
+  const isCurrent = currentFileContext(false);
   const parentPath = workspace.value.path;
-  const folderName = await prompt({
-    title: t("panel.files.folderPrompt"),
-    label: t("panel.files.name"),
-    defaultValue: "new-folder"
-  });
-  if (!folderName || !isCurrent() || locked.value) {
-    return;
-  }
-
-  const basePath = `${parentPath}/${folderName}`;
+  createBusy.value = true;
   try {
+    const folderName = await prompt({
+      title: t("panel.files.folderPrompt"),
+      message: t("panel.files.createTarget", { path: parentPath }),
+      label: t("panel.files.name"),
+      defaultValue: "new-folder"
+    });
+    if (!folderName?.trim() || !isCurrent() || locked.value || workspaceLoad.message.value) return;
+    const basePath = `${parentPath}/${folderName.trim()}`;
     await createDirectory(basePath);
     if (!isCurrent()) return;
-    await refresh(parentPath);
-    showNotice(t("panel.files.folderCreated"), false);
+    const refreshed = await refreshAfterFileOperation(parentPath, isCurrent);
+    if (!isCurrent() || refreshed === undefined) return;
+    reportFileOperation(t("panel.files.folderCreated"), false, refreshed);
   } catch (error) {
     if (isCurrent()) showNotice(resolveApiMessage(error), true);
-  }
+  } finally { createBusy.value = false; }
 }
 
 /**
@@ -1183,42 +1198,44 @@ async function createFolder() {
  * Sunucudaki CreateNew, iki oturum aynı anda oluştursa da mevcut dosyanın ezilmesini engeller.
  */
 async function createNewFile() {
-  if (disposed || locked.value || !workspace.value?.isDirectory) return;
-  const isCurrent = currentFileContext();
+  if (!isFileViewActive() || locked.value || createBusy.value || permissionsBusy.value || loading.value || workspaceLoad.message.value || !workspace.value?.isDirectory) return;
+  const isCurrent = currentFileContext(false);
   const parentPath = workspace.value.path;
-  const fileName = await prompt({
-    title: t("panel.files.filePrompt"),
-    label: t("panel.files.name"),
-    placeholder: ".htaccess"
-  });
-  if (!fileName || !isCurrent() || locked.value) {
-    return;
-  }
-
-  const name = fileName.trim();
-  // Ad bir YOL olamaz: "alt/klasor/dosya" ya da ".." arka uçta sanal alan denetimine takılır;
-  // kullanıcı bunu isteği göndermeden önce öğrensin.
-  if (/[\\/:*?"<>|]/.test(name)) {
-    showNotice(t("files.invalid_name"), true);
-    return;
-  }
-
-  if (entries.value.some((entry) => entry.name.toLowerCase() === name.toLowerCase())) {
-    showNotice(t("panel.files.fileExists"), true);
-    return;
-  }
-
-  const basePath = `${parentPath}/${name}`;
+  createBusy.value = true;
   try {
+    const fileName = await prompt({
+      title: t("panel.files.filePrompt"),
+      message: t("panel.files.createTarget", { path: parentPath }),
+      label: t("panel.files.name"),
+      placeholder: ".htaccess"
+    });
+    if (!fileName?.trim() || !isCurrent() || locked.value || workspaceLoad.message.value) return;
+    const name = fileName.trim();
+    // Ad bir YOL olamaz: "alt/klasor/dosya" ya da ".." arka uçta sanal alan denetimine takılır;
+    // kullanıcı bunu isteği göndermeden önce öğrensin.
+    if (/[\\/:*?"<>|]/.test(name)) {
+      showNotice(t("files.invalid_name"), true);
+      return;
+    }
+
+    if (entries.value.some((entry) => entry.name.toLowerCase() === name.toLowerCase())) {
+      showNotice(t("panel.files.fileExists"), true);
+      return;
+    }
+
+    const basePath = `${parentPath}/${name}`;
     await createFile(basePath);
     if (!isCurrent()) return;
     // Dosya oluşturulup DÜZENLEYİCİDE açılır: "oluştur" sonrası kullanıcı ayrıca aramak
     // zorunda kalmasın.
-    await openPath(basePath);
-    showNotice(t("panel.files.fileCreated"), false);
+    const refreshed = await openPath(basePath);
+    // openPath owns the destination read and returns no result for a stale request.
+    if (!isFileViewActive() || refreshed === undefined) return;
+    if (!refreshed) workspaceLoad.message.value = t("panel.files.refreshAfterOperationFailed");
+    reportFileOperation(t("panel.files.fileCreated"), false, refreshed);
   } catch (error) {
     if (isCurrent()) showNotice(resolveApiMessage(error), true);
-  }
+  } finally { createBusy.value = false; }
 }
 
 /**
@@ -1923,9 +1940,19 @@ async function restore(record: BackupRecord) {
 
 /* İzinler kartın ALT şeridi: üstündeki ayırıcı çizgi, buranın günlük dosya işlerinden ayrı bir
    yönetim alanı olduğunu söyler. */
-.permissions-row {
+.permissions-section {
   padding-top: 12px;
   border-top: 1px solid var(--panel-border);
+  display: grid;
+  gap: var(--sp-12);
+  min-width: 0;
+}
+.permissions-section h3 { margin: 0 0 var(--sp-8); }
+.permissions-section .field-hint { margin: var(--sp-8) 0 0; }
+.permission-target { display: grid; gap: var(--sp-4); margin: 0; }
+.permission-target span { color: var(--text-muted); font-size: var(--fs-xs); }
+.permission-target strong { overflow-wrap: anywhere; font-weight: 600; }
+.permissions-row {
   flex-wrap: wrap;
 }
 
@@ -1933,7 +1960,7 @@ async function restore(record: BackupRecord) {
   display: grid;
   gap: 5px;
   flex: 1;
-  min-width: 180px;
+  min-width: min(180px, 100%);
 }
 
 /* Hizalamanın anlam taşıdığı dosyalar (.htaccess, web.config, robots.txt) orantılı yazı tipinde

@@ -336,7 +336,7 @@ public sealed class FtpAccountLifecycleTests
                 Fake<IPanelPreferencesService>((method, _) => method.Name == "GetAsync" ? Task.FromResult(new PanelPreferencesDto())
                     : throw new NotSupportedException(method.Name)),
                 Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = root }))
-            { NativeCommand = Command, NativeScript = Script };
+            { NativeCommand = Command, NativeScript = Script, NativeAccountStatus = Lookup };
             sessions = new SessionRevocationStore(store);
             var audit = new AuditService(Db, Scopes, store);
             services = new ServiceCollection().AddSingleton(Db).AddSingleton(sessions).AddSingleton<IConcurrencyLock, ConcurrencyLock>()
@@ -431,24 +431,27 @@ public sealed class FtpAccountLifecycleTests
             _ => throw new InvalidOperationException(change)
         };
 
-        private async Task<CommandResult> Command(string name, string arguments, CancellationToken token)
+        private async Task<uint> Lookup(string name, CancellationToken token)
         {
-            if (name == "net.exe" && arguments == $"user \"{UserName}\"")
+            Assert.Equal(UserName, name);
+            var measured = WindowsAccountExists;
+            if (pause && Interlocked.Increment(ref queryCount) == pauseQuery)
             {
-                var measured = WindowsAccountExists;
-                if (pause && Interlocked.Increment(ref queryCount) == pauseQuery)
-                {
-                    entered.TrySetResult();
-                    // An external probe can complete normally despite caller cancellation.
-                    // Its consumer must still check the token before starting a write.
-                    await release.Task.WaitAsync(Token);
-                }
-                return new CommandResult { ExitCode = measured ? 0 : 2 };
+                entered.TrySetResult();
+                // An external probe can complete normally despite caller cancellation.
+                // Its consumer must still check the token before starting a write.
+                await release.Task.WaitAsync(Token);
             }
+            return measured ? 0u : 2221u;
+        }
+
+        private Task<CommandResult> Command(string name, string arguments, CancellationToken token)
+        {
+            Assert.False(name == "net.exe" && arguments == $"user \"{UserName}\"", "Account reads must use their structured native seam.");
             Effects.Add(name + " " + (name == "net.exe" ? arguments.Replace("FixturePassword123!", "[redacted]") : "fixture mutation"));
             if (arguments.Contains("/add", StringComparison.Ordinal)) WindowsAccountExists = true;
             if (arguments.Contains("/delete", StringComparison.Ordinal)) WindowsAccountExists = false;
-            return new CommandResult { ExitCode = 0 };
+            return Task.FromResult(new CommandResult { ExitCode = 0 });
         }
 
         private async Task<CommandResult> Script(string script, bool strict, CancellationToken token)

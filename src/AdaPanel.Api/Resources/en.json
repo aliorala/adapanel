@@ -285,5 +285,7 @@
   "backup.ownership_unconfirmed": "The selected databases could not be confirmed as belonging to the same account as this site. The backup did not start. Check your database selection or ask your administrator to verify the ownership records.",
   "ftp.user_changed": "The FTP account changed while this operation was waiting. Refresh the account list and try again.",
   "files.content_too_large": "The file exceeds the 1 MB editing limit, so its contents were not loaded. You can download the original file.",
-  "files.content_not_editable": "The file contains binary data or its text encoding could not be verified. Editing is disabled to preserve its contents; you can download the original file."
+  "files.content_not_editable": "The file contains binary data or its text encoding could not be verified. Editing is disabled to preserve its contents; you can download the original file.",
+  "files.acl_unverified": "Completion of the permission change on every target could not be verified.",
+  "ftp.user_status_unknown": "The Windows FTP account status could not be verified. The operation did not complete; try again."
 }
