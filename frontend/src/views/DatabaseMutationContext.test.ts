@@ -63,6 +63,7 @@ async function mount(configure?: (store: ReturnType<typeof useDatabasesStore>) =
   vi.spyOn(store, "importDatabase").mockResolvedValue(workspace()); vi.spyOn(store, "registerCredentials").mockResolvedValue(store.engines[0]);
   vi.spyOn(store, "grantAccess").mockResolvedValue(workspace());
   software.catalog = { installed: [{ componentId: "mariadb-11", status: "Installed" }, { componentId: "mysql-8", status: "Installed" }], defaults: [], manifest: [] } as unknown as SoftwareCatalog;
+  software.loaded = true;
   vi.spyOn(software, "fetchCatalog").mockImplementation(async () => software.catalog!); vi.spyOn(software, "installComponent").mockResolvedValue({} as never);
   vi.spyOn(useSitesStore(), "fetchSites").mockResolvedValue([]);
   configure?.(store);

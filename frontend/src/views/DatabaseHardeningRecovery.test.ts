@@ -54,6 +54,8 @@ async function mount(engine = status(), configure?: (store: ReturnType<typeof us
   vi.spyOn(store, "createDatabase").mockResolvedValue(workspace()); vi.spyOn(store, "createUser").mockResolvedValue(workspace());
   vi.spyOn(store, "importDatabase").mockResolvedValue(workspace()); vi.spyOn(store, "registerCredentials").mockResolvedValue(engine);
   useSoftwareStore().catalog = { installed: [{ componentId: "mariadb-11", status: "Installed" }, { componentId: "mysql-8", status: "Installed" }], defaults: [], manifest: [] } as unknown as SoftwareCatalog;
+  useSoftwareStore().loaded = true;
+  vi.spyOn(useSoftwareStore(), "fetchCatalog").mockImplementation(async () => useSoftwareStore().catalog!);
   vi.spyOn(useSitesStore(), "fetchSites").mockResolvedValue([]); configure?.(store);
   app = renderer.createApp({ ...DatabasesView, render: () => h("section") } as Component).use(pinia); app.provide(ssrContextKey, {});
   const state = (app.mount({}).$ as unknown as { setupState: State }).setupState; await flush(); return { state, store };

@@ -3,8 +3,8 @@ import { toRaw } from "vue";
 import { CanceledError } from "axios";
 import { apiClient, getSessionEpoch } from "../api/client";
 import type { OperationProgress } from "./setup";
-import { installSoftwareComponent, installSoftwareDefaults, removeSoftwareComponent, type ComponentInstallResult, type ComponentRemovalResult } from "../api/software";
-export type { ComponentInstallResult } from "../api/software";
+import { installSoftwareComponent, installSoftwareDefaults, measuredSoftwareCatalog, removeSoftwareComponent, type ComponentInstallResult, type ComponentRemovalResult, type SoftwareCatalog } from "../api/software";
+export type { ComponentInstallResult, ComponentManifestItem, InstalledComponent, SoftwareCatalog } from "../api/software";
 import { UserFacingError } from "../utils/apiError";
 
 // A measured DELETE result survives a failed follow-up read, while existing callers
@@ -41,49 +41,6 @@ type ApiEnvelope<T> = {
   data: T;
   message: string;
   code: number;
-};
-
-export type ComponentManifestItem = {
-  id: string;
-  displayName: string;
-  version: string;
-  type: string;
-  downloadUrl: string;
-  sha256: string;
-  installDir: string;
-  postInstall: string[];
-  dependencies: string[];
-  serviceName: string;
-  silentArgs: string;
-  note: string;
-  default: boolean;
-};
-
-export type InstalledComponent = {
-  id: string;
-  componentId: string;
-  displayName: string;
-  version: string;
-  type: string;
-  installDir: string;
-  serviceName: string;
-  status: string;
-  lastError: string;
-  generatedPassword: string;
-  isSystemDetected: boolean;
-  detectionSource: string;
-  availableVersion: string;
-  updateAvailable: boolean;
-  /** Üst sürüm canlı sorgulanabiliyor mu; false ise "güncel" değil "bilinmiyor". */
-  versionCheckSupported: boolean;
-  versionCheckFailed: boolean;
-  installedAtUtc: string;
-};
-
-export type SoftwareCatalog = {
-  manifest: ComponentManifestItem[];
-  defaults: ComponentManifestItem[];
-  installed: InstalledComponent[];
 };
 
 type BusyKey = "loading" | "checkingUpdates" | "installingComponentId" | "installingDefaults" | "removingComponentId";
@@ -154,7 +111,7 @@ export const useSoftwareStore = defineStore("software", {
   getters: {
     incompleteCheckCount: (state) =>
       (state.catalog?.installed ?? []).filter((item) => !item.isSystemDetected && item.status.toLowerCase() === "installed"
-        && (!item.versionCheckSupported || item.versionCheckFailed)).length,
+        && (!item.versionCheckSupported || item.versionCheckFailed || !item.version?.trim() || !item.availableVersion?.trim())).length,
     updatableCount: (state) =>
       (state.catalog?.installed ?? []).filter((item) => item.updateAvailable).length,
     failedCount: (state) =>
@@ -168,17 +125,15 @@ export const useSoftwareStore = defineStore("software", {
       this.loaded = false;
 
       try {
-        const response = await apiClient.get<ApiEnvelope<SoftwareCatalog>>("/software");
+        const response = await apiClient.get<ApiEnvelope<unknown>>("/software");
         assertCurrentSession(request);
-        if (response.data?.success !== true || !response.data.data ||
-          !Array.isArray(response.data.data.manifest) || !Array.isArray(response.data.data.defaults) ||
-          !Array.isArray(response.data.data.installed)) throw new UserFacingError("panel.software.resultUnconfirmed");
+        const catalog = measuredSoftwareCatalog(response.data);
         // Yalnız BAŞARIDA: hata fırlarsa bayrak false kalır, ekran "bileşen yok" demez.
         if (request.requests.catalogReadId === request.id && request.requests.revision === request.revision) {
-          this.catalog = response.data.data;
+          this.catalog = catalog;
           this.loaded = true;
         }
-        return response.data.data;
+        return catalog;
       } finally {
         if (ownsBusy(request, "loading")) this.loading = false;
       }
@@ -199,16 +154,18 @@ export const useSoftwareStore = defineStore("software", {
       this.loaded = false;
 
       try {
-        const response = await apiClient.post<ApiEnvelope<SoftwareCatalog>>("/software/updates/check", {});
+        const response = await apiClient.post<ApiEnvelope<unknown>>("/software/updates/check", {});
+        assertCurrentSession(request);
+        const catalog = measuredSoftwareCatalog(response.data);
         if (finishCatalogWrite(request)) {
-          this.catalog = response.data.data;
+          this.catalog = catalog;
           this.loaded = true;
         } else {
           // Another mutation overlapped this check; its response may predate that mutation.
           await this.fetchCatalog();
         }
         assertCurrentSession(request);
-        return response.data.data;
+        return catalog;
       } catch (error) {
         assertCurrentSession(request);
         throw error;

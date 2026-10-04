@@ -11,6 +11,112 @@ type ApiEnvelope<T> = {
 
 export type ComponentRemovalResult = { componentId: string; warnings: string[] };
 
+export type ComponentManifestItem = {
+  id: string;
+  displayName: string;
+  version: string;
+  type: string;
+  downloadUrl: string;
+  sha256: string;
+  installDir: string;
+  postInstall: string[];
+  dependencies: string[];
+  serviceName: string;
+  silentArgs: string;
+  note: string;
+  default: boolean;
+};
+
+export type InstalledComponent = {
+  id: string;
+  componentId: string;
+  displayName: string;
+  version: string;
+  type: string;
+  installDir: string;
+  serviceName: string;
+  status: string;
+  lastError: string;
+  generatedPassword: string;
+  isSystemDetected: boolean;
+  detectionSource: string;
+  availableVersion: string;
+  updateAvailable: boolean;
+  versionCheckSupported: boolean;
+  versionCheckFailed: boolean;
+  installedAtUtc: string;
+};
+
+export type SoftwareCatalog = {
+  manifest: ComponentManifestItem[];
+  defaults: ComponentManifestItem[];
+  installed: InstalledComponent[];
+};
+
+function invalidCatalog(): never { throw new UserFacingError("panel.software.resultUnconfirmed"); }
+function catalogObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return invalidCatalog();
+  return value as Record<string, unknown>;
+}
+function catalogText(row: Record<string, unknown>, key: string, emptyDefault = false): string {
+  const value = row[key];
+  // The manifest producer permits null optional text; keep it usable as unknown,
+  // rather than treating missing versions, notes or service names as evidence.
+  if (emptyDefault && value == null) return "";
+  return typeof value === "string" ? value : invalidCatalog();
+}
+function catalogIdentity(row: Record<string, unknown>, key: string): string {
+  const value = catalogText(row, key);
+  return value.trim() ? value : invalidCatalog();
+}
+function catalogBoolean(row: Record<string, unknown>, key: string): boolean {
+  return typeof row[key] === "boolean" ? row[key] as boolean : invalidCatalog();
+}
+function catalogStrings(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some(item => typeof item !== "string")) return invalidCatalog();
+  return [...value];
+}
+function catalogManifest(value: unknown): ComponentManifestItem {
+  const row = catalogObject(value);
+  return {
+    ...row,
+    id: catalogIdentity(row, "id"), displayName: catalogText(row, "displayName"),
+    version: catalogText(row, "version", true), type: catalogText(row, "type"),
+    downloadUrl: catalogText(row, "downloadUrl", true), sha256: catalogText(row, "sha256", true),
+    installDir: catalogText(row, "installDir"), postInstall: catalogStrings(row.postInstall ?? []),
+    dependencies: catalogStrings(row.dependencies ?? []), serviceName: catalogText(row, "serviceName", true),
+    silentArgs: catalogText(row, "silentArgs", true), note: catalogText(row, "note", true),
+    default: row.default === undefined ? false : catalogBoolean(row, "default")
+  };
+}
+function catalogInstalled(value: unknown): InstalledComponent {
+  const row = catalogObject(value), status = catalogText(row, "status");
+  if (!["pending", "installed", "failed"].includes(status.toLowerCase())) return invalidCatalog();
+  return {
+    ...row,
+    id: catalogIdentity(row, "id"), componentId: catalogIdentity(row, "componentId"),
+    displayName: catalogText(row, "displayName"), status,
+    version: catalogText(row, "version", true), type: catalogText(row, "type", true),
+    installDir: catalogText(row, "installDir", true), serviceName: catalogText(row, "serviceName", true),
+    lastError: catalogText(row, "lastError", true), generatedPassword: catalogText(row, "generatedPassword", true),
+    detectionSource: catalogText(row, "detectionSource", true), availableVersion: catalogText(row, "availableVersion", true),
+    installedAtUtc: catalogText(row, "installedAtUtc", true),
+    isSystemDetected: catalogBoolean(row, "isSystemDetected"), updateAvailable: catalogBoolean(row, "updateAvailable"),
+    versionCheckSupported: catalogBoolean(row, "versionCheckSupported"), versionCheckFailed: catalogBoolean(row, "versionCheckFailed")
+  };
+}
+
+/** Both catalog endpoints publish the same DTO; validate before replacing a measured snapshot. */
+export function measuredSoftwareCatalog(value: unknown): SoftwareCatalog {
+  const envelope = catalogObject(value), data = catalogObject(envelope.data);
+  if (envelope.success !== true || !Array.isArray(data.manifest) || !Array.isArray(data.defaults) || !Array.isArray(data.installed)) return invalidCatalog();
+  const manifest = data.manifest.map(catalogManifest), defaults = data.defaults.map(catalogManifest), installed = data.installed.map(catalogInstalled);
+  const unique = (ids: string[]) => new Set(ids.map(id => id.toLowerCase())).size === ids.length;
+  if (!unique(manifest.map(item => item.id)) || !unique(defaults.map(item => item.id)) ||
+    !unique(installed.map(item => item.componentId)) || !unique(installed.map(item => item.id))) return invalidCatalog();
+  return { manifest, defaults, installed };
+}
+
 export type ComponentInstallResult = {
   componentId: string;
   displayName: string;

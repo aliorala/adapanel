@@ -25,10 +25,10 @@ async function mount(status: string, version = "", updateAvailable = false) {
       downloadUrl: "", sha256: "", postInstall: [], dependencies: [], serviceName: "", silentArgs: "", note: "", default: false }],
     defaults: [], installed: [{ id: "1", componentId: "test", displayName: "Test", version, status, updateAvailable,
       versionCheckSupported: true, versionCheckFailed: false, type: "Zip", installDir: "test", serviceName: "", lastError: "", generatedPassword: "",
-      isSystemDetected: false, detectionSource: "", availableVersion: "", installedAtUtc: "2026-01-01T00:00:00Z" }]
+      isSystemDetected: false, detectionSource: "", availableVersion: updateAvailable ? "2.0.0" : version, installedAtUtc: "2026-01-01T00:00:00Z" }]
   };
   store.catalog = catalog; store.loaded = true;
-  vi.mocked(apiClient.post).mockResolvedValue({ data: { data: catalog } });
+  vi.mocked(apiClient.post).mockResolvedValue({ data: { success: true, data: catalog } });
   const renderer = createRenderer<object, object>({
     createElement: () => ({}), createText: () => ({}), createComment: () => ({}),
     insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {},
@@ -101,7 +101,7 @@ it("still counts updates for healthy older installations", async () => {
 it("reports both failed attempts and available updates", async () => {
   const { state } = await mount("Failed");
   const store = useSoftwareStore();
-  store.catalog!.installed.push({ ...store.catalog!.installed[0], componentId: "other", status: "Installed", updateAvailable: true });
+  store.catalog!.installed.push({ ...store.catalog!.installed[0], id: "2", componentId: "other", status: "Installed", version: "1.0.0", availableVersion: "2.0.0", updateAvailable: true });
   await state.checkForUpdates();
   expect(state.notice).toContain('updatesWithFailures{"failed":1,"count":1}');
   expect(state.noticeError).toBe(true);

@@ -92,7 +92,7 @@
           </span>
           <button
             class="secondary compact"
-            :disabled="!selectedEngineInstalled || refreshing || databasesStore.loadingEngine === selectedEngine"
+            :disabled="catalogPending || refreshing || installing || hardening || Boolean(softwareStore.installingComponentId) || databasesStore.loadingEngine === selectedEngine"
             @click="refreshWorkspace">
             {{ t("panel.database.refresh") }}
           </button>
@@ -112,7 +112,12 @@
         </div>
       </div>
 
-      <section v-if="selectedEngine === 'mssql' && !workspace" class="compact-state">
+      <section v-if="!catalogReady" class="compact-state" role="status">
+        <strong>{{ t("panel.database.catalogUnknown") }}</strong>
+        <span>{{ t(catalogPending ? "panel.common.loading" : "panel.database.catalogUnavailable") }}</span>
+      </section>
+
+      <section v-else-if="selectedEngine === 'mssql' && !workspace" class="compact-state">
         <strong>{{ t("panel.database.mssqlTitle") }}</strong>
         <span>{{ t("panel.database.mssqlPlaceholder") }}</span>
       </section>
@@ -128,7 +133,7 @@
           <button
             v-if="selectedEngineMeta?.componentId"
             class="compact"
-            :disabled="!softwareStore.catalog || installing || Boolean(softwareStore.installingComponentId)"
+            :disabled="!catalogReady || installing || Boolean(softwareStore.installingComponentId)"
             @click="installSelectedEngine">
             {{ softwareStore.installingComponentId === selectedEngineMeta?.componentId ? t("panel.software.installing") : t("panel.database.installAction") }}
           </button>
@@ -1081,8 +1086,10 @@ const engines = computed(() => ([
   { key: "mssql", label: t("panel.database.engine.mssql"), componentId: "" }
 ]));
 
+const catalogPending = computed(() => softwareStore.loading || softwareStore.checkingUpdates);
+const catalogReady = computed(() => softwareStore.loaded && !!softwareStore.catalog && !catalogPending.value);
 const installedComponentIds = computed(() => new Set(
-  (softwareStore.catalog?.installed ?? [])
+  (catalogReady.value ? softwareStore.catalog!.installed : [])
     .filter((component) => component.status.toLowerCase() === "installed")
     .map((component) => component.componentId)));
 
@@ -1105,6 +1112,14 @@ const defaultAdminUser = computed(() =>
   selectedEngine.value === "postgresql" ? "postgres" : "root");
 
 const workspace = computed(() => databasesStore.currentWorkspace);
+watch(catalogReady, ready => {
+  if (!ready) {
+    workspaceReadSequence++;
+    workspaceReady.value = false;
+    engineStatusReadSequence++;
+    engineStatusMeasured.value = false;
+  }
+}, { flush: "sync" });
 
 // Arama kutusundan ETKİLENMEYEN tam liste: form açılır listeleri bunu kullanır. Bir formdaki
 // seçenekleri tablo aramasına bağlamak, kullanıcının aradığı anda seçim yapamamasına yol açar.
@@ -1148,10 +1163,10 @@ watch(databaseSearch, () => {
 onMounted(async () => {
   const context = captureContext();
   try {
-    if (!softwareStore.catalog && !softwareStore.loading) {
+    if (!catalogReady.value) {
       await softwareStore.fetchCatalog();
     }
-    if (!contextCurrent(context)) return;
+    if (!contextCurrent(context) || !catalogReady.value) return;
     await readEngineStatuses(context);
     if (!contextCurrent(context)) return;
     selectInitialEngine();
@@ -1357,6 +1372,7 @@ function engineStatusFor(engineKey: string) {
 }
 
 function engineBadgeClass(engineKey: string) {
+  if (!catalogReady.value) return "muted";
   if (engineKey === "mssql") {
     return databasesStore.workspaces.mssql ? "ok" : "muted";
   }
@@ -1371,6 +1387,7 @@ function engineBadgeClass(engineKey: string) {
 }
 
 function engineBadgeLabel(engineKey: string) {
+  if (!catalogReady.value) return t("panel.database.catalogUnknown");
   if (engineKey === "mssql") {
     return databasesStore.workspaces.mssql
       ? t("panel.php.installedState")
@@ -1397,7 +1414,7 @@ function selectedComponentId(engineKey: string) {
 
 async function installSelectedEngine() {
   const context = captureContext(), component = selectedEngineMeta.value?.componentId;
-  if (!contextCurrent(context) || installing.value || !softwareStore.catalog || !component || selectedEngineInstalled.value || softwareStore.installingComponentId) {
+  if (!contextCurrent(context) || installing.value || !catalogReady.value || !component || selectedEngineInstalled.value || softwareStore.installingComponentId) {
     return;
   }
   installing.value = true;
@@ -1417,16 +1434,19 @@ async function installSelectedEngine() {
 
 async function refreshWorkspace() {
   const context = captureContext();
-  if (!contextCurrent(context) || refreshing.value || hardening.value || !selectedEngineInstalled.value || Object.values(pendingWrites).some(Boolean)) {
+  if (!contextCurrent(context) || refreshing.value || catalogPending.value || installing.value || softwareStore.installingComponentId ||
+    hardening.value || Object.values(pendingWrites).some(Boolean)) {
     return;
   }
   refreshing.value = true;
   workspaceReady.value = false;
   try {
+    await softwareStore.fetchCatalog();
+    if (!contextCurrent(context) || !catalogReady.value) return;
     await readEngineStatuses(context);
     if (!contextCurrent(context)) return;
     const loaded = await loadSelectedEngine(context);
-    if (contextCurrent(context) && loaded) showNotice(t("panel.database.refreshed"), false);
+    if (contextCurrent(context)) showNotice(loaded ? t("panel.database.refreshed") : "", false);
   } catch (error) {
     if (contextCurrent(context)) showNotice(resolveApiMessage(error), true);
   } finally {

@@ -5,6 +5,7 @@ import PhpView from "./PhpView.vue";
 import { getSitePhpSettings, updateSitePhpSettings, type SitePhpSettings } from "../api/php";
 import { useSitesStore } from "../stores/sites";
 import { usePhpStore } from "../stores/php";
+import { useAuthStore } from "../stores/auth";
 import { SoftwareRemovalIncompleteError, useSoftwareStore } from "../stores/software";
 
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
@@ -20,10 +21,14 @@ async function flush() { for (let i = 0; i < 8; i++) await nextTick(); }
 async function mount() {
   const renderer = createRenderer<object, object>({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
   const pinia = createPinia(); setActivePinia(pinia);
+  useAuthStore().session = { isAuthenticated: true, requiresSetupWizard: false, user: { id: 'admin', userName: 'admin', email: 'admin@example.test', role: 'Administrator', preferredLanguage: 'en', isActive: true, isTwoFactorEnabled: false, lastLoginAtUtc: null } };
   useSitesStore().selectedSiteName = "a.test";
   vi.spyOn(useSitesStore(), "fetchSites").mockResolvedValue([]);
-  vi.spyOn(usePhpStore(), "fetchVersions").mockResolvedValue([]);
-  vi.spyOn(useSoftwareStore(), "fetchCatalog").mockResolvedValue({ manifest: [], defaults: [], installed: [] });
+  vi.spyOn(usePhpStore(), "fetchVersions").mockImplementation(async () => {
+    usePhpStore().versions = [{ componentId: 'php-8.3', displayName: 'PHP 8.3', version: '8.3.20', installDir: 'fixture/php', executablePath: 'fixture/php/php-cgi.exe', status: 'Installed', isFastCgiRegistered: true, installedAtUtc: '2026-10-04T00:00:00Z' }];
+    usePhpStore().loaded = true; return usePhpStore().versions;
+  });
+  vi.spyOn(useSoftwareStore(), "fetchCatalog").mockImplementation(async () => { useSoftwareStore().loaded = true; return { manifest: [], defaults: [], installed: [] }; });
   app = renderer.createApp({ ...PhpView, render: () => h("section") } as Component).use(pinia);
   app.provide(ssrContextKey, {});
   const state = (app.mount({}).$ as unknown as { setupState: State }).setupState;

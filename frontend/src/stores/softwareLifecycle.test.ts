@@ -8,7 +8,7 @@ import type { OperationProgress } from "./setup";
 
 const originalAdapter = apiClient.defaults.adapter;
 let extraInterceptor: number | undefined;
-const catalog = (id: string): SoftwareCatalog => ({ manifest: [{ id } as SoftwareCatalog["manifest"][number]], defaults: [], installed: [] });
+const catalog = (id: string): SoftwareCatalog => ({ manifest: [{ id, displayName: id, version: "1", type: "zip", downloadUrl: "", sha256: "", installDir: "fixture", postInstall: [], dependencies: [], serviceName: "", silentArgs: "", note: "", default: false }], defaults: [], installed: [] });
 const progress = (title: string): OperationProgress => ({ title, running: true, completed: false, failed: false, error: "", steps: [], startedAtUtc: null });
 const installed: ComponentInstallResult = { componentId: "fixture", displayName: "Fixture", version: "1", status: "Installed", installDir: "fixture", serviceName: "fixture", generatedPassword: "", message: "installed" };
 const response = (data: unknown) => ({ data: { success: true, data } }) as AxiosResponse;

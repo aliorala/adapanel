@@ -5,23 +5,31 @@
         <h2>{{ t("panel.php.title") }}</h2>
         <p>{{ t("panel.php.subtitle") }}</p>
       </div>
-      <button class="secondary compact" :disabled="phpStore.loading" @click="refreshAll">
+      <button class="secondary compact" :disabled="actionsBusy" @click="refreshAll">
         {{ t("panel.php.refresh") }}
       </button>
-      <button class="secondary compact" v-bind="writeGate(enablingRedis)" @click="enableRedis">
+      <button v-if="isAdministrator" class="secondary compact" v-bind="writeGate(!canMutate())" @click="enableRedis">
         {{ enablingRedis ? t("panel.php.enablingRedis") : t("panel.php.enableRedis") }}
       </button>
     </div>
 
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
+    <section v-if="(!versionsMeasured || (activeTab === 'available' && !catalogMeasured)) && !refreshing && !phpStore.loading && !softwareStore.loading" class="php-read-state" role="status">
+      <div>
+        <strong>{{ t("panel.common.loadFailed") }}</strong>
+        <p>{{ t(phpStore.versions.length || (activeTab === 'available' && availablePhpComponents.length) ? "panel.php.lastKnown" : "panel.php.readRetryHint") }}</p>
+      </div>
+      <button class="secondary compact" :disabled="actionsBusy" @click="refreshAll">{{ t("panel.common.retry") }}</button>
+    </section>
+
     <div class="module-toolbar">
       <div class="segmented-tabs" role="tablist">
         <button role="tab" :aria-selected="activeTab === 'installed'" :class="{ active: activeTab === 'installed' }" @click="activeTab = 'installed'">
-          {{ t("panel.php.installed") }} ({{ phpStore.versions.length }})
+          {{ t("panel.php.installed") }} ({{ versionsMeasured ? phpStore.versions.length : "—" }})
         </button>
-        <button role="tab" :aria-selected="activeTab === 'available'" :class="{ active: activeTab === 'available' }" @click="activeTab = 'available'">
-          {{ t("panel.php.available") }} ({{ availablePhpComponents.length }})
+        <button v-if="isAdministrator" role="tab" :aria-selected="activeTab === 'available'" :class="{ active: activeTab === 'available' }" @click="activeTab = 'available'">
+          {{ t("panel.php.available") }} ({{ catalogMeasured ? availablePhpComponents.length : "—" }})
         </button>
       </div>
       <div class="toolbar-group">
@@ -37,11 +45,11 @@
     <div class="summary-strip">
       <div class="summary-item">
         <span>{{ t("panel.php.installed") }}</span>
-        <strong>{{ phpStore.versions.length }}</strong>
+        <strong>{{ versionsMeasured ? phpStore.versions.length : "—" }}</strong>
       </div>
       <div class="summary-item">
         <span>{{ t("panel.php.fastCgiReady") }}</span>
-        <strong>{{ fastCgiReadyCount }}</strong>
+        <strong>{{ versionsMeasured ? fastCgiReadyCount : "—" }}</strong>
       </div>
       <div class="summary-item">
         <span>{{ t("panel.php.targetSite") }}</span>
@@ -53,7 +61,7 @@
       </div>
     </div>
 
-    <div v-if="activeTab === 'installed'" class="data-table">
+    <div v-if="activeTab === 'installed' || !isAdministrator" class="data-table">
       <div class="data-row table-head php-installed-row">
         <span>{{ t("panel.software.component") }}</span>
         <span>{{ t("panel.php.version") }}</span>
@@ -64,29 +72,27 @@
       <div v-for="version in filteredInstalled" :key="version.componentId" class="data-row php-installed-row">
         <span class="cell-main"><strong>{{ version.displayName }}</strong><small>{{ version.executablePath }}</small></span>
         <span>{{ version.version || "-" }}</span>
-        <span :class="['status-pill', version.isFastCgiRegistered ? 'ok' : 'warn']">
-          {{ version.isFastCgiRegistered ? t("panel.php.fastCgiReady") : t("panel.php.fastCgiMissing") }}
+        <span :class="['status-pill', versionsMeasured && version.isFastCgiRegistered ? 'ok' : 'warn']">
+          {{ !versionsMeasured ? t("panel.health.statusUnknown") : version.isFastCgiRegistered ? t("panel.php.fastCgiReady") : t("panel.php.fastCgiMissing") }}
         </span>
         <span class="cell-muted">{{ version.installDir }}</span>
         <span class="row-actions">
           <button
             class="compact"
-            v-bind="writeGate(!selectedSiteName || phpStore.assigningComponentId === version.componentId || version.status.toLowerCase() !== 'installed')"
+            v-bind="writeGate(!canMutate() || !selectedSiteName || version.status.toLowerCase() !== 'installed')"
             @click="assignVersion(version.componentId)">
             {{ phpStore.assigningComponentId === version.componentId ? t("panel.php.applying") : t("panel.php.assignToSite") }}
           </button>
-          <button
+          <button v-if="isAdministrator"
             class="danger compact"
-            v-bind="writeGate(softwareStore.removingComponentId === version.componentId)"
+            v-bind="writeGate(!canMutate())"
             @click="removeVersion(version.componentId)">
             {{ softwareStore.removingComponentId === version.componentId ? t("panel.database.removing") : t("panel.php.remove") }}
           </button>
         </span>
       </div>
-      <!-- `loading` istek HATA ile bitince de false olur: eski koşul yalnız istek uçuşurken
-           koruyordu, hata alındığında boş liste "kurulu PHP sürümü yok" diye okunuyordu.
-           `loaded` yalnız BAŞARIDA true olur (bkz. stores/php.ts). -->
-      <p v-if="!phpStore.loaded" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+      <p v-if="phpStore.loading" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+      <p v-else-if="!versionsMeasured" class="empty-state" role="status">{{ t("panel.health.statusUnknown") }}</p>
       <p v-else-if="filteredInstalled.length === 0" class="empty-state">{{ t("panel.php.noInstalledVersions") }}</p>
     </div>
 
@@ -104,19 +110,19 @@
         <span>{{ component.type }}</span>
         <span class="cell-muted">{{ component.installDir }}</span>
         <span class="row-actions">
-          <span v-if="installedComponentIds.has(component.id)" class="status-pill ok">{{ t("panel.php.installedState") }}</span>
+          <span v-if="!versionsMeasured" class="status-pill warn">{{ t("panel.health.statusUnknown") }}</span>
+          <span v-else-if="installedComponentIds.has(component.id)" class="status-pill ok">{{ t("panel.php.installedState") }}</span>
           <button
             v-else
             class="compact"
-            v-bind="writeGate(phpStore.installingComponentId === component.id)"
+            v-bind="writeGate(!canMutate() || !catalogMeasured)"
             @click="installVersion(component.id)">
             {{ phpStore.installingComponentId === component.id ? t("panel.php.installing") : t("panel.php.install") }}
           </button>
         </span>
       </div>
-      <!-- Kurulabilir sürümler YAZILIM KATALOĞUNDAN gelir; bekleme/hata durumu onun bayrağıyla
-           ayrılır, PHP listesininkiyle değil. -->
-      <p v-if="!softwareStore.loaded" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+      <p v-if="softwareStore.loading" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+      <p v-else-if="!catalogMeasured" class="empty-state" role="status">{{ t("panel.health.statusUnknown") }}</p>
       <p v-else-if="filteredAvailable.length === 0" class="empty-state">{{ t("panel.php.noManifestVersions") }}</p>
     </div>
 
@@ -173,8 +179,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import { enableRedisExtension, getSitePhpSettings, updateSitePhpSettings } from "../api/php";
 import { useConfirm } from "../components/ConfirmDialog.vue";
-import { extractApiMessage } from "../stores/auth";
-import { usePhpStore } from "../stores/php";
+import { extractApiMessage, useAuthStore } from "../stores/auth";
+import { usePhpStore, PhpInstallationRefreshError } from "../stores/php";
 import { useSitesStore } from "../stores/sites";
 import { useSoftwareStore } from "../stores/software";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
@@ -183,16 +189,32 @@ import { getSessionEpoch } from "../api/client";
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
-const { writeGate } = useSubscriptionGate();
+const { writeGate, locked } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const phpStore = usePhpStore();
 const sitesStore = useSitesStore();
 const softwareStore = useSoftwareStore();
+const auth = useAuthStore();
 const activeTab = ref<"installed" | "available">("installed");
 const query = ref("");
 const notice = ref("");
 const noticeError = ref(false);
 const enablingRedis = ref(false);
+const refreshing = ref(false);
+const actionBusy = ref(false);
+const verificationRequired = ref(false);
+const sessionEpoch = getSessionEpoch();
+let viewRevision = 0;
+const isAdministrator = computed(() => auth.session?.user?.role === "Administrator");
+const actorCurrent = () => !disposed && sessionEpoch === getSessionEpoch() && auth.session?.isAuthenticated === true &&
+  ["Administrator", "Reseller"].includes(auth.session?.user?.role ?? "");
+const contextCurrent = (revision: number) => actorCurrent() && revision === viewRevision;
+const versionsMeasured = computed(() => phpStore.loaded && !verificationRequired.value);
+const catalogMeasured = computed(() => softwareStore.loaded && !verificationRequired.value);
+const actionsBusy = computed(() => refreshing.value || actionBusy.value || phpStore.loading ||
+  (isAdministrator.value && softwareStore.loading) || !!phpStore.installingComponentId || !!phpStore.assigningComponentId ||
+  !!softwareStore.installingComponentId || !!softwareStore.removingComponentId || softwareStore.installingDefaults || softwareStore.checkingUpdates);
+function canMutate() { return actorCurrent() && versionsMeasured.value && !actionsBusy.value && !locked.value; }
 
 const settings = reactive({
   memoryLimit: "256M",
@@ -212,7 +234,12 @@ const settingsLoaded = ref(false);
 const settingsError = ref("");
 let settingsRequest = 0;
 let disposed = false;
-onBeforeUnmount(() => { disposed = true; });
+onBeforeUnmount(() => { disposed = true; viewRevision++; });
+watch(() => [auth.session, auth.session?.user?.id, auth.session?.user?.role, auth.session?.isAuthenticated], () => {
+  viewRevision++; settingsRequest++; verificationRequired.value = true; settingsLoaded.value = false;
+  settingsError.value = t("panel.common.loadFailed"); notice.value = "";
+  if (!isAdministrator.value) activeTab.value = "installed";
+}, { flush: "sync" });
 
 function settingsContext(site = sitesStore.selectedSiteName) {
   const request = settingsRequest, epoch = getSessionEpoch();
@@ -276,6 +303,7 @@ async function saveSettings() {
 }
 
 watch(() => sitesStore.selectedSiteName, (siteName) => {
+  viewRevision++;
   notice.value = "";
   void loadSettings(siteName);
 }, { immediate: true });
@@ -296,44 +324,69 @@ const filteredAvailable = computed(() => filterByQuery(availablePhpComponents.va
 onMounted(refreshAll);
 
 async function refreshAll() {
+  if (!actorCurrent() || actionsBusy.value) return;
+  const revision = ++viewRevision;
+  refreshing.value = true;
   try {
-    await Promise.all([
-      softwareStore.fetchCatalog(),
-      sitesStore.fetchSites(),
-      phpStore.fetchVersions()
-    ]);
-    notice.value = "";
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    const reads: Promise<unknown>[] = [sitesStore.fetchSites(), phpStore.fetchVersions()];
+    if (isAdministrator.value) reads.push(softwareStore.fetchCatalog());
+    if (settingsError.value && selectedSiteName.value) reads.push(loadSettings(selectedSiteName.value));
+    const results = await Promise.allSettled(reads);
+    if (!contextCurrent(revision)) return;
+    const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (phpStore.loaded && (!isAdministrator.value || softwareStore.loaded)) verificationRequired.value = false;
+    showNotice(failed ? resolveApiMessage(failed.reason) : "", !!failed);
+  } finally {
+    refreshing.value = false;
   }
 }
 
 async function installVersion(componentId: string) {
+  if (!canMutate() || !isAdministrator.value || !catalogMeasured.value || installedComponentIds.value.has(componentId) ||
+    !availablePhpComponents.value.some(component => component.id === componentId)) return;
+  const revision = ++viewRevision;
+  actionBusy.value = true;
+  let completedMessage = "";
   try {
-    const messageKey = await phpStore.installVersion(componentId);
+    completedMessage = await phpStore.installVersion(componentId);
+    if (!contextCurrent(revision)) return;
     await softwareStore.fetchCatalog();
+    if (!contextCurrent(revision)) return;
+    if (!phpStore.loaded || !softwareStore.loaded) throw new PhpInstallationRefreshError(completedMessage, new Error("Catalog unconfirmed"));
     activeTab.value = "installed";
-    showNotice(translate(messageKey), false);
+    showNotice(translate(completedMessage), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (!contextCurrent(revision)) return;
+    if (error instanceof PhpInstallationRefreshError) completedMessage = error.installedMessageKey;
+    showNotice(completedMessage ? `${translate(completedMessage)}\n\n${t("panel.software.refreshAfterInstallFailed")}` : resolveApiMessage(error), true);
+  } finally {
+    actionBusy.value = false;
   }
 }
 
 async function assignVersion(componentId: string) {
+  if (!canMutate() || !phpStore.versions.some(version => version.componentId === componentId && version.status.toLowerCase() === "installed")) return;
   if (!selectedSiteName.value) {
     showNotice(t("panel.php.siteRequired"), true);
     return;
   }
+  const revision = ++viewRevision, site = selectedSiteName.value;
+  actionBusy.value = true;
   try {
-    await phpStore.assignVersion(selectedSiteName.value, componentId);
-    showNotice(t("php.assignment.success"), false);
+    await phpStore.assignVersion(site, componentId);
+    if (contextCurrent(revision) && selectedSiteName.value === site) showNotice(t("php.assignment.success"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (contextCurrent(revision)) showNotice(resolveApiMessage(error), true);
+  } finally {
+    actionBusy.value = false;
   }
 }
 
 async function removeVersion(componentId: string) {
+  if (!canMutate() || !isAdministrator.value) return;
   const version = phpStore.versions.find((item) => item.componentId === componentId);
+  if (!version) return;
+  const revision = viewRevision;
   const displayName = version?.displayName || componentId;
   const impact: string[] = [];
   if (version?.installDir) {
@@ -350,12 +403,24 @@ async function removeVersion(componentId: string) {
     confirmLabel: t("panel.confirm.remove"),
     busyLabel: t("panel.confirm.removing"),
     action: async () => {
+      if (!contextCurrent(revision) || !canMutate() || !isAdministrator.value ||
+        !phpStore.versions.some(item => item.componentId === componentId && item.executablePath === version.executablePath)) return;
+      actionBusy.value = true;
+      const operation = ++viewRevision;
+      phpStore.invalidateVersions();
       try {
-        await softwareStore.removeComponent(componentId);
+        try { await softwareStore.removeComponent(componentId); }
+        finally {
+          // A scan started while removal was running can also predate its outcome.
+          if (sessionEpoch === getSessionEpoch()) phpStore.invalidateVersions();
+        }
+        if (!contextCurrent(operation)) return;
         await phpStore.fetchVersions();
-        showNotice(t("panel.php.removed"), false);
+        if (contextCurrent(operation)) showNotice(t("panel.php.removed"), false);
       } catch (error) {
-        showNotice(resolveApiMessage(error), true);
+        if (contextCurrent(operation)) showNotice(resolveApiMessage(error), true);
+      } finally {
+        actionBusy.value = false;
       }
     },
   });
@@ -363,14 +428,18 @@ async function removeVersion(componentId: string) {
 
 // Sunucu geneli native phpredis uzantısını etkinleştir (idempotent; zaten varsa "already" döner).
 async function enableRedis() {
+  if (!canMutate() || !isAdministrator.value) return;
+  const revision = ++viewRevision;
+  actionBusy.value = true;
   enablingRedis.value = true;
   try {
     const result = await enableRedisExtension();
-    showNotice(t(result.message === "already" ? "php.redis_already" : "php.redis_enabled"), false);
+    if (contextCurrent(revision)) showNotice(t(result.message === "already" ? "php.redis_already" : "php.redis_enabled"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (contextCurrent(revision)) showNotice(resolveApiMessage(error), true);
   } finally {
     enablingRedis.value = false;
+    actionBusy.value = false;
   }
 }
 
@@ -395,6 +464,21 @@ function showNotice(message: string, isError: boolean) {
 </script>
 
 <style scoped>
+.php-read-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--panel-border);
+  border-left: 3px solid var(--warn-1);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+.php-read-state > div { flex: 1 1 220px; min-width: 0; }
+.php-read-state p { margin: 5px 0 0; color: var(--text-muted); overflow-wrap: anywhere; }
+.php-read-state button { flex-shrink: 0; }
 .php-installed-row {
   grid-template-columns: 1.35fr 0.55fr 0.9fr 1.45fr 1.1fr;
 }
@@ -409,5 +493,11 @@ function showNotice(message: string, isError: boolean) {
 
 .search-control {
   width: min(260px, 44vw);
+}
+
+@media (max-width: 640px) {
+  .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .summary-item { min-width: 0; }
+  .summary-item strong { overflow-wrap: anywhere; }
 }
 </style>
