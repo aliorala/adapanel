@@ -25,7 +25,7 @@ Bu eşleştirme modem port yönlendirmesi veya ağ kartı yapılandırması yapm
 ## Doğrulama
 
 - DNS/onarım/alan adı/sağlık ve ilgili sürüm-katalog testleri: **389 geçti**.
-- Son geniş altyapı çalıştırması: **9442 geçti, 0 başarısız, 0 atlanan**. Gerçek Windows hesabı oluşturan iki FtpCreateRollbackTests testi filtreyle kapsam dışında bırakıldı. Son CAA düzeltmesi ayrıca Release yapılandırmasındaki ilgili testlerle doğrulanır.
+- Son geniş altyapı çalıştırması: **9442 geçti, 0 başarısız, 0 atlanan**. Gerçek Windows hesabı oluşturan iki FtpCreateRollbackTests testi filtreyle kapsam dışında bırakıldı. Son CAA düzeltmesi dahil Release yapılandırmasında DNS/sağlık/onarım/aygıt adı/IIS testleri: **500 geçti, 0 başarısız**.
 - Core testleri: **2 geçti**.
 - Son arayüz tam çalıştırması: **2644 test / 137 dosya geçti**; TypeScript kontrolü ve üretim derlemesi başarılı.
 - Canlı DNS betikleri gerçek PowerShell içinde izole sahte Windows DNS cmdletleriyle sınandı: dış değişiklik, servis yeniden başlatma, art arda Onar, NAT, tam sıfırlama/yedek, çoklu/özel kayıt koruma, okuma/yazma hataları ve eşzamanlı değişiklik.
@@ -42,3 +42,6 @@ Kurulum paketi üretim derlemesinden hazırlanır; içerik ve sürüm denetimi p
 - SHA-256: 44678848B9855F1BF4B1A05887120B50604352FF8E9B05479D7563FA4E1932DE
 - Paket içerik denetimi: başarılı (170 dosya).
 - Kurulum dosyası sürüm ve içerik denetimi: başarılı.
+- Yayın durumu: GitHub Credential Manager kayıtlı kimlik döndüremedi; Chrome oturumu da kapalı. Release oluşturulmadı, dosya yüklenmedi. Kullanıcının GitHub girişi bekleniyor.
+- Kaynak commit: 968e3dc (yerel; kaynak deposu gönderilmedi).
+
