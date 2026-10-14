@@ -188,6 +188,7 @@ public sealed class DnsSharedPolicyAuthorityTests
                 ? Preferences((CancellationToken)args![^1]!) : throw new NotSupportedException(method.Name));
             var dns = new DnsService(sites, preferences, store, NullLogger<DnsService>.Instance)
             {
+                InventoryCommand = DnsTestInventory.MissingZone,
                 NativeCommand = Native,
                 AvailabilityOverride = token => { token.ThrowIfCancellationRequested(); return Task.FromResult(DnsAvailable); }
             };

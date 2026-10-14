@@ -95,15 +95,18 @@ public sealed class SiteHostingIisSettingsTests
         Assert.Equal("sites.invalid_error_page", hata.Message);
     }
 
-    [Fact]
-    public void Ayrilmis_aygit_adini_yalniz_KAPSAMA_denetimi_yakalar()
+    [Theory]
+    [InlineData("/hatalar/CON.txt")]
+    [InlineData("/NUL/404.html")]
+    [InlineData("/hatalar/LPT1")]
+    [InlineData("/hatalar/ con .html")]
+    public void Ayrilmis_aygit_adi_her_yol_parcasinda_reddedilir(string path)
     {
-        // Bu test, kapsama denetiminin "her ihtimale karşı" değil GEREKLİ olduğunu sabitler:
-        // "/con" bütün biçim denetimlerinden geçer (kökle başlar, "..", ters bölü, ':' yok),
-        // ama Windows onu "\\.\con" aygıt yoluna çevirir.
-        var kok = Path.Combine(Path.GetTempPath(), "ada-hosting-kapsama");
-        Assert.False(PathContainment.IsInsideRoot(kok, Path.Combine(kok, "con")));
-        Assert.True(PathContainment.IsInsideRoot(kok, Path.Combine(kok, "404.html")));
+        using var site = new GeciciSite();
+        var request = Istek();
+        request.CustomErrorPages = [new SiteErrorPageDto { StatusCode = 404, Path = path }];
+        var error = Assert.Throws<AppException>(() => site.Yaz(request));
+        Assert.Equal("sites.invalid_error_page", error.Message);
     }
 
     [Theory]

@@ -140,24 +140,8 @@ public sealed class WindowsReservedNameTests
         Assert.False(WindowsReservedNames.IsReserved(WindowsReservedNames.MakeSafe(ad)));
     }
 
-    // --- 2) NİHAİ GERÇEK: bu adla diskte dosya/klasör açılabiliyor mu? ---
-
-    /// <summary>
-    /// ÖLÇÜM: ham adla yazılan veri KAYBOLUYOR, düzeltilmiş adla KALICI oluyor.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// <b>Bu testin ilk sürümü YANLIŞTI ve ölçüm düzeltti.</b> "Ham ad istisna atar" diye
-    /// yazılmıştı; çalıştırıldığında 7 girdinin 5'i (CON, nul, aux, COM1, con.json) İSTİSNA
-    /// ATMADI — <c>File.WriteAllText</c> "başarılı" döndü ve dosya HİÇ OLUŞMADI. Yani düz yazımda
-    /// etki gürültülü çökme değil SESSİZ VERİ KAYBI. (PRN ve LPT9 bu makinede bağlı aygıt
-    /// olmadığından gürültülü düştü — hangi tarafa düştüğü DONANIMA bağlı, kurala değil.)
-    /// </para>
-    /// <para>
-    /// Bu yüzden ölçüt "istisna attı mı" DEĞİL, kullanıcının umursadığı şey: <b>veri orada mı?</b>
-    /// İki davranışı da tek kural kapsar: yazma ya patlar ya sessizce yutar; sonuçta dosya YOKTUR.
-    /// </para>
-    /// </remarks>
+    // Ham aygıt adlarının dosya API'lerindeki davranışı .NET/Windows sürümüne bağlıdır.
+    // Panelin garantisi: ürettiği ad aygıt adı değildir ve veri diskte okunabilir kalır.
     [Theory]
     [InlineData("CON")]
     [InlineData("nul")]
@@ -166,90 +150,62 @@ public sealed class WindowsReservedNameTests
     [InlineData("COM1")]
     [InlineData("LPT9")]
     [InlineData("con.json")]
-    public void HamAdaYazilanVeriKayboluyor_DuzeltilmisAdaYazilanKaliyor(string ad)
+    public void DuzeltilmisAdaYazilanVeriKalici(string ad)
     {
         var dizin = Directory.CreateTempSubdirectory("adapanel-aygit-ad");
         try
         {
-            var ham = Path.Combine(dizin.FullName, ad);
-            try
-            {
-                File.WriteAllText(ham, "x");
-            }
-            catch (Exception)
-            {
-                // Gürültülü taraf: bağlı aygıtı olmayan adlar (PRN, LPT9) burada düşer.
-            }
-
-            Assert.False(File.Exists(ham), $"AYGIT ADI ARTIK DOSYA OLUYOR: {ad}");
-
-            var guvenli = Path.Combine(dizin.FullName, WindowsReservedNames.MakeSafe(ad));
+            var safeName = WindowsReservedNames.MakeSafe(ad);
+            Assert.NotEqual(ad, safeName);
+            Assert.False(WindowsReservedNames.IsReserved(safeName));
+            var guvenli = Path.Combine(dizin.FullName, safeName);
             File.WriteAllText(guvenli, "x");
-            Assert.True(File.Exists(guvenli));
             Assert.Equal("x", File.ReadAllText(guvenli));
         }
-        finally
-        {
-            dizin.Delete(recursive: true);
-        }
+        finally { dizin.Delete(recursive: true); }
     }
 
-    /// <summary>
-    /// KLASÖR tarafı gürültülü: <c>CreateDirectory</c> aygıt adında istisna atar. Yedek klasörü
-    /// tam olarak bu yoldan düşüyordu.
-    /// </summary>
     [Theory]
     [InlineData("CON")]
     [InlineData("nul")]
     [InlineData("COM1")]
     [InlineData("con.json")]
-    public void HamAdlaKlasorOlusturulamiyor(string ad)
+    public void DuzeltilmisAdlaKlasorOlusturulur(string ad)
     {
         var dizin = Directory.CreateTempSubdirectory("adapanel-aygit-dizin");
         try
         {
-            Assert.ThrowsAny<Exception>(() => Directory.CreateDirectory(Path.Combine(dizin.FullName, ad)));
-
-            var guvenli = Path.Combine(dizin.FullName, WindowsReservedNames.MakeSafe(ad));
+            var safeName = WindowsReservedNames.MakeSafe(ad);
+            Assert.NotEqual(ad, safeName);
+            Assert.False(WindowsReservedNames.IsReserved(safeName));
+            var guvenli = Path.Combine(dizin.FullName, safeName);
             Directory.CreateDirectory(guvenli);
-            Assert.True(Directory.Exists(guvenli));
+            File.WriteAllText(Path.Combine(guvenli, "probe.txt"), "x");
+            Assert.Equal("x", File.ReadAllText(Path.Combine(guvenli, "probe.txt")));
         }
-        finally
-        {
-            dizin.Delete(recursive: true);
-        }
+        finally { dizin.Delete(recursive: true); }
     }
 
-    /// <summary>
-    /// ATOMİK YAZIM (geçici dosya + <c>File.Move</c>) — panelin JSON depolarının gerçekten
-    /// kullandığı yol. Burada etki gürültülüdür ve önceki denetimin kaydettiği hata budur.
-    /// </summary>
     [Theory]
     [InlineData("CON.json")]
     [InlineData("nul.json")]
-    public void HamAdaAtomikYazimDusuyor(string dosyaAdi)
+    public void DuzeltilmisAdaAtomikYazimKalici(string dosyaAdi)
     {
         var dizin = Directory.CreateTempSubdirectory("adapanel-aygit-atomik");
         try
         {
-            Assert.ThrowsAny<Exception>(() =>
-            {
-                var hedef = Path.Combine(dizin.FullName, dosyaAdi);
-                var gecici = hedef + ".tmp";
-                File.WriteAllText(gecici, "{}");
-                File.Move(gecici, hedef, overwrite: true);
-            });
-
-            var guvenliHedef = Path.Combine(dizin.FullName, WindowsReservedNames.MakeSafe(dosyaAdi));
+            var safeName = WindowsReservedNames.MakeSafe(dosyaAdi);
+            Assert.NotEqual(dosyaAdi, safeName);
+            Assert.False(WindowsReservedNames.IsReserved(safeName));
+            var guvenliHedef = Path.Combine(dizin.FullName, safeName);
             var guvenliGecici = guvenliHedef + ".tmp";
+            File.WriteAllText(guvenliHedef, "old");
             File.WriteAllText(guvenliGecici, "{}");
             File.Move(guvenliGecici, guvenliHedef, overwrite: true);
-            Assert.True(File.Exists(guvenliHedef));
+            Assert.Equal("{}", File.ReadAllText(guvenliHedef));
+            Assert.False(File.Exists(guvenliGecici));
         }
-        finally
-        {
-            dizin.Delete(recursive: true);
-        }
+        finally { dizin.Delete(recursive: true); }
     }
 
     // --- 3) Ad ÜRETEN her yer bu kuraldan geçiyor mu? (uçtan uca, diske yazarak) ---

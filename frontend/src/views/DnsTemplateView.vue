@@ -89,23 +89,47 @@
     </div>
 
     <div class="row-actions">
+      <button class="secondary compact" type="button" :disabled="loading || saving || !templateLoaded" @click="ipMappings.push({ privateAddress: '', publicAddress: '' })">{{ t('panel.dnsTemplate.addIpMapping') }}</button>
       <button class="secondary compact" type="button" @click="addRow">{{ t("panel.dnsTemplate.addRow") }}</button>
       <button class="compact" type="button" :disabled="saving" @click="save">
         {{ saving ? t("panel.dnsTemplate.saving") : t("panel.common.save") }}
       </button>
     </div>
+    <section class="nat-settings" v-if="templateLoaded">
+      <h4>{{ t('panel.dnsTemplate.natTitle') }}</h4>
+      <p class="meta">{{ t('panel.dnsTemplate.natHint') }}</p>
+      <div v-for="(mapping, index) in ipMappings" :key="index" class="nat-row">
+        <label>{{ t('panel.dnsTemplate.privateIp') }}<input v-model.trim="mapping.privateAddress" :disabled="loading || saving" placeholder="192.168.1.80" spellcheck="false" /></label>
+        <label>{{ t('panel.dnsTemplate.publicIp') }}<input v-model.trim="mapping.publicAddress" :disabled="loading || saving" placeholder="203.0.113.10" spellcheck="false" /></label>
+        <button class="secondary compact" :disabled="loading || saving" @click="ipMappings.splice(index, 1)">{{ t('panel.common.delete') }}</button>
+      </div>
+      <label><input type="checkbox" v-model="applyMappings" :disabled="loading || saving" /> {{ t('panel.dnsTemplate.applyMappings') }}</label>
+      <ul v-if="mappingResults.length" aria-live="polite">
+        <li v-for="result in mappingResults" :key="result.siteName" :class="{ error: !result.succeeded }">
+          {{ result.siteName }} — {{ result.succeeded ? t('panel.dnsTemplate.mappingDone', { count: result.changedRecords }) : t('panel.dnsTemplate.mappingFailed') }}
+          <details v-if="!result.succeeded"><summary>{{ t('panel.dnsTemplate.mappingDetails') }}</summary><pre>{{ result.error }}</pre></details>
+        </li>
+      </ul>
+    </section>
   </section>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { getDnsTemplate, updateDnsTemplate, type DnsTemplateRecord } from "../api/dns";
+import { getDnsTemplate, updateDnsTemplate, type DnsTemplateRecord, type DnsTemplate, type DnsIpMapping, type DnsIpMappingResult } from "../api/dns";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import FieldHint from "../components/FieldHint.vue";
 import { extractApiMessage } from "../stores/auth";
 
 const { t } = useI18n();
 const records = ref<DnsTemplateRecord[]>([]);
+const ipMappings = ref<DnsIpMapping[]>([]);
+const mappingResults = ref<DnsIpMappingResult[]>([]);
+const applyMappings = ref(true);
+const { confirm } = useConfirm();
+let epoch = 0;
+onUnmounted(() => { epoch++; });
 // Sunucu geneli ikincil (slave) DNS sunucuları; her satır bir IP.
 const secondaryServersText = ref("");
 const loading = ref(false);
@@ -120,10 +144,13 @@ const types = ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA"];
 onMounted(load);
 
 async function load() {
+  if (loading.value || saving.value) return;
+  const request = ++epoch;
   loading.value = true;
   notice.value = "";
   try {
-    applyTemplate(await getDnsTemplate());
+    const template = await getDnsTemplate();
+    if (request === epoch) applyTemplate(template);
   } catch (error) {
     showNotice(resolveMessage(error), true);
   } finally {
@@ -136,11 +163,26 @@ function addRow() {
 }
 
 async function save() {
+  if (loading.value || saving.value || !templateLoaded.value) return;
+  const request = ++epoch;
+  const acceptedRecords = records.value.map(record => ({ ...record }));
+  const acceptedMappings = ipMappings.value.map(mapping => ({ ...mapping }));
+  const acceptedSecondaries = splitLines(secondaryServersText.value);
+  const applyExisting = applyMappings.value;
   saving.value = true;
   notice.value = "";
   try {
-    applyTemplate(await updateDnsTemplate(records.value, splitLines(secondaryServersText.value)));
-    showNotice(t("panel.dnsTemplate.saved"), false);
+    if (applyExisting && acceptedMappings.length && !await confirm({
+      title: t('panel.dnsTemplate.natTitle'), message: t('panel.dnsTemplate.confirmMappings'),
+      confirmLabel: t('panel.common.save'), tone: 'danger',
+      impact: acceptedMappings.map(mapping => `${mapping.privateAddress} → ${mapping.publicAddress}`)
+    })) return;
+    if (request !== epoch) return;
+    const template = await updateDnsTemplate(acceptedRecords, acceptedSecondaries, acceptedMappings, applyExisting);
+    if (request !== epoch) return;
+    applyTemplate(template);
+    const failed = template.mappingResults?.some(result => !result.succeeded) ?? false;
+    showNotice(t(failed ? 'panel.dnsTemplate.mappingPartial' : "panel.dnsTemplate.saved"), failed);
   } catch (error) {
     showNotice(resolveMessage(error), true);
   } finally {
@@ -149,8 +191,10 @@ async function save() {
 }
 
 /** Sunucudan gelen şablonu ekrana yansıtır (yükleme ve kaydetme aynı yolu kullanır). */
-function applyTemplate(template: { records: DnsTemplateRecord[]; secondaryDnsServers: string[] }) {
+function applyTemplate(template: DnsTemplate) {
   records.value = template.records;
+  ipMappings.value = template.ipMappings ?? [];
+  mappingResults.value = template.mappingResults ?? [];
   secondaryServersText.value = (template.secondaryDnsServers ?? []).join("\n");
   // Buraya YALNIZCA sunucu gerçekten cevap verdiğinde gelinir (yükleme ya da kaydetme).
   templateLoaded.value = true;
@@ -178,6 +222,11 @@ function resolveMessage(error: unknown) {
   display: grid;
   gap: 12px;
 }
+.nat-settings { display: grid; gap: 12px; }
+.nat-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; }
+.nat-row label { display: grid; gap: 6px; min-width: 0; }
+.nat-row input { width: 100%; min-width: 0; }
+.nat-settings pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .tmpl-table {
   display: grid;
@@ -207,6 +256,7 @@ function resolveMessage(error: unknown) {
 }
 
 @media (max-width: 820px) {
+  .nat-row { grid-template-columns: 1fr; }
   .tmpl-row {
     grid-template-columns: 1fr 1fr;
   }

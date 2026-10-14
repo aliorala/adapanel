@@ -39,6 +39,7 @@ export type SiteHealth = {
   siteName: string;
   /** Ölçülen alan adı (IIS binding'inden çözülür). Boşsa sitede alan adı yok demektir. */
   domain: string;
+  mailDomain?: string;
   /** Panelin bildiği sunucu adresi — dnsMatchesServer bununla karşılaştırır. */
   serverAddress: string;
   overallStatus: SiteHealthStatus;

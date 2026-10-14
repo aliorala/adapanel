@@ -30,8 +30,9 @@ public sealed class DnsSharedZoneTests
         Assert.Equal(first.ZoneName, second.ZoneName);
         Assert.Equal(firstSite, first.SiteName);
         Assert.Equal(secondSite, second.SiteName);
-        Assert.True(first.IsWindowsZonePresent);
-        Assert.True(second.IsWindowsZonePresent);
+        // Reading a missing zone creates only metadata, never a native zone.
+        Assert.False(first.IsWindowsZonePresent);
+        Assert.False(second.IsWindowsZonePresent);
         Assert.Equal(2, (await fixture.StatesAsync()).Length);
     }
 
@@ -477,6 +478,7 @@ public sealed class DnsSharedZoneTests
             });
             return new DnsService(sites, preferences, NewStore(), NullLogger<DnsService>.Instance)
             {
+                InventoryCommand = DnsTestInventory.MissingZone,
                 NativeCommand = Native.RunAsync,
                 AvailabilityOverride = token => { token.ThrowIfCancellationRequested(); return Task.FromResult(DnsAvailable); }
             };

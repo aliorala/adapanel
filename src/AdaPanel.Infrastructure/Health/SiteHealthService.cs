@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using AdaPanel.Core.Dtos.Health;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Dtos.Ssl;
 using AdaPanel.Core.Interfaces;
@@ -46,11 +47,19 @@ public sealed partial class SiteHealthService(
         var stopwatch = Stopwatch.StartNew();
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var domain = ResolveDomain(site);
+        var zones = await fileStore.ReadAsync("config/dns-zones.json", Array.Empty<HealthZone>(), cancellationToken);
+        var configuredMailDomain = zones.FirstOrDefault(zone => string.Equals(zone.SiteName, site.Name, StringComparison.OrdinalIgnoreCase))?.ZoneName?.Trim().TrimEnd('.').ToLowerInvariant();
+        var mailDomain = !string.IsNullOrWhiteSpace(configuredMailDomain) && SiteDomainSelection.IsRealDomain(configuredMailDomain) && IsSafeDnsName(configuredMailDomain) &&
+            (domain == configuredMailDomain || domain.EndsWith("." + configuredMailDomain, StringComparison.OrdinalIgnoreCase))
+            ? configuredMailDomain : domain.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ? domain[4..] : domain;
 
         var serverAddress = string.Empty;
         try
         {
             serverAddress = (await panelPreferencesService.GetAsync(cancellationToken)).ServerAddress?.Trim() ?? string.Empty;
+            var dnsTemplate = await fileStore.ReadAsync("config/dns-template.json", new DnsTemplateDto(), cancellationToken);
+            var mapping = dnsTemplate.IpMappings.FirstOrDefault(item => site.Bindings.Any(binding => binding.IpAddress == item.PrivateAddress));
+            if (mapping is not null) serverAddress = mapping.PublicAddress;
         }
         catch { /* tercihler okunamazsa sunucu adresi karşılaştırması "unknown" kalır */ }
 
@@ -58,6 +67,7 @@ public sealed partial class SiteHealthService(
         {
             SiteName = site.Name,
             Domain = domain,
+            MailDomain = mailDomain,
             ServerAddress = serverAddress,
             CheckedAtUtc = DateTime.UtcNow
         };
@@ -78,8 +88,8 @@ public sealed partial class SiteHealthService(
 
         // Tek PowerShell turunda TÜM DNS sorguları (A x2 çözümleyici + MX + SPF + DMARC + DKIM):
         // her sorgu için ayrı süreç açmak ölçümü saniyelerce uzatırdı.
-        var dkimHosts = await ResolveDkimHostsAsync(domain, cancellationToken);
-        var probe = await RunDnsProbeAsync(domain, dkimHosts, cancellationToken);
+        var dkimHosts = await ResolveDkimHostsAsync(mailDomain, cancellationToken);
+        var probe = await RunDnsProbeAsync(domain, mailDomain, dkimHosts, cancellationToken);
 
         var resolvedAddresses = Array.Empty<string>();
         if (probe is null)
@@ -297,12 +307,13 @@ public sealed partial class SiteHealthService(
             .ToArray();
     }
 
-    private static async Task<DnsProbe?> RunDnsProbeAsync(string domain, IReadOnlyList<string> dkimHosts, CancellationToken cancellationToken)
+    private static async Task<DnsProbe?> RunDnsProbeAsync(string domain, string mailDomain, IReadOnlyList<string> dkimHosts, CancellationToken cancellationToken)
     {
         try
         {
             var script = new StringBuilder();
             script.Append("$domain = '").Append(domain).AppendLine("'");
+            script.Append("$mailDomain = '").Append(mailDomain).AppendLine("'");
             script.Append("$dkimHosts = @(")
                 .Append(string.Join(",", dkimHosts.Select(host => $"'{host}'")))
                 .AppendLine(")");
@@ -356,13 +367,13 @@ public sealed partial class SiteHealthService(
         }
 
         # Mail kayıtları için tek çözümleyici yeter: soru "kayıt VAR MI", "her yerde aynı mı" değil.
-        $out.mxRecords = @(Invoke-Probe $domain 'MX' '1.1.1.1' | Where-Object { $_.NameExchange } | ForEach-Object { [string]$_.NameExchange })
+        $out.mxRecords = @(Invoke-Probe $mailDomain 'MX' '1.1.1.1' | Where-Object { $_.NameExchange } | ForEach-Object { [string]$_.NameExchange })
 
-        $txt = @(Invoke-Probe $domain 'TXT' '1.1.1.1' | Where-Object { $_.Strings } | ForEach-Object { [string]($_.Strings -join '') })
+        $txt = @(Invoke-Probe $mailDomain 'TXT' '1.1.1.1' | Where-Object { $_.Strings } | ForEach-Object { [string]($_.Strings -join '') })
         $spf = $txt | Where-Object { $_ -like 'v=spf1*' } | Select-Object -First 1
         if ($spf) { $out.spf = [string]$spf }
 
-        $dmarcTxt = @(Invoke-Probe ('_dmarc.' + $domain) 'TXT' '1.1.1.1' | Where-Object { $_.Strings } | ForEach-Object { [string]($_.Strings -join '') })
+        $dmarcTxt = @(Invoke-Probe ('_dmarc.' + $mailDomain) 'TXT' '1.1.1.1' | Where-Object { $_.Strings } | ForEach-Object { [string]($_.Strings -join '') })
         $dmarc = $dmarcTxt | Where-Object { $_ -like '*v=DMARC1*' } | Select-Object -First 1
         if ($dmarc) { $out.dmarc = [string]$dmarc }
 
@@ -381,9 +392,7 @@ public sealed partial class SiteHealthService(
     /// <summary>Sitenin ölçülecek alan adı: binding'lerdeki ilk gerçek host adı, yoksa nokta içeren site adı.</summary>
     internal static string ResolveDomain(SiteDto site)
     {
-        var hostName = site.Bindings
-            .Select(binding => (binding.HostName ?? string.Empty).Trim().TrimEnd('.').ToLowerInvariant())
-            .FirstOrDefault(host => host.Contains('.'));
+        var hostName = SiteDomainSelection.WebDomain(site);
 
         if (!string.IsNullOrEmpty(hostName) && IsSafeDnsName(hostName))
         {
@@ -391,7 +400,13 @@ public sealed partial class SiteHealthService(
         }
 
         var fromName = (site.Name ?? string.Empty).Trim().TrimEnd('.').ToLowerInvariant();
-        return fromName.Contains('.') && IsSafeDnsName(fromName) ? fromName : string.Empty;
+        return SiteDomainSelection.IsRealDomain(fromName) && IsSafeDnsName(fromName) ? fromName : string.Empty;
+    }
+
+    private sealed class HealthZone
+    {
+        public string SiteName { get; set; } = "";
+        public string ZoneName { get; set; } = "";
     }
 
     /// <summary>

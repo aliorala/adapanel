@@ -219,22 +219,20 @@ public sealed class DnsMutationLifecycleTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task A_read_that_upgrades_defaults_does_not_erase_a_later_mutation(bool publishedKeys)
+    public async Task A_read_does_not_publish_default_upgrades_or_erase_a_later_mutation(bool publishedKeys)
     {
         using var fixture = new Fixture();
         await fixture.SeedAsync();
         var initial = await fixture.ReadZoneAsync();
         initial.DefaultsVersion = DnsService.CurrentDefaultsVersion - 1;
         await fixture.Store.WriteAsync(Fixture.StatePath, new[] { initial }, fixture.Token);
-        fixture.Native.PauseFirstSync = true;
         var service = fixture.Service();
         Task first = publishedKeys ? service.GetPublishedRecordKeysAsync(Fixture.Site, fixture.Token)
             : service.GetZoneAsync(Fixture.Site, fixture.Token);
-        await fixture.Native.FirstSyncEntered.Task.WaitAsync(fixture.Token);
         var second = fixture.AddAsync(fixture.Service(), "later");
-        await fixture.CompleteOverlapAsync(first, second);
+        await Task.WhenAll(first, second);
         var saved = await fixture.ReadZoneAsync();
-        Assert.Equal(DnsService.CurrentDefaultsVersion, saved.DefaultsVersion);
+        Assert.Equal(DnsService.CurrentDefaultsVersion - 1, saved.DefaultsVersion);
         Assert.Contains(saved.Records, record => record.Host == "later");
         Assert.Equal("192.0.2.10", fixture.Native.Record(Fixture.Site, "later"));
     }
@@ -362,6 +360,7 @@ public sealed class DnsMutationLifecycleTests
             return new DnsService(sites, preferences, store, NullLogger<DnsService>.Instance)
             {
                 AvailabilityOverride = token => { token.ThrowIfCancellationRequested(); return Task.FromResult(true); },
+                InventoryCommand = DnsTestInventory.MissingZone,
                 NativeCommand = Native.RunAsync
             };
         }

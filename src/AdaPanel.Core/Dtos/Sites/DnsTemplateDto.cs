@@ -22,6 +22,8 @@ public sealed class DnsTemplateRecordDto
 /// <summary>Sunucu-geneli DNS şablonu (yeni bölgelerin varsayılan kayıt seti).</summary>
 public sealed class DnsTemplateDto
 {
+    public List<DnsIpMappingDto> IpMappings { get; set; } = [];
+    public List<DnsIpMappingResultDto> MappingResults { get; set; } = [];
     public List<DnsTemplateRecordDto> Records { get; set; } = [];
 
     /// <summary>
@@ -48,8 +50,24 @@ public sealed class DnsTemplateDto
 /// <summary>DNS şablonunu güncelleme isteği.</summary>
 public sealed class UpdateDnsTemplateRequest
 {
+    public List<DnsIpMappingDto>? IpMappings { get; set; }
+    public bool ApplyIpMappingsToExistingZones { get; set; }
     public List<DnsTemplateRecordDto> Records { get; set; } = [];
 
     /// <summary>Sunucu-geneli ikincil (slave) DNS sunucu IP'leri; bkz. <see cref="DnsTemplateDto.SecondaryDnsServers"/>.</summary>
     public List<string> SecondaryDnsServers { get; set; } = [];
+}
+
+public sealed class DnsIpMappingDto
+{
+    public string PrivateAddress { get; set; } = "";
+    public string PublicAddress { get; set; } = "";
+}
+
+public sealed class DnsIpMappingResultDto
+{
+    public string SiteName { get; set; } = "";
+    public int ChangedRecords { get; set; }
+    public bool Succeeded { get; set; }
+    public string Error { get; set; } = "";
 }

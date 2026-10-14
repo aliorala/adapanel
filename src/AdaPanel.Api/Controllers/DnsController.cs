@@ -179,6 +179,7 @@ public sealed class DnsController(
     }
 
     [HttpPost("defaults")]
+    [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<SiteDnsZoneDto>>> ResetDefaultsAsync(
         string siteName,
         CancellationToken cancellationToken)
@@ -221,6 +222,20 @@ public sealed class DnsController(
             request.Enabled ? "dns.dnssec_enabled" : "dns.dnssec_disabled"));
     }
 
+    private Func<IReadOnlyList<string>, CancellationToken, Task> RecordApproval(string siteName)
+    {
+        var principal = new ClaimsPrincipal(User.Identities.Select(identity => new ClaimsIdentity(identity)));
+        return async (affectedSites, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            if (principal.IsInRole("Administrator")) return;
+            var allowed = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, principal, token);
+            if (!principal.IsInRole("Reseller") || allowed is null ||
+                affectedSites.Append(siteName).Any(name => !allowed.Contains(name, StringComparer.OrdinalIgnoreCase)))
+                throw new AppException("auth.site_forbidden", 403, 403);
+        };
+    }
+
     [HttpPost("records")]
     public async Task<ActionResult<ApiResponse<SiteDnsZoneDto>>> UpsertRecordAsync(
         string siteName,
@@ -229,7 +244,7 @@ public sealed class DnsController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
 
-        var zone = await dnsService.UpsertRecordAsync(siteName, request, cancellationToken);
+        var zone = await dnsService.UpsertRecordAsync(siteName, request, RecordApproval(siteName), cancellationToken);
 
         await auditService.AuditAsync(
             HttpContext,
@@ -255,7 +270,7 @@ public sealed class DnsController(
         var silinen = oncesi.Records.FirstOrDefault(record =>
             string.Equals(record.Id, recordId, StringComparison.OrdinalIgnoreCase));
 
-        var zone = await dnsService.DeleteRecordAsync(siteName, recordId, cancellationToken);
+        var zone = await dnsService.DeleteRecordAsync(siteName, recordId, RecordApproval(siteName), cancellationToken);
 
         await auditService.AuditAsync(
             HttpContext,

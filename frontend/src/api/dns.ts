@@ -165,16 +165,31 @@ function measuredDnsHealth(envelope: ApiEnvelope<DnsServerHealth>): DnsServerHea
 /** priority yalnızca MX (ve SRV) için anlamlıdır; gönderilmezse sunucu MX'e 10 uygular. */
 export type DnsTemplateRecord = { type: string; host: string; value: string; ttl: number; priority?: number | null };
 /** secondaryDnsServers: sunucu geneli ikincil (slave) DNS sunucuları — HER bölgeye AXFR izni + NOTIFY. */
-export type DnsTemplate = { records: DnsTemplateRecord[]; secondaryDnsServers: string[] };
+export type DnsIpMapping = { privateAddress: string; publicAddress: string };
+export type DnsIpMappingResult = { siteName: string; changedRecords: number; succeeded: boolean; error: string };
+export type DnsTemplate = { records: DnsTemplateRecord[]; secondaryDnsServers: string[]; ipMappings?: DnsIpMapping[]; mappingResults?: DnsIpMappingResult[] };
 
 export async function getDnsTemplate() {
   const response = await apiClient.get<ApiEnvelope<DnsTemplate>>("/dns/template");
-  return response.data.data;
+  return measuredTemplate(response.data);
 }
 
-export async function updateDnsTemplate(records: DnsTemplateRecord[], secondaryDnsServers: string[] = []) {
-  const response = await apiClient.put<ApiEnvelope<DnsTemplate>>("/dns/template", { records, secondaryDnsServers });
-  return response.data.data;
+export async function updateDnsTemplate(records: DnsTemplateRecord[], secondaryDnsServers: string[] = [], ipMappings?: DnsIpMapping[], applyIpMappingsToExistingZones = false) {
+  const response = await apiClient.put<ApiEnvelope<DnsTemplate>>("/dns/template", { records, secondaryDnsServers, ipMappings, applyIpMappingsToExistingZones });
+  return measuredTemplate(response.data);
+}
+
+function measuredTemplate(envelope: ApiEnvelope<DnsTemplate>): DnsTemplate {
+  const value = envelope?.data;
+  if (!value || !Array.isArray(value.records) || !Array.isArray(value.secondaryDnsServers) ||
+      value.secondaryDnsServers.some(ip => typeof ip !== "string") ||
+      value.records.some(record => !record || [record.type, record.host, record.value].some(field => typeof field !== "string") || !Number.isSafeInteger(record.ttl)) ||
+      (value.ipMappings !== undefined && (!Array.isArray(value.ipMappings) || value.ipMappings.some(mapping => !mapping || typeof mapping.privateAddress !== "string" || typeof mapping.publicAddress !== "string"))) ||
+      (value.mappingResults !== undefined && (!Array.isArray(value.mappingResults) || value.mappingResults.some(result => !result || typeof result.siteName !== "string" || typeof result.succeeded !== "boolean" || typeof result.error !== "string" || !Number.isSafeInteger(result.changedRecords)))) ||
+      (envelope.success !== true && !value.mappingResults?.some(result => !result.succeeded))) {
+    throw new UserFacingError("panel.dnsTemplate.resultUnconfirmed");
+  }
+  return value;
 }
 
 // DNSSEC aç/kapat (Windows DNS zone-imzalama). Açıkken dönen zone'da dnssecDsRecords (registrar'a verilecek) dolu olur.

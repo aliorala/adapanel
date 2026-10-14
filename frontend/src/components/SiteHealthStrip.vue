@@ -24,6 +24,7 @@
           :text="label('hint', 'Bu rozetler sunucunun kendi servis durumunu değil, alan adının dışarıdan görünen davranışını gösterir.')" />
       </span>
       <span v-if="health?.domain" class="meta health-domain">{{ health.domain }}</span>
+      <span v-if="health?.mailDomain" class="meta health-domain">MX / SPF / DKIM / DMARC: {{ health.mailDomain }}</span>
 
       <span class="health-actions">
         <span v-if="health" class="meta health-checked">

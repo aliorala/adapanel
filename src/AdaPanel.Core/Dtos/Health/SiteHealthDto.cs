@@ -34,6 +34,7 @@ public sealed class SiteHealthDto
 
     /// <summary>Ölçülen alan adı (IIS binding'inden çözülür). Boşsa site'ta alan adı yok demektir.</summary>
     public string Domain { get; set; } = string.Empty;
+    public string MailDomain { get; set; } = string.Empty;
 
     /// <summary>Panelin bildiği sunucu adresi — dnsMatchesServer bununla karşılaştırır.</summary>
     public string ServerAddress { get; set; } = string.Empty;

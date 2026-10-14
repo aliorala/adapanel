@@ -1413,16 +1413,13 @@ public sealed class SiteHostingSettingsService(
                 path.Contains('\\') ||
                 path.Contains(':') ||
                 path.IndexOfAny(['%', '?', '#', '*', '"', '<', '>', '|']) >= 0 ||
-                path.Any(char.IsControl))
+                path.Any(char.IsControl) ||
+                path.Split('/').Any(WindowsReservedNames.IsReserved))
             {
                 throw new AppException("sites.invalid_error_page", 400, 400);
             }
 
-            // ÖLÇÜLEN kapsama denetimi — biçim denetiminin üstüne ikinci hat.
-            // Boş bir tedbir değil: Windows'ta ayrılmış AYGIT ADLARI ("/con", "/nul", "/lpt1")
-            // yukarıdaki biçim denetimlerinin HEPSİNDEN geçer, ama Path.GetFullPath onları
-            // "\\.\con" biçimine çevirir — yani yol site kökünün dışına çıkar. Bunu yalnız gerçek
-            // normalleştirmeye bakan bir denetim görebilir.
+            // Aygıt adları ayrıca denetlenir; modern .NET bunları normalleştirmede koruyabilir.
             var physical = Path.Combine(root, path.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
             if (!PathContainment.IsInsideRoot(root, physical))
             {

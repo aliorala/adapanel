@@ -219,7 +219,7 @@ public sealed class DomainInspectionTests
                 "GetPublishedRecordKeysAsync" => PublishedKeys(),
                 "GetZoneAsync" => Zone(),
                 "EnsureZonePublishedAsync" => Task.CompletedTask,
-                "UpsertRecordsAsync" => ApplyRecords(),
+                "UpsertRecordsAsync" or "EnsureMissingRecordsAsync" => ApplyRecords(),
                 _ => throw new InvalidOperationException(method.Name)
             });
             var mail = Stub<IMailService>((method, _) => method.Name switch

@@ -5,6 +5,14 @@ namespace AdaPanel.Core.Interfaces;
 public interface IDnsService
 {
     Task<SiteDnsZoneDto> GetZoneAsync(string siteName, CancellationToken cancellationToken = default);
+    Task<SiteDnsZoneDto> UpsertRecordAsync(string siteName, UpsertDnsRecordRequest request,
+        Func<IReadOnlyList<string>, CancellationToken, Task> approval, CancellationToken cancellationToken)
+        => throw new NotSupportedException("Authorized DNS record updates are not implemented.");
+    Task<SiteDnsZoneDto> DeleteRecordAsync(string siteName, string recordId,
+        Func<IReadOnlyList<string>, CancellationToken, Task> approval, CancellationToken cancellationToken)
+        => throw new NotSupportedException("Authorized DNS record deletion is not implemented.");
+    Task<SiteDnsZoneDto> EnsureMissingRecordsAsync(string siteName, IReadOnlyCollection<UpsertDnsRecordRequest> requests,
+        CancellationToken cancellationToken = default) => throw new NotSupportedException("DNS additive repair is not implemented.");
 
     /// <summary>
     /// Windows DNS Server rolünü (Windows Server'da) kurar ve site bölgesini hemen Windows

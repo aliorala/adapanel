@@ -845,7 +845,7 @@ internal sealed class DomainRefreshService(
             var hatalar = new List<string>();
             try
             {
-                await dnsService.UpsertRecordsAsync(
+                await dnsService.EnsureMissingRecordsAsync(
                     dns.Domain,
                     applicable.Select(record => new UpsertDnsRecordRequest
                     {

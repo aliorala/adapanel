@@ -380,6 +380,7 @@ public sealed class DnsSharedConfigurationTests
             });
             return new DnsService(sites, preferences, NewStore(), NullLogger<DnsService>.Instance)
             {
+                InventoryCommand = DnsTestInventory.MissingZone,
                 NativeCommand = Native.RunAsync,
                 AvailabilityOverride = token => { token.ThrowIfCancellationRequested(); return Task.FromResult(Available); }
             };

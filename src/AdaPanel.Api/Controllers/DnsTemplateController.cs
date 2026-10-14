@@ -39,7 +39,9 @@ public sealed class DnsTemplateController(IDnsService dnsService, IAuditService 
             $"records={template.Records.Count}; " +
             $"secondaryServers={(template.SecondaryDnsServers.Count == 0 ? "(none)" : string.Join(", ", template.SecondaryDnsServers))}");
 
-        return Ok(ApiResponse<DnsTemplateDto>.Ok(template, "dns.template_saved"));
+        return Ok(template.MappingResults.Any(result => !result.Succeeded)
+            ? ApiResponse<DnsTemplateDto>.Fail("dns.sync_failed", data: template)
+            : ApiResponse<DnsTemplateDto>.Ok(template, "dns.template_saved"));
     }
 }
 

@@ -57,7 +57,7 @@
                aynı kümede durmaz. Ayraç bir CSS numarası değil GERÇEK bir küme: satır
                kaydığında çizgi de düğmeyle birlikte gider (bkz. .reset-group). -->
           <div v-if="!isSecondary" class="reset-group">
-            <button class="secondary compact" v-bind="writeGate(!canWriteRecords)" @click="restoreDefaults">{{ t("panel.dns.restoreDefaults") }}</button>
+            <button v-if="isAdmin" class="secondary compact" v-bind="writeGate(!canWriteRecords)" @click="restoreDefaults">{{ t("panel.dns.restoreDefaults") }}</button>
           </div>
         </div>
       </div>
@@ -778,17 +778,18 @@ function resetRecordForm() {
 async function restoreDefaults() {
   if (!canWriteRecords.value) return;
 
-  const managed = (zone.value?.records ?? []).filter((item) => item.isManaged).length;
+  const total = (zone.value?.records ?? []).length;
   const impact = [
     `${t("panel.dns.zone")}: ${zone.value?.zoneName || siteName.value}`,
-    `${t("panel.dns.managedRecord")}: ${managed}`
+    `${t("panel.dns.recordCount")}: ${total}`
   ];
 
-  // Normal onay: yalnız panelin yönettiği kayıtlar varsayılana döner (kapsam dar, yeniden düzenlenebilir).
-  await mutateZone(resetDnsDefaults, "panel.dns.defaultsRestored", busy, undefined, { records: true, confirmation: {
+  // Explicit full-zone reset, including custom records; require the zone name.
+  await mutateZone(resetDnsDefaults, "panel.dns.defaultsRestored", busy, undefined, { administrator: true, records: true, confirmation: {
     title: t("panel.confirm.restoreDnsDefaultsTitle"),
     message: t("panel.dns.confirmRestoreDefaults"),
     impact,
+    requireText: zone.value?.zoneName || siteName.value,
     confirmLabel: t("panel.dns.restoreDefaults"),
   } });
 }
