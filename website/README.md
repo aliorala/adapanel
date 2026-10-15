@@ -1,24 +1,45 @@
-# AdaPanel — Web Sitesi / Website
+# adapanel.host — ayrı web sitesi
 
-Tek dosyalık, bağımsız (build gerektirmez) tanıtım sitesi. Türkçe + İngilizce (sağ üstten TR/EN).
-Single-file, self-contained marketing site (no build step). Turkish + English (TR/EN toggle, top right).
+Bu klasör AdaPanel ürününün tanıtım sitesidir; panel arayüzü değildir. Site dosyaları
+AdaPanelSetup.exe içine alınmaz ve `src/AdaPanel.Api/wwwroot` dizinine kopyalanmaz.
 
-## Yayınlama / Deploy
+## Üretim ve doğrulama
 
-**Seçenek 1 — Kendi hostingin (adapanel.host):**
-- `index.html` dosyasını sitenin köküne yükle (FTP / dosya yöneticisi). Bitti.
-- Upload `index.html` to the site root (FTP / file manager). Done.
+Python 3 ile, depo kökünde:
 
-**Seçenek 2 — GitHub Pages (ücretsiz):**
-1. `aliorala/adapanel` deposunda Settings → Pages.
-2. Source = "Deploy from a branch", branch = `main`, klasör = `/website` (ya da `index.html`'i köke/`docs/`'a koy).
-3. Birkaç dakika içinde `https://aliorala.github.io/adapanel/` adresinde yayında olur.
-4. İstersen Pages'e özel alan adı (custom domain) olarak `adapanel.host` bağlayabilirsin.
+```text
+python scripts/build-website.py
+python scripts/test-website.py
+```
 
-## Bağlantılar / Links
-İndirme ve "GitHub'da incele" butonları şunlara işaret eder / Download & "View on GitHub" buttons point to:
-- `https://github.com/aliorala/adapanel/releases/latest`
-- `https://github.com/aliorala/adapanel`
+Kaynak şablon `scripts/website/index.template.html`, içerik ve metadata
+`scripts/build-website.py` içindedir. FTP için temiz çıktı yalnız
+`artifacts/website-public/` klasörüdür. Bu klasörün içeriğini adapanel.host sitesinin
+FTP köküne yükleyin; depo kaynaklarını, testleri, README dosyasını, yedekleri veya
+AdaPanel kurulum paketini FTP alanına yüklemeyin.
 
-Repo adı/kullanıcı değişirse `index.html` içindeki bu bağlantıları güncelle.
-If the repo/user changes, update these links inside `index.html`.
+Üretilen sayfalar: `/` (Türkçe), `/en/` (İngilizce), `/kurulum/` ve
+`/en/installation/`. Sunucuda build veya JavaScript gerektirmez. Buradaki statik
+sayfalar üretilen çıktının kaynak kontrolde tutulan kopyasıdır.
+
+## Yayın ve geri dönüş
+
+Önce uzak `index.html` ve `web.config` dosyalarını yerel, web dışı bir yedeğe alın.
+Mevcut `web.config`, App_Data ve diğer uygulama dosyalarını koruyun. Yeni dosyaları
+geçici isimle aktarın ve içerik özetlerini kontrol ettikten sonra asıl adlarına
+taşıyın. Varlıkları ve alt sayfaları önce, ana sayfayı en son yayınlayın.
+
+Yayından sonra dört sayfayı, robots.txt, sitemap.xml ve assets dosyalarını HTTPS
+üzerinden tekrar indirerek yerel çıktıyla karşılaştırın. Geri dönüşte yedekteki
+ana sayfayı geri yükleyin; site dışındaki alan adlarına/DNS kayıtlarına dokunmayın.
+
+## Arama ve yanıt sistemleri
+
+Sayfalar kendine ait canonical, karşılıklı hreflang, Open Graph, JSON-LD ve HTML
+olarak okunabilir içerik sağlar. FAQ verisi görünen soru/cevaplarla aynı kaynaktan
+üretilir. Sıralama, zengin sonuç veya yapay zekâ alıntısı garanti edilmez.
+
+Search Console ve Bing Webmaster Tools hesabından sitemap gönderimi ve gerçek
+arama performansı takibi ayrı işlemlerdir. Doğrulama kodu veya ölçüm hesabı bu
+sitede varsayılarak oluşturulmaz. Özel yapay zekâ dosyası zorunlu değildir:
+https://developers.google.com/search/docs/appearance/ai-features

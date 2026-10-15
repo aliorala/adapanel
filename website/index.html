@@ -1,262 +1,63 @@
 <!doctype html>
-<html lang="tr">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AdaPanel — Windows Hosting Control Panel</title>
-  <meta name="description" data-tr="Windows Server için modern barındırma kontrol paneli — siteler, e-posta, veritabanı, DNS, SSL, FTP ve daha fazlası tek panelde." data-en="A modern hosting control panel for Windows Server — sites, mail, databases, DNS, SSL, FTP and more in one panel." content="A modern hosting control panel for Windows Server." />
-  <meta name="theme-color" content="#f6f8fb" />
-  <meta property="og:title" content="AdaPanel — Windows Hosting Control Panel" />
-  <meta property="og:description" content="Sites, mail, databases, DNS, SSL & FTP in one modern panel for Windows Server." />
-  <meta property="og:type" content="website" />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%234f46e5'/%3E%3Cstop offset='1' stop-color='%234338ca'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='url(%23g)'/%3E%3Ctext x='32' y='44' font-family='Segoe UI,Arial' font-size='34' font-weight='800' text-anchor='middle' fill='%23ffffff'%3EA%3C/text%3E%3C/svg%3E" />
-  <style>
-    :root {
-      color-scheme: light;
-      --bg: #f6f8fb;
-      --bg-2: #eef2f7;
-      --surface: #ffffff;
-      --surface-2: #fbfcfe;
-      --border: #e3e8ef;
-      --border-soft: #eef1f6;
-      --text: #0f172a;
-      --muted: #475569;
-      --soft: #94a3b8;
-      --accent: #4f46e5;
-      --accent-2: #4338ca;
-      --accent-3: #6366f1;
-      --radius: 18px;
-      --radius-sm: 12px;
-      --shadow: 0 12px 34px -16px rgba(15,23,42,.18);
-      --shadow-lg: 0 30px 60px -28px rgba(15,23,42,.22);
-      --maxw: 1120px;
-      --ease: cubic-bezier(.22,.61,.36,1);
-    }
-    * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
-    body {
-      margin: 0;
-      font-family: "Segoe UI", system-ui, -apple-system, "Inter", Arial, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      line-height: 1.65;
-      overflow-x: hidden;
-    }
-    /* ambient — açık, ferah */
-    body::before {
-      content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none;
-      background:
-        radial-gradient(900px 520px at 50% -10%, rgba(79,70,229,.08), transparent 60%),
-        var(--bg);
-    }
-    body::after {
-      content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: .6;
-      background-image: linear-gradient(rgba(15,23,42,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(15,23,42,.035) 1px, transparent 1px);
-      background-size: 46px 46px;
-      mask-image: radial-gradient(900px 600px at 50% 0%, #000 0%, transparent 70%);
-    }
-    a { color: var(--accent); text-decoration: none; }
-    .wrap { width: min(var(--maxw), 92%); margin: 0 auto; }
-    .grad-text { background: linear-gradient(92deg, var(--accent), var(--accent-3)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-
-    /* Buttons */
-    .btn {
-      display: inline-flex; align-items: center; gap: 9px; padding: 12px 20px; border-radius: 999px;
-      font-weight: 650; font-size: .94rem; cursor: pointer; border: 1px solid transparent; white-space: nowrap;
-      transition: transform .15s var(--ease), filter .15s var(--ease), border-color .15s var(--ease), background .15s var(--ease), color .15s var(--ease);
-    }
-    .btn svg { width: 17px; height: 17px; }
-    .btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #ffffff; box-shadow: 0 10px 30px -10px rgba(79,70,229,.6); }
-    .btn.primary:hover { transform: translateY(-2px); filter: brightness(1.06); text-decoration: none; }
-    .btn.ghost { border-color: var(--border); color: var(--text); background: #fff; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
-    .btn.ghost:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; transform: translateY(-2px); }
-
-    /* Nav */
-    header.nav { position: sticky; top: 0; z-index: 30; transition: background .25s var(--ease), border-color .25s var(--ease); border-bottom: 1px solid transparent; }
-    header.nav.scrolled { background: rgba(255,255,255,.82); backdrop-filter: blur(14px); border-bottom-color: var(--border); box-shadow: 0 1px 0 rgba(15,23,42,.04); }
-    .nav-inner { display: flex; align-items: center; gap: 18px; padding: 15px 0; }
-    .brand { display: flex; align-items: center; gap: 11px; font-weight: 800; font-size: 1.18rem; letter-spacing: .2px; }
-    .brand .logo { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px;
-      background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #ffffff; font-weight: 900; box-shadow: 0 8px 22px -8px rgba(79,70,229,.7); }
-    .nav-links { display: flex; gap: 22px; margin-left: auto; align-items: center; }
-    .nav-links > a { color: var(--muted); font-size: .93rem; font-weight: 500; transition: color .15s; }
-    .nav-links > a:hover { color: var(--text); text-decoration: none; }
-    .lang-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
-    .lang-toggle button { background: transparent; color: var(--muted); border: 0; padding: 7px 13px; cursor: pointer; font-weight: 700; font-size: .78rem; transition: background .15s, color .15s; }
-    .lang-toggle button.active { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #ffffff; }
-    @media (max-width: 780px) { .nav-links > a:not(.btn) { display: none; } }
-
-    /* Hero */
-    .hero { padding: 86px 0 40px; text-align: center; }
-    .pill { display: inline-flex; align-items: center; gap: 8px; font-size: .76rem; letter-spacing: .04em; font-weight: 600;
-      color: var(--accent); background: rgba(79,70,229,.08); border: 1px solid rgba(79,70,229,.25); padding: 6px 14px; border-radius: 999px; }
-    .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px rgba(79,70,229,.18); }
-    .hero h1 { font-size: clamp(2.3rem, 6.2vw, 4rem); line-height: 1.04; margin: 22px auto 16px; max-width: 14ch; letter-spacing: -.02em; font-weight: 800; }
-    .hero p.sub { color: var(--muted); font-size: clamp(1.02rem, 2.1vw, 1.22rem); max-width: 660px; margin: 0 auto 30px; }
-    .hero-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-    .trust { display: flex; gap: 22px; justify-content: center; flex-wrap: wrap; margin-top: 26px; color: var(--soft); font-size: .85rem; }
-    .trust span { display: inline-flex; align-items: center; gap: 7px; }
-    .trust svg { width: 15px; height: 15px; color: var(--accent); }
-
-    /* Dashboard mock */
-    /* Mockup, gerçek panele sadık kalsın diye KOYU: değişkenler bu ağaç içinde geçersiz kılınır (açık temada koyu ürün ekranı = şık kontrast). */
-    .mock { width: min(1000px, 100%); margin: 52px auto 0; border-radius: var(--radius); border: 1px solid #243049; overflow: hidden;
-      background: linear-gradient(180deg, #131c30, #0f1626); box-shadow: var(--shadow-lg);
-      --surface: #131c30; --surface-2: #0f1626; --border: #243049; --border-soft: #1c2740; --text: #e7ecf5; --muted: #aab6cf; --soft: #8493b0; --accent: #818cf8; --accent-3: #5cc8ff; }
-    .mock .chrome { display: flex; align-items: center; gap: 8px; padding: 13px 16px; border-bottom: 1px solid var(--border-soft); background: rgba(0,0,0,.16); }
-    .mock .chrome i { width: 11px; height: 11px; border-radius: 50%; }
-    .mock .chrome i:nth-child(1){ background:#ff5f57; } .mock .chrome i:nth-child(2){ background:#febc2e; } .mock .chrome i:nth-child(3){ background:#28c840; }
-    .mock .url { margin-left: 12px; font-size: .76rem; color: var(--soft); background: rgba(255,255,255,.04); border: 1px solid var(--border-soft); padding: 4px 12px; border-radius: 999px; }
-    .mock .body { display: grid; grid-template-columns: 184px 1fr; min-height: 330px; }
-    .mock .side { border-right: 1px solid var(--border-soft); padding: 16px 12px; display: grid; gap: 4px; align-content: start; background: rgba(0,0,0,.12); }
-    .mock .side .si { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 9px; font-size: .82rem; color: var(--muted); }
-    .mock .side .si svg { width: 16px; height: 16px; opacity: .85; }
-    .mock .side .si.active { background: linear-gradient(135deg, rgba(79,70,229,.16), rgba(79,70,229,.10)); color: var(--text); font-weight: 600; }
-    .mock .side .si.active svg { color: var(--accent); opacity: 1; }
-    .mock .main { padding: 18px; display: grid; gap: 16px; align-content: start; }
-    .mock .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-    .mock .scard { border: 1px solid var(--border-soft); border-radius: 12px; background: var(--surface-2); padding: 14px; display: flex; align-items: center; gap: 12px; }
-    .ring { width: 50px; height: 50px; border-radius: 50%; display: grid; place-items: center; flex: none;
-      background: conic-gradient(var(--rc, var(--accent)) calc(var(--p,60) * 1%), rgba(255,255,255,.07) 0); }
-    .ring i { width: 38px; height: 38px; border-radius: 50%; background: var(--surface-2); display: grid; place-items: center; font-size: .68rem; font-weight: 800; color: var(--text); font-style: normal; }
-    .scard .lbl { display: grid; gap: 2px; min-width: 0; }
-    .scard .lbl b { font-size: .92rem; } .scard .lbl small { color: var(--soft); font-size: .72rem; }
-    .mock .tbl { border: 1px solid var(--border-soft); border-radius: 12px; overflow: hidden; }
-    .mock .tr { display: grid; grid-template-columns: 1.6fr .8fr .6fr; gap: 10px; padding: 11px 14px; align-items: center; font-size: .8rem; border-top: 1px solid var(--border-soft); }
-    .mock .tr:first-child { border-top: 0; color: var(--soft); font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; background: rgba(0,0,0,.14); }
-    .mock .tr .nm { display: flex; align-items: center; gap: 9px; color: var(--text); }
-    .mock .tr .nm b { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px rgba(79,70,229,.16); }
-    .tag { font-size: .68rem; font-weight: 700; padding: 3px 9px; border-radius: 999px; justify-self: start; }
-    .tag.ok { color: var(--accent); background: rgba(79,70,229,.12); }
-    .tag.run { color: var(--accent-3); background: rgba(106,208,255,.12); }
-    @media (max-width: 620px) { .mock .body { grid-template-columns: 1fr; } .mock .side { display: none; } .mock .stats { grid-template-columns: 1fr; } }
-
-    /* Sections */
-    section { padding: 64px 0; }
-    .sec-head { text-align: center; max-width: 680px; margin: 0 auto 40px; }
-    .sec-head .pill { margin-bottom: 14px; }
-    .sec-head h2 { font-size: clamp(1.7rem, 4vw, 2.5rem); margin: 0 0 12px; letter-spacing: -.01em; }
-    .sec-head p { color: var(--muted); margin: 0; font-size: 1.03rem; }
-
-    .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
-    @media (max-width: 900px) { .features { grid-template-columns: repeat(2, 1fr); } }
-    @media (max-width: 560px) { .features { grid-template-columns: 1fr; } }
-    .feature { border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 24px; background: linear-gradient(180deg, var(--surface), var(--surface-2));
-      transition: border-color .18s var(--ease), transform .18s var(--ease), box-shadow .18s var(--ease); position: relative; }
-    .feature:hover { border-color: rgba(79,70,229,.4); transform: translateY(-4px); box-shadow: 0 22px 50px -28px rgba(79,70,229,.5); }
-    .feature .ico { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 13px; margin-bottom: 15px;
-      background: linear-gradient(135deg, rgba(79,70,229,.16), rgba(79,70,229,.08)); color: var(--accent); border: 1px solid rgba(79,70,229,.2); }
-    .feature .ico svg { width: 23px; height: 23px; }
-    .feature h3 { margin: 0 0 7px; font-size: 1.08rem; }
-    .feature p { margin: 0; color: var(--muted); font-size: .92rem; }
-
-    /* Steps */
-    .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; counter-reset: step; }
-    @media (max-width: 760px) { .steps { grid-template-columns: 1fr; } }
-    .step { border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 26px 24px; background: linear-gradient(180deg, var(--surface), var(--surface-2)); position: relative; }
-    .step .num { counter-increment: step; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; font-weight: 800; color: #ffffff;
-      background: linear-gradient(135deg, var(--accent), var(--accent-2)); margin-bottom: 14px; }
-    .step .num::before { content: counter(step); }
-    .step h3 { margin: 0 0 6px; font-size: 1.08rem; }
-    .step p { margin: 0; color: var(--muted); font-size: .92rem; }
-
-    /* Stats band */
-    .band { border-top: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); background: rgba(255,255,255,.012); }
-    .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; text-align: center; }
-    @media (max-width: 700px) { .stats-row { grid-template-columns: repeat(2,1fr); } }
-    .stat strong { display: block; font-size: clamp(1.7rem, 4.4vw, 2.4rem); font-weight: 800; }
-    .stat span { color: var(--muted); font-size: .88rem; }
-
-    /* CTA */
-    .cta { text-align: center; border: 1px solid rgba(79,70,229,.28); border-radius: 24px; padding: 52px 28px; position: relative; overflow: hidden;
-      background: radial-gradient(700px 300px at 50% -40%, rgba(79,70,229,.18), transparent 70%), linear-gradient(180deg, var(--surface), var(--surface-2)); }
-    .cta h2 { font-size: clamp(1.7rem, 4vw, 2.4rem); margin: 0 0 10px; }
-    .cta p { color: var(--muted); margin: 0 auto 26px; max-width: 540px; }
-    .cta .req { margin-top: 16px; color: var(--soft); font-size: .82rem; }
-
-    /* FAQ */
-    .faq { max-width: 780px; margin: 0 auto; display: grid; gap: 12px; }
-    details.q { border: 1px solid var(--border-soft); border-radius: 14px; background: var(--surface-2); padding: 2px 18px; transition: border-color .15s; }
-    details.q[open] { border-color: rgba(79,70,229,.3); }
-    details.q summary { cursor: pointer; padding: 16px 0; font-weight: 600; list-style: none; display: flex; justify-content: space-between; gap: 16px; align-items: center; }
-    details.q summary::-webkit-details-marker { display: none; }
-    details.q summary .x { color: var(--accent); font-weight: 800; font-size: 1.3rem; line-height: 1; transition: transform .2s var(--ease); }
-    details.q[open] summary .x { transform: rotate(45deg); }
-    details.q .a { margin: 0 0 16px; color: var(--muted); font-size: .94rem; }
-
-    footer { border-top: 1px solid var(--border-soft); padding: 30px 0; color: var(--soft); font-size: .86rem; margin-top: 24px; }
-    .foot-inner { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: center; }
-    .foot-inner .brand { font-size: 1rem; }
-    .foot-links { display: flex; gap: 18px; }
-    .foot-links a { color: var(--muted); }
-
-    /* reveal */
-    .reveal { opacity: 0; transform: translateY(22px); transition: opacity .6s var(--ease), transform .6s var(--ease); }
-    .reveal.in { opacity: 1; transform: none; }
-    @media (prefers-reduced-motion: reduce) { .reveal { opacity: 1; transform: none; transition: none; } html { scroll-behavior: auto; } }
-  </style>
-</head>
-<body>
+<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AdaPanel | Windows Hosting Kontrol Paneli</title><meta name="description" content="Windows Server ve IIS için AdaPanel: web, e-posta, DNS, SSL, veritabanı ve yedek yönetimi. Türkçe ve İngilizce panel, SEO/AEO/GEO denetimi."><link rel="canonical" href="https://adapanel.host/"><link rel="alternate" hreflang="tr" href="https://adapanel.host/"><link rel="alternate" hreflang="en" href="https://adapanel.host/en/"><link rel="alternate" hreflang="x-default" href="https://adapanel.host/"><meta property="og:title" content="AdaPanel | Windows Hosting Kontrol Paneli"><meta property="og:description" content="Windows Server ve IIS için AdaPanel: web, e-posta, DNS, SSL, veritabanı ve yedek yönetimi. Türkçe ve İngilizce panel, SEO/AEO/GEO denetimi."><meta property="og:type" content="website"><meta property="og:url" content="https://adapanel.host/"><meta property="og:site_name" content="AdaPanel"><meta property="og:locale" content="tr_TR"><meta property="og:image" content="https://adapanel.host/assets/social.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="AdaPanel — Windows hosting control panel"><meta name="twitter:card" content="summary_large_image"><meta name="theme-color" content="#4f46e5"><link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/site.css"><script type="application/ld+json">{"@context": "https://schema.org", "@graph": [{"@type": "Organization", "@id": "https://adapanel.host/#organization", "name": "AdaPanel", "url": "https://adapanel.host/", "logo": "https://adapanel.host/assets/favicon.svg", "sameAs": ["https://github.com/aliorala/adapanel"]}, {"@type": "WebSite", "@id": "https://adapanel.host/#website", "url": "https://adapanel.host/", "name": "AdaPanel", "inLanguage": ["tr", "en"], "publisher": {"@id": "https://adapanel.host/#organization"}}, {"@type": "WebPage", "@id": "https://adapanel.host/#page", "url": "https://adapanel.host/", "name": "AdaPanel | Windows Hosting Kontrol Paneli", "description": "Windows Server ve IIS için AdaPanel: web, e-posta, DNS, SSL, veritabanı ve yedek yönetimi. Türkçe ve İngilizce panel, SEO/AEO/GEO denetimi.", "inLanguage": "tr", "isPartOf": {"@id": "https://adapanel.host/#website"}}, {"@type": "SoftwareApplication", "@id": "https://adapanel.host/#software", "name": "AdaPanel", "url": "https://adapanel.host/", "applicationCategory": "DeveloperApplication", "operatingSystem": "Windows Server", "downloadUrl": "https://github.com/aliorala/adapanel/releases/latest", "inLanguage": ["tr", "en"], "publisher": {"@id": "https://adapanel.host/#organization"}, "description": "Windows Server ve IIS için AdaPanel: web, e-posta, DNS, SSL, veritabanı ve yedek yönetimi. Türkçe ve İngilizce panel, SEO/AEO/GEO denetimi."}, {"@type": "FAQPage", "@id": "https://adapanel.host/#faq", "inLanguage": "tr", "mainEntity": [{"@type": "Question", "name": "AdaPanel nedir?", "acceptedAnswer": {"@type": "Answer", "text": "AdaPanel, kendi Windows Server sunucunuza kurduğunuz bir hosting kontrol panelidir. IIS web sitelerini, e-postayı, veritabanlarını, DNS, SSL ve FTP hizmetlerini tek arayüzde yönetir. Sunucu veya barındırma hizmeti sağlamaz."}}, {"@type": "Question", "name": "AdaPanel kimler için uygundur?", "acceptedAnswer": {"@type": "Answer", "text": "Windows ve IIS üzerinde site yayınlayan geliştiriciler, ajanslar ve sunucu yöneticileri için tasarlanmıştır. Yönetici, bayi ve müşteri rolleriyle kaynakları ve erişimi ayırabilirsiniz."}}, {"@type": "Question", "name": "Kurulum için ne gerekir?", "acceptedAnswer": {"@type": "Answer", "text": "Yönetici yetkisine sahip bir Windows sunucusu, IIS ve seçtiğiniz uygulamaların bileşenleri gerekir. Kurulum öncesinde yedek alın; Windows rol kurulumu yeniden başlatma gerektirebilir. İlk panel kurulumu sunucunun kendisinden tamamlanır."}}, {"@type": "Question", "name": "Evdeki sunucu veya NAT arkasında kullanılabilir mi?", "acceptedAnswer": {"@type": "Answer", "text": "Evet, ancak yerel IIS adresi ile internette yayınlanacak genel IP ayrı ayarlanmalıdır. Modemde gerekli portları doğru sunucuya yönlendirin. Aynı genel IP üzerinde başka bir web hizmeti varsa 80/443 paylaşımını ters vekil veya ayrı IP ile planlayın. CGNAT ve sağlayıcı port kısıtlamaları ayrıca değerlendirilmelidir."}}, {"@type": "Question", "name": "SEO, AEO ve GEO araçları ne yapar?", "acceptedAnswer": {"@type": "Answer", "text": "SEO arama motoru görünürlüğünün teknik temelidir; AEO yanıt sistemlerinin, GEO ise üretken yapay zekâ sistemlerinin içeriği anlamasına odaklanır. AdaPanel; başlık, canonical, dil, robots, yapılandırılmış veri ve okunabilir metin sinyallerini tarar. Bulgular düzeltme önerileriyle gösterilir. Bu denetim sitenizin içeriğini otomatik değiştirmez ve sıralama ya da yapay zekâ alıntısı garantisi vermez."}}, {"@type": "Question", "name": "Mevcut sitelerimi nasıl taşırım?", "acceptedAnswer": {"@type": "Answer", "text": "Taşıma akışlarıyla dosya ve veritabanlarını aktarın; uygulamanın çalışma zamanı, bağlantı bilgileri, posta ve SSL ayarlarını kontrol edin. Önce ayrı bir test ortamında geri yüklemeyi ve uygulamayı doğrulayın, sonra DNS geçişini yapın."}}, {"@type": "Question", "name": "Güncellemeler nereden indirilir?", "acceptedAnswer": {"@type": "Answer", "text": "Resmî kurulum paketleri GitHub sürümlerinde yayımlanır. Panelde Ayarlar → Güncellemeler üzerinden yeni sürümü kontrol edebilirsiniz. Güncellemeden önce yedek alın ve sürüm notlarını okuyun."}}]}]}</script></head>
+<body><a class="skip" href="#main">İçeriğe geç</a>
   <header class="nav" id="nav">
     <div class="wrap nav-inner">
-      <div class="brand"><span class="logo">A</span> AdaPanel</div>
+      <a class="brand" href="/" aria-label="AdaPanel"><span class="logo" aria-hidden="true">A</span> AdaPanel</a>
       <nav class="nav-links">
-        <a href="#features" data-tr="Özellikler" data-en="Features">Features</a>
-        <a href="#how" data-tr="Nasıl çalışır" data-en="How it works">How it works</a>
-        <a href="#faq" data-tr="SSS" data-en="FAQ">FAQ</a>
+        <a href="#features">Özellikler</a>
+        <a href="/kurulum/">Kurulum rehberi</a>
+        <a href="#faq">SSS</a>
         <a class="btn ghost" href="https://github.com/aliorala/adapanel" target="_blank" rel="noopener">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2A10 10 0 0 0 8.8 21.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.4-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.6 2.4 1.1 3 .9.1-.7.3-1.1.6-1.4-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.7 1a9.4 9.4 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.3 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A10 10 0 0 0 12 2Z"/></svg>
+          <svg viewbox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2A10 10 0 0 0 8.8 21.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.4-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.6 2.4 1.1 3 .9.1-.7.3-1.1.6-1.4-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.7 1a9.4 9.4 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.3 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A10 10 0 0 0 12 2Z"></path></svg>
           GitHub
         </a>
-        <span class="lang-toggle" role="group" aria-label="Language">
-          <button type="button" data-lang="tr">TR</button>
-          <button type="button" data-lang="en">EN</button>
-        </span>
+        <span class="lang-toggle" role="group" aria-label="Language"><a href="/" hreflang="tr" lang="tr" aria-current="page">TR</a><a href="/en/" hreflang="en" lang="en">EN</a></span>
       </nav>
     </div>
   </header>
 
-  <main>
+  <main id="main">
     <section class="hero">
       <div class="wrap">
-        <span class="pill reveal"><span class="dot"></span><span data-tr="Windows Server için kontrol paneli" data-en="Control panel for Windows Server">Control panel for Windows Server</span></span>
-        <h1 class="reveal" data-tr="Windows barındırma, &lt;span class='grad-text'&gt;tek panelden&lt;/span&gt;." data-en="Windows hosting, &lt;span class='grad-text'&gt;from one panel&lt;/span&gt;.">Windows hosting, from one panel.</h1>
-        <p class="sub reveal" data-tr="Web sitelerini, e-postayı, veritabanlarını, DNS'i, SSL'i ve FTP'yi tek modern arayüzden yönetin. Plesk'in yaptığını — Windows için, sade ve hızlı." data-en="Manage websites, mail, databases, DNS, SSL and FTP from one modern interface. What Plesk does — built for Windows, clean and fast.">Manage websites, mail, databases, DNS, SSL and FTP from one modern interface.</p>
+        <span class="pill reveal"><span class="dot"></span><span>Windows Server için kontrol paneli</span></span>
+        <h1 class="reveal">Windows hosting kontrol paneli.<br><span class='grad-text'>Sunucunuz sizin elinizde.</span></h1>
+        <p class="sub reveal">AdaPanel, kendi Windows Server sunucunuzdaki IIS sitelerini, e-postayı, veritabanlarını, DNS, SSL ve FTP hizmetlerini Türkçe ve İngilizce tek arayüzden yönetmenizi sağlar.</p>
         <div class="hero-actions reveal">
           <a class="btn primary" href="https://github.com/aliorala/adapanel/releases/latest" target="_blank" rel="noopener">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
-            <span data-tr="Ücretsiz indir" data-en="Download free">Download free</span>
+            <svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"></path></svg>
+            <span>Kurulumu indir</span>
           </a>
-          <a class="btn ghost" href="#features"><span data-tr="Özellikleri gör" data-en="See features">See features</span></a>
+          <a class="btn ghost" href="#features"><span>Özellikleri gör</span></a>
         </div>
         <div class="trust reveal">
-          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span data-tr="Tek kurulum dosyası" data-en="Single installer">Single installer</span></span>
-          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span data-tr="IIS · PHP · e-posta · DB otomatik" data-en="IIS · PHP · mail · DB automatic">IIS · PHP · mail · DB automatic</span></span>
-          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span data-tr="Türkçe + English" data-en="Turkish + English">Turkish + English</span></span>
+          <span><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg><span>Tek kurulum dosyası</span></span>
+          <span><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg><span>IIS · PHP · e-posta · veritabanı</span></span>
+          <span><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg><span>Türkçe + English</span></span>
         </div>
 
         <div class="mock reveal" aria-hidden="true">
-          <div class="chrome"><i></i><i></i><i></i><span class="url">https://localhost:8890/panel</span></div>
+          <div class="chrome"><i></i><i></i><i></i><span class="url">AdaPanel · IIS / PHP / ASP.NET</span></div>
           <div class="body">
             <div class="side">
-              <div class="si active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg><span data-tr="Pano" data-en="Dashboard">Dashboard</span></div>
-              <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span data-tr="Web Siteleri" data-en="Websites">Websites</span></div>
-              <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg><span data-tr="E-posta" data-en="Mail">Mail</span></div>
-              <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg><span data-tr="Veritabanı" data-en="Databases">Databases</span></div>
-              <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M6 8.5v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-3M12 13.5v2"/></svg><span>DNS</span></div>
-              <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>SSL</span></div>
+              <div class="si active"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="5" rx="1"></rect><rect x="14" y="12" width="7" height="9" rx="1"></rect><rect x="3" y="16" width="7" height="5" rx="1"></rect></svg><span>Pano</span></div>
+              <div class="si"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"></path></svg><span>Web Siteleri</span></div>
+              <div class="si"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg><span>E-posta</span></div>
+              <div class="si"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg><span>Veritabanı</span></div>
+              <div class="si"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="6" r="2.5"></circle><circle cx="18" cy="6" r="2.5"></circle><circle cx="12" cy="18" r="2.5"></circle><path d="M6 8.5v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-3M12 13.5v2"></path></svg><span>DNS</span></div>
+              <div class="si"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="10" width="16" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg><span>SSL</span></div>
             </div>
             <div class="main">
               <div class="stats">
-                <div class="scard"><div class="ring" style="--p:24;--rc:#818cf8"><i>24%</i></div><div class="lbl"><b data-tr="İşlemci" data-en="CPU">CPU</b><small>8 core</small></div></div>
-                <div class="scard"><div class="ring" style="--p:61;--rc:#5cc8ff"><i>61%</i></div><div class="lbl"><b data-tr="Bellek" data-en="Memory">Memory</b><small>9.8 / 16 GB</small></div></div>
-                <div class="scard"><div class="ring" style="--p:38;--rc:#febc2e"><i>38%</i></div><div class="lbl"><b data-tr="Disk" data-en="Disk">Disk</b><small>190 / 500 GB</small></div></div>
+                <div class="scard"><div class="ring" style="--p:24;--rc:#818cf8"><i>24%</i></div><div class="lbl"><b>İşlemci</b><small>8 core</small></div></div>
+                <div class="scard"><div class="ring" style="--p:61;--rc:#5cc8ff"><i>61%</i></div><div class="lbl"><b>Bellek</b><small>9.8 / 16 GB</small></div></div>
+                <div class="scard"><div class="ring" style="--p:38;--rc:#febc2e"><i>38%</i></div><div class="lbl"><b>Disk</b><small>190 / 500 GB</small></div></div>
               </div>
               <div class="tbl">
-                <div class="tr"><span data-tr="Alan adı" data-en="Domain">Domain</span><span data-tr="Çalışma" data-en="Runtime">Runtime</span><span data-tr="Durum" data-en="Status">Status</span></div>
-                <div class="tr"><span class="nm"><b></b>ornek.com</span><span>PHP 8.3</span><span class="tag ok" data-tr="Çalışıyor" data-en="Running">Running</span></div>
-                <div class="tr"><span class="nm"><b></b>shop.ornek.com</span><span>ASP.NET</span><span class="tag ok" data-tr="Çalışıyor" data-en="Running">Running</span></div>
-                <div class="tr"><span class="nm"><b></b>api.ornek.com</span><span>Node.js</span><span class="tag run" data-tr="Yayında" data-en="Live">Live</span></div>
+                <div class="tr"><span>Alan adı</span><span>Çalışma</span><span>Durum</span></div>
+                <div class="tr"><span class="nm"><b></b>ornek.com</span><span>PHP 8.3</span><span class="tag ok">Çalışıyor</span></div>
+                <div class="tr"><span class="nm"><b></b>shop.ornek.com</span><span>ASP.NET</span><span class="tag ok">Çalışıyor</span></div>
+                <div class="tr"><span class="nm"><b></b>api.ornek.com</span><span>Node.js</span><span class="tag run">Yayında</span></div>
               </div>
             </div>
           </div>
@@ -264,37 +65,37 @@
       </div>
     </section>
 
-    <section id="features">
+    <p class="mock-note wrap">Temsili panel görünümü; örnek veriler içerir.</p><section id="features">
       <div class="wrap">
         <div class="sec-head reveal">
-          <span class="pill" data-tr="Özellikler" data-en="Features">Features</span>
-          <h2 data-tr="Bir sunucuyu işletmek için her şey" data-en="Everything to run a server">Everything to run a server</h2>
-          <p data-tr="Kurulumdan günlük yönetime, ihtiyacınız olan tüm araçlar tek panelde — ayrı yazılım kurmadan." data-en="From setup to daily operations, every tool you need in one panel — no extra software to install.">From setup to daily operations, every tool in one panel.</p>
+          <span class="pill">Özellikler</span>
+          <h2>Günlük sunucu yönetimi, tek yerde</h2>
+          <p>Web, posta ve veritabanı hizmetlerini ortak bir arayüzden yönetin. Bileşenleri ihtiyacınıza göre kurun ve yapılandırın.</p>
         </div>
         <div class="features">
-          <article class="feature reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></div><h3 data-tr="Web Siteleri" data-en="Websites">Websites</h3><p data-tr="IIS siteleri; PHP, ASP.NET, Node.js, Python; belge kökü, URL rewrite ve tek tık WordPress." data-en="IIS sites; PHP, ASP.NET, Node.js, Python; document root, URL rewrite and one-click WordPress.">IIS sites and runtimes.</p></article>
-          <article class="feature reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></div><h3 data-tr="E-posta" data-en="Mail">Mail</h3><p data-tr="Alan adı, posta kutusu ve alias yönetimi; Roundcube webmail, SPF/DKIM/DMARC otomatik." data-en="Domains, mailboxes and aliases; Roundcube webmail, automatic SPF/DKIM/DMARC.">Mailboxes + webmail.</p></article>
-          <article class="feature reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></div><h3 data-tr="Veritabanları" data-en="Databases">Databases</h3><p data-tr="MySQL, MariaDB, PostgreSQL ve MSSQL; phpMyAdmin, kullanıcı/yetki ve uzak erişim." data-en="MySQL, MariaDB, PostgreSQL and MSSQL; phpMyAdmin, users/grants and remote access.">Multiple DB engines.</p></article>
-          <article class="feature reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><path d="M12 14v3"/></svg></div><h3 data-tr="SSL Sertifikaları" data-en="SSL Certificates">SSL Certificates</h3><p data-tr="Let's Encrypt ile ücretsiz, otomatik yenilenen HTTPS — site, webmail ve posta için." data-en="Free, auto-renewing HTTPS with Let's Encrypt — for sites, webmail and mail.">Free auto HTTPS.</p></article>
-          <article class="feature reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M6 8.5v2a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-2M12 12.5v3"/></svg></div><h3>DNS</h3><p data-tr="Bölge yönetimi, kayıt şablonları, DNSSEC ve posta kayıtlarının otomatik yazımı." data-en="Zone management, record templates, DNSSEC and automatic mail records.">Zones + templates.</p></article>
-          <article class="feature reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 17v-6m0 0-2.5 2.5M12 11l2.5 2.5"/></svg></div><h3 data-tr="FTP / Dosyalar" data-en="FTP / Files">FTP / Files</h3><p data-tr="İzole FTP kullanıcıları (FTPS), dosya yöneticisi ve site başına yetki." data-en="Isolated FTP users (FTPS), file manager and per-site permissions.">FTP + file manager.</p></article>
-          <article class="feature reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg></div><h3 data-tr="Göç" data-en="Migration">Migration</h3><p data-tr="Plesk/cPanel veya ham sunucudan site + dosya + veritabanını canlı, adım adım taşıyın." data-en="Move sites + files + databases from Plesk/cPanel or a raw server, live and step by step.">Plesk/cPanel migration.</p></article>
-          <article class="feature reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 4 6v6c0 4.5 3.2 7.8 8 9 4.8-1.2 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/></svg></div><h3 data-tr="Güvenlik" data-en="Security">Security</h3><p data-tr="Kiracı izolasyonu, güvenlik duvarı, WAF, korumalı dizinler ve gizli giriş yolu." data-en="Tenant isolation, firewall, WAF, protected directories and a hidden login path.">Isolation + firewall.</p></article>
-          <article class="feature reveal"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 4v4h-4"/></svg></div><h3 data-tr="Yedekleme & Güncelleme" data-en="Backups & Updates">Backups & Updates</h3><p data-tr="Zamanlanmış yedekler, off-site hedef, tek tık geri yükleme ve panel içinden tek tık güncelleme." data-en="Scheduled backups, off-site targets, one-click restore and one-click panel updates.">Backups + auto-update.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"></path></svg></div><h3>Web Siteleri</h3><p>IIS siteleri; PHP, ASP.NET, Node.js, Python; belge kökü, URL rewrite ve tek tık WordPress.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg></div><h3>E-posta</h3><p>Alan adları, posta kutuları ve alias yönetimi; Stalwart ve Roundcube, SPF, DKIM ve DMARC kayıtlarının kurulumu ve denetimi.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg></div><h3>Veritabanları</h3><p>MySQL, MariaDB, PostgreSQL ve MSSQL; phpMyAdmin, kullanıcı/yetki ve uzak erişim.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="10" width="16" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path><path d="M12 14v3"></path></svg></div><h3>SSL Sertifikaları</h3><p>Let&#x27;s Encrypt ile ücretsiz, otomatik yenilenen HTTPS — site, webmail ve posta için.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="6" r="2.5"></circle><circle cx="18" cy="6" r="2.5"></circle><circle cx="12" cy="18" r="2.5"></circle><path d="M6 8.5v2a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-2M12 12.5v3"></path></svg></div><h3>DNS</h3><p>Windows DNS ile canlı kayıt eşitlemesi, şablonlar ve NAT için yerel/genel IP eşleştirmesi. Onar eksik kayıtları ekler; varsayılanlara dönüş ayrı bir işlemdir.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><path d="M12 17v-6m0 0-2.5 2.5M12 11l2.5 2.5"></path></svg></div><h3>FTP / Dosyalar</h3><p>İzole FTP kullanıcıları (FTPS), dosya yöneticisi ve site başına yetki.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 8h13l-3-3M20 16H7l3 3"></path></svg></div><h3>Göç</h3><p>Plesk, cPanel veya sunucudan dosya ve veritabanı taşıma akışları. DNS geçişinden önce taşınan uygulamayı ve yedek geri yüklemeyi sınayın.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 4 6v6c0 4.5 3.2 7.8 8 9 4.8-1.2 8-4.5 8-9V6z"></path><path d="m9 12 2 2 4-4"></path></svg></div><h3>Güvenlik</h3><p>Kiracı izolasyonu, güvenlik duvarı, WAF, korumalı dizinler ve gizli giriş yolu.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"></path><path d="M21 4v4h-4"></path></svg></div><h3>Yedekleme &amp; Güncelleme</h3><p>Zamanlanmış yedekler, off-site hedef, tek tık geri yükleme ve panel içinden tek tık güncelleme.</p></article>
         </div>
       </div>
     </section>
 
-    <section id="how">
+    <section id="visibility"><div class="wrap answer"><h2>Barındırma yönetiminden görünürlük denetimine</h2><p>Bir siteyi yayınlamak başlangıçtır. AdaPanel’in SEO, AEO ve GEO denetimi; arama motorlarının ve yanıt sistemlerinin okuyabileceği teknik sinyalleri aynı panelde inceler. Canonical, dil, robots, JSON-LD ve metin sorunlarını sayfa bazında, gerekçesi ve düzeltme önerisiyle görün. Arama botları ile yapay zekâ eğitim botlarının erişim kuralları ayrı gösterilir.</p><p>Denetim, JavaScript çalıştırmadan dönen HTML’i ve sunucudaki erişilebilir verileri değerlendirir. İçeriğinizin kalitesi, dış bağlantılar ve gerçek arama performansı ayrıca izlenmelidir.</p><a href="/kurulum/">Kurulum rehberi →</a></div></section><section id="how">
       <div class="wrap">
         <div class="sec-head reveal">
-          <span class="pill" data-tr="Nasıl çalışır" data-en="How it works">How it works</span>
-          <h2 data-tr="Üç adımda yayında" data-en="Live in three steps">Live in three steps</h2>
+          <span class="pill">Nasıl çalışır</span>
+          <h2>Kurun, doğrulayın, yayına alın</h2>
         </div>
         <div class="steps">
-          <div class="step reveal"><div class="num"></div><h3 data-tr="İndir & kur" data-en="Download & install">Download & install</h3><p data-tr="Tek kurulum dosyasını çalıştır; IIS, PHP, e-posta ve veritabanı otomatik kurulur." data-en="Run the single installer; IIS, PHP, mail and database are set up automatically.">Run the single installer.</p></div>
-          <div class="step reveal"><div class="num"></div><h3 data-tr="Oluştur & yönet" data-en="Create & manage">Create & manage</h3><p data-tr="Panelden site, e-posta kutusu, veritabanı ve FTP kullanıcısı oluştur; SSL'i tek tıkla al." data-en="Create sites, mailboxes, databases and FTP users from the panel; get SSL in one click.">Create sites, mail, DB, SSL.</p></div>
-          <div class="step reveal"><div class="num"></div><h3 data-tr="Güncel kal" data-en="Stay updated">Stay updated</h3><p data-tr="Yeni sürümler panelde görünür; tek tıkla indirip kurar, servis otomatik yeniden başlar." data-en="New versions appear in the panel; install in one click and the service restarts automatically.">One-click updates.</p></div>
+          <div class="step reveal"><div class="num"></div><h3>İndir &amp; kur</h3><p>Kurulumu yönetici olarak çalıştırın; gerekli IIS rollerini ve kullanacağınız bileşenleri hazırlayın. Windows yeniden başlatma isterse tamamlayın.</p></div>
+          <div class="step reveal"><div class="num"></div><h3>Oluştur &amp; yönet</h3><p>Panelden site, e-posta kutusu, veritabanı ve FTP kullanıcısı oluştur; SSL&#x27;i tek tıkla al.</p></div>
+          <div class="step reveal"><div class="num"></div><h3>Güncel kal</h3><p>Yeni sürümler panelde görünür; tek tıkla indirip kurar, servis otomatik yeniden başlar.</p></div>
         </div>
       </div>
     </section>
@@ -302,10 +103,10 @@
     <section class="band">
       <div class="wrap">
         <div class="stats-row">
-          <div class="stat reveal"><strong class="grad-text">1</strong><span data-tr="kurulum dosyası" data-en="installer">installer</span></div>
-          <div class="stat reveal"><strong class="grad-text">4</strong><span data-tr="veritabanı motoru" data-en="database engines">database engines</span></div>
-          <div class="stat reveal"><strong class="grad-text">∞</strong><span data-tr="site &amp; alan adı" data-en="sites &amp; domains">sites &amp; domains</span></div>
-          <div class="stat reveal"><strong class="grad-text">TR/EN</strong><span data-tr="çift dilli panel" data-en="bilingual panel">bilingual panel</span></div>
+          <div class="stat reveal"><strong class="grad-text">1</strong><span>kurulum dosyası</span></div>
+          <div class="stat reveal"><strong class="grad-text">4</strong><span>veritabanı motoru</span></div>
+          <div class="stat reveal"><strong class="grad-text">3</strong><span>kullanıcı rolü</span></div>
+          <div class="stat reveal"><strong class="grad-text">TR/EN</strong><span>çift dilli panel</span></div>
         </div>
       </div>
     </section>
@@ -314,28 +115,22 @@
       <div class="wrap">
         <div class="sec-head reveal">
           <span class="pill">SSS · FAQ</span>
-          <h2 data-tr="Sık sorulan sorular" data-en="Frequently asked questions">Frequently asked questions</h2>
+          <h2>Sık sorulan sorular</h2>
         </div>
-        <div class="faq reveal">
-          <details class="q"><summary><span data-tr="AdaPanel nedir?" data-en="What is AdaPanel?">What is AdaPanel?</span><span class="x">+</span></summary><p class="a" data-tr="Windows Server için bir barındırma kontrol panelidir; siteleri, e-postayı, veritabanlarını, DNS'i, SSL'i ve FTP'yi tek arayüzden yönetir — Windows için bir Plesk alternatifi." data-en="A hosting control panel for Windows Server that manages sites, mail, databases, DNS, SSL and FTP from one interface — a Plesk alternative for Windows.">A hosting control panel for Windows Server.</p></details>
-          <details class="q"><summary><span data-tr="Kurulumu zor mu?" data-en="Is it hard to install?">Is it hard to install?</span><span class="x">+</span></summary><p class="a" data-tr="Hayır. Tek bir kurulum dosyası çalıştırırsınız; IIS, PHP, e-posta sunucusu ve veritabanı dahil gerekli her şey otomatik kurulur." data-en="No. You run a single installer; everything needed — IIS, PHP, mail server and database — is set up automatically.">No. A single installer sets up everything.</p></details>
-          <details class="q"><summary><span data-tr="Güncellemeler nasıl gelir?" data-en="How do updates work?">How do updates work?</span><span class="x">+</span></summary><p class="a" data-tr="Panel, yeni sürümleri GitHub üzerinden görür ve Ayarlar → Güncellemeler ekranından tek tıkla indirip kurar; servis otomatik yeniden başlar." data-en="The panel sees new versions via GitHub and installs them in one click from Settings → Updates; the service restarts automatically.">One-click updates via GitHub from Settings → Updates.</p></details>
-          <details class="q"><summary><span data-tr="Mevcut sunucumdan taşıyabilir miyim?" data-en="Can I migrate from my current server?">Can I migrate from my current server?</span><span class="x">+</span></summary><p class="a" data-tr="Evet. Göç sihirbazı Plesk/cPanel veya ham sunucudan siteleri, dosyaları ve veritabanlarını adım adım taşır." data-en="Yes. The migration wizard moves sites, files and databases from Plesk/cPanel or a raw server, step by step.">Yes, via the migration wizard.</p></details>
-          <details class="q"><summary><span data-tr="Hangi Windows sürümleri destekleniyor?" data-en="Which Windows versions are supported?">Which Windows versions are supported?</span><span class="x">+</span></summary><p class="a" data-tr="Windows Server 2019 ve 2022 önerilir; geliştirme için Windows 10/11 de çalışır." data-en="Windows Server 2019 and 2022 are recommended; Windows 10/11 also works for development.">Windows Server 2019/2022 (10/11 for dev).</p></details>
-        </div>
+        <div class="faq reveal"><details class="q"><summary><span>AdaPanel nedir?</span><span class="x" aria-hidden="true">+</span></summary><p class="a">AdaPanel, kendi Windows Server sunucunuza kurduğunuz bir hosting kontrol panelidir. IIS web sitelerini, e-postayı, veritabanlarını, DNS, SSL ve FTP hizmetlerini tek arayüzde yönetir. Sunucu veya barındırma hizmeti sağlamaz.</p></details><details class="q"><summary><span>AdaPanel kimler için uygundur?</span><span class="x" aria-hidden="true">+</span></summary><p class="a">Windows ve IIS üzerinde site yayınlayan geliştiriciler, ajanslar ve sunucu yöneticileri için tasarlanmıştır. Yönetici, bayi ve müşteri rolleriyle kaynakları ve erişimi ayırabilirsiniz.</p></details><details class="q"><summary><span>Kurulum için ne gerekir?</span><span class="x" aria-hidden="true">+</span></summary><p class="a">Yönetici yetkisine sahip bir Windows sunucusu, IIS ve seçtiğiniz uygulamaların bileşenleri gerekir. Kurulum öncesinde yedek alın; Windows rol kurulumu yeniden başlatma gerektirebilir. İlk panel kurulumu sunucunun kendisinden tamamlanır.</p></details><details class="q"><summary><span>Evdeki sunucu veya NAT arkasında kullanılabilir mi?</span><span class="x" aria-hidden="true">+</span></summary><p class="a">Evet, ancak yerel IIS adresi ile internette yayınlanacak genel IP ayrı ayarlanmalıdır. Modemde gerekli portları doğru sunucuya yönlendirin. Aynı genel IP üzerinde başka bir web hizmeti varsa 80/443 paylaşımını ters vekil veya ayrı IP ile planlayın. CGNAT ve sağlayıcı port kısıtlamaları ayrıca değerlendirilmelidir.</p></details><details class="q"><summary><span>SEO, AEO ve GEO araçları ne yapar?</span><span class="x" aria-hidden="true">+</span></summary><p class="a">SEO arama motoru görünürlüğünün teknik temelidir; AEO yanıt sistemlerinin, GEO ise üretken yapay zekâ sistemlerinin içeriği anlamasına odaklanır. AdaPanel; başlık, canonical, dil, robots, yapılandırılmış veri ve okunabilir metin sinyallerini tarar. Bulgular düzeltme önerileriyle gösterilir. Bu denetim sitenizin içeriğini otomatik değiştirmez ve sıralama ya da yapay zekâ alıntısı garantisi vermez.</p></details><details class="q"><summary><span>Mevcut sitelerimi nasıl taşırım?</span><span class="x" aria-hidden="true">+</span></summary><p class="a">Taşıma akışlarıyla dosya ve veritabanlarını aktarın; uygulamanın çalışma zamanı, bağlantı bilgileri, posta ve SSL ayarlarını kontrol edin. Önce ayrı bir test ortamında geri yüklemeyi ve uygulamayı doğrulayın, sonra DNS geçişini yapın.</p></details><details class="q"><summary><span>Güncellemeler nereden indirilir?</span><span class="x" aria-hidden="true">+</span></summary><p class="a">Resmî kurulum paketleri GitHub sürümlerinde yayımlanır. Panelde Ayarlar → Güncellemeler üzerinden yeni sürümü kontrol edebilirsiniz. Güncellemeden önce yedek alın ve sürüm notlarını okuyun.</p></details></div>
       </div>
     </section>
 
     <section>
       <div class="wrap">
         <div class="cta reveal">
-          <h2 data-tr="Bugün kurmaya başlayın" data-en="Start hosting today">Start hosting today</h2>
-          <p data-tr="Tek kurulum dosyasını indirin; gerisini AdaPanel halleder." data-en="Download the single installer; AdaPanel takes care of the rest.">Download the single installer; AdaPanel takes care of the rest.</p>
+          <h2>Bugün kurmaya başlayın</h2>
+          <p>Kurulum rehberini inceleyin, son sürümü indirin ve kendi Windows sunucunuzda deneyin.</p>
           <a class="btn primary" href="https://github.com/aliorala/adapanel/releases/latest" target="_blank" rel="noopener">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
-            <span data-tr="En son sürümü indir" data-en="Download latest release">Download latest release</span>
+            <svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"></path></svg>
+            <span>En son sürümü indir</span>
           </a>
-          <p class="req" data-tr="Windows Server 2019/2022 (veya Windows 10/11) · yönetici hakları" data-en="Windows Server 2019/2022 (or Windows 10/11) · administrator rights">Windows Server 2019/2022 · administrator rights</p>
+          <p class="req">Windows Server · IIS · yönetici yetkisi · kurulum öncesi yedek</p>
         </div>
       </div>
     </section>
@@ -343,58 +138,16 @@
 
   <footer>
     <div class="wrap foot-inner">
-      <div class="brand"><span class="logo">A</span> AdaPanel</div>
+      <a class="brand" href="/" aria-label="AdaPanel"><span class="logo" aria-hidden="true">A</span> AdaPanel</a>
       <div class="foot-links">
         <a href="https://github.com/aliorala/adapanel" target="_blank" rel="noopener">GitHub</a>
-        <a href="https://github.com/aliorala/adapanel/releases/latest" target="_blank" rel="noopener" data-tr="İndir" data-en="Download">Download</a>
-        <a href="#features" data-tr="Özellikler" data-en="Features">Features</a>
+        <a href="https://github.com/aliorala/adapanel/releases/latest" target="_blank" rel="noopener">İndir</a>
+        <a href="#features">Özellikler</a>
       </div>
-      <div>© <span id="year"></span> AdaPanel</div>
+      <div>© 2026 AdaPanel</div>
     </div>
   </footer>
 
-  <script>
-    (function () {
-      document.getElementById("year").textContent = new Date().getFullYear();
 
-      // Dil
-      var STORAGE_KEY = "adapanel-lang";
-      function applyLang(lang) {
-        document.documentElement.lang = lang;
-        document.querySelectorAll("[data-" + lang + "]").forEach(function (el) {
-          var value = el.getAttribute("data-" + lang);
-          if (value === null) return;
-          if (value.indexOf("<") !== -1) { el.innerHTML = value; } else { el.textContent = value; }
-        });
-        var metaDesc = document.querySelector('meta[name="description"]');
-        if (metaDesc && metaDesc.getAttribute("data-" + lang)) { metaDesc.setAttribute("content", metaDesc.getAttribute("data-" + lang)); }
-        document.querySelectorAll(".lang-toggle button").forEach(function (b) { b.classList.toggle("active", b.getAttribute("data-lang") === lang); });
-        try { localStorage.setItem(STORAGE_KEY, lang); } catch (e) {}
-      }
-      document.querySelectorAll(".lang-toggle button").forEach(function (b) {
-        b.addEventListener("click", function () { applyLang(b.getAttribute("data-lang")); });
-      });
-      var saved; try { saved = localStorage.getItem(STORAGE_KEY); } catch (e) {}
-      applyLang(saved || "tr");
-
-      // Nav gölgesi
-      var nav = document.getElementById("nav");
-      function onScroll() { nav.classList.toggle("scrolled", window.scrollY > 8); }
-      onScroll(); window.addEventListener("scroll", onScroll, { passive: true });
-
-      // Scroll-reveal
-      var items = document.querySelectorAll(".reveal");
-      if ("IntersectionObserver" in window) {
-        var io = new IntersectionObserver(function (entries) {
-          entries.forEach(function (e, i) {
-            if (e.isIntersecting) { e.target.style.transitionDelay = Math.min(i * 40, 160) + "ms"; e.target.classList.add("in"); io.unobserve(e.target); }
-          });
-        }, { threshold: 0.12, rootMargin: "0px 0px -40px 0px" });
-        items.forEach(function (el) { io.observe(el); });
-      } else {
-        items.forEach(function (el) { el.classList.add("in"); });
-      }
-    })();
-  </script>
 </body>
 </html>

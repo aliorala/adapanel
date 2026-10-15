@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AdaPanel | Windows Hosting Control Panel</title><meta name="description" content="AdaPanel for Windows Server and IIS: manage websites, email, DNS, SSL, databases and backups. English and Turkish interface with SEO/AEO/GEO audits."><link rel="canonical" href="https://adapanel.host/en/"><link rel="alternate" hreflang="tr" href="https://adapanel.host/"><link rel="alternate" hreflang="en" href="https://adapanel.host/en/"><link rel="alternate" hreflang="x-default" href="https://adapanel.host/"><meta property="og:title" content="AdaPanel | Windows Hosting Control Panel"><meta property="og:description" content="AdaPanel for Windows Server and IIS: manage websites, email, DNS, SSL, databases and backups. English and Turkish interface with SEO/AEO/GEO audits."><meta property="og:type" content="website"><meta property="og:url" content="https://adapanel.host/en/"><meta property="og:site_name" content="AdaPanel"><meta property="og:locale" content="en_US"><meta property="og:image" content="https://adapanel.host/assets/social.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="AdaPanel — Windows hosting control panel"><meta name="twitter:card" content="summary_large_image"><meta name="theme-color" content="#4f46e5"><link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/site.css"><script type="application/ld+json">{"@context": "https://schema.org", "@graph": [{"@type": "Organization", "@id": "https://adapanel.host/#organization", "name": "AdaPanel", "url": "https://adapanel.host/", "logo": "https://adapanel.host/assets/favicon.svg", "sameAs": ["https://github.com/aliorala/adapanel"]}, {"@type": "WebSite", "@id": "https://adapanel.host/#website", "url": "https://adapanel.host/", "name": "AdaPanel", "inLanguage": ["tr", "en"], "publisher": {"@id": "https://adapanel.host/#organization"}}, {"@type": "WebPage", "@id": "https://adapanel.host/en/#page", "url": "https://adapanel.host/en/", "name": "AdaPanel | Windows Hosting Control Panel", "description": "AdaPanel for Windows Server and IIS: manage websites, email, DNS, SSL, databases and backups. English and Turkish interface with SEO/AEO/GEO audits.", "inLanguage": "en", "isPartOf": {"@id": "https://adapanel.host/#website"}}, {"@type": "SoftwareApplication", "@id": "https://adapanel.host/#software", "name": "AdaPanel", "url": "https://adapanel.host/", "applicationCategory": "DeveloperApplication", "operatingSystem": "Windows Server", "downloadUrl": "https://github.com/aliorala/adapanel/releases/latest", "inLanguage": ["tr", "en"], "publisher": {"@id": "https://adapanel.host/#organization"}, "description": "AdaPanel for Windows Server and IIS: manage websites, email, DNS, SSL, databases and backups. English and Turkish interface with SEO/AEO/GEO audits."}, {"@type": "FAQPage", "@id": "https://adapanel.host/en/#faq", "inLanguage": "en", "mainEntity": [{"@type": "Question", "name": "What is AdaPanel?", "acceptedAnswer": {"@type": "Answer", "text": "AdaPanel is a hosting control panel you install on your own Windows Server. It manages IIS websites, email, databases, DNS, SSL and FTP in one interface. It does not provide a server or hosting service."}}, {"@type": "Question", "name": "Who is AdaPanel for?", "acceptedAnswer": {"@type": "Answer", "text": "AdaPanel is designed for developers, agencies and administrators hosting sites on Windows and IIS. Administrator, reseller and customer roles help separate resources and access."}}, {"@type": "Question", "name": "What do I need to install it?", "acceptedAnswer": {"@type": "Answer", "text": "You need administrator access to a Windows server, IIS and the components required by your applications. Take a backup before setup; Windows role installation may require a restart. Complete initial panel setup locally on the server."}}, {"@type": "Question", "name": "Can I use a home server or a server behind NAT?", "acceptedAnswer": {"@type": "Answer", "text": "Yes, but the local IIS address and the public IP used in DNS must be configured separately. Forward the required ports to the correct server. If another web service shares the public IP, plan ports 80/443 with a reverse proxy or a separate IP. Check CGNAT and provider port restrictions as well."}}, {"@type": "Question", "name": "What do the SEO, AEO and GEO tools do?", "acceptedAnswer": {"@type": "Answer", "text": "SEO covers technical search visibility; AEO focuses on answer systems, and GEO on generative AI systems understanding content. AdaPanel checks titles, canonical URLs, language, robots rules, structured data and readable text, then provides findings and suggested fixes. The audit does not rewrite your site and cannot guarantee rankings or AI citations."}}, {"@type": "Question", "name": "How do I migrate existing sites?", "acceptedAnswer": {"@type": "Answer", "text": "Use migration workflows to transfer files and databases, then check runtimes, connection settings, mail and SSL. Verify backup restoration and the application in a separate test environment before switching DNS."}}, {"@type": "Question", "name": "Where can I get updates?", "acceptedAnswer": {"@type": "Answer", "text": "Official installers are published in GitHub releases. Use Settings → Updates in the panel to check for a new version. Back up your data and read the release notes before updating."}}]}]}</script></head>
+<body><a class="skip" href="#main">Skip to content</a>
+  <header class="nav" id="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="/en/" aria-label="AdaPanel"><span class="logo" aria-hidden="true">A</span> AdaPanel</a>
+      <nav class="nav-links">
+        <a href="#features">Features</a>
+        <a href="/en/installation/">Installation guide</a>
+        <a href="#faq">FAQ</a>
+        <a class="btn ghost" href="https://github.com/aliorala/adapanel" target="_blank" rel="noopener">
+          <svg viewbox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2A10 10 0 0 0 8.8 21.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.4-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.6 2.4 1.1 3 .9.1-.7.3-1.1.6-1.4-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.7 1a9.4 9.4 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.3 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A10 10 0 0 0 12 2Z"></path></svg>
+          GitHub
+        </a>
+        <span class="lang-toggle" role="group" aria-label="Language"><a href="/" hreflang="tr" lang="tr">TR</a><a href="/en/" hreflang="en" lang="en" aria-current="page">EN</a></span>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <div class="wrap">
+        <span class="pill reveal"><span class="dot"></span><span>Control panel for Windows Server</span></span>
+        <h1 class="reveal">Windows hosting control panel.<br><span class='grad-text'>Your server. Your control.</span></h1>
+        <p class="sub reveal">AdaPanel brings IIS websites, email, databases, DNS, SSL and FTP on your own Windows Server into one interface, available in English and Turkish.</p>
+        <div class="hero-actions reveal">
+          <a class="btn primary" href="https://github.com/aliorala/adapanel/releases/latest" target="_blank" rel="noopener">
+            <svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"></path></svg>
+            <span>Download installer</span>
+          </a>
+          <a class="btn ghost" href="#features"><span>See features</span></a>
+        </div>
+        <div class="trust reveal">
+          <span><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg><span>Single installer</span></span>
+          <span><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg><span>IIS · PHP · email · databases</span></span>
+          <span><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg><span>Turkish + English</span></span>
+        </div>
+
+        <div class="mock reveal" aria-hidden="true">
+          <div class="chrome"><i></i><i></i><i></i><span class="url">AdaPanel · IIS / PHP / ASP.NET</span></div>
+          <div class="body">
+            <div class="side">
+              <div class="si active"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="5" rx="1"></rect><rect x="14" y="12" width="7" height="9" rx="1"></rect><rect x="3" y="16" width="7" height="5" rx="1"></rect></svg><span>Dashboard</span></div>
+              <div class="si"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"></path></svg><span>Websites</span></div>
+              <div class="si"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg><span>Mail</span></div>
+              <div class="si"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg><span>Databases</span></div>
+              <div class="si"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="6" r="2.5"></circle><circle cx="18" cy="6" r="2.5"></circle><circle cx="12" cy="18" r="2.5"></circle><path d="M6 8.5v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-3M12 13.5v2"></path></svg><span>DNS</span></div>
+              <div class="si"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="10" width="16" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg><span>SSL</span></div>
+            </div>
+            <div class="main">
+              <div class="stats">
+                <div class="scard"><div class="ring" style="--p:24;--rc:#818cf8"><i>24%</i></div><div class="lbl"><b>CPU</b><small>8 core</small></div></div>
+                <div class="scard"><div class="ring" style="--p:61;--rc:#5cc8ff"><i>61%</i></div><div class="lbl"><b>Memory</b><small>9.8 / 16 GB</small></div></div>
+                <div class="scard"><div class="ring" style="--p:38;--rc:#febc2e"><i>38%</i></div><div class="lbl"><b>Disk</b><small>190 / 500 GB</small></div></div>
+              </div>
+              <div class="tbl">
+                <div class="tr"><span>Domain</span><span>Runtime</span><span>Status</span></div>
+                <div class="tr"><span class="nm"><b></b>ornek.com</span><span>PHP 8.3</span><span class="tag ok">Running</span></div>
+                <div class="tr"><span class="nm"><b></b>shop.ornek.com</span><span>ASP.NET</span><span class="tag ok">Running</span></div>
+                <div class="tr"><span class="nm"><b></b>api.ornek.com</span><span>Node.js</span><span class="tag run">Live</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <p class="mock-note wrap">Illustrative panel preview with sample data.</p><section id="features">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <span class="pill">Features</span>
+          <h2>Everyday server management in one place</h2>
+          <p>Manage web, mail and database services through a shared interface. Install and configure the components your workloads need.</p>
+        </div>
+        <div class="features">
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"></path></svg></div><h3>Websites</h3><p>IIS sites; PHP, ASP.NET, Node.js, Python; document root, URL rewrite and one-click WordPress.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg></div><h3>Mail</h3><p>Domains, mailboxes and aliases with Stalwart and Roundcube; setup and checks for SPF, DKIM and DMARC records.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg></div><h3>Databases</h3><p>MySQL, MariaDB, PostgreSQL and MSSQL; phpMyAdmin, users/grants and remote access.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="10" width="16" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path><path d="M12 14v3"></path></svg></div><h3>SSL Certificates</h3><p>Free, auto-renewing HTTPS with Let&#x27;s Encrypt — for sites, webmail and mail.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="6" r="2.5"></circle><circle cx="18" cy="6" r="2.5"></circle><circle cx="12" cy="18" r="2.5"></circle><path d="M6 8.5v2a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-2M12 12.5v3"></path></svg></div><h3>DNS</h3><p>Live record synchronization with Windows DNS, templates and private/public IP mapping for NAT. Repair adds missing records; resetting defaults is a separate action.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><path d="M12 17v-6m0 0-2.5 2.5M12 11l2.5 2.5"></path></svg></div><h3>FTP / Files</h3><p>Isolated FTP users (FTPS), file manager and per-site permissions.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 8h13l-3-3M20 16H7l3 3"></path></svg></div><h3>Migration</h3><p>Migration workflows for files and databases from Plesk, cPanel or a server. Test the migrated application and backup restoration before changing DNS.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 4 6v6c0 4.5 3.2 7.8 8 9 4.8-1.2 8-4.5 8-9V6z"></path><path d="m9 12 2 2 4-4"></path></svg></div><h3>Security</h3><p>Tenant isolation, firewall, WAF, protected directories and a hidden login path.</p></article>
+          <article class="feature reveal"><div class="ico"><svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"></path><path d="M21 4v4h-4"></path></svg></div><h3>Backups &amp; Updates</h3><p>Scheduled backups, off-site targets, one-click restore and one-click panel updates.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="visibility"><div class="wrap answer"><h2>From hosting operations to visibility audits</h2><p>Publishing is the first step. AdaPanel’s SEO, AEO and GEO audit checks the technical signals search engines and answer systems can read. Review canonical, language, robots, JSON-LD and text issues per page, with evidence and suggested fixes. Search crawlers and AI training crawlers have separate access summaries.</p><p>The audit evaluates returned HTML without executing JavaScript and the data available on your server. Content quality, external links and real search performance need separate monitoring.</p><a href="/en/installation/">Installation guide →</a></div></section><section id="how">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <span class="pill">How it works</span>
+          <h2>Install, verify, go live</h2>
+        </div>
+        <div class="steps">
+          <div class="step reveal"><div class="num"></div><h3>Download &amp; install</h3><p>Run the installer as administrator, prepare the required IIS roles and your chosen components, and complete any restart Windows requests.</p></div>
+          <div class="step reveal"><div class="num"></div><h3>Create &amp; manage</h3><p>Create sites, mailboxes, databases and FTP users from the panel; get SSL in one click.</p></div>
+          <div class="step reveal"><div class="num"></div><h3>Stay updated</h3><p>New versions appear in the panel; install in one click and the service restarts automatically.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="band">
+      <div class="wrap">
+        <div class="stats-row">
+          <div class="stat reveal"><strong class="grad-text">1</strong><span>installer</span></div>
+          <div class="stat reveal"><strong class="grad-text">4</strong><span>database engines</span></div>
+          <div class="stat reveal"><strong class="grad-text">3</strong><span>user roles</span></div>
+          <div class="stat reveal"><strong class="grad-text">TR/EN</strong><span>bilingual panel</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="faq">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <span class="pill">SSS · FAQ</span>
+          <h2>Frequently asked questions</h2>
+        </div>
+        <div class="faq reveal"><details class="q"><summary><span>What is AdaPanel?</span><span class="x" aria-hidden="true">+</span></summary><p class="a">AdaPanel is a hosting control panel you install on your own Windows Server. It manages IIS websites, email, databases, DNS, SSL and FTP in one interface. It does not provide a server or hosting service.</p></details><details class="q"><summary><span>Who is AdaPanel for?</span><span class="x" aria-hidden="true">+</span></summary><p class="a">AdaPanel is designed for developers, agencies and administrators hosting sites on Windows and IIS. Administrator, reseller and customer roles help separate resources and access.</p></details><details class="q"><summary><span>What do I need to install it?</span><span class="x" aria-hidden="true">+</span></summary><p class="a">You need administrator access to a Windows server, IIS and the components required by your applications. Take a backup before setup; Windows role installation may require a restart. Complete initial panel setup locally on the server.</p></details><details class="q"><summary><span>Can I use a home server or a server behind NAT?</span><span class="x" aria-hidden="true">+</span></summary><p class="a">Yes, but the local IIS address and the public IP used in DNS must be configured separately. Forward the required ports to the correct server. If another web service shares the public IP, plan ports 80/443 with a reverse proxy or a separate IP. Check CGNAT and provider port restrictions as well.</p></details><details class="q"><summary><span>What do the SEO, AEO and GEO tools do?</span><span class="x" aria-hidden="true">+</span></summary><p class="a">SEO covers technical search visibility; AEO focuses on answer systems, and GEO on generative AI systems understanding content. AdaPanel checks titles, canonical URLs, language, robots rules, structured data and readable text, then provides findings and suggested fixes. The audit does not rewrite your site and cannot guarantee rankings or AI citations.</p></details><details class="q"><summary><span>How do I migrate existing sites?</span><span class="x" aria-hidden="true">+</span></summary><p class="a">Use migration workflows to transfer files and databases, then check runtimes, connection settings, mail and SSL. Verify backup restoration and the application in a separate test environment before switching DNS.</p></details><details class="q"><summary><span>Where can I get updates?</span><span class="x" aria-hidden="true">+</span></summary><p class="a">Official installers are published in GitHub releases. Use Settings → Updates in the panel to check for a new version. Back up your data and read the release notes before updating.</p></details></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap">
+        <div class="cta reveal">
+          <h2>Start hosting today</h2>
+          <p>Read the installation guide, download the latest release and try it on your own Windows server.</p>
+          <a class="btn primary" href="https://github.com/aliorala/adapanel/releases/latest" target="_blank" rel="noopener">
+            <svg viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"></path></svg>
+            <span>Download latest release</span>
+          </a>
+          <p class="req">Windows Server · IIS · administrator access · backup before setup</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap foot-inner">
+      <a class="brand" href="/en/" aria-label="AdaPanel"><span class="logo" aria-hidden="true">A</span> AdaPanel</a>
+      <div class="foot-links">
+        <a href="https://github.com/aliorala/adapanel" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/aliorala/adapanel/releases/latest" target="_blank" rel="noopener">Download</a>
+        <a href="#features">Features</a>
+      </div>
+      <div>© 2026 AdaPanel</div>
+    </div>
+  </footer>
+
+
+</body>
+</html>
