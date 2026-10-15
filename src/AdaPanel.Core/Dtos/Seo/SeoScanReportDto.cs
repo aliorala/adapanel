@@ -6,6 +6,9 @@ namespace AdaPanel.Core.Dtos.Seo;
 /// </summary>
 public sealed class SeoScanReportDto
 {
+    /// <summary>Zero means a historical report; new checks require a rescan.</summary>
+    public int AnalysisVersion { get; init; }
+
     /// <summary>Tarama kimliği (geçmiş listesinden tek raporu çekmek için).</summary>
     public string Id { get; init; } = string.Empty;
 

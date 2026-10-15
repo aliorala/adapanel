@@ -31,9 +31,6 @@ public static partial class SeoRobotsAnalyzer
     public static SeoRobotsParse ParseRobots(string? text)
     {
         var sitemaps = new List<string>();
-        var yildizGrubunda = false;
-        var hepsiYasak = false;
-        var yildizGrubundaIzin = false;
 
         foreach (var rawLine in (text ?? string.Empty).Split('\n'))
         {
@@ -69,30 +66,9 @@ public static partial class SeoRobotsAnalyzer
                 continue;
             }
 
-            if (string.Equals(key, "user-agent", StringComparison.OrdinalIgnoreCase))
-            {
-                yildizGrubunda = value == "*";
-                continue;
-            }
-
-            if (!yildizGrubunda)
-            {
-                continue;
-            }
-
-            if (string.Equals(key, "disallow", StringComparison.OrdinalIgnoreCase) && value == "/")
-            {
-                hepsiYasak = true;
-            }
-            else if (string.Equals(key, "allow", StringComparison.OrdinalIgnoreCase) && value.Length > 0)
-            {
-                // "Disallow: /" + "Allow: /blog" kalıbı siteyi tümüyle kapatmaz; bunu "kapalı"
-                // diye raporlamak yanlış alarm olurdu.
-                yildizGrubundaIzin = true;
-            }
         }
 
-        return new SeoRobotsParse(hepsiYasak && !yildizGrubundaIzin, sitemaps);
+        return new SeoRobotsParse(SeoBotAccessAnalyzer.BlocksWildcard(text ?? ""), sitemaps);
     }
 
     /// <summary>

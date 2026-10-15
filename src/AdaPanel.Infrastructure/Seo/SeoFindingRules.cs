@@ -25,7 +25,7 @@ public static class SeoFindingRules
 
     public const int DescriptionMaxLength = 160;
 
-    /// <summary>Bu sürenin üstündeki yanıtlar "yavaş" sayılır (Google'ın alan deneyimi eşiğine yakın).</summary>
+    /// <summary>Local response review threshold; not a Core Web Vitals measurement.</summary>
     public const int SlowPageMs = 1500;
 
     /// <summary>Kaç atlamadan sonra "yönlendirme zinciri" sayılır (1 atlama normaldir).</summary>
@@ -64,10 +64,13 @@ public static class SeoFindingRules
                 findings.Add(New("redirect_chain", "warn", page.Path, $"{page.RedirectDepth} → {page.RedirectTo}"));
             }
 
-            if (!IsHtml(page))
+            if (!IsHtml(page) || page.StatusCode is < 200 or >= 300)
             {
                 continue;
             }
+
+            findings.AddRange(SeoContentFindingRules.Evaluate(page));
+            if (page.ContentSignals?.BodyTruncated == true) continue;
 
             if (page.Title.Length == 0)
             {
@@ -114,6 +117,9 @@ public static class SeoFindingRules
 
         findings.AddRange(Duplicates(pages, page => page.Title, "duplicate_title"));
         findings.AddRange(Duplicates(pages, page => page.MetaDescription, "duplicate_description"));
+
+        foreach (var bot in robots.BotAccess.Where(bot => bot.Purpose == "search" && bot.Status == "blocked"))
+            findings.Add(New("search_bot_blocked", "warn", "/robots.txt", bot.Agent));
 
         if (!robots.Found)
         {
@@ -165,14 +171,13 @@ public static class SeoFindingRules
             return findings;
         }
 
-        var kirpilmis = findings.Take(MaxFindings).ToList();
+        var kirpilmis = findings.OrderBy(finding => finding.Severity == "error" ? 0 : finding.Severity == "warn" ? 1 : 2).Take(MaxFindings).ToList();
         kirpilmis.Add(New("findings_truncated", "info", string.Empty, findings.Count.ToString()));
         return kirpilmis;
     }
 
     /// <summary>
-    /// Aynı başlığı/açıklamayı paylaşan sayfalar. Arama motoru bunları birbirinin kopyası sayar ve
-    /// yalnız birini listeler.
+    /// Shared titles/descriptions warrant review; they do not prove duplicate content or exclusion.
     /// </summary>
     private static IEnumerable<SeoFindingDto> Duplicates(
         IReadOnlyList<SeoPageDto> pages,
@@ -180,7 +185,7 @@ public static class SeoFindingRules
         string key)
     {
         return pages
-            .Where(page => IsHtml(page) && page.StatusCode < 400 && page.Error.Length == 0 && selector(page).Length > 0)
+            .Where(page => IsHtml(page) && page.StatusCode is >= 200 and < 300 && page.ContentSignals?.BodyTruncated != true && page.Error.Length == 0 && selector(page).Length > 0)
             .GroupBy(selector, StringComparer.OrdinalIgnoreCase)
             .Where(group => group.Count() > 1)
             .Select(group => New(

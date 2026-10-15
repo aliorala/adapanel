@@ -313,7 +313,7 @@ public sealed class SeoLogAnalyzerTests
             Satir("2026-08-19", "11:00:03", "/", "-", "9.9.9.9", "SomeUnknownCrawler/1.0", 200)
         ]);
 
-        Assert.Equal("ai", rapor.Engines.Single(item => item.Key == "openai").Category);
+        Assert.Equal("ai", rapor.Engines.Single(item => item.Key == "openai_training").Category);
         Assert.Equal("tool", rapor.Engines.Single(item => item.Key == "ahrefs").Category);
 
         // Tanınmayan tarayıcı "insan" sayılmaz — bot oranı olduğundan küçük görünürdü.

@@ -3,14 +3,15 @@ namespace AdaPanel.Core.Dtos.Seo;
 /// <summary><c>robots.txt</c> denetiminin sonucu.</summary>
 public sealed class SeoRobotsDto
 {
+    public IReadOnlyList<SeoBotAccessDto> BotAccess { get; init; } = [];
+
     /// <summary>Dosya 200 ile döndü mü.</summary>
     public bool Found { get; init; }
 
     public int StatusCode { get; init; }
 
     /// <summary>
-    /// Tüm robotlara kök yasağı (<c>User-agent: *</c> + <c>Disallow: /</c>) var mı — site arama
-    /// motorlarına KAPALI demektir.
+    /// Wildcard group's root restriction. Agent-specific overrides are reported in BotAccess.
     /// </summary>
     public bool DisallowsAll { get; init; }
 

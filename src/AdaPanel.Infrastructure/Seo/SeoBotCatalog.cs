@@ -94,7 +94,9 @@ public static class SeoBotCatalog
         // Ters DNS ile doğrulanmıyor: DuckDuckGo kimliğini yayımlanmış IP listesiyle doğrulatır.
         new("duckduckgo", SeoBotCategory.Search, ["duckduckbot", "duckassistbot"], []),
 
-        new("openai", SeoBotCategory.Ai, ["gptbot", "oai-searchbot", "chatgpt-user"], []),
+        new("openai_search", SeoBotCategory.Ai, ["oai-searchbot"], []),
+        new("openai_training", SeoBotCategory.Ai, ["gptbot"], []),
+        new("openai_user", SeoBotCategory.Ai, ["chatgpt-user"], []),
         new("anthropic", SeoBotCategory.Ai, ["claudebot", "claude-searchbot", "claude-user"], []),
         new("perplexity", SeoBotCategory.Ai, ["perplexitybot", "perplexity-user"], []),
         new("commoncrawl", SeoBotCategory.Ai, ["ccbot"], []),

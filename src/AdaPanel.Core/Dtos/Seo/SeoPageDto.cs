@@ -10,6 +10,9 @@ namespace AdaPanel.Core.Dtos.Seo;
 /// </remarks>
 public sealed class SeoPageDto
 {
+    /// <summary>Null for historical reports that did not measure these signals.</summary>
+    public SeoContentSignalsDto? ContentSignals { get; init; }
+
     /// <summary>Site kökünden yol (<c>/</c>, <c>/hakkimizda</c>). Tam adres DEĞİL — konak adı sitenin kendisidir.</summary>
     public string Path { get; init; } = string.Empty;
 

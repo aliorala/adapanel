@@ -26,6 +26,7 @@ export type SeoFinding = {
 };
 
 export type SeoPage = {
+  contentSignals?: SeoContentSignals | null;
   path: string;
   statusCode: number;
   responseMs: number;
@@ -44,6 +45,7 @@ export type SeoPage = {
 };
 
 export type SeoRobots = {
+  botAccess?: SeoBotAccess[];
   found: boolean;
   statusCode: number;
   disallowsAll: boolean;
@@ -64,6 +66,7 @@ export type SeoSitemap = {
 };
 
 export type SeoScanReport = {
+  analysisVersion?: number;
   id: string;
   siteName: string;
   host: string;
@@ -83,6 +86,30 @@ export type SeoScanReport = {
   newFindingCount: number;
   resolvedFindingCount: number;
   comparedToId: string;
+};
+
+export type SeoContentSignals = {
+  canonical: string;
+  canonicalCount: number;
+  language: string;
+  titleCount: number;
+  sectionHeadingCount: number;
+  textCharacters: number;
+  jsonLdBlocks: number;
+  invalidJsonLdBlocks: number;
+  structuredDataLimited: boolean;
+  otherStructuredData: boolean;
+  schemaTypes: string[];
+  noSnippet: boolean;
+  bodyTruncated: boolean;
+  robotDirectives: string[];
+};
+
+export type SeoBotAccess = {
+  agent: string;
+  purpose: "search" | "training";
+  status: "allowed" | "restricted" | "blocked" | "unknown";
+  matchedGroup: string;
 };
 
 export type SeoScanState = {

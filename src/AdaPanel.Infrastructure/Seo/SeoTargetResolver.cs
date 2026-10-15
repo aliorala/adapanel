@@ -1,4 +1,5 @@
 using AdaPanel.Core.Dtos.Sites;
+using AdaPanel.Core.Common;
 
 namespace AdaPanel.Infrastructure.Seo;
 
@@ -38,12 +39,12 @@ public static class SeoTargetResolver
             return new SeoTargetResolution(null, "no_host");
         }
 
-        var https = bindings.FirstOrDefault(binding =>
-            binding.Port == 443 && !string.IsNullOrWhiteSpace(binding.HostName));
-        var http = bindings.FirstOrDefault(binding =>
-            binding.Port == 80 && !string.IsNullOrWhiteSpace(binding.HostName));
-
-        var secildi = https ?? http;
+        var primary = SiteDomainSelection.WebDomain(site);
+        var secildi = bindings.Where(binding => binding.Port is 80 or 443 && !string.IsNullOrWhiteSpace(binding.HostName))
+            .OrderBy(binding => binding.HostName.Trim().TrimEnd('.').Equals(primary, StringComparison.OrdinalIgnoreCase) ? 0
+                : binding.HostName.Trim().TrimEnd('.').Equals("www." + primary, StringComparison.OrdinalIgnoreCase) ? 1
+                : SiteDomainSelection.IsRealDomain(binding.HostName.Trim().TrimEnd('.')) ? 2 : 3)
+            .ThenBy(binding => binding.Port == 443 ? 0 : 1).FirstOrDefault();
         if (secildi is null)
         {
             // Yalnız standart olmayan portta yayındaki site taranmaz (bkz. SeoLinkPolicy.IsAllowedPort).

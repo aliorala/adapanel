@@ -12,7 +12,11 @@ public sealed record SeoFetchResult(
     string Body,
     long ElapsedMs,
     string Location,
-    string Error);
+    string Error)
+{
+    public bool BodyTruncated { get; init; }
+    public IReadOnlyList<string> RobotsHeaders { get; init; } = [];
+}
 
 /// <summary>Taramanın toplu sonucu.</summary>
 public sealed class SeoCrawlResult
@@ -197,6 +201,15 @@ public sealed class SeoCrawler(HttpClient client, SeoCrawlLimits limits)
             }
 
             var parse = SeoHtmlAnalyzer.Parse(fetch.Body);
+            var html = fetch.ContentType.Length == 0 || fetch.ContentType.Contains("html", StringComparison.OrdinalIgnoreCase);
+            var genericRobots = SeoContentAnalyzer.GenericHeaderDirectives(fetch.RobotsHeaders);
+            var signals = html ? SeoContentAnalyzer.Analyze(fetch.Body) : null;
+            if (signals is not null) signals = signals with
+            {
+                BodyTruncated = fetch.BodyTruncated,
+                NoSnippet = signals.NoSnippet || SeoContentAnalyzer.HasDirective(genericRobots, "nosnippet") || SeoContentAnalyzer.HasZeroSnippet(genericRobots),
+                RobotDirectives = signals.RobotDirectives.Concat(fetch.RobotsHeaders.Select(value => "X-Robots-Tag: " + value)).Take(30).ToArray()
+            };
             var page = new SeoPageDto
             {
                 Path = path,
@@ -211,13 +224,14 @@ public sealed class SeoCrawler(HttpClient client, SeoCrawlLimits limits)
                 H1Count = parse.H1Count,
                 ImageCount = parse.ImageCount,
                 ImagesWithoutAlt = parse.ImagesWithoutAlt,
-                NoIndex = parse.NoIndex
+                NoIndex = parse.NoIndex || SeoContentAnalyzer.HasDirective(genericRobots, "noindex") || SeoContentAnalyzer.HasDirective(genericRobots, "none"),
+                ContentSignals = signals
             };
 
             // Bağlantılar yalnız BAŞARILI HTML sayfalarından toplanır: hata sayfasının menüsü
             // sitenin gerçek bağlantı yapısı değildir ve 404 sayfası her seferinde aynı bağlantıları
             // üreterek taramayı gereksiz uzatırdı.
-            var links = fetch.StatusCode is >= 200 and < 300 ? parse.Links : [];
+            var links = html && fetch.StatusCode is >= 200 and < 300 ? parse.Links : [];
             return new PageOutcome(page, links);
         }
     }
@@ -248,10 +262,15 @@ public sealed class SeoCrawler(HttpClient client, SeoCrawlLimits limits)
 
             var contentType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
             var location = response.Headers.Location?.OriginalString ?? string.Empty;
-            var body = await ReadBodyAsync(response, timeout.Token);
+            var (body, truncated) = await ReadBodyAsync(response, timeout.Token);
 
             stopwatch.Stop();
-            return new SeoFetchResult((int)response.StatusCode, contentType, body, stopwatch.ElapsedMilliseconds, location, string.Empty);
+            return new SeoFetchResult((int)response.StatusCode, contentType, body, stopwatch.ElapsedMilliseconds, location, string.Empty)
+            {
+                BodyTruncated = truncated,
+                RobotsHeaders = response.Headers.TryGetValues("X-Robots-Tag", out var headers)
+                    ? headers.Take(10).Select(value => value.Length <= 1000 ? value : value[..1000]).ToArray() : []
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -277,24 +296,26 @@ public sealed class SeoCrawler(HttpClient client, SeoCrawlLimits limits)
     /// tüketmenin en kolay yoludur; sınır aşılınca okuma kesilir ve eldeki parça ayrıştırılır
     /// (başlık/açıklama zaten <c>&lt;head&gt;</c> içindedir).
     /// </summary>
-    private async Task<string> ReadBodyAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    private async Task<(string Body, bool Truncated)> ReadBodyAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var buffer = new MemoryStream();
         var chunk = new byte[8192];
 
-        while (buffer.Length < limits.MaxResponseBytes)
+        while (buffer.Length <= limits.MaxResponseBytes)
         {
-            var read = await stream.ReadAsync(chunk, cancellationToken);
+            var read = await stream.ReadAsync(chunk.AsMemory(0, Math.Min(chunk.Length, limits.MaxResponseBytes + 1 - (int)buffer.Length)), cancellationToken);
             if (read <= 0)
             {
                 break;
             }
 
-            buffer.Write(chunk, 0, Math.Min(read, limits.MaxResponseBytes - (int)buffer.Length));
+            buffer.Write(chunk, 0, read);
         }
 
-        return Decode(buffer.ToArray(), response.Content.Headers.ContentType?.CharSet);
+        var truncated = buffer.Length > limits.MaxResponseBytes;
+        if (truncated) buffer.SetLength(limits.MaxResponseBytes);
+        return (Decode(buffer.ToArray(), response.Content.Headers.ContentType?.CharSet), truncated);
     }
 
     /// <summary>

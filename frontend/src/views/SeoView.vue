@@ -103,6 +103,8 @@
           {{ t("panel.seo.scanCancelled") }}
         </p>
 
+        <SeoReadinessPanel :report="report" />
+
         <div class="seo-columns">
           <div class="form-surface">
             <h4>robots.txt</h4>
@@ -167,6 +169,7 @@
             <span :class="['status-pill', severityPill(finding.severity)]">{{ t(`panel.seo.severity.${finding.severity}`) }}</span>
             <div class="finding-body">
               <strong>{{ t(`panel.seo.finding.${finding.key}`) }}</strong>
+              <p v-if="te(`panel.seo.remedy.${finding.key}`)" class="meta">{{ t(`panel.seo.remedy.${finding.key}`) }}</p>
               <p class="meta">
                 <code v-if="finding.url">{{ finding.url }}</code>
                 <span v-if="finding.detail"> {{ finding.detail }}</span>
@@ -457,6 +460,7 @@
 import { getFormattingLocale } from '../utils/locale';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import SeoReadinessPanel from '../components/SeoReadinessPanel.vue';
 
 import {
   analyzeSeoLogs,
@@ -474,7 +478,7 @@ import { useSitesStore } from "../stores/sites";
 import { extractApiMessage } from "../stores/auth";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const sitesStore = useSitesStore();
 const { writeGate } = useSubscriptionGate();
 

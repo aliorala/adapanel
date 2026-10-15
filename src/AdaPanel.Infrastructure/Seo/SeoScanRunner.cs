@@ -86,6 +86,7 @@ public sealed class SeoScanRunner(
 
             var report = new SeoScanReportDto
             {
+                AnalysisVersion = 1,
                 Id = job.Id,
                 SiteName = job.SiteName,
                 Host = target.Host,
@@ -145,13 +146,16 @@ public sealed class SeoScanRunner(
         var fetch = await crawler.FetchAsync(target, "/robots.txt", cancellationToken);
         if (fetch.Error.Length > 0)
         {
-            return new SeoRobotsDto { Error = fetch.Error };
+            return new SeoRobotsDto { Error = fetch.Error, BotAccess = SeoBotAccessAnalyzer.Analyze(null, 0) };
         }
 
         if (fetch.StatusCode != 200)
         {
-            return new SeoRobotsDto { StatusCode = fetch.StatusCode };
+            return new SeoRobotsDto { StatusCode = fetch.StatusCode, BotAccess = SeoBotAccessAnalyzer.Analyze(null, fetch.StatusCode) };
         }
+
+        if (fetch.BodyTruncated || fetch.ContentType.Contains("html", StringComparison.OrdinalIgnoreCase))
+            return new SeoRobotsDto { StatusCode = fetch.StatusCode, Error = "invalid_or_truncated_robots", BotAccess = SeoBotAccessAnalyzer.Analyze(null, 200, true) };
 
         var parse = SeoRobotsAnalyzer.ParseRobots(fetch.Body);
         return new SeoRobotsDto
@@ -159,7 +163,8 @@ public sealed class SeoScanRunner(
             Found = true,
             StatusCode = fetch.StatusCode,
             DisallowsAll = parse.DisallowsAll,
-            SitemapUrls = parse.SitemapUrls
+            SitemapUrls = parse.SitemapUrls,
+            BotAccess = SeoBotAccessAnalyzer.Analyze(fetch.Body)
         };
     }
 
@@ -252,6 +257,7 @@ public sealed class SeoScanRunner(
         SeoCrawlLimits limits,
         string error) => new()
         {
+            AnalysisVersion = 1,
             Id = job.Id,
             SiteName = job.SiteName,
             StartedAtUtc = startedAt,

@@ -70,7 +70,7 @@ public static partial class SeoHtmlAnalyzer
                 description = Normalize(value ?? string.Empty);
             }
             else if (string.Equals(name, "robots", StringComparison.OrdinalIgnoreCase)
-                && (value ?? string.Empty).Contains("noindex", StringComparison.OrdinalIgnoreCase))
+                && (SeoContentAnalyzer.HasDirective(value ?? "", "noindex") || SeoContentAnalyzer.HasDirective(value ?? "", "none")))
             {
                 noIndex = true;
             }
@@ -102,10 +102,8 @@ public static partial class SeoHtmlAnalyzer
         {
             imageCount++;
             var attributes = ReadAttributes(image.Value);
-            // "alt yok" ile "alt=''" AYNI sayılır: ikisi de ekran okuyucuya ve arama motoruna
-            // hiçbir şey söylemez. (Bilinçli boş alt yalnız dekoratif görsellerde doğrudur;
-            // bu yüzden bulgunun önem derecesi "uyarı", "hata" değil.)
-            if (!attributes.TryGetValue("alt", out var alt) || alt.Trim().Length == 0)
+            // Empty alt is valid for decorative images; only an absent attribute is a defect.
+            if (!attributes.ContainsKey("alt"))
             {
                 imagesWithoutAlt++;
             }

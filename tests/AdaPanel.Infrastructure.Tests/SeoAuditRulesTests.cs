@@ -71,7 +71,7 @@ public sealed class SeoAuditRulesTests
         Assert.Equal("Kisa & oz aciklama", olcum.MetaDescription); // HTML varlıkları çözülür
         Assert.Equal(2, olcum.H1Count);
         Assert.Equal(3, olcum.ImageCount);
-        Assert.Equal(2, olcum.ImagesWithoutAlt);                 // eksik alt + boş alt
+        Assert.Equal(1, olcum.ImagesWithoutAlt);                 // decorative empty alt is valid
         Assert.Equal(["/bir", "/iki"], olcum.Links);
         Assert.False(olcum.NoIndex);
         Assert.Equal("https://ornek.test/", olcum.Canonical);
