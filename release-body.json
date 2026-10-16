@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.102",
-  "name": "0.8.102 — PFX zinciri ve özel anahtar onarımı",
-  "body": "## 0.8.102\n\nPFX sertifika içe aktarmasındaki zincir ve özel anahtar eksikleri giderildi.\n\n- Seçilen sunucu sertifikasına ait, imzası doğrulanan ara sertifikalar Windows ara sertifika deposuna aktarılır. Paket içindeki kök sertifikalara otomatik güven verilmez; ilgisiz sertifikalar aktarılmaz.\n- Kalıcı özel anahtar aktarımı yalnız seçilen sunucu sertifikasıyla sınırlıdır. Ara sertifikaların özel anahtarları depoya yazılmaz.\n- Aynı sertifikanın depoda anahtarsız kopyası varsa özel anahtarlı PFX ile onarılabilir. Mevcut anahtarlı kopya korunur.\n- Zincir aktarımında hata, iptal veya yetki kaybı olursa kalan adımlar durur; yeni HTTPS bağlaması ve başarı kaydı oluşturulmaz.\n- Posta servisinin güven zinciri, alan adı ve süre doğrulamaları korunur.\n\nWindows x64 kurulum paketi: **AdaPanelSetup.exe**."
+  "tag_name": "0.8.103",
+  "name": "0.8.103 — Posta sertifikası seçimi ve zincir düzeltmeleri",
+  "body": "## 0.8.103\n\nPosta sertifikasının Windows deposundan seçilmesi ve Stalwart'a aktarılması iyileştirildi.\n\n- Sertifika seçiminde tüm zincirin sunucu kimlik doğrulamasına uygunluğu kontrol edilir. Daha yeni tarihli yalnız istemci veya kod imzalama sertifikaları, kullanılabilir posta sertifikasını engellemez.\n- Anahtar geçişlerinde kullanılan, konusu ve düzenleyici adı aynı ara sertifikalar tam zincirde korunur. Zincirden yalnız doğrulanmış güven kökü çıkarılır.\n- Alan adı, süre, özel anahtar ve sistem güveni kontrolleri korunur. Uygun sertifikalar arasında geçerlilik süresi daha uzun olan seçilir.\n- Değişiklikler izole test zincirleriyle doğrulandı; güven doğrulaması kapatılmadı.\n\nWindows x64 kurulum paketi: **AdaPanelSetup.exe**."
 }

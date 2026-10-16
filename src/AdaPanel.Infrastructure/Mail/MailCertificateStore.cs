@@ -13,7 +13,6 @@ internal static class MailCertificateStore
     internal static MailCertificateMaterial? Find(string host)
     {
         var candidates = new List<X509Certificate2>();
-        CryptographicException? exportFailure = null;
         try
         {
             foreach (var name in new[] { "My", "WebHosting" })
@@ -23,38 +22,51 @@ internal static class MailCertificateStore
                 catch (CryptographicException) { continue; }
                 candidates.AddRange(store.Certificates.Cast<X509Certificate2>());
             }
-            foreach (var certificate in candidates.Where(c => c.HasPrivateKey && c.MatchesHostname(host, true, false)
-                && c.NotBefore.ToUniversalTime() <= DateTime.UtcNow && c.NotAfter.ToUniversalTime() > DateTime.UtcNow)
-                .OrderByDescending(c => c.NotAfter))
-            {
-                using var chain = new X509Chain();
-                chain.ChainPolicy.UrlRetrievalTimeout = TimeSpan.FromSeconds(5);
-                if (!chain.Build(certificate)) continue;
-                // Never replace a trusted certificate with an ACME fallback because its key is not exportable.
-                // Windows CNG may allow encrypted PFX export but reject direct plaintext key
-                // export. Use an ephemeral in-memory copy; do not alter the installed key policy.
-                byte[] archive;
-                try { archive = certificate.Export(X509ContentType.Pfx, string.Empty); }
-                catch (CryptographicException error)
-                {
-                    exportFailure = error;
-                    var cached = FindCachedCertificate(certificate.Thumbprint);
-                    if (cached is null) continue;
-                    using (cached) archive = cached.Export(X509ContentType.Pfx, string.Empty);
-                }
-                string key;
-                try { key = ExportArchiveKey(archive); }
-                finally { CryptographicOperations.ZeroMemory(archive); }
-                var pem = string.Join("\n", chain.ChainElements.Cast<X509ChainElement>()
-                    .Where((e, index) => index == 0 || e.Certificate.Subject != e.Certificate.Issuer)
-                    .Select(e => e.Certificate.ExportCertificatePem())) + "\n";
-                return new(pem, key, certificate.Thumbprint);
-            }
-            if (exportFailure is not null)
-                throw new CryptographicException("The matching certificate key cannot be exported and no matching win-acme cache was usable.", exportFailure);
-            return null;
+            return FindInCandidates(host, candidates);
         }
         finally { foreach (var certificate in candidates) certificate.Dispose(); }
+    }
+
+    // The caller owns the candidates. Tests configure trust only in memory; the live path
+    // always uses Windows trust and the normal revocation policy.
+    internal static MailCertificateMaterial? FindInCandidates(string host, IEnumerable<X509Certificate2> candidates,
+        Action<X509ChainPolicy>? configureTrust = null)
+    {
+        CryptographicException? exportFailure = null;
+        foreach (var certificate in candidates.Where(c => c.HasPrivateKey && c.MatchesHostname(host, true, false)
+            && c.NotBefore.ToUniversalTime() <= DateTime.UtcNow && c.NotAfter.ToUniversalTime() > DateTime.UtcNow)
+            .OrderByDescending(c => c.NotAfter))
+        {
+            using var chain = new X509Chain();
+            chain.ChainPolicy.UrlRetrievalTimeout = TimeSpan.FromSeconds(5);
+            chain.ChainPolicy.ApplicationPolicy.Add(new Oid("1.3.6.1.5.5.7.3.1"));
+            configureTrust?.Invoke(chain.ChainPolicy);
+            if (!chain.Build(certificate)) continue;
+            // Never replace a trusted certificate with an ACME fallback because its key is not exportable.
+            // Windows CNG may allow encrypted PFX export but reject direct plaintext key
+            // export. Use an ephemeral in-memory copy; do not alter the installed key policy.
+            byte[] archive;
+            try { archive = certificate.Export(X509ContentType.Pfx, string.Empty); }
+            catch (CryptographicException error)
+            {
+                exportFailure = error;
+                var cached = FindCachedCertificate(certificate.Thumbprint);
+                if (cached is null) continue;
+                using (cached) archive = cached.Export(X509ContentType.Pfx, string.Empty);
+            }
+            string key;
+            try { key = ExportArchiveKey(archive); }
+            finally { CryptographicOperations.ZeroMemory(archive); }
+            // A self-issued rollover intermediate can share its issuer's name without being
+            // self-signed. Omit only the validated chain's trust anchor, never an intermediate.
+            var pem = string.Join("\n", chain.ChainElements.Cast<X509ChainElement>()
+                .Where((_, index) => index == 0 || index < chain.ChainElements.Count - 1)
+                .Select(e => e.Certificate.ExportCertificatePem())) + "\n";
+            return new(pem, key, certificate.Thumbprint);
+        }
+        if (exportFailure is not null)
+            throw new CryptographicException("The matching certificate key cannot be exported and no matching win-acme cache was usable.", exportFailure);
+        return null;
     }
 
     internal static string ExportArchiveKey(byte[] archive)
