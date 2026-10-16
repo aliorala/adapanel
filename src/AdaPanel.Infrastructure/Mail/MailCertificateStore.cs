@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using AdaPanel.Infrastructure.Ssl;
 using Org.BouncyCastle.Pkcs;
 
 namespace AdaPanel.Infrastructure.Mail;
@@ -33,7 +34,9 @@ internal static class MailCertificateStore
         Action<X509ChainPolicy>? configureTrust = null)
     {
         CryptographicException? exportFailure = null;
-        foreach (var certificate in candidates.Where(c => c.HasPrivateKey && c.MatchesHostname(host, true, false)
+        // A malformed SAN in one installed certificate must not prevent selection from
+        // the rest of the store. Share the strict, failure-safe SAN matcher with web SSL.
+        foreach (var certificate in candidates.Where(c => c.HasPrivateKey && SslCertificateSelection.MatchesHost(c, host)
             && c.NotBefore.ToUniversalTime() <= DateTime.UtcNow && c.NotAfter.ToUniversalTime() > DateTime.UtcNow)
             .OrderByDescending(c => c.NotAfter))
         {

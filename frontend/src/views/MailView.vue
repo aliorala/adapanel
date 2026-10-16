@@ -1522,7 +1522,11 @@ async function loadCertificate() {
     certificate.value = result;
     certificateLoad.clear();
     // Formu otomatik doldur ki kullanıcı mail sunucu adını/e-postayı elle yazmasın.
-    if (!certForm.hostName && domain) certForm.hostName = `mail.${domain}`;
+    if (!certForm.hostName && domain) {
+      const savedHost = result.hostName.trim();
+      const sameDomain = result.domain.trim().toLowerCase() === domain.trim().toLowerCase();
+      certForm.hostName = sameDomain && savedHost ? savedHost : `mail.${domain}`;
+    }
     if (!certForm.contactEmail && result.suggestedContactEmail) {
       certForm.contactEmail = result.suggestedContactEmail;
     }

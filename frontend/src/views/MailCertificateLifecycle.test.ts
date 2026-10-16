@@ -43,6 +43,31 @@ async function mount() {
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(getMailCertificate).mockResolvedValue(cert()); vi.mocked(issueMailCertificate).mockResolvedValue(cert()); });
 afterEach(() => { app?.unmount(); app = undefined; });
 
+it.each([true, false])("reuses the saved custom hostname for its own domain (active: %s)", async active => {
+  const { state } = await mount();
+  vi.mocked(getMailCertificate).mockResolvedValueOnce(cert(active, "smtp.example.test"));
+  await state.loadCertificate(); await state.issueCert(true);
+  expect(issueMailCertificate).toHaveBeenCalledWith("example.test", "smtp.example.test", "owner@example.test", true);
+});
+it.each(["other.test", "", "  EXAMPLE.TEST  "])("scopes saved hostname selection to the selected domain: %s", async domain => {
+  const { state } = await mount();
+  vi.mocked(getMailCertificate).mockResolvedValueOnce({ ...cert(true, "smtp.example.test"), domain });
+  await state.loadCertificate();
+  expect(state.certForm.hostName).toBe(domain.trim().toLowerCase() === "example.test" ? "smtp.example.test" : "mail.example.test");
+});
+it("does not overwrite a hostname typed while the saved certificate is loading", async () => {
+  const { state } = await mount(), pending = deferred<MailCertificate>();
+  vi.mocked(getMailCertificate).mockReturnValueOnce(pending.promise);
+  const loading = state.loadCertificate(); state.certForm.hostName = "chosen.example.test";
+  pending.resolve(cert(true, "smtp.example.test")); await loading;
+  expect(state.certForm.hostName).toBe("chosen.example.test");
+});
+it("uses the selected domain default when the saved hostname is blank", async () => {
+  const { state } = await mount();
+  vi.mocked(getMailCertificate).mockResolvedValueOnce(cert(false, "  "));
+  await state.loadCertificate(); expect(state.certForm.hostName).toBe("mail.example.test");
+});
+
 it.each([false, true])("does not let an old read overwrite issuance (old read rejects: %s)", async rejects => {
   const { state } = await mount(), old = deferred<MailCertificate>();
   vi.mocked(getMailCertificate).mockReturnValueOnce(old.promise);

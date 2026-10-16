@@ -8,6 +8,34 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class MailCertificateStoreSelectionTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void MalformedSanCandidateDoesNotHideAValidCertificate(bool malformedFirst, bool sameSubject)
+    {
+        using var chain = new TestChain();
+        using var working = chain.Leaf("1.3.6.1.5.5.7.3.1", 10);
+        using var malformed = chain.Leaf("1.3.6.1.5.5.7.3.1", 20,
+            host: sameSubject ? TestChain.Host : "other.example.test", malformedSan: true);
+        var before = malformed.RawData;
+        var material = MailCertificateStore.FindInCandidates(TestChain.Host,
+            malformedFirst ? [malformed, working] : [working, malformed], chain.Trust);
+        Assert.Equal(working.Thumbprint, material?.Thumbprint);
+        MailCertificateValidation.Validate(TestChain.Host, material!.CertificatePem, material.PrivateKeyPem, chain.Trust);
+        Assert.Equal(before, malformed.RawData);
+        Assert.True(malformed.HasPrivateKey);
+    }
+
+    [Fact]
+    public void MalformedSanIsNeverAcceptedThroughItsMatchingCommonName()
+    {
+        using var chain = new TestChain();
+        using var malformed = chain.Leaf("1.3.6.1.5.5.7.3.1", 20, malformedSan: true);
+        Assert.Null(MailCertificateStore.FindInCandidates(TestChain.Host, [malformed], chain.Trust));
+    }
+
     [Fact]
     public void ValidCandidatesStillPreferTheLaterExpiry()
     {
@@ -104,11 +132,15 @@ public sealed class MailCertificateStoreSelectionTests
             Intermediate = issued.CopyWithPrivateKey(intermediateKey);
         }
 
-        internal X509Certificate2 Leaf(string? purpose, int days, int starts = -2, string host = Host)
+        internal X509Certificate2 Leaf(string? purpose, int days, int starts = -2, string host = Host, bool malformedSan = false)
         {
             using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
             var request = Request("CN=" + host, key, false);
-            var san = new SubjectAlternativeNameBuilder(); san.AddDnsName(host); request.CertificateExtensions.Add(san.Build());
+            if (malformedSan) request.CertificateExtensions.Add(new X509Extension("2.5.29.17", [0x30, 0x01, 0xff], false));
+            else
+            {
+                var san = new SubjectAlternativeNameBuilder(); san.AddDnsName(host); request.CertificateExtensions.Add(san.Build());
+            }
             if (purpose is not null) request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new(purpose) }, false));
             AddAuthorityKey(request, Intermediate);
             using var certificate = request.Create(Intermediate, DateTimeOffset.UtcNow.AddDays(starts), DateTimeOffset.UtcNow.AddDays(days), RandomNumberGenerator.GetBytes(16));
