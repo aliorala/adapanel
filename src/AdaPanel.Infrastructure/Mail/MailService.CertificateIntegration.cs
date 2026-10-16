@@ -57,8 +57,9 @@ public sealed partial class MailService
             var records = MailQueryResult.Olc(await RunCertificateCommandAsync(cli, "query Certificate --json", null, env, token));
             var settings = MailQueryResult.Olc(await RunCertificateCommandAsync(cli, "get SystemSettings --json", null, env, token));
             if (!records.Measured || !settings.Measured || settings.Items.Count != 1) return;
-            var matches = records.Items.Where(item => CertificateNames(item).Any(name => CertificateNameMatches(name, dto.HostName))).ToArray();
-            dto.CertificateId = string.Join(", ", matches.Select(item => GetField(item, "id")));
+            var matches = ReadCertificateInventory(records.Items)
+                .Where(item => item.Names.Any(name => CertificateNameMatches(name, dto.HostName))).ToArray();
+            dto.CertificateId = string.Join(", ", matches.Select(item => item.Id));
             dto.DefaultCertificateId = GetField(settings.Items[0], "defaultCertificateId");
             dto.ConfigurationStatus = matches.Length == 1 ? "ok" : matches.Length == 0 ? "missing" : "ambiguous";
         }
@@ -91,35 +92,67 @@ public sealed partial class MailService
         return dto;
     }
 
-    internal static string[] CertificateNames(JsonElement item)
+    private sealed record CertificateInventoryRecord(string Id, string[] Names);
+
+    private static CertificateInventoryRecord[] ReadCertificateInventory(IReadOnlyList<JsonElement> items)
     {
-        if (!item.TryGetProperty("subjectAlternativeNames", out var names)) return [];
-        return names.ValueKind switch
+        static AppException InvalidMetadata() => new("mail.certificate_push_failed", 502, 502,
+            "Certificate inventory metadata is incomplete or invalid.");
+
+        var result = new List<CertificateInventoryRecord>();
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        // Validate the entire inventory before selecting a target. An unreadable unrelated
+        // record can hide a shared SAN and must not authorize creating or replacing a certificate.
+        foreach (var item in items)
         {
-            JsonValueKind.Object => names.EnumerateObject().Select(p => p.Name).ToArray(),
-            JsonValueKind.Array => names.EnumerateArray().Where(p => p.ValueKind == JsonValueKind.String).Select(p => p.GetString()!).ToArray(),
-            _ => []
-        };
+            if (item.ValueKind != JsonValueKind.Object
+                || item.EnumerateObject().Count(p => p.NameEquals("id")) != 1
+                || item.EnumerateObject().Count(p => p.NameEquals("subjectAlternativeNames")) != 1)
+                throw InvalidMetadata();
+            var idValue = item.GetProperty("id");
+            if (idValue.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(idValue.GetString())
+                || !ids.Add(idValue.GetString()!)) throw InvalidMetadata();
+            var names = item.GetProperty("subjectAlternativeNames");
+            string[] parsedNames;
+            if (names.ValueKind == JsonValueKind.Object)
+            {
+                // Stalwart Set<String> uses { "name": true }; retain legacy array support below.
+                var members = names.EnumerateObject().ToArray();
+                if (members.Any(p => string.IsNullOrWhiteSpace(p.Name) || p.Value.ValueKind != JsonValueKind.True)
+                    || members.Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() != members.Length)
+                    throw InvalidMetadata();
+                parsedNames = members.Select(p => p.Name).ToArray();
+            }
+            else if (names.ValueKind == JsonValueKind.Array)
+            {
+                var members = names.EnumerateArray().ToArray();
+                if (members.Any(p => p.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(p.GetString())))
+                    throw InvalidMetadata();
+                parsedNames = members.Select(p => p.GetString()!).ToArray();
+            }
+            else throw InvalidMetadata();
+            result.Add(new CertificateInventoryRecord(idValue.GetString()!, parsedNames));
+        }
+        return result.ToArray();
     }
 
     internal static string? SelectCertificateId(IReadOnlyList<JsonElement> items, string host, X509Certificate2 replacement)
     {
         var replacementNames = replacement.Extensions.OfType<X509SubjectAlternativeNameExtension>()
             .SelectMany(extension => extension.EnumerateDnsNames()).ToArray();
-        var matches = items.Where(item => CertificateNames(item).Any(name => CertificateNameMatches(name, host))).ToArray();
+        var records = ReadCertificateInventory(items);
+        var matches = records.Where(item => item.Names.Any(name => CertificateNameMatches(name, host))).ToArray();
         // Never silently choose one of several SNI matches, or strip names from a shared certificate.
-        if (matches.Length > 1 || matches.Any(item => CertificateNames(item).Any(name =>
+        if (matches.Length > 1 || matches.Any(item => item.Names.Any(name =>
             name.Contains('*') ? !replacementNames.Contains(name, StringComparer.OrdinalIgnoreCase)
                 : !replacement.MatchesHostname(name, true, false))))
             throw new AppException("mail.certificate_selection_conflict", 409, 409, host);
         // Additional SANs must not collide with another domain's existing certificate.
-        if (items.Except(matches).Any(item => CertificateNames(item).Any(name => replacementNames.Any(candidate =>
+        if (records.Except(matches).Any(item => item.Names.Any(name => replacementNames.Any(candidate =>
             CertificateNameMatches(name, candidate) || CertificateNameMatches(candidate, name)))))
             throw new AppException("mail.certificate_selection_conflict", 409, 409, host);
         if (matches.Length == 0) return null;
-        var id = GetField(matches[0], "id");
-        if (string.IsNullOrWhiteSpace(id)) throw new AppException("mail.certificate_push_failed", 502, 502);
-        return id;
+        return matches[0].Id;
     }
 
     internal static bool CertificateNameMatches(string name, string host)

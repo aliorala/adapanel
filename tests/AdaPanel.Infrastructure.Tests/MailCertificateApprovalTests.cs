@@ -21,6 +21,102 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class MailCertificateApprovalTests
 {
+    public static IEnumerable<object[]> IncompleteCertificateInventories()
+    {
+        foreach (var json in new[]
+        {
+            "[{}]",
+            "[{\"id\":\"cert-1\"}]",
+            "[{\"id\":42,\"subjectAlternativeNames\":[\"mail.example.test\"]}]",
+            "[{\"id\":\"\",\"subjectAlternativeNames\":[\"mail.example.test\"]}]",
+            "[{\"id\":\"cert-1\",\"subjectAlternativeNames\":null}]",
+            "[{\"id\":\"cert-1\",\"subjectAlternativeNames\":\"mail.example.test\"}]",
+            "[{\"id\":\"cert-1\",\"subjectAlternativeNames\":[\"mail.example.test\",null]}]",
+            "[{\"id\":\"cert-1\",\"subjectAlternativeNames\":[\"mail.example.test\",42]}]",
+            "[{\"id\":\"cert-1\",\"subjectAlternativeNames\":[\"mail.example.test\",\"\"]}]",
+            "[{\"id\":\"cert-1\",\"subjectAlternativeNames\":{\"mail.example.test\":false}}]",
+            "[{\"id\":\"cert-1\",\"subjectAlternativeNames\":{\"mail.example.test\":null}}]",
+            "[{\"id\":\"cert-1\",\"subjectAlternativeNames\":[\"mail.example.test\"]},{\"id\":\"cert-1\",\"subjectAlternativeNames\":[\"other.test\"]}]",
+            "[{\"id\":\"cert-1\",\"id\":\"cert-2\",\"subjectAlternativeNames\":[\"mail.example.test\"]}]",
+            "[{\"id\":\"cert-1\",\"subjectAlternativeNames\":[\"other.test\"],\"subjectAlternativeNames\":[\"mail.example.test\"]}]",
+            "[{\"id\":\"cert-1\",\"subjectAlternativeNames\":{\"mail.example.test\":true,\"mail.example.test\":true}}]",
+            "[{\"id\":\"cert-1\",\"subjectAlternativeNames\":[\"mail.example.test\"]},{\"id\":\"other-cert\"}]"
+        }) yield return [json];
+    }
+
+    [Theory]
+    [MemberData(nameof(IncompleteCertificateInventories))]
+    public async Task IncompleteCertificateMetadataCannotAuthorizeAProviderWrite(string inventory)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        var before = await f.Bytes();
+        f.QueryResult = new CommandResult { ExitCode = 0, StandardOutput = inventory };
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.SyncCertificateAsync(f.Token));
+        Assert.Equal("mail.certificate_push_failed", error.MessageKey);
+        Assert.Equal(new[] { "query Certificate --json" }, f.Commands);
+        Assert.Equal(before, await f.Bytes());
+        Assert.False(f.Written);
+    }
+
+    [Theory]
+    [MemberData(nameof(IncompleteCertificateInventories))]
+    public async Task IncompleteInventoryIsUnknownEvenWhenListenersAreHealthy(string inventory)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        await f.EditState(state => state["thumbprint"] = f.Thumbprint);
+        f.QueryResult = new CommandResult { ExitCode = 0, StandardOutput = inventory };
+        var result = await f.Service.GetCertificateStatusAsync(f.Token);
+        Assert.True(result.Active);
+        Assert.Equal("unknown", result.ConfigurationStatus);
+        Assert.Empty(result.CertificateId);
+        Assert.False(f.Written);
+    }
+
+    [Theory]
+    [InlineData("[]", "missing", "")]
+    [InlineData("[{\"id\":\"cert-1\",\"subjectAlternativeNames\":[]}]", "missing", "")]
+    [InlineData("[{\"id\":\"cert-1\",\"subjectAlternativeNames\":{}}]", "missing", "")]
+    [InlineData("[{\"id\":\"cert-1\",\"subjectAlternativeNames\":[\"mail.example.test\"]}]", "ok", "cert-1")]
+    [InlineData("[{\"id\":\"cert-1\",\"subjectAlternativeNames\":{\"mail.example.test\":true}}]", "ok", "cert-1")]
+    public async Task CompleteInventoryRemainsMeasurable(string inventory, string status, string id)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        f.QueryResult = new CommandResult { ExitCode = 0, StandardOutput = inventory };
+        var result = await f.Service.GetCertificateStatusAsync(f.Token);
+        Assert.Equal(status, result.ConfigurationStatus);
+        Assert.Equal(id, result.CertificateId);
+        Assert.False(f.Written);
+    }
+
+    [Fact]
+    public async Task IncompleteReadbackDoesNotReloadChangeDefaultOrPublishAndCanBeRetried()
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        f.DefaultHost = f.Host;
+        f.DefaultId = "";
+        var before = await f.Bytes();
+        f.AfterWrite = () =>
+        {
+            f.QueryResult = new CommandResult { ExitCode = 0, StandardOutput = "[{\"id\":\"cert-1\"}]" };
+            return Task.CompletedTask;
+        };
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.SyncCertificateAsync(f.Token));
+        Assert.Equal("mail.certificate_push_failed", error.MessageKey);
+        Assert.True(f.Written);
+        Assert.DoesNotContain("update SystemSettings", f.Commands);
+        Assert.DoesNotContain("create Action", f.Commands);
+        Assert.Equal(before, await f.Bytes());
+        f.QueryResult = null;
+        f.AfterWrite = null;
+        // Keep this retry focused on inventory repair; default-setting behavior has separate coverage.
+        f.DefaultId = "cert-1";
+        Assert.True((await f.Service.SyncCertificateAsync(f.Token))!.Active);
+    }
+
     public static IEnumerable<object[]> Revocations() =>
         from existing in new[] { false, true }
         from change in new[] { "disabled", "deleted", "role", "password" }
