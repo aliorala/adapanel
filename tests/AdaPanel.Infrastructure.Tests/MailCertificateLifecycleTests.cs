@@ -19,6 +19,68 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class MailCertificateLifecycleTests
 {
+    [Theory]
+    [InlineData("query")]
+    [InlineData("write")]
+    [InlineData("reload")]
+    public async Task StatusWaitsForIssueAndReadsItsCompletedState(string stage)
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        f.Pause("first", stage);
+        var issue = f.First.IssueCertificateAsync(Request("mail.new.example.test"), f.Token);
+        await f.Entered.Task.WaitAsync(f.Token);
+        var read = f.Second.GetCertificateStatusAsync(f.Token);
+        await f.CompleteInOrder(issue, read);
+        Assert.Equal("mail.new.example.test", (await read).HostName);
+        Assert.True((await read).Active);
+        Assert.Equal(0, f.References);
+    }
+
+    [Fact]
+    public async Task IssueCannotChangeProviderDuringStatusInspection()
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        f.Pause("first", "query");
+        var read = f.First.GetCertificateStatusAsync(f.Token);
+        await f.Entered.Task.WaitAsync(f.Token);
+        var issue = f.Second.IssueCertificateAsync(Request("mail.new.example.test"), f.Token);
+        int commandsWhileReading;
+        try
+        {
+            if (f.References < 2) await issue.WaitAsync(f.Token);
+            commandsWhileReading = f.Commands.Count;
+        }
+        finally { f.Release.TrySetResult(); }
+        await Task.WhenAll(read, issue).WaitAsync(f.Token);
+        Assert.Equal(1, commandsWhileReading);
+        Assert.Equal(Fixture.OldHost, (await read).HostName);
+        Assert.Equal(0, f.References);
+    }
+
+    [Fact]
+    public async Task WaitingStatusCanBeCanceledWithoutReleasingTheWriterLease()
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        f.Pause("first", "query");
+        var issue = f.First.IssueCertificateAsync(Request(Fixture.OldHost), f.Token);
+        await f.Entered.Task.WaitAsync(f.Token);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(f.Token);
+        var read = f.Second.GetCertificateStatusAsync(cancellation.Token);
+        var references = f.References;
+        cancellation.Cancel();
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read);
+            Assert.Equal(2, references);
+            Assert.Equal(1, f.References);
+        }
+        finally { f.Release.TrySetResult(); await issue; }
+        Assert.Equal(0, f.References);
+    }
+
     [Theory, InlineData("mismatched-key"), InlineData("partial-key"), InlineData("partial-chain"), InlineData("locked-key")]
     public async Task BrokenPemLeavesProviderAndStateUntouchedAndCanBeRetried(string problem)
     {

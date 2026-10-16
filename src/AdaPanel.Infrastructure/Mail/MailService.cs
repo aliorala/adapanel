@@ -2523,6 +2523,10 @@ public sealed partial class MailService(
 
     public async Task<MailCertificateDto> GetCertificateStatusAsync(CancellationToken cancellationToken = default)
     {
+        // Keep the saved certificate, listener probes and provider registry in one panel
+        // lifecycle. A concurrent renewal must finish before this snapshot is inspected.
+        using var operation = await MailCertificateLifecycle.EnterAsync(
+            fileStore.ResolvePath(CertificateStatePath), cancellationToken);
         var state = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
         var savedContact = await fileStore.ReadAsync<Support.AcmeContactSettings?>(Support.AcmeContactSettings.Path, null, cancellationToken);
         var suggestedEmail = savedContact?.Email?.Trim() ?? string.Empty;

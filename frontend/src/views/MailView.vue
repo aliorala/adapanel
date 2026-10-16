@@ -961,7 +961,7 @@
 
 <script setup lang="ts">
 import { getFormattingLocale } from '../utils/locale';
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import {
@@ -1068,6 +1068,15 @@ const spamAdvanced = ref(false);
 const certificate = ref<MailCertificate | null>(null);
 const certificateLoad = useSectionError();
 const certForm = reactive({ hostName: "", contactEmail: "" });
+let certificateRequest = 0;
+let certificateDisposed = false;
+const certificateIssuing = ref(false);
+watch(() => [selectedDomain.value, authStore.session?.isAuthenticated, authStore.session?.user?.id, authStore.session?.user?.role], () => {
+  ++certificateRequest;
+  certificate.value = null;
+  certificateLoad.clear();
+}, { flush: "sync" });
+onBeforeUnmount(() => { certificateDisposed = true; ++certificateRequest; });
 const webmailOpening = ref(false);
 const webmailDiagnosing = ref(false);
 const webmailReport = ref("");
@@ -1501,12 +1510,19 @@ async function applyDns() {
 }
 
 async function loadCertificate() {
+  if (certificateDisposed || certificateIssuing.value || !isAdmin.value) return;
+  const request = ++certificateRequest;
+  const domain = selectedDomain.value;
+  const current = () => !certificateDisposed && request === certificateRequest;
+  certificate.value = null;
+  certificateLoad.clear();
   try {
     const result = await getMailCertificate();
+    if (!current()) return;
     certificate.value = result;
     certificateLoad.clear();
     // Formu otomatik doldur ki kullanıcı mail sunucu adını/e-postayı elle yazmasın.
-    if (!certForm.hostName) certForm.hostName = `mail.${selectedDomain.value}`;
+    if (!certForm.hostName && domain) certForm.hostName = `mail.${domain}`;
     if (!certForm.contactEmail && result.suggestedContactEmail) {
       certForm.contactEmail = result.suggestedContactEmail;
     }
@@ -1516,23 +1532,40 @@ async function loadCertificate() {
       autoconfigContactEmail.value = result.suggestedContactEmail;
     }
   } catch (error) {
+    if (!current()) return;
     certificate.value = null;
     certificateLoad.capture(error);
   }
 }
 
 async function issueCert(reuseExistingOnly = false) {
-  await run(async () => {
-    certificate.value = await issueMailCertificate(
-      selectedDomain.value,
-      certForm.hostName || `mail.${selectedDomain.value}`,
-      certForm.contactEmail, reuseExistingOnly);
+  if (certificateDisposed || certificateIssuing.value || busy.value || !isAdmin.value) return;
+  const request = ++certificateRequest;
+  const current = () => !certificateDisposed && request === certificateRequest;
+  const domain = selectedDomain.value;
+  const host = certForm.hostName || `mail.${domain}`;
+  const email = certForm.contactEmail;
+  certificateIssuing.value = true;
+  busy.value = true;
+  certificate.value = null;
+  certificateLoad.clear();
+  showNotice("", false);
+  try {
+    const result = await issueMailCertificate(domain, host, email, reuseExistingOnly);
+    if (!current()) return;
+    certificate.value = result;
+    certificateLoad.clear();
     showNotice(
       certificate.value.active
         ? t("panel.mail.certIssued")
         : t("panel.mail.certUnverified"),
       !certificate.value.active);
-  });
+  } catch (error) {
+    if (current()) showError(error);
+  } finally {
+    certificateIssuing.value = false;
+    if (!certificateDisposed) busy.value = false;
+  }
 }
 
 // Tek tık webmail (profesyonel paneller gibi): Roundcube kurulu/yayında değilse panel otomatik kurar,
