@@ -2653,23 +2653,35 @@ public sealed partial class MailService(
             return null;
         }
 
-        var material = StoreCertificateLookup(state.HostName);
         if (state.Source == "windows-store")
         {
+            var material = StoreCertificateLookup(state.HostName);
             if (material is null) throw new AppException("mail.certificate_store_missing", 409, 409);
-            if (material.Thumbprint == state.Thumbprint) return null;
+            if (material.Thumbprint == state.Thumbprint
+                && await MailListenersMatchAsync(state.HostName, material.Thumbprint, cancellationToken)) return null;
             return await ApplyStoreCertificateAsync(state.Domain, state.HostName, material, cancellationToken, beforeMutation);
         }
         var (certificatePem, privateKeyPem) = ReadPemPair(state.PemDirectory);
         var hash = ComputeHash(certificatePem + privateKeyPem);
-        if (string.Equals(hash, state.ContentHash, StringComparison.Ordinal))
+        using var leaf = System.Security.Cryptography.X509Certificates.X509Certificate2.CreateFromPem(certificatePem, privateKeyPem);
+        if (string.Equals(hash, state.ContentHash, StringComparison.Ordinal)
+            && await MailListenersMatchAsync(state.HostName, leaf.Thumbprint, cancellationToken))
         {
+            // Repair older metadata without rewriting a certificate already served correctly.
+            if (!string.Equals(state.Thumbprint, leaf.Thumbprint, StringComparison.OrdinalIgnoreCase))
+            {
+                if (beforeMutation is not null) await beforeMutation(cancellationToken);
+                state.Thumbprint = leaf.Thumbprint;
+                state.NotAfterUtc = leaf.NotAfter.ToUniversalTime();
+                await fileStore.WriteAsync(CertificateStatePath, state, cancellationToken);
+            }
             return null;
         }
 
         // win-acme zamanlanmış görevi sertifikayı yenilemiş; Stalwart'a yeniden bas.
-        await PushCertificateToStalwartAsync(state.HostName, certificatePem, privateKeyPem, cancellationToken, beforeMutation);
+        var endpoints = await PushCertificateToStalwartAsync(state.HostName, certificatePem, privateKeyPem, cancellationToken, beforeMutation);
         state.ContentHash = hash;
+        state.Thumbprint = leaf.Thumbprint;
         state.NotAfterUtc = TryGetNotAfterUtc(certificatePem);
         await fileStore.WriteAsync(CertificateStatePath, state, cancellationToken);
 
@@ -2679,7 +2691,8 @@ public sealed partial class MailService(
             Domain = state.Domain,
             HostName = state.HostName,
             Source = state.Source,
-            NotAfterUtc = state.NotAfterUtc
+            NotAfterUtc = state.NotAfterUtc,
+            Endpoints = endpoints
         };
     }
 
@@ -3102,6 +3115,8 @@ public sealed partial class MailService(
     private async Task<MailTlsEndpointDto[]> PushCertificateToStalwartAsync(string hostName, string certificatePem, string privateKeyPem,
         CancellationToken cancellationToken, Func<CancellationToken, Task>? beforeMutation = null)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateCertificateMaterial(hostName, certificatePem, privateKeyPem);
         var (cli, env) = await RequireCliAsync(cancellationToken);
 
         var payload =

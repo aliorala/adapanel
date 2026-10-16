@@ -366,6 +366,7 @@ public sealed class MailCertificateLifecycleTests
             {
                 CertificateCommandRunner = (cli, command, json, env, token) => Execute(owner, cli, command, json, env, token),
                 StoreCertificateLookup = _ => null,
+                ValidateCertificateMaterial = (_, _, _) => { }, // This suite isolates lifecycle ordering; trust is tested separately.
                 CertificateIssuer = (_, host, _, _, directory, _) => { WritePem(host, directory); return Task.FromResult(true); },
                 TlsProbe = (_, port, _, _) => Task.FromResult(new MailTlsEndpointDto { Port = port, Status = "ok" })
             };

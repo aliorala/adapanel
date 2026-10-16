@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AdaPanel.Api.Security;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Mail;
@@ -88,6 +89,9 @@ public sealed class MailCertificateApprovalTests
         using var state = JsonDocument.Parse(await f.Bytes());
         Assert.NotEqual("previous-hash", state.RootElement.GetProperty("contentHash").GetString());
         Assert.Equal(result.NotAfterUtc, state.RootElement.GetProperty("notAfterUtc").GetDateTime());
+        Assert.Equal(f.Thumbprint, state.RootElement.GetProperty("thumbprint").GetString());
+        Assert.All(result.Endpoints, endpoint => Assert.Equal(f.Thumbprint, endpoint.Thumbprint));
+        Assert.True((await f.Service.GetCertificateStatusAsync(f.Token)).Active);
         f.Commands.Clear();
         Assert.Null(await f.Service.SyncCertificateAsync(f.Token));
         Assert.Empty(f.Commands); // the actual persisted hash makes the next sync a no-op
@@ -194,6 +198,88 @@ public sealed class MailCertificateApprovalTests
         Assert.Equal(2, f.Commands.Count(c => c == "get SystemSettings --json"));
     }
 
+    [Fact]
+    public async Task PemRenewalDoesNotRequireExportingAnUnrelatedWindowsStoreKey()
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        f.FailStoreLookup = true;
+        Assert.True((await f.Service.SyncCertificateAsync(f.Token))!.Active);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnchangedCertificateRepairsListenersServingTheWrongCertificate(bool windowsStore)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        await f.Service.SyncCertificateAsync(f.Token);
+        if (windowsStore) await f.UseWindowsStore();
+        f.Commands.Clear();
+        f.PresentedThumbprint = "wrong-certificate";
+        var result = await f.Service.SyncCertificateAsync(f.Token);
+        Assert.True(result!.Active);
+        Assert.Contains("update Certificate cert-1", f.Commands);
+        Assert.Equal(f.Thumbprint, f.PresentedThumbprint);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnchangedCertificateCannotHideFailedSmtpValidation(bool windowsStore)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        await f.Service.SyncCertificateAsync(f.Token);
+        if (windowsStore) await f.UseWindowsStore();
+        var before = await f.Bytes();
+        f.FailTls = true;
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.SyncCertificateAsync(f.Token));
+        Assert.Equal("mail.certificate_not_activated", error.MessageKey);
+        Assert.Equal(before, await f.Bytes());
+    }
+
+    [Fact]
+    public async Task HealthyUnchangedWindowsCertificateIsMeasuredWithoutProviderWrites()
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        await f.UseWindowsStore();
+        var before = await f.Bytes();
+        Assert.Null(await f.Service.SyncCertificateAsync(f.Token));
+        Assert.Equal(new[] { 465, 587 }, f.ProbedPorts.Order());
+        Assert.Empty(f.Commands);
+        Assert.Equal(before, await f.Bytes());
+    }
+
+    [Fact]
+    public async Task OldPemThumbprintIsRepairedWithoutRewritingAHealthyListener()
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        await f.Service.SyncCertificateAsync(f.Token);
+        await f.EditState(state => state["thumbprint"] = "stale-thumbprint");
+        f.Commands.Clear();
+        Assert.Null(await f.Service.SyncCertificateAsync(f.Token));
+        Assert.Empty(f.Commands);
+        Assert.True((await f.Service.GetCertificateStatusAsync(f.Token)).Active);
+    }
+
+    [Fact]
+    public async Task UntrustedReplacementIsRejectedBeforeItCanOverwriteTheRunningCertificate()
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        f.EnforceTrust = true; // This fixture uses a genuinely untrusted self-signed leaf.
+        var before = await f.Bytes();
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.SyncCertificateAsync(f.Token));
+        Assert.Equal("mail.certificate_invalid", error.MessageKey);
+        Assert.Empty(f.Commands);
+        Assert.Equal(before, await f.Bytes());
+        Assert.DoesNotContain(f.PrivateKeyPem, error.ToString());
+    }
+
     private sealed class Fixture : IDisposable
     {
         private readonly BulutAlani area = new();
@@ -210,6 +296,9 @@ public sealed class MailCertificateApprovalTests
         internal readonly TaskCompletionSource QueryRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal bool PauseQuery, FailReload;
         internal bool Written, FailTls;
+        internal bool StoreMaterial, FailStoreLookup, EnforceTrust;
+        internal string CertificatePem = "", Thumbprint = "", PresentedThumbprint = "";
+        internal readonly List<int> ProbedPorts = [];
         internal string DefaultHost = "other.example.test", DefaultId = "other-cert";
         internal string PrivateKeyPem = "";
         internal string? CertificatePayload, ReloadPayload;
@@ -237,8 +326,15 @@ public sealed class MailCertificateApprovalTests
                 NullLogger<MailService>.Instance)
             {
                 CertificateCommandRunner = Execute,
-                StoreCertificateLookup = _ => null,
-                TlsProbe = (_, port, _, _) => Task.FromResult(new MailTlsEndpointDto { Port = port, Status = FailTls ? "fail" : "ok" })
+                StoreCertificateLookup = _ => FailStoreLookup ? throw new CryptographicException("Store key cannot be exported")
+                    : StoreMaterial ? new MailCertificateMaterial(CertificatePem, PrivateKeyPem, Thumbprint) : null,
+                ValidateCertificateMaterial = (host, cert, key) => { if (EnforceTrust) MailCertificateValidation.Validate(host, cert, key); },
+                TlsProbe = (_, port, expected, _) =>
+                {
+                    ProbedPorts.Add(port);
+                    return Task.FromResult(new MailTlsEndpointDto { Port = port, Thumbprint = PresentedThumbprint,
+                        Status = FailTls || (!string.IsNullOrEmpty(expected) && expected != PresentedThumbprint) ? "fail" : "ok" });
+                }
             };
         }
 
@@ -252,10 +348,12 @@ public sealed class MailCertificateApprovalTests
             request.CertificateExtensions.Add(san.Build());
             using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30));
             PrivateKeyPem = key.ExportPkcs8PrivateKeyPem();
+            CertificatePem = certificate.ExportCertificatePem();
+            Thumbprint = PresentedThumbprint = certificate.Thumbprint;
             await File.WriteAllTextAsync(Path.Combine(pem, "mail-key.pem"), PrivateKeyPem, Token);
             await File.WriteAllTextAsync(Path.Combine(pem, "mail-crt.pem"), certificate.ExportCertificatePem(), Token);
             await area.DosyaDeposu.WriteAsync("config/mail-cert.json", new
-            { domain = "example.test", hostName = "mail.example.test", source = "letsencrypt", pemDirectory = pem, contentHash = "previous-hash" }, Token);
+            { domain = "example.test", hostName = "mail.example.test", source = "letsencrypt", pemDirectory = pem, contentHash = "previous-hash", thumbprint = "old-thumbprint" }, Token);
             await area.DosyaDeposu.WriteAsync("config/mail.json", new
             { adminPasswordProtected = SahteKoruyucu.Onek + "fixture-password" }, Token);
             principal = new ClaimsPrincipal(new ClaimsIdentity(new[]
@@ -264,6 +362,17 @@ public sealed class MailCertificateApprovalTests
         }
 
         internal Task Approve(CancellationToken token) => authority.RevalidateAsync(db, null!, principal, token);
+        internal async Task EditState(Action<JsonObject> edit)
+        {
+            var state = JsonNode.Parse(await Bytes())!.AsObject();
+            edit(state);
+            await area.DosyaDeposu.WriteAsync("config/mail-cert.json", state, Token);
+        }
+        internal async Task UseWindowsStore()
+        {
+            StoreMaterial = true;
+            await EditState(state => { state["source"] = "windows-store"; state["thumbprint"] = Thumbprint; });
+        }
         internal async Task ChangeActor(string change)
         {
             var user = await db.Users.SingleAsync(item => item.Id == actorId, Token);
@@ -310,6 +419,7 @@ public sealed class MailCertificateApprovalTests
             }
             Assert.Equal("create Action", command);
             ReloadPayload = json;
+            if (!FailReload && json!.Contains("ReloadTlsCertificates")) PresentedThumbprint = Thumbprint;
             return new CommandResult { ExitCode = FailReload ? 1 : 0 };
         }
 

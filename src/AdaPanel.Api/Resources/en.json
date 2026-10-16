@@ -302,5 +302,6 @@
   "mail.certificate_not_activated": "The certificate may have been saved, but SMTP 587 STARTTLS and 465 TLS verification failed. This operation was not successful.",
   "mail.certificate_push_failed": "The mail certificate registry could not be read or verified after saving.",
   "mail.certificate_issued": "The mail certificate was loaded and SMTP 587 STARTTLS and 465 TLS connections were verified.",
-  "mail.invalid_domain": "Enter a valid mail domain and its mail hostname."
+  "mail.invalid_domain": "Enter a valid mail domain and its mail hostname.",
+  "mail.certificate_invalid": "The certificate was not applied: hostname, validity, private key or trust chain could not be verified. Check the complete intermediate chain and matching private key."
 }

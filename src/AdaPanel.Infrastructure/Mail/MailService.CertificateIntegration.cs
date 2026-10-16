@@ -8,8 +8,15 @@ namespace AdaPanel.Infrastructure.Mail;
 public sealed partial class MailService
 {
     internal Func<string, MailCertificateMaterial?> StoreCertificateLookup { get; init; } = MailCertificateStore.Find;
+    internal Action<string, string, string> ValidateCertificateMaterial { get; init; } = MailCertificateValidation.Validate;
     internal Func<string, int, string?, CancellationToken, Task<MailTlsEndpointDto>> TlsProbe { get; init; } = MailTlsProbe.ProbeAsync;
     internal Func<string, string, string, bool, string, CancellationToken, Task<bool>>? CertificateIssuer { get; init; }
+
+    private async Task<bool> MailListenersMatchAsync(string host, string expected, CancellationToken token)
+    {
+        var probes = await Task.WhenAll(new[] { 587, 465 }.Select(port => TlsProbe(host, port, expected, token)));
+        return probes.All(probe => probe.Status == "ok");
+    }
 
     public async Task SyncWebCertificateAsync(string hostName, Func<CancellationToken, Task>? beforeMutation = null,
         CancellationToken cancellationToken = default)

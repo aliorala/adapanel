@@ -5824,5 +5824,6 @@
   "mail.certificate_store_missing": "No trusted existing certificate with a private key matches the mail hostname. Existing certificates were preserved.",
   "mail.certificate_selection_conflict": "Multiple or shared certificates match this hostname. Automatic changes stopped to protect other domains.",
   "mail.certificate_acme_failed": "A valid certificate could not be issued. No self-signed replacement was installed.",
-  "mail.invalid_domain": "Enter a valid mail domain and its mail hostname."
+  "mail.invalid_domain": "Enter a valid mail domain and its mail hostname.",
+  "mail.certificate_invalid": "The certificate was not applied: hostname, validity, private key or trust chain could not be verified. Check the complete intermediate chain and matching private key."
 }

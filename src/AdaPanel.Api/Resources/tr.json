@@ -302,5 +302,6 @@
   "mail.certificate_not_activated": "Sertifika kaydı yazılmış olabilir ancak SMTP 587 STARTTLS ve 465 TLS üzerinde doğrulanamadı. İşlem başarılı sayılmadı.",
   "mail.certificate_push_failed": "Posta sertifikası kaydı okunamadı veya doğrulanarak kaydedilemedi.",
   "mail.certificate_issued": "Posta sertifikası yüklendi; SMTP 587 STARTTLS ve 465 TLS bağlantıları doğrulandı.",
-  "mail.invalid_domain": "Geçerli bir posta alan adı ve bu alan adına ait mail hostname girin."
+  "mail.invalid_domain": "Geçerli bir posta alan adı ve bu alan adına ait mail hostname girin.",
+  "mail.certificate_invalid": "Sertifika uygulanmadı: alan adı, süre, özel anahtar veya güven zinciri doğrulanamadı. Tam ara sertifika zincirini ve eşleşen özel anahtarı kontrol edin."
 }
