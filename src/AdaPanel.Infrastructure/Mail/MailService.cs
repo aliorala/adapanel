@@ -2569,7 +2569,10 @@ public sealed partial class MailService(
         if (request.ReuseExistingOnly)
             throw new AppException("mail.certificate_store_missing", 409, 409);
 
-        var pemDirectory = fileStore.EnsureDirectory($"mail-certs/{hostName}");
+        // win-acme writes directly to this directory, even if issuance or activation later
+        // fails. Keep each attempt separate from the files of the running certificate.
+        // Successful state retains this path so scheduled renewals use the same location.
+        var pemDirectory = fileStore.EnsureDirectory($"mail-certs/{hostName}/{Guid.NewGuid():N}");
         var source = "self-signed";
 
         // İletişim e-postası boşsa, daha önce (site SSL'i ya da mail sertifikası alınırken)

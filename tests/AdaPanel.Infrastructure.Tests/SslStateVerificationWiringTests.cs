@@ -215,6 +215,9 @@ public sealed class SslStateVerificationWiringTests : IDisposable
     {
         using var rsa = RSA.Create(2048);
         var istek = new CertificateRequest($"CN={host}", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        var names = new SubjectAlternativeNameBuilder();
+        names.AddDnsName(host);
+        istek.CertificateExtensions.Add(names.Build());
         using var uretilen = istek.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddDays(gun));
 
         // Ozel anahtarli kalici kopya (KULLANICI deposu -> yonetici yetkisi gerekmez).

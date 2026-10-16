@@ -39,7 +39,7 @@ public sealed class MailCertificateLifecycleTests
         var state = await f.State();
         Assert.Equal(host, state.HostName);
         Assert.Equal("letsencrypt", state.Source);
-        Assert.Equal(f.Store.ResolvePath($"mail-certs/{host}"), state.PemDirectory);
+        Assert.StartsWith(f.Store.ResolvePath($"mail-certs/{host}") + Path.DirectorySeparatorChar, state.PemDirectory);
         Assert.Equal(f.LoadedHash, state.ContentHash);
         Assert.Equal(f.PemHash(state.PemDirectory), state.ContentHash);
         Assert.Equal(new[] { "first", "first", "first", "second", "second", "second" }, f.Commands.Select(item => item.Owner));
@@ -306,6 +306,29 @@ public sealed class MailCertificateLifecycleTests
         }
     }
 
+    [Theory]
+    [InlineData("issuer", false)]
+    [InlineData("validation", false)]
+    [InlineData("validation", true)]
+    [InlineData("reload", false)]
+    public async Task FailedIssueNeverOverwritesTheRunningRenewalFiles(string failure, bool staging)
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        var before = await File.ReadAllBytesAsync(f.StatePath, f.Token);
+        var oldHash = f.PemHash(f.InitialPemDirectory);
+        f.IssuerFails = failure == "issuer";
+        f.RejectMaterial = failure == "validation";
+        f.FailedStage = failure == "reload" ? "reload" : null;
+        await Assert.ThrowsAsync<AppException>(() => f.First.IssueCertificateAsync(new IssueMailCertificateRequest
+            { Domain = "example.test", HostName = Fixture.OldHost, UseStaging = staging }, f.Token));
+        Assert.Equal(before, await File.ReadAllBytesAsync(f.StatePath, f.Token));
+        Assert.Equal(oldHash, f.PemHash(f.InitialPemDirectory));
+        Assert.NotEqual(f.InitialPemDirectory, f.AttemptDirectory);
+        if (failure is "issuer" or "validation") Assert.Empty(f.Commands);
+        Assert.Equal(0, f.References);
+    }
+
     private sealed class StateRecord
     {
         public string Domain { get; set; } = "example.test";
@@ -327,6 +350,8 @@ public sealed class MailCertificateLifecycleTests
         private bool readback;
         private readonly Dictionary<string, object> certificates = [];
         internal string? LoadedHash, FailedStage;
+        internal string? AttemptDirectory;
+        internal bool IssuerFails, RejectMaterial;
         internal readonly MailService First, Second;
         internal readonly List<(string Owner, string Stage)> Commands = [];
         internal readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -366,8 +391,10 @@ public sealed class MailCertificateLifecycleTests
             {
                 CertificateCommandRunner = (cli, command, json, env, token) => Execute(owner, cli, command, json, env, token),
                 StoreCertificateLookup = _ => null,
-                ValidateCertificateMaterial = (_, _, _) => { }, // This suite isolates lifecycle ordering; trust is tested separately.
-                CertificateIssuer = (_, host, _, _, directory, _) => { WritePem(host, directory); return Task.FromResult(true); },
+                ValidateCertificateMaterial = (_, _, _) =>
+                { if (RejectMaterial) throw new AppException("mail.certificate_invalid", 409, 409); }, // Trust itself is tested separately.
+                CertificateIssuer = (_, host, _, _, directory, _) =>
+                { AttemptDirectory = directory; WritePem(host, directory); return Task.FromResult(!IssuerFails); },
                 TlsProbe = (_, port, _, _) => Task.FromResult(new MailTlsEndpointDto { Port = port, Status = "ok" })
             };
         }

@@ -245,6 +245,14 @@ public sealed class WinAcmeSslService(
             X509Certificate2? certificate = outcome.Certificate;
             if (certificate is null)
             {
+                using var existing = IssueCertificateLookup(hostName);
+                var bindings = await ReadHttpsBindingsAsync(cancellationToken);
+                await ApproveAsync(cancellationToken);
+                if (existing is not null || bindings.Any(binding =>
+                    string.Equals(binding.SiteName, site.Name, StringComparison.OrdinalIgnoreCase) && binding.Port == 443
+                    && (string.IsNullOrEmpty(binding.HostName) || string.Equals(binding.HostName, hostName, StringComparison.OrdinalIgnoreCase))
+                    && (!binding.CertificateReadable || !string.IsNullOrWhiteSpace(binding.Thumbprint))))
+                    throw new AppException("ssl.issue_failed_existing_preserved", 409, 409);
                 // The fallback constructor itself imports a persistent machine key.
                 await MutateAsync(() =>
                 {
@@ -1629,50 +1637,29 @@ public sealed class WinAcmeSslService(
         };
 
         storesReadable = false;
-        X509Certificate2? fallback = null;
-        foreach (var (name, location) in stores)
+        var candidates = new List<X509Certificate2>();
+        X509Certificate2? selected = null;
+        try
         {
-            X509Store store;
-            try
+            foreach (var (name, location) in stores)
             {
-                store = new X509Store(name, location);
-                store.Open(OpenFlags.ReadOnly);
-            }
-            catch
-            {
-                continue;
-            }
-
-            using (store)
-            {
-                List<X509Certificate2> matches;
+                using var store = new X509Store(name, location);
                 try
                 {
-                    matches = store.Certificates
-                        .OfType<X509Certificate2>()
-                        .Where(cert => cert.Subject.Contains($"CN={hostName}", StringComparison.OrdinalIgnoreCase))
-                        .OrderByDescending(cert => cert.NotAfter)
-                        .ToList();
+                    store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
+                    candidates.AddRange(store.Certificates.Cast<X509Certificate2>());
+                    storesReadable = true;
                 }
-                catch
-                {
-                    // Depo açıldı ama içeriği okunamadı: bu depo ÖLÇÜLMÜŞ sayılmaz.
-                    continue;
-                }
-
-                storesReadable = true;
-
-                var withKey = matches.FirstOrDefault(cert => cert.HasPrivateKey);
-                if (withKey is not null)
-                {
-                    return withKey;
-                }
-
-                fallback ??= matches.FirstOrDefault();
+                catch (CryptographicException) { }
             }
+            selected = SslCertificateSelection.Select(candidates, hostName);
+            return selected;
         }
-
-        return fallback;
+        finally
+        {
+            foreach (var certificate in candidates)
+                if (!ReferenceEquals(certificate, selected)) certificate.Dispose();
+        }
     }
 
     // IIS HTTPS binding'i artık PowerShell WebAdministration ile yapılır (New-WebBinding -SslFlags 1

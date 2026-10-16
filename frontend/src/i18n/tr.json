@@ -5825,5 +5825,6 @@
   "mail.certificate_selection_conflict": "Bu posta adına birden fazla veya başka adlarla paylaşılan sertifika eşleşiyor. Diğer alan adlarını korumak için otomatik değişiklik durduruldu.",
   "mail.certificate_acme_failed": "Geçerli sertifika alınamadı. Kendinden imzalı sertifikaya geçilmedi.",
   "mail.invalid_domain": "Geçerli bir posta alan adı ve bu alan adına ait mail hostname girin.",
-  "mail.certificate_invalid": "Sertifika uygulanmadı: alan adı, süre, özel anahtar veya güven zinciri doğrulanamadı. Tam ara sertifika zincirini ve eşleşen özel anahtarı kontrol edin."
+  "mail.certificate_invalid": "Sertifika uygulanmadı: alan adı, süre, özel anahtar veya güven zinciri doğrulanamadı. Tam ara sertifika zincirini ve eşleşen özel anahtarı kontrol edin.",
+  "ssl.issue_failed_existing_preserved": "Sertifika isteği başarısız oldu. Mevcut HTTPS sertifikası korunarak kendinden imzalı sertifikaya geçiş durduruldu."
 }

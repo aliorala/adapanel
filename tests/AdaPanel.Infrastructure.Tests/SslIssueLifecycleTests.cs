@@ -206,6 +206,22 @@ public sealed class SslIssueLifecycleTests
         Assert.Equal(0, f.Acme);
     }
 
+    [Theory, InlineData("store"), InlineData("binding"), InlineData("unreadable-binding")]
+    public async Task FailedAcmeDoesNotReplaceAnExistingHttpsCertificate(string existing)
+    {
+        using var f = await Fixture.Create();
+        f.AcmeFails = true;
+        f.UseExistingCertificate = existing == "store";
+        f.ExistingBindingThumbprint = existing == "binding" ? "working-cert" : "";
+        f.BindingUnreadable = existing == "unreadable-binding";
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Invoke());
+        Assert.Equal("ssl.issue_failed_existing_preserved", error.MessageKey);
+        Assert.Equal(0, f.Fallbacks);
+        Assert.Equal(0, f.Persists);
+        Assert.Equal(0, f.Bindings);
+        await f.Unpublished();
+    }
+
     private sealed class Fixture : IDisposable
     {
         public readonly BulutAlani Area = new();
@@ -233,6 +249,8 @@ public sealed class SslIssueLifecycleTests
         public int Acme, Dns, Fallbacks, Persists, Bindings, Redirects, Webmail, Installs;
         public bool AcmeFails, NeedRewrite;
         public bool NonSelfSigned, FailMail, UseExistingCertificate;
+        public bool BindingUnreadable;
+        public string ExistingBindingThumbprint = "";
         public int MailApprovals;
         public readonly List<string> MailHosts = [];
         public static async Task<Fixture> Create(UserRole role = UserRole.Customer, bool subUser = false)
@@ -351,7 +369,8 @@ public sealed class SslIssueLifecycleTests
         {
             await Boundary("inventory");
             return [new IisHttpsBinding { SiteName = Name, BindingInformation = "*:443:" + Name,
-                Thumbprint = thumbprint, CertificateReadable = true, StoreName = "My" }];
+                Thumbprint = thumbprint.Length == 0 ? ExistingBindingThumbprint : thumbprint,
+                CertificateReadable = !BindingUnreadable, StoreName = "My" }];
         }
         public async Task ChangeActor(string change)
         {
