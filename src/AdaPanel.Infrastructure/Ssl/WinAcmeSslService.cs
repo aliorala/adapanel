@@ -429,6 +429,7 @@ public sealed class WinAcmeSslService(
             // kurulu olmasa bile bagin yanlis sertifikada kalmasi GERCEK bir arizadir ve
             // soylenmelidir.
             var bagYok = await MeasureBindingsAndPersistAsync(cancellationToken);
+            await SyncMailCertificateAsync(beforeMutation, cancellationToken);
             return new RenewAllResultDto
             {
                 RenewedCount = 0,
@@ -473,11 +474,7 @@ public sealed class WinAcmeSslService(
         // sunar ve panel hicbir sey soylemez.
         var bag = await MeasureBindingsAndPersistAsync(cancellationToken);
 
-        if (mailService is not null)
-        {
-            if (beforeMutation is null) await mailService.SyncCertificateAsync(cancellationToken);
-            else await mailService.SyncCertificateAsync(beforeMutation, cancellationToken);
-        }
+        await SyncMailCertificateAsync(beforeMutation, cancellationToken);
 
         return new RenewAllResultDto
         {
@@ -491,6 +488,13 @@ public sealed class WinAcmeSslService(
             BindingDriftCount = bag.Drift,
             BindingsMeasured = bag.Measured
         };
+    }
+
+    private async Task SyncMailCertificateAsync(Func<CancellationToken, Task>? beforeMutation, CancellationToken token)
+    {
+        if (mailService is null) return;
+        if (beforeMutation is null) await mailService.SyncCertificateAsync(token);
+        else await mailService.SyncCertificateAsync(beforeMutation, token);
     }
 
     /// <summary>
@@ -925,10 +929,12 @@ public sealed class WinAcmeSslService(
             var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
 
             // 1) host'u kapsayan geçerli bir sertifika zaten varsa (ör. yüklenen wildcard) onu bağla.
-            var existing = FindBestCertificate(hostName);
+            using var existing = IssueCertificateLookup(hostName);
             if (existing is not null && existing.NotAfter > DateTime.Now)
             {
                 await EnsureHttpsBindingAsync(site.Name, hostName, 443, existing, cancellationToken);
+                if (mailService is not null && ResolveCertificateSource(existing) != "self-signed")
+                    await mailService.SyncWebCertificateAsync(hostName, cancellationToken: cancellationToken);
                 return true;
             }
 
@@ -954,8 +960,11 @@ public sealed class WinAcmeSslService(
                 return false;
             }
 
-            PersistCertificate(issued.Certificate);
-            await EnsureHttpsBindingAsync(site.Name, hostName, 443, issued.Certificate, cancellationToken);
+            using var certificate = issued.Certificate;
+            PersistIssuedCertificate(certificate);
+            await EnsureHttpsBindingAsync(site.Name, hostName, 443, certificate, cancellationToken);
+            if (mailService is not null && ResolveCertificateSource(certificate) != "self-signed")
+                await mailService.SyncWebCertificateAsync(hostName, cancellationToken: cancellationToken);
             return true;
         }
         catch (Exception exception)
@@ -1312,6 +1321,8 @@ public sealed class WinAcmeSslService(
             ToDto(site.Name, $"*.{domain}", certificate, ResolveCertificateSource(certificate), null),
             site.Name, string.Empty, 443, certificate.Thumbprint ?? string.Empty, cancellationToken);
         await publish(dto);
+        if (mailService is not null && dto.Source != "self-signed")
+            await mailService.SyncWebCertificateAsync(dto.HostName, approve, cancellationToken);
         return dto;
     }
 

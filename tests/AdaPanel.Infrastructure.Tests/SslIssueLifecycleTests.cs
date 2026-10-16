@@ -169,6 +169,43 @@ public sealed class SslIssueLifecycleTests
         await f.ChangeSite("same-id");
     }
 
+    [Theory, InlineData(false), InlineData(true)]
+    public async Task IssuanceAlsoSynchronizesMailForExactAndWildcardCertificates(bool wildcard)
+    {
+        using var f = await Fixture.Create(UserRole.Administrator);
+        f.Request.Wildcard = wildcard;
+        f.NonSelfSigned = true;
+        await f.Invoke();
+        Assert.Equal(wildcard ? "*." + f.Name : f.Name, Assert.Single(f.MailHosts));
+        Assert.Equal(1, f.MailApprovals);
+    }
+
+    [Fact]
+    public async Task WildcardMailFailureDoesNotReturnASuccessResponse()
+    {
+        using var f = await Fixture.Create(UserRole.Administrator);
+        f.Request.Wildcard = true;
+        f.NonSelfSigned = true;
+        f.FailMail = true;
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Invoke());
+        Assert.Equal("mail.certificate_not_activated", error.MessageKey);
+        Assert.Empty(f.Audits);
+        Assert.Equal(1, f.MailApprovals);
+        await f.ChangeSite("same-id"); // reservation released even when mail activation fails
+    }
+
+    [Theory, InlineData(false), InlineData(true)]
+    public async Task AutomaticHttpsSetupAlsoChecksMailAndCannotHideItsFailure(bool failMail)
+    {
+        using var f = await Fixture.Create();
+        f.UseExistingCertificate = f.NonSelfSigned = true;
+        f.FailMail = failMail;
+        var result = await f.Service.TrySecureHostAsync(f.Name, f.Name, "owner@example.test", f.Token);
+        Assert.Equal(!failMail, result);
+        Assert.Equal(f.Name, Assert.Single(f.MailHosts));
+        Assert.Equal(0, f.Acme);
+    }
+
     private sealed class Fixture : IDisposable
     {
         public readonly BulutAlani Area = new();
@@ -195,6 +232,9 @@ public sealed class SslIssueLifecycleTests
         public readonly List<string> Audits = [];
         public int Acme, Dns, Fallbacks, Persists, Bindings, Redirects, Webmail, Installs;
         public bool AcmeFails, NeedRewrite;
+        public bool NonSelfSigned, FailMail, UseExistingCertificate;
+        public int MailApprovals;
+        public readonly List<string> MailHosts = [];
         public static async Task<Fixture> Create(UserRole role = UserRole.Customer, bool subUser = false)
         {
             var f = new Fixture { subUser = subUser }; await f.keeper.OpenAsync();
@@ -222,14 +262,16 @@ public sealed class SslIssueLifecycleTests
             var components = Fake<IComponentBootstrapper>((method, _) => method.Name == "InstallAsync"
                 ? f.InstallRewrite() : throw new InvalidOperationException("Unexpected component call: " + method.Name));
             f.Service = new WinAcmeSslService(f.Context(intercept: true), sites, null!, f.Area.DosyaDeposu, components,
-                NullLogger<WinAcmeSslService>.Instance, f.ReadBindings, f.Gates)
+                NullLogger<WinAcmeSslService>.Instance, f.ReadBindings, f.Gates,
+                Fake<IMailService>((method, args) => method.Name == "SyncWebCertificateAsync"
+                    ? f.SyncMail(args) : throw new InvalidOperationException(method.Name)))
             {
                 IssueCommand = async (_, _, token) =>
                 {
                     f.Acme++; await f.Pause("acme", token); f.issued = !f.AcmeFails;
                     await f.Boundary("acme"); return new CommandResult { ExitCode = f.AcmeFails ? 1 : 0, StandardOutput = "fixture", StandardError = "" };
                 },
-                IssueCertificateLookup = _ => f.issued ? f.Certificate() : null,
+                IssueCertificateLookup = _ => f.issued || f.UseExistingCertificate ? f.Certificate() : null,
                 IssueFallbackCertificate = (_, _) => { f.Fallbacks++; return f.Certificate(); },
                 PersistIssuedCertificate = cert =>
                 { f.Persists++; f.thumbprint = cert.Thumbprint; f.Boundary("persist").GetAwaiter().GetResult(); },
@@ -262,10 +304,25 @@ public sealed class SslIssueLifecycleTests
         {
             using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
             var request = new CertificateRequest("CN=" + Name, key, HashAlgorithmName.SHA256);
-            using var originalCertificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(10));
+            using var publicCertificate = NonSelfSigned
+                ? request.Create(new X500DistinguishedName("CN=Isolated fixture issuer"), X509SignatureGenerator.CreateForECDsa(key),
+                    DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(10), RandomNumberGenerator.GetBytes(16)) : null;
+            using var originalCertificate = publicCertificate is null
+                ? request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(10))
+                : publicCertificate.CopyWithPrivateKey(key);
             var cert = new X509Certificate2(originalCertificate.Export(X509ContentType.Pfx), (string?)null,
                 X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable);
             certificates.Add(cert); return cert;
+        }
+        private async Task SyncMail(object?[] args)
+        {
+            MailHosts.Add((string)args[0]!);
+            if (args[1] is Func<CancellationToken, Task> approve)
+            {
+                await approve((CancellationToken)args[2]!);
+                MailApprovals++;
+            }
+            if (FailMail) throw new AppException("mail.certificate_not_activated", 502, 502);
         }
         private AdaPanelDbContext Context(bool intercept = false)
         {

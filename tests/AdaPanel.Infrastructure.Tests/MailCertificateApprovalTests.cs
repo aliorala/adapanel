@@ -297,6 +297,59 @@ public sealed class MailCertificateApprovalTests
         Assert.Equal(before, await f.Bytes());
     }
 
+    [Theory]
+    [InlineData("smtp.example.test", "smtp.example.test")]
+    [InlineData("smtp.example.test", "*.example.test")]
+    [InlineData("mail.example.test", "*.example.test")]
+    public async Task WebCertificateSyncTargetsTheConfiguredHostAndKeepsItsDomain(string mailHost, string webHost)
+    {
+        using var f = new Fixture(true);
+        f.Host = mailHost;
+        await f.Initialize();
+        await f.EditState(state => state["domain"] = "associated.example.test");
+        f.StoreMaterial = true;
+        await f.Service.SyncWebCertificateAsync(webHost, f.Approve, f.Token);
+        Assert.Equal(mailHost, Assert.Single(f.StoreLookups));
+        Assert.Contains("update Certificate cert-1", f.Commands);
+        using var state = JsonDocument.Parse(await f.Bytes());
+        Assert.Equal(mailHost, state.RootElement.GetProperty("hostName").GetString());
+        Assert.Equal("associated.example.test", state.RootElement.GetProperty("domain").GetString());
+    }
+
+    [Theory]
+    [InlineData("smtp.unrelated.test")]
+    [InlineData("*.unrelated.test")]
+    [InlineData("*.test")]
+    public async Task UnrelatedWebCertificatesDoNotChangeTheConfiguredMailCertificate(string webHost)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        f.FailStoreLookup = true;
+        var before = await f.Bytes();
+        await f.Service.SyncWebCertificateAsync(webHost, f.Approve, f.Token);
+        Assert.Empty(f.StoreLookups);
+        Assert.Empty(f.Commands);
+        Assert.Equal(before, await f.Bytes());
+    }
+
+    [Fact]
+    public async Task WildcardWebSyncRevalidatesAuthorityBeforeMailMutation()
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        f.StoreMaterial = true;
+        f.PauseQuery = true;
+        var before = await f.Bytes();
+        var action = f.Service.SyncWebCertificateAsync("*.example.test", f.Approve, f.Token);
+        await f.QueryEntered.Task.WaitAsync(f.Token);
+        await f.ChangeActor("disabled");
+        f.QueryRelease.TrySetResult();
+        var error = await Assert.ThrowsAsync<AppException>(() => action);
+        Assert.Equal("auth.unauthorized", error.MessageKey);
+        Assert.Single(f.Commands);
+        Assert.Equal(before, await f.Bytes());
+    }
+
     private sealed class Fixture : IDisposable
     {
         private readonly BulutAlani area = new();
@@ -314,6 +367,8 @@ public sealed class MailCertificateApprovalTests
         internal bool PauseQuery, FailReload;
         internal bool Written, FailTls;
         internal bool StoreMaterial, FailStoreLookup, EnforceTrust;
+        internal string Host = "mail.example.test";
+        internal readonly List<string> StoreLookups = [];
         internal int FailFinalInspectionPort;
         internal string CertificatePem = "", Thumbprint = "", PresentedThumbprint = "";
         internal readonly List<int> ProbedPorts = [];
@@ -344,8 +399,12 @@ public sealed class MailCertificateApprovalTests
                 NullLogger<MailService>.Instance)
             {
                 CertificateCommandRunner = Execute,
-                StoreCertificateLookup = _ => FailStoreLookup ? throw new CryptographicException("Store key cannot be exported")
-                    : StoreMaterial ? new MailCertificateMaterial(CertificatePem, PrivateKeyPem, Thumbprint) : null,
+                StoreCertificateLookup = host =>
+                {
+                    StoreLookups.Add(host);
+                    return FailStoreLookup ? throw new CryptographicException("Store key cannot be exported")
+                        : StoreMaterial ? new MailCertificateMaterial(CertificatePem, PrivateKeyPem, Thumbprint) : null;
+                },
                 ValidateCertificateMaterial = (host, cert, key) => { if (EnforceTrust) MailCertificateValidation.Validate(host, cert, key); },
                 TlsProbe = (_, port, expected, _) =>
                 {
@@ -361,9 +420,9 @@ public sealed class MailCertificateApprovalTests
         {
             var pem = area.DosyaDeposu.EnsureDirectory("pem");
             using var key = RSA.Create(2048);
-            var request = new CertificateRequest("CN=mail.example.test", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            var request = new CertificateRequest("CN=" + Host, key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
             var san = new SubjectAlternativeNameBuilder();
-            san.AddDnsName("mail.example.test");
+            san.AddDnsName(Host);
             request.CertificateExtensions.Add(san.Build());
             using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30));
             PrivateKeyPem = key.ExportPkcs8PrivateKeyPem();
@@ -372,7 +431,7 @@ public sealed class MailCertificateApprovalTests
             await File.WriteAllTextAsync(Path.Combine(pem, "mail-key.pem"), PrivateKeyPem, Token);
             await File.WriteAllTextAsync(Path.Combine(pem, "mail-crt.pem"), certificate.ExportCertificatePem(), Token);
             await area.DosyaDeposu.WriteAsync("config/mail-cert.json", new
-            { domain = "example.test", hostName = "mail.example.test", source = "letsencrypt", pemDirectory = pem, contentHash = "previous-hash", thumbprint = "old-thumbprint" }, Token);
+            { domain = "example.test", hostName = Host, source = "letsencrypt", pemDirectory = pem, contentHash = "previous-hash", thumbprint = "old-thumbprint" }, Token);
             await area.DosyaDeposu.WriteAsync("config/mail.json", new
             { adminPasswordProtected = SahteKoruyucu.Onek + "fixture-password" }, Token);
             principal = new ClaimsPrincipal(new ClaimsIdentity(new[]
@@ -418,7 +477,7 @@ public sealed class MailCertificateApprovalTests
                 QueryEntered.TrySetResult();
                 if (PauseQuery) await QueryRelease.Task.WaitAsync(token);
                 return QueryResult ?? new CommandResult { ExitCode = 0, StandardOutput = (existing || Written)
-                    ? "[{\"id\":\"cert-1\",\"subjectAlternativeNames\":{\"mail.example.test\":{}}}]" : "[]" };
+                    ? JsonSerializer.Serialize(new[] { new { id = "cert-1", subjectAlternativeNames = new[] { Host } } }) : "[]" };
             }
             if (command == "get SystemSettings --json")
                 return new CommandResult { ExitCode = 0, StandardOutput = JsonSerializer.Serialize(new { defaultHostname = DefaultHost, defaultCertificateId = DefaultId }) };

@@ -21,21 +21,26 @@ public sealed partial class MailService
     public async Task SyncWebCertificateAsync(string hostName, Func<CancellationToken, Task>? beforeMutation = null,
         CancellationToken cancellationToken = default)
     {
-        if (!hostName.StartsWith("mail.", StringComparison.OrdinalIgnoreCase) || await ResolveCliAsync(cancellationToken) is null)
-            return;
+        if (await ResolveCliAsync(cancellationToken) is null) return;
         // An explicit web certificate operation for a mail hostname reuses the trusted store
         // certificate. It never issues another certificate or changes unrelated mail settings.
         using var operation = await MailCertificateLifecycle.EnterAsync(fileStore.ResolvePath(CertificateStatePath), cancellationToken);
         if (beforeMutation is not null) await beforeMutation(cancellationToken);
+        var state = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
+        var trackedHost = state is not null && CertificateNameMatches(hostName, state.HostName);
+        if (!trackedHost && !hostName.StartsWith("mail.", StringComparison.OrdinalIgnoreCase)) return;
+        // A wildcard operation targets only the already configured mail host it covers.
+        // Custom names such as smtp.example.test keep their saved domain association.
+        var domain = trackedHost ? state!.Domain : hostName[5..];
+        hostName = trackedHost ? state!.HostName : hostName.Trim().ToLowerInvariant();
         var material = StoreCertificateLookup(hostName)
             ?? throw new AppException("mail.certificate_store_missing", 409, 409);
-        var state = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
         if (state?.HostName == hostName && state.Thumbprint == material.Thumbprint)
         {
             var probes = await Task.WhenAll(new[] { 587, 465 }.Select(port => TlsProbe(hostName, port, material.Thumbprint, cancellationToken)));
             if (probes.All(p => p.Status == "ok")) return;
         }
-        await ApplyStoreCertificateAsync(hostName[5..], hostName, material, cancellationToken, beforeMutation);
+        await ApplyStoreCertificateAsync(domain, hostName, material, cancellationToken, beforeMutation);
     }
 
     private async Task InspectMailCertificateAsync(MailCertificateDto dto, string? expected, CancellationToken token)
