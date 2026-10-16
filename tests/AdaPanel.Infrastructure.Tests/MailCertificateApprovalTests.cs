@@ -21,6 +21,68 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class MailCertificateApprovalTests
 {
+    [Fact]
+    public async Task RetryAfterDefaultReloadFailureKeepsTheSavedSelectionAndReloadsTls()
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        f.DefaultHost = f.Host;
+        f.DefaultId = "";
+        f.FailReload = true;
+        var before = await f.Bytes();
+
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.SyncCertificateAsync(f.Token));
+        Assert.Equal("mail.certificate_not_activated", error.MessageKey);
+        Assert.Equal("cert-1", f.DefaultId); // provider write succeeded before ReloadSettings failed
+        Assert.Equal("{\"@type\":\"ReloadSettings\"}", f.ReloadPayload);
+        Assert.Equal(before, await f.Bytes());
+
+        f.FailReload = false;
+        f.Commands.Clear();
+        Assert.True((await f.Service.SyncCertificateAsync(f.Token))!.Active);
+        Assert.Equal("cert-1", f.DefaultId);
+        Assert.DoesNotContain("update SystemSettings", f.Commands);
+        Assert.Single(f.Commands, command => command == "create Action");
+        Assert.Equal("{\"@type\":\"ReloadTlsCertificates\"}", f.ReloadPayload);
+        using var published = JsonDocument.Parse(await f.Bytes());
+        Assert.Equal(f.Thumbprint, published.RootElement.GetProperty("thumbprint").GetString());
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task FailedActivationCanRetryAndOnlySuccessfulRetryMakesTheNextSyncANoOp(bool store, bool smtpFailure)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        if (store)
+        {
+            await f.UseWindowsStore();
+            await f.EditState(state => state["thumbprint"] = "old-thumbprint");
+        }
+        f.PresentedThumbprint = "old-thumbprint";
+        f.FailTls = smtpFailure;
+        f.FailReload = !smtpFailure;
+        var before = await f.Bytes();
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.SyncCertificateAsync(f.Token));
+        Assert.Equal("mail.certificate_not_activated", error.MessageKey);
+        Assert.Equal(before, await f.Bytes());
+
+        f.FailTls = f.FailReload = false;
+        f.Commands.Clear();
+        var result = await f.Service.SyncCertificateAsync(f.Token);
+        Assert.NotNull(result);
+        Assert.True(result.Active);
+        Assert.All(result.Endpoints, endpoint => Assert.Equal(f.Thumbprint, endpoint.Thumbprint));
+        Assert.Contains("update Certificate cert-1", f.Commands);
+        Assert.Equal("{\"@type\":\"ReloadTlsCertificates\"}", f.ReloadPayload);
+        f.Commands.Clear();
+        Assert.Null(await f.Service.SyncCertificateAsync(f.Token));
+        Assert.Empty(f.Commands);
+    }
+
     public static IEnumerable<object[]> InvalidCertificateSettings()
     {
         foreach (var json in new[]
