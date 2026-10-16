@@ -57,6 +57,13 @@ internal static class MailTlsProbe
             if (result.Status != "ok") result.Status = "fail";
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (MailKit.Net.Smtp.SmtpCommandException error)
+        {
+            result.Status = "fail";
+            // A rejected greeting or STARTTLS command is an endpoint failure, not a
+            // failure of the entire multi-port inspection. Do not expose server reply text.
+            result.Detail = $"SMTP command rejected (status {(int)error.StatusCode}, {error.ErrorCode}).";
+        }
         catch (Exception error) when (error is IOException or SocketException or System.Security.Authentication.AuthenticationException
             or MailKit.ProtocolException or MailKit.Security.SslHandshakeException or OperationCanceledException or NotSupportedException)
         {

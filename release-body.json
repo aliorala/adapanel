@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.104",
-  "name": "0.8.104 — Posta sertifikası dosyalarında tutarlı okuma",
-  "body": "## 0.8.104\n\nPosta sertifikası yenilemesinde PEM dosyalarının karışmasına yol açan hata düzeltildi.\n\n- Anahtar, sertifika ve zincir artık aynı dosya adı grubundan okunur. Farklı grupların en yeni dosyaları birbiriyle birleştirilmez.\n- Okuma sırasında içerik veya dosya grubu değişirse işlem durur. Okuyucu, yenileme programının yazma ve dosya değiştirme erişimini engellemez.\n- Eksik, yarım yazılmış, bozuk veya kilitli dosyalar ve eşleşmeyen özel anahtar Stalwart'a yazmadan önce reddedilir. Mevcut posta sertifikası kaydı korunur.\n- Türkçe ve İngilizce hata mesajları, yenileme tamamlandıktan sonra yeniden deneme ve eşleşen dosyaları birlikte tutma konusunda yol gösterir.\n- Tam zincir ve yalnız ara zincir dosyaları desteklenir; TLS güven, alan adı ve süre kontrolleri korunur.\n\nWindows x64 kurulum paketi: **AdaPanelSetup.exe**."
+  "tag_name": "0.8.105",
+  "name": "0.8.105 — SMTP TLS durum kontrolünde hata yönetimi",
+  "body": "## 0.8.105\n\nSMTP sunucusunun bağlantı veya STARTTLS isteğini reddetmesi halinde sertifika durum sorgusunun kesilmesine yol açan hata düzeltildi.\n\n- SMTP komut reddi, ilgili port için başarısız sonuç ve SMTP durum koduyla gösterilir. Diğer posta ve web bağlantılarının sonuçları korunur.\n- Sunucunun serbest metin hata yanıtı kullanıcıya aktarılmaz.\n- Güven zinciri, alan adı, süre ve beklenen sertifika kontrolleri korunur. Reddedilen bağlantı başarı olarak gösterilmez.\n- Gerçek TCP bağlantılarıyla 421 bağlantı reddi ve 454 STARTTLS reddi için regresyon testleri eklendi. İstemci iptali davranışı da test edildi.\n\nWindows x64 kurulum paketi: **AdaPanelSetup.exe**."
 }
