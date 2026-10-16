@@ -760,8 +760,10 @@ public sealed class AutomationService(
             var mailFailure = "";
             try
             {
-                var synced = approval is null
-                    ? await mailService.SyncCertificateAsync(cancellationToken)
+                // The native SSL service already synchronizes mail. Preserve that result;
+                // a second no-op call would discard its success and repeat store/TLS work.
+                var synced = result.MailSynchronizationPerformed ? result.MailCertificate
+                    : approval is null ? await mailService.SyncCertificateAsync(cancellationToken)
                     : await mailService.SyncCertificateAsync(approval.CheckAsync, cancellationToken);
                 if (synced is not null)
                 {

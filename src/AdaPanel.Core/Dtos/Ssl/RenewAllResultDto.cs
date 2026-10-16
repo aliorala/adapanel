@@ -1,9 +1,18 @@
 using AdaPanel.Core.Common;
+using AdaPanel.Core.Dtos.Mail;
+using System.Text.Json.Serialization;
 
 namespace AdaPanel.Core.Dtos.Ssl;
 
 public sealed class RenewAllResultDto
 {
+    /// <summary>Posta eşitlemesi bu yenileme içinde tamamlandı; null sonuç değişiklik gerektirmediğini belirtir.</summary>
+    [JsonIgnore] // In-process orchestration result; not part of the public SSL response.
+    public bool MailSynchronizationPerformed { get; set; }
+
+    [JsonIgnore]
+    public MailCertificateDto? MailCertificate { get; set; }
+
     /// <summary>
     /// Yenilenen sertifika sayisi. <see cref="Measured"/> false ise ANLAMSIZDIR.
     /// </summary>

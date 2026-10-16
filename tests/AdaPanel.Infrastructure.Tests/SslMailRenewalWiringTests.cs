@@ -34,6 +34,21 @@ public sealed class SslMailRenewalWiringTests
         Assert.Equal(approval ? 2 : 0, approvals);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task CompletedMailSynchronizationAndItsResultAreCarriedToTheCaller(bool installed, bool changed)
+    {
+        using var f = new Fixture(installed);
+        f.MailResult = changed ? new MailCertificateDto { Active = true, HostName = "mail.example.test" } : null;
+        var result = await f.Service.RenewAllAsync(f.Area.Iptal);
+        Assert.True(result.MailSynchronizationPerformed);
+        Assert.Same(f.MailResult, result.MailCertificate);
+        Assert.Equal(1, f.MailCalls);
+    }
+
     [Fact]
     public async Task MissingWinAcmeDoesNotHideMailValidationFailure()
     {
@@ -51,6 +66,7 @@ public sealed class SslMailRenewalWiringTests
         internal readonly WinAcmeSslService Service;
         internal int MailCalls;
         internal bool MailReceivedApproval, FailMail;
+        internal MailCertificateDto? MailResult;
 
         internal Fixture(bool installed)
         {
@@ -82,7 +98,7 @@ public sealed class SslMailRenewalWiringTests
                 await approve((CancellationToken)args[1]!);
             }
             if (FailMail) throw new AppException("mail.certificate_not_activated", 502, 502);
-            return null;
+            return MailResult;
         }
         public void Dispose() { db.Dispose(); connection.Dispose(); Area.Dispose(); }
     }

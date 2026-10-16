@@ -9,6 +9,30 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed partial class QueuedBackupActorLifecycleTests
 {
+    public static IEnumerable<object[]> AlreadySynchronizedMailResults() =>
+        from trusted in new[] { false, true }
+        from measured in new[] { false, true }
+        from changed in new[] { false, true }
+        select new object[] { trusted, measured, changed };
+
+    [Theory]
+    [MemberData(nameof(AlreadySynchronizedMailResults))]
+    public async Task SslOutcomeUsesCompletedMailSynchronizationWithoutCallingItAgain(bool trusted, bool measured, bool changed)
+    {
+        using var f = new Fixture();
+        await f.PrepareSslOutcome(measured, "");
+        f.SslOutcome!.MailSynchronizationPerformed = true;
+        f.SslOutcome.MailCertificate = changed
+            ? new MailCertificateDto { Active = true, HostName = "mail.example.test", Source = "letsencrypt" } : null;
+        if (trusted) await f.SslAutomation.RunSslRenewNowAsync(f.Token);
+        else await f.InvokeSsl();
+        Assert.Equal(0, f.SslMailCommands);
+        var status = await f.SslAutomation.GetStatusAsync(f.Token);
+        Assert.Equal(measured ? "completed" : "failed", status.LastSslStatus);
+        Assert.Equal(changed, status.LastSslDetails.Contains("Mail sertifikası (mail.example.test) güncellendi.", StringComparison.Ordinal));
+        if (!measured) Assert.Contains("fixture win-acme unavailable", status.LastSslDetails);
+    }
+
     public static IEnumerable<object[]> SslMailFailures() =>
         from trusted in new[] { false, true }
         from measured in new[] { false, true }

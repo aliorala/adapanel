@@ -6,6 +6,7 @@ using System.Text;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Ssl;
 using AdaPanel.Core.Dtos.Sites;
+using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Core.Enums;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
@@ -457,7 +458,7 @@ public sealed class WinAcmeSslService(
             // kurulu olmasa bile bagin yanlis sertifikada kalmasi GERCEK bir arizadir ve
             // soylenmelidir.
             var bagYok = await MeasureBindingsAndPersistAsync(cancellationToken);
-            await SyncMailCertificateAsync(beforeMutation, cancellationToken);
+            var mailResult = await SyncMailCertificateAsync(beforeMutation, cancellationToken);
             return new RenewAllResultDto
             {
                 RenewedCount = 0,
@@ -468,7 +469,9 @@ public sealed class WinAcmeSslService(
                 MissingFromStoreCount = dogrulamaYok.MissingFromStore,
                 UnverifiedCount = dogrulamaYok.Unmeasured,
                 BindingDriftCount = bagYok.Drift,
-                BindingsMeasured = bagYok.Measured
+                BindingsMeasured = bagYok.Measured,
+                MailSynchronizationPerformed = mailService is not null,
+                MailCertificate = mailResult
             };
         }
 
@@ -502,7 +505,7 @@ public sealed class WinAcmeSslService(
         // sunar ve panel hicbir sey soylemez.
         var bag = await MeasureBindingsAndPersistAsync(cancellationToken);
 
-        await SyncMailCertificateAsync(beforeMutation, cancellationToken);
+        var syncedMail = await SyncMailCertificateAsync(beforeMutation, cancellationToken);
 
         return new RenewAllResultDto
         {
@@ -514,15 +517,17 @@ public sealed class WinAcmeSslService(
             MissingFromStoreCount = dogrulama.MissingFromStore,
             UnverifiedCount = dogrulama.Unmeasured,
             BindingDriftCount = bag.Drift,
-            BindingsMeasured = bag.Measured
+            BindingsMeasured = bag.Measured,
+            MailSynchronizationPerformed = mailService is not null,
+            MailCertificate = syncedMail
         };
     }
 
-    private async Task SyncMailCertificateAsync(Func<CancellationToken, Task>? beforeMutation, CancellationToken token)
+    private async Task<MailCertificateDto?> SyncMailCertificateAsync(Func<CancellationToken, Task>? beforeMutation, CancellationToken token)
     {
-        if (mailService is null) return;
-        if (beforeMutation is null) await mailService.SyncCertificateAsync(token);
-        else await mailService.SyncCertificateAsync(beforeMutation, token);
+        if (mailService is null) return null;
+        return beforeMutation is null ? await mailService.SyncCertificateAsync(token)
+            : await mailService.SyncCertificateAsync(beforeMutation, token);
     }
 
     /// <summary>
