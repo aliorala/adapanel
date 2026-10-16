@@ -171,6 +171,43 @@ public sealed class SslImportLifecycleTests
     }
     private static void AssertAuthority(Exception? error) => Assert.True(Assert.IsType<AppException>(error).HttpStatusCode is 401 or 403);
 
+    [Fact]
+    public async Task PfxChainIsPersistedBeforeLeafAndBindingWithOnlyPublicIntermediateMaterial()
+    {
+        using var f = await Fixture.Create();
+        using var chain = new SslImportTestChain(f.Name);
+        f.Request.Base64Content = Convert.ToBase64String(chain.Export());
+        Assert.True((await f.Invoke()).IsCertificateBound);
+        Assert.Equal(new[] { chain.Lower.Thumbprint, chain.Upper.Thumbprint }, f.Intermediates);
+        Assert.Equal(1, f.PersistentBundleCertificateCount);
+        Assert.Equal(1, f.Persists); Assert.Equal(1, f.Bindings);
+    }
+
+    [Theory, InlineData(false), InlineData(true)]
+    public async Task AuthorityLossAfterAnIntermediateStopsRemainingImportsAndSuccess(bool cancel)
+    {
+        using var f = await Fixture.Create();
+        using var chain = new SslImportTestChain(f.Name);
+        f.Request.Base64Content = Convert.ToBase64String(chain.Export());
+        f.AfterIntermediate = () => { if (cancel) f.Cancellation.Cancel(); else f.ChangeActor("disabled").GetAwaiter().GetResult(); };
+        var error = await Capture(() => f.Invoke());
+        if (cancel) Assert.IsAssignableFrom<OperationCanceledException>(error); else AssertAuthority(error);
+        Assert.Single(f.Intermediates); Assert.Equal(0, f.Persists); Assert.Equal(0, f.Bindings);
+        Assert.DoesNotContain(f.LoadFlags, flags => flags.HasFlag(X509KeyStorageFlags.PersistKeySet));
+        await f.AssertUnchanged();
+    }
+
+    [Fact]
+    public async Task ChainImportFailureDoesNotPersistLeafOrPublishSuccess()
+    {
+        using var f = await Fixture.Create();
+        using var chain = new SslImportTestChain(f.Name);
+        f.Request.Base64Content = Convert.ToBase64String(chain.Export());
+        f.AfterIntermediate = () => throw new CryptographicException("store unavailable");
+        Assert.IsType<CryptographicException>(await Capture(() => f.Invoke()));
+        Assert.Equal(0, f.Persists); Assert.Equal(0, f.Bindings); await f.AssertUnchanged();
+    }
+
     private sealed class Fixture : IDisposable
     {
         public readonly BulutAlani Area = new();
@@ -196,6 +233,9 @@ public sealed class SslImportLifecycleTests
         public readonly List<X509KeyStorageFlags> LoadFlags = [];
         public readonly List<string> Audits = [];
         public int Persists, Bindings, RedirectWrites, WebmailCalls;
+        public int PersistentBundleCertificateCount;
+        public readonly List<string> Intermediates = [];
+        public Action? AfterIntermediate;
         public bool PersistedHadPrivateKey, PersistHeldGate, BindingFails;
         public Action? AfterPersist;
         public Func<Task>? AfterBinding, BeforeInventory;
@@ -229,12 +269,28 @@ public sealed class SslImportLifecycleTests
                 ImportCertificateLoader = (raw, password, flags) =>
                 {
                     f.LoadFlags.Add(flags);
+                    if (flags.HasFlag(X509KeyStorageFlags.PersistKeySet))
+                    {
+                        var bundle = new X509Certificate2Collection();
+                        try
+                        {
+                            bundle.Import(raw, password, X509KeyStorageFlags.EphemeralKeySet);
+                            f.PersistentBundleCertificateCount = bundle.Count;
+                        }
+                        finally { foreach (var item in bundle) item.Dispose(); }
+                    }
                     // Exercise the real PFX parser but never persist a test key, even on the unsafe baseline.
                     var cert = new X509Certificate2(raw, password, X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
                     f.loaded.Add(cert); return cert;
                 },
                 PersistImportedCertificate = cert =>
                 { f.Persists++; f.PersistedHadPrivateKey = cert.HasPrivateKey; f.PersistHeldGate = f.Gates.Held; f.thumbprint = cert.Thumbprint; f.AfterPersist?.Invoke(); },
+                PersistImportedIntermediate = cert =>
+                {
+                    Assert.True(f.Gates.Held); Assert.False(cert.HasPrivateKey);
+                    Assert.Equal(0, f.Persists); Assert.Equal(0, f.Bindings);
+                    f.Intermediates.Add(cert.Thumbprint); f.AfterIntermediate?.Invoke();
+                },
                 HttpsBindingCommand = async (_, _) =>
                 {
                     f.Bindings++; if (f.AfterBinding is not null) await f.AfterBinding();

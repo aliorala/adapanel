@@ -58,6 +58,7 @@ public sealed class WinAcmeSslService(
         (raw, password, flags) => new X509Certificate2(raw, password, flags);
 
     internal Action<X509Certificate2> PersistImportedCertificate { get; init; } = PersistCertificate;
+    internal Action<X509Certificate2> PersistImportedIntermediate { get; init; } = SslCertificateImport.PersistIntermediate;
 
     internal Func<string, CancellationToken, Task<CommandResult>> HttpsBindingCommand { get; init; } =
         ProcessRunner.RunPowerShellAsync;
@@ -333,6 +334,9 @@ public sealed class WinAcmeSslService(
         }
         using var certificate = inspected;
         ValidateImportedCertificate(certificate, hostName);
+        IReadOnlyList<byte[]> intermediates;
+        try { intermediates = SslCertificateImport.ReadIntermediates(raw, password, certificate); }
+        catch (CryptographicException) { throw new AppException("ssl.invalid_certificate_payload", 400, 400); }
 
         async Task ApproveAsync(SiteDto current, CancellationToken token)
         {
@@ -343,15 +347,28 @@ public sealed class WinAcmeSslService(
         }
         Task ReapproveAsync(CancellationToken token) => target.RunAsync(current => ApproveAsync(current, token), token);
         using var reservation = await target.ReserveAsync(ApproveAsync, cancellationToken);
+        foreach (var der in intermediates)
+        {
+            await target.RunAsync(async current =>
+            {
+                await ApproveAsync(current, cancellationToken);
+                using var intermediate = new X509Certificate2(der);
+                PersistImportedIntermediate(intermediate);
+            }, cancellationToken);
+        }
         await target.RunAsync(async current =>
         {
             await ApproveAsync(current, cancellationToken);
-            // Re-import the validated PFX with persistent machine keys; adding an ephemeral
-            // certificate to the store would lose its private key when this request ends.
-            using var persistent = ImportCertificateLoader(raw, password,
-                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.PersistKeySet | X509KeyStorageFlags.MachineKeySet);
-            cancellationToken.ThrowIfCancellationRequested();
-            PersistImportedCertificate(persistent);
+            // Persist only the selected leaf's key, never extra private keys from the bundle.
+            var leafPfx = certificate.Export(X509ContentType.Pfx, password);
+            try
+            {
+                using var persistent = ImportCertificateLoader(leafPfx, password,
+                    X509KeyStorageFlags.Exportable | X509KeyStorageFlags.PersistKeySet | X509KeyStorageFlags.MachineKeySet);
+                cancellationToken.ThrowIfCancellationRequested();
+                PersistImportedCertificate(persistent);
+            }
+            finally { CryptographicOperations.ZeroMemory(leafPfx); }
         }, cancellationToken);
         await target.RunAsync(async current =>
         {
@@ -1600,22 +1617,14 @@ public sealed class WinAcmeSslService(
 
     // IIS/HTTP.sys YALNIZCA LocalMachine\My deposundaki sertifikayı bağlayabilir. Bu yüzden
     // CurrentUser'a düşmeyiz (binding "bağlanamadı" verirdi); LocalMachine başarısızsa hatayı
-    // açıkça yükseltiriz. Aynı parmak izi zaten varsa tekrar eklemeyiz ki özel anahtarlı
-    // kopyanın üzerine anahtarsız kopya yazılmasın.
+    // açıkça yükseltiriz. Anahtarlı kopyayı koruruz; depodaki anahtarsız kopya ise
+    // aynı sertifikanın özel anahtarlı PFX ile onarılmasını engellememeli.
     private static void PersistCertificate(X509Certificate2 certificate)
     {
         using var machineStore = new X509Store(StoreName.My, StoreLocation.LocalMachine);
         machineStore.Open(OpenFlags.ReadWrite);
 
-        var alreadyPresent = !string.IsNullOrWhiteSpace(certificate.Thumbprint) &&
-            machineStore.Certificates
-                .Find(X509FindType.FindByThumbprint, certificate.Thumbprint, validOnly: false)
-                .Count > 0;
-
-        if (!alreadyPresent)
-        {
-            machineStore.Add(certificate);
-        }
+        SslCertificateImport.PersistToStore(machineStore, certificate);
     }
 
     private static X509Certificate2? FindBestCertificate(string hostName)
