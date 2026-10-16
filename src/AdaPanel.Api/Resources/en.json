@@ -304,5 +304,6 @@
   "mail.certificate_issued": "The mail certificate was loaded and SMTP 587 STARTTLS and 465 TLS connections were verified.",
   "mail.invalid_domain": "Enter a valid mail domain and its mail hostname.",
   "mail.certificate_invalid": "The certificate was not applied: hostname, validity, private key or trust chain could not be verified. Check the complete intermediate chain and matching private key.",
-  "ssl.issue_failed_existing_preserved": "Certificate issuance failed. Self-signed fallback was stopped to preserve the existing HTTPS certificate."
+  "ssl.issue_failed_existing_preserved": "Certificate issuance failed. Self-signed fallback was stopped to preserve the existing HTTPS certificate.",
+  "ssl.certificate_server_auth_required": "This certificate does not permit server authentication. Select a certificate suitable for HTTPS."
 }

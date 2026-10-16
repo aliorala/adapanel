@@ -108,7 +108,7 @@ public sealed partial class MailService(
     internal static readonly string[] DomainCascadeTypes = [MailingListObject, "account", "DkimSignature"];
 
     private const string ConfigPath = "config/mail.json";
-    private const string CertificateStatePath = "config/mail-cert.json";
+    private const string CertificateStatePath = MailCertificateStoreReference.StatePath;
     // Domain kotalari Stalwart'ta yok → panel-tarafi tutulur (domain→azami toplam MB) ve tahsis toplamiyla dayatilir.
     private const string DomainQuotaPath = "config/mail-domain-quotas.json";
     private const string ServerComponentId = "stalwart-mail";

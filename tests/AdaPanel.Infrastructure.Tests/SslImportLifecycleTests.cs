@@ -70,6 +70,8 @@ public sealed class SslImportLifecycleTests
     [InlineData("wrong-host")]
     [InlineData("cn-overridden-by-san")]
     [InlineData("deep-wildcard")]
+    [InlineData("legacy-cn")]
+    [InlineData("client-only")]
     public async Task UnusableCertificateIsRejectedWithoutNativeOrMetadataChanges(string problem)
     {
         using var f = await Fixture.Create(); f.SetCertificate(problem);
@@ -110,7 +112,7 @@ public sealed class SslImportLifecycleTests
         await f.ChangeSite("id");
     }
     public static IEnumerable<object[]> ValidCertificates() =>
-        from kind in new[] { "san", "wildcard", "legacy-cn" }
+        from kind in new[] { "san", "wildcard", "server-auth", "any-usage" }
         from port in new[] { 443, 8443 }
         select new object[] { kind, port };
     [Theory, MemberData(nameof(ValidCertificates))]
@@ -261,6 +263,9 @@ public sealed class SslImportLifecycleTests
             if (kind == "deep-wildcard") host = "deep.api.example.test";
             Request.HostName = host;
             var builder = new CertificateRequest("CN=" + host, key, HashAlgorithmName.SHA256);
+            if (kind is "client-only" or "server-auth" or "any-usage")
+                builder.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection
+                    { new(kind == "client-only" ? "1.3.6.1.5.5.7.3.2" : kind == "server-auth" ? "1.3.6.1.5.5.7.3.1" : "2.5.29.37.0") }, false));
             if (kind != "legacy-cn")
             {
                 var san = new SubjectAlternativeNameBuilder();

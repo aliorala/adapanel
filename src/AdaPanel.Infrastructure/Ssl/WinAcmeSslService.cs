@@ -397,12 +397,15 @@ public sealed class WinAcmeSslService(
             throw new AppException("ssl.certificate_expired", 400, 400);
         if (certificate.NotBefore.ToUniversalTime() > now)
             throw new AppException("ssl.certificate_not_yet_valid", 400, 400);
+        foreach (var usage in certificate.Extensions.OfType<X509EnhancedKeyUsageExtension>())
+            if (!usage.EnhancedKeyUsages.Cast<Oid>().Any(oid => oid.Value is "1.3.6.1.5.5.7.3.1" or "2.5.29.37.0"))
+                throw new AppException("ssl.certificate_server_auth_required", 400, 400);
         bool matches;
         try
         {
             var host = hostName.TrimEnd('.');
             if (!System.Net.IPAddress.TryParse(host, out _)) host = new System.Globalization.IdnMapping().GetAscii(host);
-            matches = certificate.MatchesHostname(host, allowWildcards: true, allowCommonName: true);
+            matches = certificate.MatchesHostname(host, allowWildcards: true, allowCommonName: false);
         }
         catch (Exception error) when (error is CryptographicException or ArgumentException)
         {
@@ -1847,6 +1850,10 @@ public sealed class WinAcmeSslService(
         }
         else
         {
+            // Acquire before entering IIS: mail activation holds this lifecycle while its
+            // authority callback briefly acquires IIS. Reversing that order would deadlock.
+            using var mailOperation = await Mail.MailCertificateLifecycle.EnterAsync(
+                fileStore.ResolvePath(Mail.MailCertificateStoreReference.StatePath), cancellationToken);
             await MutateAsync(async () =>
             {
                 // JSON cleanup and approval may both wait. A new user, including a
@@ -1864,6 +1871,19 @@ public sealed class WinAcmeSslService(
                     return;
                 }
 
+                var mailUsage = await Mail.MailCertificateStoreReference.ReadAsync(
+                    fileStore.ResolvePath(Mail.MailCertificateStoreReference.StatePath), target.Thumbprint, cancellationToken);
+                if (mailUsage != Mail.MailCertificateStoreReference.Usage.None)
+                {
+                    result.CertificateAction = "kept_in_use";
+                    result.CertificateUsedBy = [mailUsage == Mail.MailCertificateStoreReference.Usage.InUse
+                        ? "SMTP TLS" : "SMTP TLS (status unknown)"];
+                    result.Detail = result.CertificateUsedBy[0];
+                    return;
+                }
+                current = await generation.ValidateAsync(cancellationToken);
+                if (beforeMutation is not null) await beforeMutation(current, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 var deletion = await TryDeleteCertificateAsync(target.Thumbprint, cancellationToken);
                 result.CertificateAction = deletion.Action;
                 result.Detail = deletion.Detail;
