@@ -305,5 +305,6 @@
   "mail.invalid_domain": "Geçerli bir posta alan adı ve bu alan adına ait mail hostname girin.",
   "mail.certificate_invalid": "Sertifika uygulanmadı: alan adı, süre, özel anahtar veya güven zinciri doğrulanamadı. Tam ara sertifika zincirini ve eşleşen özel anahtarı kontrol edin.",
   "ssl.issue_failed_existing_preserved": "Sertifika isteği başarısız oldu. Mevcut HTTPS sertifikası korunarak kendinden imzalı sertifikaya geçiş durduruldu.",
-  "ssl.certificate_server_auth_required": "Bu sertifikanın kullanım amacı sunucu kimlik doğrulamasına izin vermiyor. HTTPS için uygun bir sertifika seçin."
+  "ssl.certificate_server_auth_required": "Bu sertifikanın kullanım amacı sunucu kimlik doğrulamasına izin vermiyor. HTTPS için uygun bir sertifika seçin.",
+  "mail.certificate_files_unreadable": "PEM dosyaları eksik, tamamlanmamış veya kilitli. Yenileme tamamlandıktan sonra yeniden deneyin. Aynı adla başlayan sertifika, anahtar ve zincir dosyalarını birlikte tutun. Posta sertifikası değiştirilmedi."
 }

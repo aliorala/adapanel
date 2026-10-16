@@ -3002,62 +3002,11 @@ public sealed partial class MailService(
     }
 
     /// <summary>
-    /// pemfiles dizininden anahtar + tam zincir okur. win-acme sürümüne göre dosya adları
-    /// değişebildiğinden desenle aranır: *-key.pem anahtar, *-crt.pem yaprak, *-chain.pem ara zincir.
+    /// Aynı ad grubundan anahtar ve zinciri okur: -key.pem anahtar, -crt.pem yaprak,
+    /// -chain.pem tam zincir, -chain-only.pem yalnız ara sertifikalar.
     /// </summary>
-    private static (string CertificatePem, string PrivateKeyPem) ReadPemPair(string pemDirectory)
-    {
-        var keyFile = Directory.EnumerateFiles(pemDirectory, "*-key.pem")
-            .OrderByDescending(File.GetLastWriteTimeUtc)
-            .FirstOrDefault()
-            ?? throw new AppException("mail.certificate_files_missing", 500, 500, pemDirectory);
-
-        // SIRA ÖNEMLİ: yaprak önce, ara sertifikalar sonra. TLS bunu şart koşar.
-        //
-        // Neden dosyaları birleştirip TEKİLLEŞTİRİYORUZ: win-acme sürümüne göre -chain.pem bazen
-        // yalnız ara sertifikaları, bazen yaprak DAHİL tam zinciri içerir. Önceki kod "yaprak
-        // yinelenmesin" diye bakıp zinciri içinde yaprağı görünce zincirin TAMAMINI atıyordu —
-        // ara sertifika da gidiyordu. Sonuç: sunucu yalnız yaprağı sunuyor, OpenSSL tabanlı
-        // istemciler (PHP, Python, çoğu posta istemcisi) zinciri kuramayıp bağlantıyı kesiyordu.
-        // Windows istemcileri eksik ara sertifikayı kendi indirdiği için sorun uzun süre GÖRÜNMEZ
-        // kalır; bu yüzden metinsel karşılaştırma değil, blok bazında tekilleştirme yapılıyor.
-        var blocks = new List<string>();
-
-        void Topla(string? file)
-        {
-            if (file is null)
-            {
-                return;
-            }
-
-            foreach (var block in ExtractCertificateBlocks(File.ReadAllText(file)))
-            {
-                if (!blocks.Contains(block, StringComparer.Ordinal))
-                {
-                    blocks.Add(block);
-                }
-            }
-        }
-
-        string? Sonuncu(string pattern) => Directory.EnumerateFiles(pemDirectory, pattern)
-            .Where(file => !file.EndsWith("-chain-only.pem", StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(File.GetLastWriteTimeUtc)
-            .FirstOrDefault();
-
-        Topla(Sonuncu("*-crt.pem"));
-        Topla(Sonuncu("*-chain.pem"));
-        // Yalnız ara sertifikaları içeren dosya: -chain.pem hiç üretilmediyse tek zincir kaynağıdır.
-        Topla(Directory.EnumerateFiles(pemDirectory, "*-chain-only.pem")
-            .OrderByDescending(File.GetLastWriteTimeUtc)
-            .FirstOrDefault());
-
-        if (blocks.Count == 0)
-        {
-            throw new AppException("mail.certificate_files_missing", 500, 500, pemDirectory);
-        }
-
-        return (string.Join("\n", blocks) + "\n", File.ReadAllText(keyFile));
-    }
+    internal static (string CertificatePem, string PrivateKeyPem) ReadPemPair(string pemDirectory)
+        => MailCertificatePemFiles.Read(pemDirectory);
 
     /// <summary>
     /// Bir PEM metnindeki sertifika bloklarını sırayla çıkarır ve satır sonlarını normalleştirir.

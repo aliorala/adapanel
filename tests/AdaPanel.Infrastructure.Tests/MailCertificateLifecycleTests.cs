@@ -19,6 +19,33 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class MailCertificateLifecycleTests
 {
+    [Theory, InlineData("mismatched-key"), InlineData("partial-key"), InlineData("partial-chain"), InlineData("locked-key")]
+    public async Task BrokenPemLeavesProviderAndStateUntouchedAndCanBeRetried(string problem)
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        var before = await File.ReadAllBytesAsync(f.StatePath, f.Token);
+        var keyPath = Directory.GetFiles(f.InitialPemDirectory, "*-key.pem").Single();
+        var chainPath = Path.Combine(f.InitialPemDirectory, Fixture.OldHost + "-chain.pem");
+        using var wrong = RSA.Create(2048);
+        if (problem == "mismatched-key") File.WriteAllText(keyPath, wrong.ExportPkcs8PrivateKeyPem());
+        if (problem == "partial-key") File.WriteAllText(keyPath, "-----BEGIN PRIVATE KEY-----\npartial");
+        if (problem == "partial-chain") File.WriteAllText(chainPath, "-----BEGIN CERTIFICATE-----\npartial");
+        using (var locked = problem == "locked-key" ? new FileStream(keyPath, FileMode.Open, FileAccess.Read, FileShare.None) : null)
+        {
+            var error = await Assert.ThrowsAsync<AppException>(() => f.First.SyncCertificateAsync(f.Token));
+            Assert.Equal(409, error.HttpStatusCode);
+        }
+        Assert.Empty(f.Commands);
+        Assert.Equal(before, await File.ReadAllBytesAsync(f.StatePath, f.Token));
+        Assert.Equal(0, f.References);
+        if (File.Exists(chainPath)) File.Delete(chainPath);
+        f.WritePem(Fixture.OldHost, f.InitialPemDirectory);
+        Assert.True((await f.First.SyncCertificateAsync(f.Token))!.Active);
+        Assert.Equal(3, f.Commands.Count);
+        Assert.Equal(0, f.References);
+    }
+
     public static IEnumerable<object[]> SyncIssueCases() =>
         from stage in new[] { "query", "write", "reload" }
         from sameHost in new[] { false, true }
