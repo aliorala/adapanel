@@ -855,8 +855,13 @@
           </p>
           <p v-else class="meta">{{ t("panel.mail.certNone") }}</p>
           <template v-if="certificate?.hostName">
-            <p class="meta">{{ t("panel.mail.certWeb") }}: {{ certificate.webCertificate?.status === 'ok' ? t('panel.mail.certVerified') : t('panel.mail.certUnverified') }}
-              {{ certificate.webCertificate?.thumbprint }}</p>
+            <p class="meta">{{ t("panel.mail.certWeb") }}:
+              <span :class="['status-pill', certificate.webCertificate?.status === 'ok' ? 'ok' : 'warn']">{{ certificate.webCertificate?.status === 'ok' ? t('panel.mail.certVerified') : t('panel.mail.certUnverified') }}</span>
+              <template v-if="certificate.webCertificate">
+                {{ certificate.webCertificate.subject }} · {{ certificate.webCertificate.issuer }} · {{ certificate.webCertificate.notAfterUtc }}
+                {{ certificate.webCertificate.thumbprint }} {{ certificate.webCertificate.detail }}
+              </template>
+            </p>
             <p class="meta">{{ t("panel.mail.certMail") }} — {{ certificate.hostName }}</p>
             <p v-for="endpoint in certificate.endpoints || []" :key="endpoint.port" class="meta">
               <span :class="['status-pill', endpoint.status === 'ok' ? 'ok' : 'warn']">{{ endpoint.port }} {{ endpoint.protocol }}: {{ endpoint.status === 'ok' ? t('panel.mail.certVerified') : t('panel.mail.certUnverified') }}</span>

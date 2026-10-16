@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.105",
-  "name": "0.8.105 — SMTP TLS durum kontrolünde hata yönetimi",
-  "body": "## 0.8.105\n\nSMTP sunucusunun bağlantı veya STARTTLS isteğini reddetmesi halinde sertifika durum sorgusunun kesilmesine yol açan hata düzeltildi.\n\n- SMTP komut reddi, ilgili port için başarısız sonuç ve SMTP durum koduyla gösterilir. Diğer posta ve web bağlantılarının sonuçları korunur.\n- Sunucunun serbest metin hata yanıtı kullanıcıya aktarılmaz.\n- Güven zinciri, alan adı, süre ve beklenen sertifika kontrolleri korunur. Reddedilen bağlantı başarı olarak gösterilmez.\n- Gerçek TCP bağlantılarıyla 421 bağlantı reddi ve 454 STARTTLS reddi için regresyon testleri eklendi. İstemci iptali davranışı da test edildi.\n\nWindows x64 kurulum paketi: **AdaPanelSetup.exe**."
+  "tag_name": "0.8.106",
+  "name": "0.8.106 — TLS doğrulama nedenleri ve web sertifikası ayrıntıları",
+  "body": "## 0.8.106\n\nWeb ve posta TLS kontrollerinde başarısız doğrulamanın nedenleri daha açık gösterilir.\n\n- Alan adı uyuşmazlığı, eksik veya okunamayan SAN, geçerlilik dönemi ve beklenen sertifika uyuşmazlığı ayrı açıklanır. Yanıltıcı TLS validation: None mesajı kaldırıldı.\n- Bozuk SAN alanı sertifika doğrulama işlevini kesmeden başarısız sonuç verir; birden fazla hata birlikte gösterilir.\n- HTTPS kontrolünde çevrimiçi sertifika iptal denetimi açıkça etkinleştirildi. Doğrulama hataları başarıya çevrilmez.\n- Posta ekranındaki web sertifikası bölümünde sunulan sertifikanın konusu, düzenleyicisi, bitiş zamanı ve hata ayrıntıları da görünür.\n- Güven zinciri, alan adı, süre ve parmak izi kontrolleri için regresyon kapsamı genişletildi.\n\nWindows x64 kurulum paketi: **AdaPanelSetup.exe**."
 }
