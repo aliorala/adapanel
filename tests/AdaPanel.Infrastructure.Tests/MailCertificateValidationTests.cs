@@ -10,6 +10,9 @@ public sealed class MailCertificateValidationTests
 {
     [Theory]
     [InlineData("valid")]
+    [InlineData("wildcard")]
+    [InlineData("wildcard-apex")]
+    [InlineData("wildcard-nested")]
     [InlineData("wrong-host")]
     [InlineData("expired")]
     [InlineData("future")]
@@ -33,8 +36,10 @@ public sealed class MailCertificateValidationTests
             // Simulate Windows already knowing the intermediate, even when the PEM omits it.
             policy.ExtraStore.Add(chain.Intermediate);
         }
-        void Validate() => MailCertificateValidation.Validate("mail.example.test", pem, key, Trust);
-        if (scenario == "valid") Validate();
+        var host = scenario == "wildcard-apex" ? "example.test"
+            : scenario == "wildcard-nested" ? "nested.mail.example.test" : "mail.example.test";
+        void Validate() => MailCertificateValidation.Validate(host, pem, key, Trust);
+        if (scenario is "valid" or "wildcard") Validate();
         else
         {
             var error = Assert.Throws<AppException>(Validate);
@@ -69,7 +74,8 @@ public sealed class MailCertificateValidationTests
             Intermediate = intermediatePublic.CopyWithPrivateKey(intermediateKey);
             var request = Request("CN=mail.example.test", LeafKey, false);
             var san = new SubjectAlternativeNameBuilder();
-            san.AddDnsName(scenario == "wrong-host" ? "other.example.test" : "mail.example.test");
+            san.AddDnsName(scenario.StartsWith("wildcard") ? "*.example.test"
+                : scenario == "wrong-host" ? "other.example.test" : "mail.example.test");
             request.CertificateExtensions.Add(san.Build());
             request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection
                 { new(scenario == "client-only" ? "1.3.6.1.5.5.7.3.2" : "1.3.6.1.5.5.7.3.1") }, false));

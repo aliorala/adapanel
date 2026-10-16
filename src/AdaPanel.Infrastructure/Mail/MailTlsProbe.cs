@@ -28,7 +28,7 @@ internal static class MailTlsProbe
             result.Issuer = leaf.Issuer;
             result.Thumbprint = leaf.Thumbprint;
             result.NotAfterUtc = leaf.NotAfter.ToUniversalTime();
-            var valid = errors == SslPolicyErrors.None && leaf.MatchesHostname(host, false, false)
+            var valid = errors == SslPolicyErrors.None && leaf.MatchesHostname(host, true, false)
                 && leaf.NotBefore.ToUniversalTime() <= DateTime.UtcNow && result.NotAfterUtc > DateTime.UtcNow;
             var matches = string.IsNullOrWhiteSpace(expectedThumbprint)
                 || string.Equals(expectedThumbprint, leaf.Thumbprint, StringComparison.OrdinalIgnoreCase);

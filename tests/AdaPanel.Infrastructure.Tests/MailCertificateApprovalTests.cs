@@ -280,6 +280,23 @@ public sealed class MailCertificateApprovalTests
         Assert.DoesNotContain(f.PrivateKeyPem, error.ToString());
     }
 
+    [Theory]
+    [InlineData(587)]
+    [InlineData(465)]
+    public async Task FailedFinalStoreInspectionDoesNotPublishNewState(int failingPort)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        f.StoreMaterial = true;
+        f.FailFinalInspectionPort = failingPort;
+        var before = await f.Bytes();
+        var error = await Assert.ThrowsAsync<AppException>(() =>
+            f.Service.SyncWebCertificateAsync("mail.example.test", f.Approve, f.Token));
+        Assert.Equal("mail.certificate_not_activated", error.MessageKey);
+        Assert.Contains("update Certificate cert-1", f.Commands);
+        Assert.Equal(before, await f.Bytes());
+    }
+
     private sealed class Fixture : IDisposable
     {
         private readonly BulutAlani area = new();
@@ -297,6 +314,7 @@ public sealed class MailCertificateApprovalTests
         internal bool PauseQuery, FailReload;
         internal bool Written, FailTls;
         internal bool StoreMaterial, FailStoreLookup, EnforceTrust;
+        internal int FailFinalInspectionPort;
         internal string CertificatePem = "", Thumbprint = "", PresentedThumbprint = "";
         internal readonly List<int> ProbedPorts = [];
         internal string DefaultHost = "other.example.test", DefaultId = "other-cert";
@@ -333,7 +351,8 @@ public sealed class MailCertificateApprovalTests
                 {
                     ProbedPorts.Add(port);
                     return Task.FromResult(new MailTlsEndpointDto { Port = port, Thumbprint = PresentedThumbprint,
-                        Status = FailTls || (!string.IsNullOrEmpty(expected) && expected != PresentedThumbprint) ? "fail" : "ok" });
+                        Status = FailTls || (port == FailFinalInspectionPort && ProbedPorts.Count(p => p == port) > 1)
+                            || (!string.IsNullOrEmpty(expected) && expected != PresentedThumbprint) ? "fail" : "ok" });
                 }
             };
         }

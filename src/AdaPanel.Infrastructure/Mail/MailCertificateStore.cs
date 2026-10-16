@@ -23,7 +23,7 @@ internal static class MailCertificateStore
                 catch (CryptographicException) { continue; }
                 candidates.AddRange(store.Certificates.Cast<X509Certificate2>());
             }
-            foreach (var certificate in candidates.Where(c => c.HasPrivateKey && c.MatchesHostname(host, false, false)
+            foreach (var certificate in candidates.Where(c => c.HasPrivateKey && c.MatchesHostname(host, true, false)
                 && c.NotBefore.ToUniversalTime() <= DateTime.UtcNow && c.NotAfter.ToUniversalTime() > DateTime.UtcNow)
                 .OrderByDescending(c => c.NotAfter))
             {
@@ -73,43 +73,50 @@ internal static class MailCertificateStore
 
     // Read the existing protected cache only. Never decrypt configuration on disk, change
     // machine key permissions or request a replacement certificate to obtain its key.
-    private static X509Certificate2? FindCachedCertificate(string thumbprint)
+    internal static X509Certificate2? FindCachedCertificate(string thumbprint, string? cacheRoot = null)
     {
-        var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        var root = cacheRoot ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "win-acme", "acme-v02.api.letsencrypt.org");
         if (!Directory.Exists(root)) return null;
         foreach (var path in Directory.EnumerateFiles(root, "*.renewal.json", SearchOption.TopDirectoryOnly))
         {
-            using var json = JsonDocument.Parse(File.ReadAllText(path));
-            if (!json.RootElement.TryGetProperty("Id", out var id) ||
-                !json.RootElement.TryGetProperty("PfxPasswordProtected", out var secret) || secret.ValueKind != JsonValueKind.String)
-                continue;
-            var directory = Path.Combine(root, "Certificates");
-            if (!Directory.Exists(directory)) continue;
-            var identifier = id.GetString();
-            if (string.IsNullOrWhiteSpace(identifier)) continue;
-            string password;
-            try { password = DecodeCachePassword(secret.GetString()!); }
-            catch (Exception error) when (error is CryptographicException or FormatException) { continue; }
-            foreach (var archive in Directory.EnumerateFiles(directory, "*.pfx")
-                .Where(file => Path.GetFileName(file).StartsWith(identifier + "-", StringComparison.OrdinalIgnoreCase)))
+            try
             {
-                var collection = new X509Certificate2Collection();
-                try
+                using var json = JsonDocument.Parse(File.ReadAllText(path));
+                if (json.RootElement.ValueKind != JsonValueKind.Object ||
+                    !json.RootElement.TryGetProperty("Id", out var id) || id.ValueKind != JsonValueKind.String ||
+                    !json.RootElement.TryGetProperty("PfxPasswordProtected", out var secret) || secret.ValueKind != JsonValueKind.String)
+                    continue;
+                var directory = Path.Combine(root, "Certificates");
+                if (!Directory.Exists(directory)) continue;
+                var identifier = id.GetString();
+                if (string.IsNullOrWhiteSpace(identifier)) continue;
+                string password;
+                try { password = DecodeCachePassword(secret.GetString()!); }
+                catch (Exception error) when (error is CryptographicException or FormatException) { continue; }
+                foreach (var archive in Directory.EnumerateFiles(directory, "*.pfx")
+                    .Where(file => Path.GetFileName(file).StartsWith(identifier + "-", StringComparison.OrdinalIgnoreCase)))
                 {
-                    collection.Import(archive, password, X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
-                    var match = collection.Cast<X509Certificate2>().FirstOrDefault(c => c.HasPrivateKey &&
-                        string.Equals(c.Thumbprint, thumbprint, StringComparison.OrdinalIgnoreCase));
-                    if (match is not null)
+                    var collection = new X509Certificate2Collection();
+                    try
                     {
-                        var bytes = match.Export(X509ContentType.Pfx);
-                        try { return new X509Certificate2(bytes, "", X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet); }
-                        finally { CryptographicOperations.ZeroMemory(bytes); }
+                        collection.Import(archive, password, X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+                        var match = collection.Cast<X509Certificate2>().FirstOrDefault(c => c.HasPrivateKey &&
+                            string.Equals(c.Thumbprint, thumbprint, StringComparison.OrdinalIgnoreCase));
+                        if (match is not null)
+                        {
+                            var bytes = match.Export(X509ContentType.Pfx);
+                            try { return new X509Certificate2(bytes, "", X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet); }
+                            finally { CryptographicOperations.ZeroMemory(bytes); }
+                        }
                     }
+                    catch (Exception error) when (error is CryptographicException or IOException or UnauthorizedAccessException) { }
+                    finally { foreach (var c in collection) c.Dispose(); }
                 }
-                catch (CryptographicException) { }
-                finally { foreach (var c in collection) c.Dispose(); }
             }
+            // One damaged, locked or concurrently replaced renewal must not hide a valid
+            // cache entry for another site. Selection still requires the exact thumbprint.
+            catch (Exception error) when (error is JsonException or IOException or UnauthorizedAccessException) { }
         }
         return null;
     }

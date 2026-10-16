@@ -3136,7 +3136,7 @@ public sealed partial class MailService(
         }
 
         using var leaf = System.Security.Cryptography.X509Certificates.X509Certificate2.CreateFromPem(certificatePem, privateKeyPem);
-        if (!leaf.MatchesHostname(hostName, false, false) || leaf.NotAfter.ToUniversalTime() <= DateTime.UtcNow
+        if (!leaf.MatchesHostname(hostName, true, false) || leaf.NotAfter.ToUniversalTime() <= DateTime.UtcNow
             || leaf.NotBefore.ToUniversalTime() > DateTime.UtcNow)
             throw new AppException("mail.certificate_push_failed", 409, 409, hostName);
         var existingId = SelectCertificateId(sertifikaSorgusu.Items, hostName, leaf);

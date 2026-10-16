@@ -52,7 +52,7 @@ public sealed partial class MailService
             var records = MailQueryResult.Olc(await RunCertificateCommandAsync(cli, "query Certificate --json", null, env, token));
             var settings = MailQueryResult.Olc(await RunCertificateCommandAsync(cli, "get SystemSettings --json", null, env, token));
             if (!records.Measured || !settings.Measured || settings.Items.Count != 1) return;
-            var matches = records.Items.Where(item => CertificateNames(item).Contains(dto.HostName, StringComparer.OrdinalIgnoreCase)).ToArray();
+            var matches = records.Items.Where(item => CertificateNames(item).Any(name => CertificateNameMatches(name, dto.HostName))).ToArray();
             dto.CertificateId = string.Join(", ", matches.Select(item => GetField(item, "id")));
             dto.DefaultCertificateId = GetField(settings.Items[0], "defaultCertificateId");
             dto.ConfigurationStatus = matches.Length == 1 ? "ok" : matches.Length == 0 ? "missing" : "ambiguous";
@@ -79,10 +79,10 @@ public sealed partial class MailService
             ContentHash = ComputeHash(material.CertificatePem + material.PrivateKeyPem),
             NotAfterUtc = TryGetNotAfterUtc(material.CertificatePem)
         };
-        await fileStore.WriteAsync(CertificateStatePath, state, token);
         var dto = new MailCertificateDto { Domain = domain, HostName = host, Source = state.Source, NotAfterUtc = state.NotAfterUtc };
         await InspectMailCertificateAsync(dto, state.Thumbprint, token);
         if (!dto.Active) throw new AppException("mail.certificate_not_activated", 502, 502, host);
+        await fileStore.WriteAsync(CertificateStatePath, state, token);
         return dto;
     }
 
@@ -99,14 +99,30 @@ public sealed partial class MailService
 
     internal static string? SelectCertificateId(IReadOnlyList<JsonElement> items, string host, X509Certificate2 replacement)
     {
-        var matches = items.Where(item => CertificateNames(item).Contains(host, StringComparer.OrdinalIgnoreCase)).ToArray();
+        var replacementNames = replacement.Extensions.OfType<X509SubjectAlternativeNameExtension>()
+            .SelectMany(extension => extension.EnumerateDnsNames()).ToArray();
+        var matches = items.Where(item => CertificateNames(item).Any(name => CertificateNameMatches(name, host))).ToArray();
         // Never silently choose one of several SNI matches, or strip names from a shared certificate.
         if (matches.Length > 1 || matches.Any(item => CertificateNames(item).Any(name =>
-            name.Contains('*') || !replacement.MatchesHostname(name, false, false))))
+            name.Contains('*') ? !replacementNames.Contains(name, StringComparer.OrdinalIgnoreCase)
+                : !replacement.MatchesHostname(name, true, false))))
+            throw new AppException("mail.certificate_selection_conflict", 409, 409, host);
+        // Additional SANs must not collide with another domain's existing certificate.
+        if (items.Except(matches).Any(item => CertificateNames(item).Any(name => replacementNames.Any(candidate =>
+            CertificateNameMatches(name, candidate) || CertificateNameMatches(candidate, name)))))
             throw new AppException("mail.certificate_selection_conflict", 409, 409, host);
         if (matches.Length == 0) return null;
         var id = GetField(matches[0], "id");
         if (string.IsNullOrWhiteSpace(id)) throw new AppException("mail.certificate_push_failed", 502, 502);
         return id;
+    }
+
+    internal static bool CertificateNameMatches(string name, string host)
+    {
+        if (string.Equals(name, host, StringComparison.OrdinalIgnoreCase)) return true;
+        // A DNS wildcard covers exactly one leftmost label, never the apex or nested names.
+        return name.StartsWith("*.", StringComparison.Ordinal) && !host.Contains('*')
+            && host.IndexOf('.') > 0
+            && string.Equals(name[1..], host[host.IndexOf('.')..], StringComparison.OrdinalIgnoreCase);
     }
 }

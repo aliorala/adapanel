@@ -17,7 +17,7 @@ internal static class MailCertificateValidation
         try
         {
             using var leaf = X509Certificate2.CreateFromPem(certificatePem, privateKeyPem);
-            if (!leaf.MatchesHostname(host, false, false) || leaf.NotBefore.ToUniversalTime() > DateTime.UtcNow
+            if (!leaf.MatchesHostname(host, true, false) || leaf.NotBefore.ToUniversalTime() > DateTime.UtcNow
                 || leaf.NotAfter.ToUniversalTime() <= DateTime.UtcNow)
                 throw new CryptographicException("Certificate name or validity does not match.");
             supplied.ImportFromPem(certificatePem);

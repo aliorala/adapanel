@@ -83,6 +83,61 @@ public sealed class MailTlsIntegrationTests
     }
 
     [Theory]
+    [InlineData("*.example.test", "mail.example.test", true)]
+    [InlineData("*.example.test", "MAIL.EXAMPLE.TEST", true)]
+    [InlineData("*.example.test", "example.test", false)]
+    [InlineData("*.example.test", "sub.mail.example.test", false)]
+    [InlineData("*.example.test", "mail.other.test", false)]
+    public void SniWildcardCoversOnlyOneDnsLabel(string name, string host, bool expected) =>
+        Assert.Equal(expected, MailService.CertificateNameMatches(name, host));
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WildcardReplacementPreservesSharedNamesAndRejectsOtherRecordCollisions(bool wildcard)
+    {
+        using var key = RSA.Create(2048);
+        var request = new CertificateRequest("CN=mail.example.test", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        var san = new SubjectAlternativeNameBuilder();
+        san.AddDnsName(wildcard ? "*.example.test" : "mail.example.test");
+        request.CertificateExtensions.Add(san.Build());
+        using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(2));
+        using var shared = JsonDocument.Parse("{\"id\":\"shared\",\"subjectAlternativeNames\":[\"*.example.test\"]}");
+        if (wildcard) Assert.Equal("shared", MailService.SelectCertificateId([shared.RootElement], "mail.example.test", certificate));
+        else Assert.Throws<AppException>(() => MailService.SelectCertificateId([shared.RootElement], "mail.example.test", certificate));
+        using var other = JsonDocument.Parse("{\"id\":\"other\",\"subjectAlternativeNames\":[\"other.example.test\"]}");
+        if (wildcard)
+            Assert.Throws<AppException>(() => MailService.SelectCertificateId([shared.RootElement, other.RootElement], "mail.example.test", certificate));
+        else Assert.Null(MailService.SelectCertificateId([other.RootElement], "mail.example.test", certificate));
+    }
+
+    [Theory]
+    [InlineData("{broken")]
+    [InlineData("[]")]
+    [InlineData("{\"Id\":42,\"PfxPasswordProtected\":\"clear-secret\"}")]
+    [InlineData("{\"Id\":\"broken\",\"PfxPasswordProtected\":\"enc-invalid\"}")]
+    public void DamagedUnrelatedCacheEntriesDoNotHideTheExactCertificate(string damagedJson)
+    {
+        using var area = new BulutAlani();
+        var root = area.DosyaDeposu.EnsureDirectory("cache");
+        var certificates = Directory.CreateDirectory(Path.Combine(root, "Certificates")).FullName;
+        var damagedPath = Path.Combine(root, "00-damaged.renewal.json");
+        File.WriteAllText(damagedPath, damagedJson);
+        File.WriteAllText(Path.Combine(root, "valid.renewal.json"), "{\"Id\":\"valid\",\"PfxPasswordProtected\":\"clear-fixture\"}");
+        File.WriteAllText(Path.Combine(certificates, "valid-damaged.pfx"), "invalid archive");
+        using var key = RSA.Create(2048);
+        var request = new CertificateRequest("CN=mail.example.test", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(2));
+        File.WriteAllBytes(Path.Combine(certificates, "valid-certificate.pfx"), certificate.Export(X509ContentType.Pfx, "fixture"));
+        using var found = MailCertificateStore.FindCachedCertificate(certificate.Thumbprint, root);
+        Assert.NotNull(found);
+        Assert.True(found.HasPrivateKey);
+        Assert.Equal(certificate.Thumbprint, found.Thumbprint);
+        Assert.Null(MailCertificateStore.FindCachedCertificate("unrelated-thumbprint", root));
+        Assert.Equal(damagedJson, File.ReadAllText(damagedPath));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void PfxPrivateKeyIsExportedWithoutChangingTheInstalledWindowsKeyPolicy(bool elliptic)
