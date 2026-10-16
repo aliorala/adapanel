@@ -21,6 +21,36 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class MailCertificateApprovalTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProviderReceivesTheValidatedChainWhileSourceMaterialStaysUnchanged(bool store)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        using var chain = new MailChainFixture();
+        var pem = MailChainFixture.Pem(chain.Leaf, chain.Root, chain.Upper, chain.Lower);
+        await f.SetPemMaterial(pem, chain.Key);
+        f.CertificateTrust = chain.Trust;
+        if (store)
+        {
+            await f.UseWindowsStore();
+            await f.EditState(state => state["thumbprint"] = "old-thumbprint");
+        }
+        var result = await f.Service.SyncCertificateAsync(f.Token);
+        Assert.True(result!.Active);
+        using var payload = JsonDocument.Parse(f.CertificatePayload!);
+        Assert.Equal(chain.OrderedPem, payload.RootElement.GetProperty("certificate").GetProperty("value").GetString());
+        Assert.Equal(chain.Key, payload.RootElement.GetProperty("privateKey").GetProperty("secret").GetString());
+        Assert.Equal(pem, f.CertificatePem);
+        using var saved = JsonDocument.Parse(await f.Bytes());
+        var directory = saved.RootElement.TryGetProperty("pemDirectory", out var path) ? path.GetString() : null;
+        if (!store) Assert.Equal(pem, await File.ReadAllTextAsync(Path.Combine(directory!, "mail-crt.pem")));
+        f.Commands.Clear();
+        Assert.Null(await f.Service.SyncCertificateAsync(f.Token));
+        Assert.Empty(f.Commands);
+    }
+
     [Fact]
     public async Task RetryAfterDefaultReloadFailureKeepsTheSavedSelectionAndReloadsTls()
     {
@@ -696,7 +726,8 @@ public sealed class MailCertificateApprovalTests
                     return FailStoreLookup ? throw new CryptographicException("Store key cannot be exported")
                         : StoreMaterial ? new MailCertificateMaterial(CertificatePem, PrivateKeyPem, Thumbprint) : null;
                 },
-                ValidateCertificateMaterial = (host, cert, key) => { if (EnforceTrust) MailCertificateValidation.Validate(host, cert, key); },
+                ValidateCertificateMaterial = (host, cert, key) => EnforceTrust || CertificateTrust is not null
+                    ? MailCertificateValidation.Validate(host, cert, key, CertificateTrust) : cert,
                 TlsProbe = (_, port, expected, _) =>
                 {
                     ProbedPorts.Add(port);
@@ -731,6 +762,18 @@ public sealed class MailCertificateApprovalTests
         }
 
         internal Task Approve(CancellationToken token) => authority.RevalidateAsync(db, null!, principal, token);
+        internal Action<X509ChainPolicy>? CertificateTrust;
+        internal async Task SetPemMaterial(string pem, string key)
+        {
+            CertificatePem = pem;
+            PrivateKeyPem = key;
+            using var leaf = X509Certificate2.CreateFromPem(pem, key);
+            Thumbprint = PresentedThumbprint = leaf.Thumbprint;
+            using var state = JsonDocument.Parse(await Bytes());
+            var directory = state.RootElement.GetProperty("pemDirectory").GetString()!;
+            await File.WriteAllTextAsync(Path.Combine(directory, "mail-crt.pem"), pem, Token);
+            await File.WriteAllTextAsync(Path.Combine(directory, "mail-key.pem"), key, Token);
+        }
         internal async Task EditState(Action<JsonObject> edit)
         {
             var state = JsonNode.Parse(await Bytes())!.AsObject();

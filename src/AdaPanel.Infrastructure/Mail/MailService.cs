@@ -3072,7 +3072,7 @@ public sealed partial class MailService(
         CancellationToken cancellationToken, Func<CancellationToken, Task>? beforeMutation = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        ValidateCertificateMaterial(hostName, certificatePem, privateKeyPem);
+        certificatePem = ValidateCertificateMaterial(hostName, certificatePem, privateKeyPem);
         var (cli, env) = await RequireCliAsync(cancellationToken);
 
         var payload =

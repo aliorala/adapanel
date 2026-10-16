@@ -480,8 +480,8 @@ public sealed class MailCertificateLifecycleTests
             {
                 CertificateCommandRunner = (cli, command, json, env, token) => Execute(owner, cli, command, json, env, token),
                 StoreCertificateLookup = _ => null,
-                ValidateCertificateMaterial = (_, _, _) =>
-                { if (RejectMaterial) throw new AppException("mail.certificate_invalid", 409, 409); }, // Trust itself is tested separately.
+                ValidateCertificateMaterial = (_, pem, _) =>
+                { if (RejectMaterial) throw new AppException("mail.certificate_invalid", 409, 409); return pem; }, // Trust itself is tested separately.
                 CertificateIssuer = (_, host, _, _, directory, _) =>
                 { AttemptDirectory = directory; WritePem(host, directory); return Task.FromResult(!IssuerFails); },
                 TlsProbe = (_, port, _, _) => Task.FromResult(new MailTlsEndpointDto { Port = port, Status = "ok" })

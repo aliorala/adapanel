@@ -79,7 +79,8 @@ public sealed class MailCertificateStoreSelectionTests
             Assert.Equal(new[] { server.Thumbprint, chain.Intermediate.Thumbprint },
                 supplied.Cast<X509Certificate2>().Select(certificate => certificate.Thumbprint));
             Assert.Equal(chain.Intermediate.Subject, chain.Intermediate.Issuer);
-            MailCertificateValidation.Validate(TestChain.Host, material.CertificatePem, material.PrivateKeyPem, chain.Trust);
+            Assert.Equal(material.CertificatePem,
+                MailCertificateValidation.Validate(TestChain.Host, material.CertificatePem, material.PrivateKeyPem, chain.Trust));
         }
         finally { foreach (var certificate in supplied) certificate.Dispose(); }
     }

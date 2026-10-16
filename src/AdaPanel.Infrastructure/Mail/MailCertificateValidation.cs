@@ -6,11 +6,11 @@ namespace AdaPanel.Infrastructure.Mail;
 
 internal static class MailCertificateValidation
 {
-    internal static void Validate(string host, string certificatePem, string privateKeyPem) =>
+    internal static string Validate(string host, string certificatePem, string privateKeyPem) =>
         Validate(host, certificatePem, privateKeyPem, null);
 
     // Tests supply an isolated trust root in memory; production always uses the system trust store.
-    internal static void Validate(string host, string certificatePem, string privateKeyPem,
+    internal static string Validate(string host, string certificatePem, string privateKeyPem,
         Action<X509ChainPolicy>? configureTrust)
     {
         var supplied = new X509Certificate2Collection();
@@ -33,6 +33,13 @@ internal static class MailCertificateValidation
             if (chain.ChainElements.Cast<X509ChainElement>().SkipLast(1).Any(element =>
                 !supplied.Cast<X509Certificate2>().Any(cert => cert.Thumbprint == element.Certificate.Thumbprint)))
                 throw new CryptographicException("Certificate chain is incomplete.");
+            // Chain.Build can reorder supplied certificates and ignore unrelated ones. Send
+            // that verified path rather than the original PEM order (which Stalwart preserves).
+            // Omit only the trust anchor, retaining self-issued rollover intermediates and
+            // a trusted self-signed leaf when it is itself the sole chain element.
+            return string.Join("\n", chain.ChainElements.Cast<X509ChainElement>()
+                .Where((_, index) => index == 0 || index < chain.ChainElements.Count - 1)
+                .Select(element => element.Certificate.ExportCertificatePem())) + "\n";
         }
         catch (Exception error) when (error is CryptographicException or ArgumentException)
         {

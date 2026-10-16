@@ -8,7 +8,7 @@ namespace AdaPanel.Infrastructure.Mail;
 public sealed partial class MailService
 {
     internal Func<string, MailCertificateMaterial?> StoreCertificateLookup { get; init; } = MailCertificateStore.Find;
-    internal Action<string, string, string> ValidateCertificateMaterial { get; init; } = MailCertificateValidation.Validate;
+    internal Func<string, string, string, string> ValidateCertificateMaterial { get; init; } = MailCertificateValidation.Validate;
     internal Func<string, int, string?, CancellationToken, Task<MailTlsEndpointDto>> TlsProbe { get; init; } = MailTlsProbe.ProbeAsync;
     internal Func<string, string, string, bool, string, CancellationToken, Task<bool>>? CertificateIssuer { get; init; }
 
