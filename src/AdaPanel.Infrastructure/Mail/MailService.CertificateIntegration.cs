@@ -56,11 +56,12 @@ public sealed partial class MailService
             var (cli, env) = await RequireCliAsync(token);
             var records = MailQueryResult.Olc(await RunCertificateCommandAsync(cli, "query Certificate --json", null, env, token));
             var settings = MailQueryResult.Olc(await RunCertificateCommandAsync(cli, "get SystemSettings --json", null, env, token));
-            if (!records.Measured || !settings.Measured || settings.Items.Count != 1) return;
+            if (!records.Measured) return;
+            var selection = ReadCertificateSettings(settings);
             var matches = ReadCertificateInventory(records.Items)
                 .Where(item => item.Names.Any(name => CertificateNameMatches(name, dto.HostName))).ToArray();
             dto.CertificateId = string.Join(", ", matches.Select(item => item.Id));
-            dto.DefaultCertificateId = GetField(settings.Items[0], "defaultCertificateId");
+            dto.DefaultCertificateId = selection.DefaultCertificateId;
             dto.ConfigurationStatus = matches.Length == 1 ? "ok" : matches.Length == 0 ? "missing" : "ambiguous";
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
@@ -93,6 +94,34 @@ public sealed partial class MailService
     }
 
     private sealed record CertificateInventoryRecord(string Id, string[] Names);
+
+    private sealed record CertificateSettings(string DefaultHostname, string DefaultCertificateId);
+
+    private static CertificateSettings ReadCertificateSettings(MailQueryResult query,
+        string errorKey = "mail.certificate_push_failed")
+    {
+        AppException InvalidSettings() => new(errorKey, 502, 502,
+            "SystemSettings certificate selection is incomplete or invalid.");
+        if (!query.Measured || query.Items.Count != 1) throw InvalidSettings();
+        var item = query.Items[0];
+        if (item.ValueKind != JsonValueKind.Object
+            || item.EnumerateObject().Count(p => p.NameEquals("defaultHostname")) != 1
+            || item.EnumerateObject().Count(p => p.NameEquals("defaultCertificateId")) > 1)
+            throw InvalidSettings();
+        var host = item.GetProperty("defaultHostname");
+        if (host.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(host.GetString()))
+            throw InvalidSettings();
+        // The optional certificate ID can be omitted/null; preserve legacy empty strings.
+        // A malformed value must never be converted to "no default" and overwritten.
+        var id = "";
+        if (item.TryGetProperty("defaultCertificateId", out var value) && value.ValueKind != JsonValueKind.Null)
+        {
+            if (value.ValueKind != JsonValueKind.String) throw InvalidSettings();
+            id = value.GetString()!;
+            if (id.Length > 0 && string.IsNullOrWhiteSpace(id)) throw InvalidSettings();
+        }
+        return new CertificateSettings(host.GetString()!, id);
+    }
 
     private static CertificateInventoryRecord[] ReadCertificateInventory(IReadOnlyList<JsonElement> items)
     {

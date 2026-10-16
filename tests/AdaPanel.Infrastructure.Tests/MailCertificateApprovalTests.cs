@@ -21,6 +21,138 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class MailCertificateApprovalTests
 {
+    public static IEnumerable<object[]> InvalidCertificateSettings()
+    {
+        foreach (var json in new[]
+        {
+            "{}",
+            "{\"defaultHostname\":null}",
+            "{\"defaultHostname\":42}",
+            "{\"defaultHostname\":\"\"}",
+            "{\"defaultHostname\":\"mail.example.test\",\"defaultCertificateId\":false}",
+            "{\"defaultHostname\":\"mail.example.test\",\"defaultCertificateId\":42}",
+            "{\"defaultHostname\":\"mail.example.test\",\"defaultCertificateId\":{}}",
+            "{\"defaultHostname\":\"mail.example.test\",\"defaultCertificateId\":[]}",
+            "{\"defaultHostname\":\"mail.example.test\",\"defaultCertificateId\":\" \"}",
+            "{\"defaultHostname\":\"other.test\",\"defaultHostname\":\"mail.example.test\"}",
+            "{\"defaultHostname\":\"mail.example.test\",\"defaultCertificateId\":\"other-cert\",\"defaultCertificateId\":null}"
+        }) yield return [json];
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidCertificateSettings))]
+    public async Task InvalidSystemSettingsCannotAuthorizeCertificateOrDefaultWrites(string json)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        var before = await f.Bytes();
+        f.SettingsResults.Enqueue(new CommandResult { ExitCode = 0, StandardOutput = json });
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.SyncCertificateAsync(f.Token));
+        Assert.Equal("mail.certificate_push_failed", error.MessageKey);
+        Assert.Equal(new[] { "query Certificate --json", "get SystemSettings --json" }, f.Commands);
+        Assert.False(f.Written);
+        Assert.Equal(before, await f.Bytes());
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidCertificateSettings))]
+    public async Task InvalidSystemSettingsAreUnknownWithoutHidingHealthyTls(string json)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        await f.EditState(state => state["thumbprint"] = f.Thumbprint);
+        f.SettingsResults.Enqueue(new CommandResult { ExitCode = 0, StandardOutput = json });
+        var result = await f.Service.GetCertificateStatusAsync(f.Token);
+        Assert.True(result.Active);
+        Assert.Equal("unknown", result.ConfigurationStatus);
+        Assert.Empty(result.DefaultCertificateId);
+        Assert.False(f.Written);
+    }
+
+    [Theory]
+    [InlineData("other.test", "other-cert")]
+    [InlineData("mail.example.test", "other-cert")]
+    [InlineData("other.test", "")]
+    public async Task DefaultChangedDuringCertificateWriteIsPreserved(string host, string id)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        f.DefaultHost = f.Host;
+        f.DefaultId = "";
+        f.AfterWrite = () => { f.DefaultHost = host; f.DefaultId = id; return Task.CompletedTask; };
+        Assert.True((await f.Service.SyncCertificateAsync(f.Token))!.Active);
+        Assert.Equal(id, f.DefaultId);
+        Assert.DoesNotContain("update SystemSettings", f.Commands);
+        Assert.Equal("{\"@type\":\"ReloadTlsCertificates\"}", f.ReloadPayload);
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("null", true)]
+    [InlineData("\"\"", true)]
+    [InlineData(null, false)]
+    [InlineData("null", false)]
+    [InlineData("\"\"", false)]
+    public async Task OptionalDefaultFormsAreAcceptedAndOnlyOwnHostnameIsInitialized(string? value, bool ownHost)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        f.DefaultHost = ownHost ? f.Host : "other.test";
+        f.DefaultId = "";
+        var json = "{\"defaultHostname\":" + JsonSerializer.Serialize(f.DefaultHost)
+            + (value is null ? "" : ",\"defaultCertificateId\":" + value) + "}";
+        f.SettingsResults.Enqueue(new CommandResult { ExitCode = 0, StandardOutput = json });
+        Assert.True((await f.Service.SyncCertificateAsync(f.Token))!.Active);
+        Assert.Equal(ownHost ? "cert-1" : "", f.DefaultId);
+        Assert.Equal(ownHost, f.Commands.Contains("update SystemSettings"));
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"defaultHostname\":\"mail.example.test\",\"defaultCertificateId\":false}")]
+    public async Task UnreadableDefaultRecheckStopsBeforeSettingsWriteAndCanBeRetried(string json)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        f.DefaultHost = f.Host;
+        f.DefaultId = "";
+        var before = await f.Bytes();
+        f.AfterWrite = () =>
+        {
+            f.SettingsResults.Enqueue(new CommandResult { ExitCode = 0, StandardOutput = json });
+            return Task.CompletedTask;
+        };
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.SyncCertificateAsync(f.Token));
+        Assert.Equal("mail.certificate_push_failed", error.MessageKey);
+        Assert.True(f.Written);
+        Assert.DoesNotContain("update SystemSettings", f.Commands);
+        Assert.DoesNotContain("create Action", f.Commands);
+        Assert.Equal(before, await f.Bytes());
+        f.AfterWrite = null;
+        Assert.True((await f.Service.SyncCertificateAsync(f.Token))!.Active);
+    }
+
+    [Theory]
+    [InlineData("{\"defaultCertificateId\":\"cert-1\"}")]
+    [InlineData("{\"defaultHostname\":\"other.test\",\"defaultCertificateId\":\"cert-1\"}")]
+    [InlineData("{\"defaultHostname\":\"mail.example.test\",\"defaultCertificateId\":\"other-cert\",\"defaultCertificateId\":\"cert-1\"}")]
+    [InlineData("{\"defaultHostname\":\"mail.example.test\",\"defaultCertificateId\":42}")]
+    public async Task InvalidDefaultConfirmationDoesNotPublishOrReloadTls(string json)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        var before = await f.Bytes();
+        for (var i = 0; i < 2; i++)
+            f.SettingsResults.Enqueue(new CommandResult { ExitCode = 0,
+                StandardOutput = "{\"defaultHostname\":\"mail.example.test\",\"defaultCertificateId\":null}" });
+        f.SettingsResults.Enqueue(new CommandResult { ExitCode = 0, StandardOutput = json });
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.SyncCertificateAsync(f.Token));
+        Assert.Equal("mail.certificate_not_activated", error.MessageKey);
+        Assert.Contains("update SystemSettings", f.Commands);
+        Assert.Equal("{\"@type\":\"ReloadSettings\"}", f.ReloadPayload);
+        Assert.Equal(before, await f.Bytes());
+    }
+
     public static IEnumerable<object[]> IncompleteCertificateInventories()
     {
         foreach (var json in new[]
@@ -291,7 +423,7 @@ public sealed class MailCertificateApprovalTests
         Assert.NotNull(await f.Service.SyncCertificateAsync(f.Token));
         Assert.Equal("cert-1", f.DefaultId);
         Assert.Contains("update SystemSettings", f.Commands);
-        Assert.Equal(2, f.Commands.Count(c => c == "get SystemSettings --json"));
+        Assert.Equal(3, f.Commands.Count(c => c == "get SystemSettings --json"));
     }
 
     [Fact]
@@ -473,6 +605,7 @@ public sealed class MailCertificateApprovalTests
         internal string? CertificatePayload, ReloadPayload;
         internal Func<Task>? AfterWrite;
         internal CommandResult? QueryResult;
+        internal readonly Queue<CommandResult> SettingsResults = new();
         internal CancellationToken Token => area.Iptal;
 
         internal Fixture(bool existing)
@@ -576,7 +709,8 @@ public sealed class MailCertificateApprovalTests
                     ? JsonSerializer.Serialize(new[] { new { id = "cert-1", subjectAlternativeNames = new[] { Host } } }) : "[]" };
             }
             if (command == "get SystemSettings --json")
-                return new CommandResult { ExitCode = 0, StandardOutput = JsonSerializer.Serialize(new { defaultHostname = DefaultHost, defaultCertificateId = DefaultId }) };
+                return SettingsResults.Count > 0 ? SettingsResults.Dequeue()
+                    : new CommandResult { ExitCode = 0, StandardOutput = JsonSerializer.Serialize(new { defaultHostname = DefaultHost, defaultCertificateId = DefaultId }) };
             if (command == "update SystemSettings")
             {
                 using var settings = JsonDocument.Parse(json!);

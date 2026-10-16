@@ -3104,12 +3104,9 @@ public sealed partial class MailService(
         }
 
         var settingsRead = MailQueryResult.Olc(await RunCertificateCommandAsync(cli, "get SystemSettings --json", null, env, cancellationToken));
-        if (!settingsRead.Measured || settingsRead.Items.Count != 1)
-            throw new AppException("mail.certificate_push_failed", 502, 502, "SystemSettings unreadable");
+        var settings = ReadCertificateSettings(settingsRead);
         // A read can block. Revalidate directly before the first provider mutation.
         if (beforeMutation is not null) await beforeMutation(cancellationToken);
-        var defaultId = GetField(settingsRead.Items[0], "defaultCertificateId");
-        var defaultHost = GetField(settingsRead.Items[0], "defaultHostname");
 
         // The approved certificate write and reload form one operation; do not recheck authority between them.
         // Sertifika PEM'i çok satırlı; inline --json argümanı Windows'ta bozulur. JSON --file
@@ -3129,16 +3126,24 @@ public sealed partial class MailService(
             ?? throw new AppException("mail.certificate_push_failed", 502, 502);
         // Only initialize the global default for the server's own hostname. A different domain's
         // explicit default is preserved; SNI serves this host without changing that selection.
-        if (string.IsNullOrWhiteSpace(defaultId) && string.Equals(defaultHost, hostName, StringComparison.OrdinalIgnoreCase))
+        if (settings.DefaultCertificateId.Length == 0 && string.Equals(settings.DefaultHostname, hostName, StringComparison.OrdinalIgnoreCase))
         {
-            var change = await RunCertificateCommandAsync(cli, "update SystemSettings",
-                JsonSerializer.Serialize(new { defaultCertificateId = savedId }), env, cancellationToken);
-            if (!change.Success) throw new AppException("mail.certificate_push_failed", 502, 502);
-            var reload = await RunCertificateCommandAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
-            if (!reload.Success) throw new AppException("mail.certificate_not_activated", 502, 502);
-            var confirmed = MailQueryResult.Olc(await RunCertificateCommandAsync(cli, "get SystemSettings --json", null, env, cancellationToken));
-            if (!confirmed.Measured || confirmed.Items.Count != 1 || GetField(confirmed.Items[0], "defaultCertificateId") != savedId)
-                throw new AppException("mail.certificate_not_activated", 502, 502, "Default certificate selection could not be verified.");
+            // Certificate creation can take time. Preserve a default or hostname changed
+            // by another administrator since the initial read. This is not an atomic CAS.
+            var current = ReadCertificateSettings(MailQueryResult.Olc(await RunCertificateCommandAsync(
+                cli, "get SystemSettings --json", null, env, cancellationToken)));
+            if (current.DefaultCertificateId.Length == 0 && string.Equals(current.DefaultHostname, hostName, StringComparison.OrdinalIgnoreCase))
+            {
+                var change = await RunCertificateCommandAsync(cli, "update SystemSettings",
+                    JsonSerializer.Serialize(new { defaultCertificateId = savedId }), env, cancellationToken);
+                if (!change.Success) throw new AppException("mail.certificate_push_failed", 502, 502);
+                var reload = await RunCertificateCommandAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
+                if (!reload.Success) throw new AppException("mail.certificate_not_activated", 502, 502);
+                var confirmed = ReadCertificateSettings(MailQueryResult.Olc(await RunCertificateCommandAsync(
+                    cli, "get SystemSettings --json", null, env, cancellationToken)), "mail.certificate_not_activated");
+                if (confirmed.DefaultCertificateId != savedId || !string.Equals(confirmed.DefaultHostname, hostName, StringComparison.OrdinalIgnoreCase))
+                    throw new AppException("mail.certificate_not_activated", 502, 502, "Default certificate selection could not be verified.");
+            }
         }
 
         // Sertifikaları yeniden başlatma olmadan canlı yükle (tagged-union → @type JSON ile).
