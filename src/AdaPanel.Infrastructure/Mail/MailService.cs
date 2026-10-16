@@ -25,7 +25,7 @@ namespace AdaPanel.Infrastructure.Mail;
 /// CLI çıktıları NDJSON'dur (satır başına bir nesne).
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class MailService(
+public sealed partial class MailService(
     JsonFileStore fileStore,
     ISecretProtector secretProtector,
     IPanelPreferencesService panelPreferencesService,
@@ -2526,24 +2526,28 @@ public sealed class MailService(
         var state = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
         var savedContact = await fileStore.ReadAsync<Support.AcmeContactSettings?>(Support.AcmeContactSettings.Path, null, cancellationToken);
         var suggestedEmail = savedContact?.Email?.Trim() ?? string.Empty;
-        return state is null
+        var dto = state is null
             ? new MailCertificateDto { Active = false, SuggestedContactEmail = suggestedEmail }
             : new MailCertificateDto
             {
-                Active = true,
+                Active = false,
                 Domain = state.Domain,
                 HostName = state.HostName,
                 Source = state.Source,
                 NotAfterUtc = state.NotAfterUtc,
                 SuggestedContactEmail = suggestedEmail
             };
+        if (state is not null)
+        {
+            await InspectMailCertificateAsync(dto, state.Thumbprint, cancellationToken);
+        }
+        return dto;
     }
 
     /// <summary>
     /// Mail hostname'i için sertifika alır ve Stalwart'a yükler:
-    /// 1) Domain panelde IIS sitesi olarak varsa win-acme (pemfiles store) ile Let's Encrypt,
-    /// 2) aksi halde / başarısızlıkta hostname'e özel self-signed sertifika.
-    /// Yükleme sonrası Stalwart "ReloadTlsCertificates" aksiyonuyla canlı devreye alınır.
+    /// Önce Windows deposundaki geçerli sertifika kullanılır; yoksa win-acme ile Let's Encrypt alınır.
+    /// Başarısızlıkta self-signed değişimi yapılmaz. Reload sonrası gerçek SMTP TLS doğrulanır.
     /// </summary>
     public async Task<MailCertificateDto> IssueCertificateAsync(IssueMailCertificateRequest request, CancellationToken cancellationToken = default)
     {
@@ -2555,6 +2559,15 @@ public sealed class MailService(
         var hostName = string.IsNullOrWhiteSpace(request.HostName)
             ? $"mail.{domain}"
             : request.HostName.Trim().ToLowerInvariant();
+
+        if (Uri.CheckHostName(hostName) != UriHostNameType.Dns || hostName.Contains('*'))
+            throw new AppException("mail.invalid_domain", 400, 400);
+
+        var material = StoreCertificateLookup(hostName);
+        if (material is not null)
+            return await ApplyStoreCertificateAsync(domain, hostName, material, cancellationToken);
+        if (request.ReuseExistingOnly)
+            throw new AppException("mail.certificate_store_missing", 409, 409);
 
         var pemDirectory = fileStore.EnsureDirectory($"mail-certs/{hostName}");
         var source = "self-signed";
@@ -2568,7 +2581,7 @@ public sealed class MailService(
             contactEmail = saved?.Email?.Trim() ?? string.Empty;
         }
 
-        var issued = await TryIssueWithWinAcmeAsync(domain, hostName, contactEmail, request.UseStaging, pemDirectory, cancellationToken);
+        var issued = await (CertificateIssuer ?? TryIssueWithWinAcmeAsync)(domain, hostName, contactEmail, request.UseStaging, pemDirectory, cancellationToken);
         if (issued)
         {
             source = "letsencrypt";
@@ -2582,12 +2595,12 @@ public sealed class MailService(
         }
         else
         {
-            WriteSelfSignedPem(hostName, pemDirectory);
+            throw new AppException("mail.certificate_acme_failed", 502, 502);
         }
 
         var (certificatePem, privateKeyPem) = ReadPemPair(pemDirectory);
         var notAfter = TryGetNotAfterUtc(certificatePem);
-        await PushCertificateToStalwartAsync(hostName, certificatePem, privateKeyPem, cancellationToken);
+        var endpoints = await PushCertificateToStalwartAsync(hostName, certificatePem, privateKeyPem, cancellationToken);
 
         var state = new MailCertificateState
         {
@@ -2596,18 +2609,22 @@ public sealed class MailService(
             Source = source,
             PemDirectory = pemDirectory,
             ContentHash = ComputeHash(certificatePem + privateKeyPem),
-            NotAfterUtc = notAfter
+            NotAfterUtc = notAfter,
+            Thumbprint = endpoints[0].Thumbprint
         };
         await fileStore.WriteAsync(CertificateStatePath, state, cancellationToken);
 
-        return new MailCertificateDto
+        var published = new MailCertificateDto
         {
             Active = true,
             Domain = domain,
             HostName = hostName,
             Source = source,
-            NotAfterUtc = notAfter
+            NotAfterUtc = notAfter,
+            Endpoints = endpoints,
+            WebCertificate = await TlsProbe(hostName, 443, null, cancellationToken)
         };
+        return published;
     }
 
     public Task<MailCertificateDto?> SyncCertificateAsync(CancellationToken cancellationToken = default) =>
@@ -2630,12 +2647,19 @@ public sealed class MailService(
         }
 
         if (state is null
-            || !string.Equals(state.Source, "letsencrypt", StringComparison.OrdinalIgnoreCase)
-            || !Directory.Exists(state.PemDirectory))
+            || (state.Source != "windows-store" &&
+                (!string.Equals(state.Source, "letsencrypt", StringComparison.OrdinalIgnoreCase) || !Directory.Exists(state.PemDirectory))))
         {
             return null;
         }
 
+        var material = StoreCertificateLookup(state.HostName);
+        if (state.Source == "windows-store")
+        {
+            if (material is null) throw new AppException("mail.certificate_store_missing", 409, 409);
+            if (material.Thumbprint == state.Thumbprint) return null;
+            return await ApplyStoreCertificateAsync(state.Domain, state.HostName, material, cancellationToken, beforeMutation);
+        }
         var (certificatePem, privateKeyPem) = ReadPemPair(state.PemDirectory);
         var hash = ComputeHash(certificatePem + privateKeyPem);
         if (string.Equals(hash, state.ContentHash, StringComparison.Ordinal))
@@ -3075,7 +3099,7 @@ public sealed class MailService(
                 ? RunCliAsync(cli, command, env, cancellationToken)
                 : RunCliJsonAsync(cli, command, json, env, cancellationToken);
 
-    private async Task PushCertificateToStalwartAsync(string hostName, string certificatePem, string privateKeyPem,
+    private async Task<MailTlsEndpointDto[]> PushCertificateToStalwartAsync(string hostName, string certificatePem, string privateKeyPem,
         CancellationToken cancellationToken, Func<CancellationToken, Task>? beforeMutation = null)
     {
         var (cli, env) = await RequireCliAsync(cancellationToken);
@@ -3096,23 +3120,25 @@ public sealed class MailService(
             throw new AppException("mail.certificate_push_failed", 500, 500, $"certificate list unreadable: {hostName}");
         }
 
-        string? existingId = null;
-        foreach (var item in sertifikaSorgusu.Items)
-        {
-            if (item.TryGetProperty("subjectAlternativeNames", out var sans)
-                && sans.ValueKind == JsonValueKind.Object
-                && sans.EnumerateObject().Any(san => string.Equals(san.Name, hostName, StringComparison.OrdinalIgnoreCase)))
-            {
-                existingId = GetField(item, "id");
-                break;
-            }
-        }
+        using var leaf = System.Security.Cryptography.X509Certificates.X509Certificate2.CreateFromPem(certificatePem, privateKeyPem);
+        if (!leaf.MatchesHostname(hostName, false, false) || leaf.NotAfter.ToUniversalTime() <= DateTime.UtcNow
+            || leaf.NotBefore.ToUniversalTime() > DateTime.UtcNow)
+            throw new AppException("mail.certificate_push_failed", 409, 409, hostName);
+        var existingId = SelectCertificateId(sertifikaSorgusu.Items, hostName, leaf);
 
         cancellationToken.ThrowIfCancellationRequested();
         if (beforeMutation is not null)
         {
             await beforeMutation(cancellationToken);
         }
+
+        var settingsRead = MailQueryResult.Olc(await RunCertificateCommandAsync(cli, "get SystemSettings --json", null, env, cancellationToken));
+        if (!settingsRead.Measured || settingsRead.Items.Count != 1)
+            throw new AppException("mail.certificate_push_failed", 502, 502, "SystemSettings unreadable");
+        // A read can block. Revalidate directly before the first provider mutation.
+        if (beforeMutation is not null) await beforeMutation(cancellationToken);
+        var defaultId = GetField(settingsRead.Items[0], "defaultCertificateId");
+        var defaultHost = GetField(settingsRead.Items[0], "defaultHostname");
 
         // The approved certificate write and reload form one operation; do not recheck authority between them.
         // Sertifika PEM'i çok satırlı; inline --json argümanı Windows'ta bozulur. JSON --file
@@ -3125,6 +3151,25 @@ public sealed class MailService(
             throw new AppException("mail.certificate_push_failed", 500, 500, CombineError(result));
         }
 
+        // Re-read SANs set by Stalwart, including the ID of a newly created record.
+        var saved = MailQueryResult.Olc(await RunCertificateCommandAsync(cli, "query Certificate --json", null, env, cancellationToken));
+        if (!saved.Measured) throw new AppException("mail.certificate_push_failed", 502, 502);
+        var savedId = SelectCertificateId(saved.Items, hostName, leaf)
+            ?? throw new AppException("mail.certificate_push_failed", 502, 502);
+        // Only initialize the global default for the server's own hostname. A different domain's
+        // explicit default is preserved; SNI serves this host without changing that selection.
+        if (string.IsNullOrWhiteSpace(defaultId) && string.Equals(defaultHost, hostName, StringComparison.OrdinalIgnoreCase))
+        {
+            var change = await RunCertificateCommandAsync(cli, "update SystemSettings",
+                JsonSerializer.Serialize(new { defaultCertificateId = savedId }), env, cancellationToken);
+            if (!change.Success) throw new AppException("mail.certificate_push_failed", 502, 502);
+            var reload = await RunCertificateCommandAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
+            if (!reload.Success) throw new AppException("mail.certificate_not_activated", 502, 502);
+            var confirmed = MailQueryResult.Olc(await RunCertificateCommandAsync(cli, "get SystemSettings --json", null, env, cancellationToken));
+            if (!confirmed.Measured || confirmed.Items.Count != 1 || GetField(confirmed.Items[0], "defaultCertificateId") != savedId)
+                throw new AppException("mail.certificate_not_activated", 502, 502, "Default certificate selection could not be verified.");
+        }
+
         // Sertifikaları yeniden başlatma olmadan canlı yükle (tagged-union → @type JSON ile).
         //
         // SONUÇ ATILMAZ. Yüklenemezse sertifika nesnesi Stalwart'ta DURUR ama dinleyiciler ESKİ
@@ -3135,6 +3180,16 @@ public sealed class MailService(
         {
             throw new AppException("mail.certificate_not_activated", 502, 502, hostName);
         }
+        var probes = await Task.WhenAll(new[] { 587, 465 }.Select(port => TlsProbe(hostName, port, leaf.Thumbprint, cancellationToken)));
+        for (var attempt = 0; attempt < 2 && probes.Any(p => p.Status != "ok"); attempt++)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+            probes = await Task.WhenAll(new[] { 587, 465 }.Select(port => TlsProbe(hostName, port, leaf.Thumbprint, cancellationToken)));
+        }
+        if (probes.Any(p => p.Status != "ok"))
+            throw new AppException("mail.certificate_not_activated", 502, 502,
+                string.Join("; ", probes.Select(p => $"{p.Port}: {p.Status} {p.Detail}")));
+        return probes;
     }
 
     private async Task<string?> ResolveComponentExecutableAsync(string componentId, string executableName, CancellationToken cancellationToken)
@@ -3180,6 +3235,7 @@ public sealed class MailService(
         public string ContentHash { get; set; } = string.Empty;
 
         public DateTime? NotAfterUtc { get; set; }
+        public string Thumbprint { get; set; } = string.Empty;
     }
 
     /// <summary>

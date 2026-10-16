@@ -20,7 +20,10 @@ public interface IMailService
     /// <summary>Mail sunucusundaki TLS sertifikası durumunu döner.</summary>
     Task<MailCertificateDto> GetCertificateStatusAsync(CancellationToken cancellationToken = default);
 
-    /// <summary>Mail hostname'i için Let's Encrypt (yoksa self-signed) sertifika alır ve Stalwart'a yükler.</summary>
+    Task SyncWebCertificateAsync(string hostName, Func<CancellationToken, Task>? beforeMutation = null,
+        CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    /// <summary>Mevcut güvenilir sertifikayı kullanır veya Let's Encrypt alır; Stalwart'a yükleyip SMTP TLS'i doğrular.</summary>
     Task<MailCertificateDto> IssueCertificateAsync(IssueMailCertificateRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>win-acme yenilemesi sonrası PEM dosyaları değiştiyse sertifikayı Stalwart'a yeniden yükler.</summary>

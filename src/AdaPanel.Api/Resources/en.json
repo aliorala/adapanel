@@ -295,5 +295,12 @@
   "files.owner_changed": "The site's subscription owner changed while the operation was waiting. Check the current site and try again.",
   "files.upload_too_large": "The uploaded file exceeds the 200 MiB limit.",
   "files.upload_size_mismatch": "The uploaded content does not match the declared file size. Select the file again and retry.",
-  "update.github_version_invalid": "The published version number could not be validated. Latest release information is unavailable."
+  "update.github_version_invalid": "The published version number could not be validated. Latest release information is unavailable.",
+  "mail.certificate_store_missing": "No trusted existing certificate with a private key matches the mail hostname. Existing certificates were preserved.",
+  "mail.certificate_selection_conflict": "Multiple or shared certificates match this hostname. Automatic changes stopped to protect other domains.",
+  "mail.certificate_acme_failed": "A valid certificate could not be issued. No self-signed replacement was installed.",
+  "mail.certificate_not_activated": "The certificate may have been saved, but SMTP 587 STARTTLS and 465 TLS verification failed. This operation was not successful.",
+  "mail.certificate_push_failed": "The mail certificate registry could not be read or verified after saving.",
+  "mail.certificate_issued": "The mail certificate was loaded and SMTP 587 STARTTLS and 465 TLS connections were verified.",
+  "mail.invalid_domain": "Enter a valid mail domain and its mail hostname."
 }

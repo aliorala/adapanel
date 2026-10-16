@@ -80,7 +80,7 @@ public sealed class MailCertificateApprovalTests
         Assert.True(result.Active);
         Assert.Equal("mail.example.test", result.HostName);
         Assert.NotNull(result.NotAfterUtc);
-        Assert.Equal(new[] { "query Certificate --json", existing ? "update Certificate cert-1" : "create Certificate", "create Action" }, f.Commands);
+        Assert.Equal(new[] { "query Certificate --json", "get SystemSettings --json", existing ? "update Certificate cert-1" : "create Certificate", "query Certificate --json", "create Action" }, f.Commands);
         using var payload = JsonDocument.Parse(f.CertificatePayload!);
         Assert.Contains("BEGIN CERTIFICATE", payload.RootElement.GetProperty("certificate").GetProperty("value").GetString());
         Assert.Equal(f.PrivateKeyPem, payload.RootElement.GetProperty("privateKey").GetProperty("secret").GetString());
@@ -161,12 +161,38 @@ public sealed class MailCertificateApprovalTests
         var before = await f.Bytes();
         var error = await Assert.ThrowsAsync<AppException>(() => ((IMailService)f.Service).SyncCertificateAsync(f.Approve, f.Token));
         Assert.Equal("mail.certificate_not_activated", error.MessageKey);
-        Assert.Equal(3, f.Commands.Count);
+        Assert.Equal(5, f.Commands.Count);
         Assert.Equal(before, await f.Bytes());
     }
 
     private static async Task<Exception?> Capture(Func<Task<MailCertificateDto?>> action)
     { try { await action(); return null; } catch (Exception error) { return error; } }
+
+    [Fact]
+    public async Task FailedSmtpVerificationDoesNotPublishSuccessOrRenewalHash()
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        f.FailTls = true;
+        var before = await f.Bytes();
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.SyncCertificateAsync(f.Token));
+        Assert.Equal("mail.certificate_not_activated", error.MessageKey);
+        Assert.Equal(before, await f.Bytes());
+        Assert.DoesNotContain("update SystemSettings", f.Commands); // explicit other-domain default preserved
+    }
+
+    [Fact]
+    public async Task EmptyDefaultIsInitializedOnlyForTheServersOwnHostnameAndReadBack()
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        f.DefaultHost = "mail.example.test";
+        f.DefaultId = "";
+        Assert.NotNull(await f.Service.SyncCertificateAsync(f.Token));
+        Assert.Equal("cert-1", f.DefaultId);
+        Assert.Contains("update SystemSettings", f.Commands);
+        Assert.Equal(2, f.Commands.Count(c => c == "get SystemSettings --json"));
+    }
 
     private sealed class Fixture : IDisposable
     {
@@ -183,6 +209,8 @@ public sealed class MailCertificateApprovalTests
         internal readonly TaskCompletionSource QueryEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal readonly TaskCompletionSource QueryRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal bool PauseQuery, FailReload;
+        internal bool Written, FailTls;
+        internal string DefaultHost = "other.example.test", DefaultId = "other-cert";
         internal string PrivateKeyPem = "";
         internal string? CertificatePayload, ReloadPayload;
         internal Func<Task>? AfterWrite;
@@ -206,7 +234,12 @@ public sealed class MailCertificateApprovalTests
             var protector = new SahteKoruyucu();
             var runtime = new StalwartRuntime(area.DosyaDeposu, protector, db, new SahteIstemciFabrikasi(new SahteBulut()));
             Service = new MailService(area.DosyaDeposu, protector, null!, null!, null!, db, runtime,
-                NullLogger<MailService>.Instance) { CertificateCommandRunner = Execute };
+                NullLogger<MailService>.Instance)
+            {
+                CertificateCommandRunner = Execute,
+                StoreCertificateLookup = _ => null,
+                TlsProbe = (_, port, _, _) => Task.FromResult(new MailTlsEndpointDto { Port = port, Status = FailTls ? "fail" : "ok" })
+            };
         }
 
         internal async Task Initialize()
@@ -214,6 +247,9 @@ public sealed class MailCertificateApprovalTests
             var pem = area.DosyaDeposu.EnsureDirectory("pem");
             using var key = RSA.Create(2048);
             var request = new CertificateRequest("CN=mail.example.test", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            var san = new SubjectAlternativeNameBuilder();
+            san.AddDnsName("mail.example.test");
+            request.CertificateExtensions.Add(san.Build());
             using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30));
             PrivateKeyPem = key.ExportPkcs8PrivateKeyPem();
             await File.WriteAllTextAsync(Path.Combine(pem, "mail-key.pem"), PrivateKeyPem, Token);
@@ -253,12 +289,22 @@ public sealed class MailCertificateApprovalTests
             {
                 QueryEntered.TrySetResult();
                 if (PauseQuery) await QueryRelease.Task.WaitAsync(token);
-                return QueryResult ?? new CommandResult { ExitCode = 0, StandardOutput = existing
+                return QueryResult ?? new CommandResult { ExitCode = 0, StandardOutput = (existing || Written)
                     ? "[{\"id\":\"cert-1\",\"subjectAlternativeNames\":{\"mail.example.test\":{}}}]" : "[]" };
+            }
+            if (command == "get SystemSettings --json")
+                return new CommandResult { ExitCode = 0, StandardOutput = JsonSerializer.Serialize(new { defaultHostname = DefaultHost, defaultCertificateId = DefaultId }) };
+            if (command == "update SystemSettings")
+            {
+                using var settings = JsonDocument.Parse(json!);
+                Assert.Single(settings.RootElement.EnumerateObject());
+                DefaultId = settings.RootElement.GetProperty("defaultCertificateId").GetString()!;
+                return new CommandResult { ExitCode = 0 };
             }
             if (command.StartsWith("create Certificate", StringComparison.Ordinal) || command.StartsWith("update Certificate", StringComparison.Ordinal))
             {
                 CertificatePayload = json;
+                Written = true;
                 if (AfterWrite is not null) await AfterWrite();
                 return new CommandResult { ExitCode = 0 };
             }

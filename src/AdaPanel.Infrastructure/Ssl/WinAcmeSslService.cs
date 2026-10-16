@@ -31,7 +31,8 @@ public sealed class WinAcmeSslService(
     // depoda defalarca yakalandi. Ayni kalip SiteHostingSettingsService (outboundResolver) ve
     // MailEnableMailService (KomutKosucusu) icinde de var.
     Func<CancellationToken, Task<IReadOnlyCollection<IisHttpsBinding>?>>? bindingReader = null,
-    IConcurrencyLock? concurrencyLock = null) : ISslService
+    IConcurrencyLock? concurrencyLock = null,
+    IMailService? mailService = null) : ISslService
 {
     private const string StatePath = "config/ssl.json";
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
@@ -271,6 +272,8 @@ public sealed class WinAcmeSslService(
                 site.Name, hostName, 443, issuedCertificate.Thumbprint ?? string.Empty, cancellationToken);
             dto.FallbackReason = outcome.Certificate is null ? outcome.FailureReason : string.Empty;
             await PublishAsync(dto);
+            if (mailService is not null && dto.Source != "self-signed")
+                await mailService.SyncWebCertificateAsync(hostName, ApproveAsync, cancellationToken);
             return dto;
         }
         finally { reservation?.Dispose(); }
@@ -372,6 +375,8 @@ public sealed class WinAcmeSslService(
                 await ApproveAsync(fresh, token);
             });
         }, cancellationToken);
+        if (mailService is not null)
+            await mailService.SyncWebCertificateAsync(hostName, ReapproveAsync, cancellationToken);
         return dto;
     }
 
@@ -467,6 +472,12 @@ public sealed class WinAcmeSslService(
         // saglikli gorunur, bag eski sertifikada kalir, site o sertifika dolana kadar onu
         // sunar ve panel hicbir sey soylemez.
         var bag = await MeasureBindingsAndPersistAsync(cancellationToken);
+
+        if (mailService is not null)
+        {
+            if (beforeMutation is null) await mailService.SyncCertificateAsync(cancellationToken);
+            else await mailService.SyncCertificateAsync(beforeMutation, cancellationToken);
+        }
 
         return new RenewAllResultDto
         {

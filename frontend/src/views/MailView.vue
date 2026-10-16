@@ -845,8 +845,8 @@
 
         <div class="form-surface">
           <p v-if="certificate?.active" class="meta">
-            <span :class="['status-pill', certificate.source === 'letsencrypt' ? 'ok' : 'warn']">
-              {{ certificate.source === "letsencrypt" ? "Let's Encrypt" : t("panel.mail.certSelfSigned") }}
+            <span :class="['status-pill', certificate.active && certificate.source !== 'self-signed' ? 'ok' : 'warn']">
+              {{ certificate.source === "windows-store" ? t("panel.mail.certWindowsStore") : certificate.source === "letsencrypt" ? "Let's Encrypt" : t("panel.mail.certSelfSigned") }}
             </span>
             {{ certificate.hostName }}
             <template v-if="certificate.notAfterUtc">
@@ -854,6 +854,17 @@
             </template>
           </p>
           <p v-else class="meta">{{ t("panel.mail.certNone") }}</p>
+          <template v-if="certificate?.hostName">
+            <p class="meta">{{ t("panel.mail.certWeb") }}: {{ certificate.webCertificate?.status === 'ok' ? t('panel.mail.certVerified') : t('panel.mail.certUnverified') }}
+              {{ certificate.webCertificate?.thumbprint }}</p>
+            <p class="meta">{{ t("panel.mail.certMail") }} — {{ certificate.hostName }}</p>
+            <p v-for="endpoint in certificate.endpoints || []" :key="endpoint.port" class="meta">
+              <span :class="['status-pill', endpoint.status === 'ok' ? 'ok' : 'warn']">{{ endpoint.port }} {{ endpoint.protocol }}: {{ endpoint.status === 'ok' ? t('panel.mail.certVerified') : t('panel.mail.certUnverified') }}</span>
+              {{ endpoint.subject }} · {{ endpoint.issuer }} · {{ endpoint.notAfterUtc }}
+              {{ endpoint.thumbprint }} {{ endpoint.detail }}
+            </p>
+            <p class="meta">{{ t('panel.mail.certRegistry') }}: {{ certificate.configurationStatus || 'unknown' }} · {{ certificate.certificateId || '-' }} · {{ t('panel.mail.certDefault') }}: {{ certificate.defaultCertificateId || '-' }}</p>
+          </template>
           <div class="form-grid">
             <label class="stacked-field">
               <span class="field-label">{{ t("panel.mail.certHost") }}</span>
@@ -865,7 +876,9 @@
             </label>
           </div>
           <div class="row-actions">
-            <button class="compact" :disabled="busy" @click="issueCert">{{ t("panel.mail.certIssue") }}</button>
+            <button class="compact" :disabled="busy" @click="issueCert()">{{ t("panel.mail.certIssue") }}</button>
+            <button class="compact" :disabled="busy" @click="issueCert(true)">{{ t("panel.mail.certReuse") }}</button>
+            <button class="compact" :disabled="busy" @click="loadCertificate">{{ t("panel.mail.certCheck") }}</button>
           </div>
         </div>
         </template>
@@ -1050,7 +1063,6 @@ const spamAdvanced = ref(false);
 const certificate = ref<MailCertificate | null>(null);
 const certificateLoad = useSectionError();
 const certForm = reactive({ hostName: "", contactEmail: "" });
-const certAutoTried = ref(false);
 const webmailOpening = ref(false);
 const webmailDiagnosing = ref(false);
 const webmailReport = ref("");
@@ -1498,46 +1510,23 @@ async function loadCertificate() {
     if (!autoconfigContactEmail.value && result.suggestedContactEmail) {
       autoconfigContactEmail.value = result.suggestedContactEmail;
     }
-    // profesyonel paneller gibi: panel sertifikası yoksa ve iletişim e-postası zaten biliniyorsa
-    // (ör. site SSL'i alınırken kaydedildi) sertifikayı bir kez otomatik al — uğraştırma.
-    // Sonuç (LE ya da self-signed) yüklenince active=true olur, bu yüzden döngüye girmez.
-    if (!result.active && result.suggestedContactEmail && !certAutoTried.value) {
-      certAutoTried.value = true;
-      void autoIssueCert();
-    }
   } catch (error) {
     certificate.value = null;
     certificateLoad.capture(error);
   }
 }
 
-// Sayfa açılışında sessiz, en iyi çaba issuance: başarısızsa form zaten dolu, kullanıcı
-// "Sertifika al ve yükle" ile tek tıkla tekrar dener (hata toast'ı ile rahatsız etme).
-async function autoIssueCert() {
-  try {
-    certificate.value = await issueMailCertificate(
-      selectedDomain.value,
-      certForm.hostName || `mail.${selectedDomain.value}`,
-      certForm.contactEmail);
-    if (certificate.value.source === "letsencrypt") {
-      showNotice(t("panel.mail.certIssued"), false);
-    }
-  } catch {
-    // sessiz geç
-  }
-}
-
-async function issueCert() {
+async function issueCert(reuseExistingOnly = false) {
   await run(async () => {
     certificate.value = await issueMailCertificate(
       selectedDomain.value,
       certForm.hostName || `mail.${selectedDomain.value}`,
-      certForm.contactEmail);
+      certForm.contactEmail, reuseExistingOnly);
     showNotice(
-      certificate.value.source === "letsencrypt"
+      certificate.value.active
         ? t("panel.mail.certIssued")
-        : t("panel.mail.certIssuedSelfSigned"),
-      false);
+        : t("panel.mail.certUnverified"),
+      !certificate.value.active);
   });
 }
 

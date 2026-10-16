@@ -11,7 +11,7 @@ public sealed class MailCertificateDto
 
     public string HostName { get; set; } = string.Empty;
 
-    /// <summary>letsencrypt | self-signed</summary>
+    /// <summary>windows-store | letsencrypt | self-signed (legacy)</summary>
     public string Source { get; set; } = string.Empty;
 
     public DateTime? NotAfterUtc { get; set; }
@@ -21,6 +21,25 @@ public sealed class MailCertificateDto
     /// ve bilindiğinde sertifikayı elle uğraştırmadan otomatik almak için kullanır.
     /// </summary>
     public string SuggestedContactEmail { get; set; } = string.Empty;
+
+    public string CertificateId { get; set; } = string.Empty;
+    public string DefaultCertificateId { get; set; } = string.Empty;
+    public string ConfigurationStatus { get; set; } = "unknown";
+    public MailTlsEndpointDto[] Endpoints { get; set; } = [];
+    public MailTlsEndpointDto? WebCertificate { get; set; }
+}
+
+public sealed class MailTlsEndpointDto
+{
+    public int Port { get; set; }
+    public string Protocol { get; set; } = string.Empty;
+    public string Status { get; set; } = "unknown";
+    public string Subject { get; set; } = string.Empty;
+    public string Issuer { get; set; } = string.Empty;
+    public string Thumbprint { get; set; } = string.Empty;
+    public DateTime? NotAfterUtc { get; set; }
+    public string Detail { get; set; } = string.Empty;
+    public DateTime CheckedAtUtc { get; set; }
 }
 
 public sealed class IssueMailCertificateRequest
@@ -37,4 +56,6 @@ public sealed class IssueMailCertificateRequest
     public string ContactEmail { get; init; } = string.Empty;
 
     public bool UseStaging { get; init; }
+
+    public bool ReuseExistingOnly { get; init; }
 }

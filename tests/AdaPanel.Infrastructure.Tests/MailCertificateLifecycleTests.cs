@@ -38,7 +38,7 @@ public sealed class MailCertificateLifecycleTests
         await f.CompleteInOrder(first, second);
         var state = await f.State();
         Assert.Equal(host, state.HostName);
-        Assert.Equal("self-signed", state.Source);
+        Assert.Equal("letsencrypt", state.Source);
         Assert.Equal(f.Store.ResolvePath($"mail-certs/{host}"), state.PemDirectory);
         Assert.Equal(f.LoadedHash, state.ContentHash);
         Assert.Equal(f.PemHash(state.PemDirectory), state.ContentHash);
@@ -62,7 +62,7 @@ public sealed class MailCertificateLifecycleTests
         Assert.Null(await second);
         Assert.Equal(new[] { "first", "first", "first" }, f.Commands.Select(item => item.Owner));
         var state = await f.State();
-        Assert.Equal("self-signed", state.Source);
+        Assert.Equal("letsencrypt", state.Source);
         Assert.Equal(f.LoadedHash, state.ContentHash);
         Assert.Equal(f.PemHash(state.PemDirectory), state.ContentHash);
     }
@@ -324,6 +324,8 @@ public sealed class MailCertificateLifecycleTests
         private readonly List<AdaPanelDbContext> contexts = [];
         private readonly string cliDirectory;
         private string? pausedOwner, pausedStage, writtenHash;
+        private bool readback;
+        private readonly Dictionary<string, object> certificates = [];
         internal string? LoadedHash, FailedStage;
         internal readonly MailService First, Second;
         internal readonly List<(string Owner, string Stage)> Commands = [];
@@ -361,7 +363,12 @@ public sealed class MailCertificateLifecycleTests
             var protector = new SahteKoruyucu();
             var runtime = new StalwartRuntime(store, protector, db, new SahteIstemciFabrikasi(new SahteBulut()));
             return new MailService(store, protector, null!, null!, null!, db, runtime, NullLogger<MailService>.Instance)
-            { CertificateCommandRunner = (cli, command, json, env, token) => Execute(owner, cli, command, json, env, token) };
+            {
+                CertificateCommandRunner = (cli, command, json, env, token) => Execute(owner, cli, command, json, env, token),
+                StoreCertificateLookup = _ => null,
+                CertificateIssuer = (_, host, _, _, directory, _) => { WritePem(host, directory); return Task.FromResult(true); },
+                TlsProbe = (_, port, _, _) => Task.FromResult(new MailTlsEndpointDto { Port = port, Status = "ok" })
+            };
         }
 
         internal async Task Initialize()
@@ -376,6 +383,9 @@ public sealed class MailCertificateLifecycleTests
             Directory.CreateDirectory(directory);
             using var key = RSA.Create(2048);
             var request = new CertificateRequest($"CN={host}", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            var san = new SubjectAlternativeNameBuilder();
+            san.AddDnsName(host);
+            request.CertificateExtensions.Add(san.Build());
             using var cert = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30));
             File.WriteAllText(Path.Combine(directory, $"{host}-crt.pem"), cert.ExportCertificatePem());
             File.WriteAllText(Path.Combine(directory, $"{host}-key.pem"), key.ExportPkcs8PrivateKeyPem());
@@ -401,19 +411,29 @@ public sealed class MailCertificateLifecycleTests
             token.ThrowIfCancellationRequested();
             Assert.Equal(Path.Combine(cliDirectory, "stalwart-cli.exe"), cli);
             Assert.Equal("fixture-password", env["STALWART_PASSWORD"]);
+            if (command == "get SystemSettings --json")
+                return new CommandResult { ExitCode = 0, StandardOutput = "{\"defaultHostname\":\"other.test\",\"defaultCertificateId\":\"other-cert\"}" };
+            if (command == "query Certificate --json" && readback)
+            {
+                readback = false;
+                return new CommandResult { ExitCode = 0, StandardOutput = JsonSerializer.Serialize(certificates.Values) };
+            }
             var stage = command == "query Certificate --json" ? "query" : command == "create Action" ? "reload" : "write";
             Commands.Add((owner, stage));
             if (owner == pausedOwner && stage == pausedStage)
             { Entered.TrySetResult(); await Release.Task.WaitAsync(token); }
             if (stage == FailedStage) return new CommandResult { ExitCode = 1, StandardError = "fixture provider failure" };
-            if (stage == "query") return new CommandResult { ExitCode = 0, StandardOutput = "[]" };
+            if (stage == "query") return new CommandResult { ExitCode = 0, StandardOutput = JsonSerializer.Serialize(certificates.Values) };
             if (stage == "write")
             {
-                Assert.Equal("create Certificate", command);
+                Assert.True(command == "create Certificate" || command.StartsWith("update Certificate "));
                 using var payload = JsonDocument.Parse(json!);
                 var cert = payload.RootElement.GetProperty("certificate").GetProperty("value").GetString()!;
                 var key = payload.RootElement.GetProperty("privateKey").GetProperty("secret").GetString()!;
                 using var parsed = X509Certificate2.CreateFromPem(cert, key); // a real matching PEM pair
+                var host = parsed.GetNameInfo(X509NameType.DnsName, false);
+                certificates[host] = new { id = host, subjectAlternativeNames = new Dictionary<string, bool> { [host] = true } };
+                readback = true;
                 writtenHash = Hash(cert + key);
             }
             else

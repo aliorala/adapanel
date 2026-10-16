@@ -315,6 +315,16 @@ export type MailCertificate = {
   source: string;
   notAfterUtc: string | null;
   suggestedContactEmail: string;
+  certificateId?: string;
+  defaultCertificateId?: string;
+  configurationStatus?: string;
+  endpoints?: MailTlsEndpoint[];
+  webCertificate?: MailTlsEndpoint | null;
+};
+
+export type MailTlsEndpoint = {
+  port: number; protocol: string; status: string; subject: string; issuer: string;
+  thumbprint: string; notAfterUtc: string | null; detail: string; checkedAtUtc: string;
 };
 
 export async function getMailCertificate() {
@@ -322,12 +332,13 @@ export async function getMailCertificate() {
   return response.data.data;
 }
 
-export async function issueMailCertificate(domain: string, hostName: string, contactEmail: string) {
+export async function issueMailCertificate(domain: string, hostName: string, contactEmail: string, reuseExistingOnly = false) {
   const response = await apiClient.post<ApiEnvelope<MailCertificate>>("/mail/certificate", {
     domain,
     hostName,
     contactEmail,
-    useStaging: false
+    useStaging: false,
+    reuseExistingOnly
   });
   return response.data.data;
 }

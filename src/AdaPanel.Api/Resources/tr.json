@@ -295,5 +295,12 @@
   "files.owner_changed": "İşlem beklerken sitenin abonelik sahibi değişti. Güncel siteyi kontrol edip işlemi yeniden başlatın.",
   "files.upload_too_large": "Yüklenecek dosya 200 MiB sınırını aşıyor.",
   "files.upload_size_mismatch": "Yüklenen içerik bildirilen dosya boyutuyla eşleşmiyor. Dosyayı yeniden seçip tekrar deneyin.",
-  "update.github_version_invalid": "Yayımlanan sürüm numarası doğrulanamadı. Güncel sürüm bilgisi alınamadı."
+  "update.github_version_invalid": "Yayımlanan sürüm numarası doğrulanamadı. Güncel sürüm bilgisi alınamadı.",
+  "mail.certificate_store_missing": "Posta adıyla eşleşen, güvenilir ve özel anahtarlı mevcut sertifika bulunamadı. Çalışan sertifikalar değiştirilmedi.",
+  "mail.certificate_selection_conflict": "Bu posta adına birden fazla veya başka adlarla paylaşılan sertifika eşleşiyor. Diğer alan adlarını korumak için otomatik değişiklik durduruldu.",
+  "mail.certificate_acme_failed": "Geçerli sertifika alınamadı. Kendinden imzalı sertifikaya geçilmedi.",
+  "mail.certificate_not_activated": "Sertifika kaydı yazılmış olabilir ancak SMTP 587 STARTTLS ve 465 TLS üzerinde doğrulanamadı. İşlem başarılı sayılmadı.",
+  "mail.certificate_push_failed": "Posta sertifikası kaydı okunamadı veya doğrulanarak kaydedilemedi.",
+  "mail.certificate_issued": "Posta sertifikası yüklendi; SMTP 587 STARTTLS ve 465 TLS bağlantıları doğrulandı.",
+  "mail.invalid_domain": "Geçerli bir posta alan adı ve bu alan adına ait mail hostname girin."
 }
