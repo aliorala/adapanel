@@ -7,6 +7,58 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed partial class QueuedBackupActorLifecycleTests
 {
+    private static async Task<string> TruncatedRenewalOutput(CancellationToken token)
+    {
+        const string visible = "Renewal for \"a.test\" succeeded\n";
+        using var bytes = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(
+            visible + "Renewal for \"b.test\" succeeded with errors\n"));
+        using var reader = new StreamReader(bytes);
+        return await ProcessRunner.TavanliOkuAsync(reader, visible.Length, token);
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public async Task SslRenewalReportsIncompleteCaptureFromEitherStream(bool stderr, bool successful)
+    {
+        using var f = new Fixture();
+        await f.PrepareNativeSsl("", true);
+        f.SslRelease.TrySetResult();
+        var truncated = await TruncatedRenewalOutput(f.Token);
+        Assert.DoesNotContain("b.test", truncated);
+        f.SslNativeResult = new CommandResult { ExitCode = successful ? 0 : 1,
+            StandardOutput = stderr ? "Renewal for \"a.test\" succeeded" : truncated,
+            StandardError = stderr ? truncated : "" };
+        var result = await f.SslNativeService.RenewAllAsync(f.Token);
+        Assert.Equal(successful, result.Measured);
+        Assert.Equal(1, result.RenewedCount);
+        Assert.Contains("cikti eksik", result.FailureReason);
+        Assert.Contains("sayim kismi olabilir", result.FailureReason);
+        Assert.Contains(ProcessRunner.TruncationNotice, result.Output);
+        if (!successful) Assert.Contains("komutu basarisiz", result.FailureReason);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SslRenewalTruncatedCaptureCannotPublishCleanAutomationSuccess(bool stderr)
+    {
+        using var f = new Fixture();
+        await f.PrepareNativeSsl("", true);
+        f.SslRelease.TrySetResult();
+        var truncated = await TruncatedRenewalOutput(f.Token);
+        f.SslNativeResult = new CommandResult { ExitCode = 0,
+            StandardOutput = stderr ? "Checking renewals" : truncated,
+            StandardError = stderr ? truncated : "" };
+        await f.InvokeSsl();
+        var status = await f.SslAutomation.GetStatusAsync(f.Token);
+        Assert.Equal("completed_with_errors", status.LastSslStatus);
+        Assert.Contains("cikti eksik", status.LastSslDetails);
+        Assert.Contains("sayim kismi olabilir", status.LastSslDetails);
+    }
+
     [Theory]
     [InlineData("Renewal succeeded", 1, false)]
     [InlineData(" [INFO] Renewal for \"[IIS] example.test\" succeeded\r\n", 1, false)]

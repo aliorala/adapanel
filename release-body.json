@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.115",
-  "name": "0.8.115 — SSL yenilemesinde hatalı başarı bildirimlerinin düzeltilmesi",
-  "body": "## 0.8.115\n\nSSL yenilemesinde hatalarla tamamlanan işlemin tamamen başarılı gösterilmesi ve yanıltıcı çıktıların yenileme sayısına eklenmesi düzeltildi.\n\n- Win-acme hatalarla tamamlanma bildirdiğinde otomasyon hatalı tamamlandı durumunu kullanır. SSL ekranı ölçülmüş sayıları ve hata açıklamasını birlikte gösterir.\n- Yenileme sayısı yalnız tamamlanma satırlarından çıkarılır. Başarısızlık ifadesi veya adındaki success sözcüğü yenilemeyi başarılı saydırmaz.\n- Hata bilgisi hem normal hem hata çıktısından değerlendirilir. Sıfır dışı çıkış kodu ve hassas bilgi maskelemesi korunur.\n- Sağlayıcı çıktı biçimi, otomasyon durumu ve panel uyarısı için regresyon testleri eklendi.\n\nWindows x64 kurulum paketi: **AdaPanelSetup.exe**."
+  "tag_name": "0.8.116",
+  "name": "0.8.116 — Eksik SSL yenileme çıktısının bildirilmesi",
+  "body": "## 0.8.116\n\nÇıktı sınırı nedeniyle kayıtları eksik kalan SSL yenilemesinin tamamen başarılı gösterilmesi düzeltildi.\n\n- Normal veya hata çıktısı kesilmişse otomasyon ve SSL ekranı açık uyarı gösterir. Yenileme sayısının kısmi olabileceği belirtilir.\n- Komut başarısızlığı varsa mevcut hata açıklaması da korunur.\n- Görülebilen sonuçlar saklanır; kesilen bölümdeki yenilemeler veya hatalar tahmin edilmez.\n- Çıktı sınırı, hassas bilgi maskelemesi ve sertifika doğrulama kontrolleri korunur.\n- Gerçek sınırlı çıktı okuyucusu üzerinden kesilme, komut sonucu ve otomasyon durumu için regresyon testleri eklendi.\n\nWindows x64 kurulum paketi: **AdaPanelSetup.exe**."
 }

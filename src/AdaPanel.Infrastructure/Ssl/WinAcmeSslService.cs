@@ -495,6 +495,17 @@ public sealed class WinAcmeSslService(
         // Errors on either stream matter even when stdout is the selected counting stream.
         var reportedErrors = Regex.Matches(diagnostics, outcomePattern, outcomeOptions)
             .Any(match => match.Groups["errors"].Success);
+        var failureReason = !result.Success ? "win-acme yenileme komutu basarisiz oldu."
+            : reportedErrors ? "win-acme yenilemeyi hata kayitlariyla tamamladi; komut ciktisini inceleyin." : string.Empty;
+        // A bounded capture can omit later renewals or error summaries even with exit code zero.
+        // Keep the observed count, but never publish it as a complete, clean result.
+        if (new[] { result.StandardOutput, result.StandardError }
+            .Any(output => output?.EndsWith(ProcessRunner.TruncationNotice, StringComparison.Ordinal) == true))
+        {
+            failureReason = string.Join(" ", new[] { failureReason,
+                "win-acme cikti eksik; sayim kismi olabilir. Ayrintilar icin win-acme gunluklerini inceleyin." }
+                .Where(reason => !string.IsNullOrWhiteSpace(reason)));
+        }
 
         // YENILEMEDEN SONRA KAYIT MUTLAKA TAZELENIR.
         //
@@ -518,8 +529,7 @@ public sealed class WinAcmeSslService(
         {
             RenewedCount = yenilenen,
             Measured = result.Success,
-            FailureReason = !result.Success ? "win-acme yenileme komutu basarisiz oldu."
-                : reportedErrors ? "win-acme yenilemeyi hata kayitlariyla tamamladi; komut ciktisini inceleyin." : string.Empty,
+            FailureReason = failureReason,
             Output = diagnostics,
             VerifiedCount = dogrulama.Verified,
             MissingFromStoreCount = dogrulama.MissingFromStore,
