@@ -52,6 +52,14 @@ it("shows measured counts for a verified successful renewal", async () => {
   expect(state.noticeError).toBe(false); expect(state.notice).toContain('panel.ssl.renewalSummary {"renewed":2,"verified":3}');
   expect(state.notice).toContain("fixture command output");
 });
+it("shows a reported renewal warning as an error while preserving measured counts", async () => {
+  vi.mocked(renewAllCertificates).mockResolvedValue({ ...success(), failureReason: "win-acme reported errors", output: "Renewal for example.test succeeded with errors" });
+  const state = await mount(); await state.renew();
+  expect(state.noticeError).toBe(true);
+  expect(state.notice).toContain('panel.ssl.renewalSummary {"renewed":2,"verified":3}');
+  expect(state.notice).toContain("win-acme reported errors");
+  expect(state.notice).toContain("succeeded with errors");
+});
 it("reports the server-wide result even when no site is selected", async () => {
   const state = await mount(""); await state.renew();
   expect(renewAllCertificates).toHaveBeenCalledTimes(1); expect(getSslWorkspace).not.toHaveBeenCalled();

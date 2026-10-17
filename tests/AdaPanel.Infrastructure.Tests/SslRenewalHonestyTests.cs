@@ -14,7 +14,7 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </para>
 /// <para>
 /// Ikinci hata: RenewedCount, wacs'in CIKIS KODUNDAN uretiliyordu. wacs --renew yenilenecek bir
-/// sey olmadiginda da, tek tek yenilemeler basarisiz oldugunda da 0 doner. Yani bes sertifika
+/// sey olmadiginda da 0 donebilir. Yani bes sertifika
 /// yenilense de "1", hicbiri yenilenmese de "1" yaziyordu -- sayi hicbir gercegi olcmuyordu.
 /// </para>
 /// </summary>

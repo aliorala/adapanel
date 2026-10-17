@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.114",
-  "name": "0.8.114 — Eksik posta sertifikası kaynağının bildirilmesi",
-  "body": "## 0.8.114\n\nKayıtlı Let's Encrypt PEM klasörü kaybolduğunda posta sertifikası eşitlemesinin sessizce atlanması düzeltildi.\n\n- Eksik klasör, klasör yerine dosya veya boş kaynak yolu artık açık bir hata üretir; değişiklik gerekmiyor sonucu verilmez.\n- Kaynak okunamıyorsa çalışan posta sertifikasına ve kayıtlı eşitleme durumuna dokunulmaz.\n- Kaynak yeniden erişilebilir olduğunda eşitleme tekrar denenebilir; başarılı işlemden sonra aynı sertifika gereksiz yere yeniden yazılmaz.\n- Windows sertifika deposu akışı ve otomatik yenileme kaynağı olmayan sertifikaların davranışı korunur.\n- Eksik kaynak, durum koruma ve hata sonrası yeniden deneme için regresyon testleri eklendi.\n\nWindows x64 kurulum paketi: **AdaPanelSetup.exe**."
+  "tag_name": "0.8.115",
+  "name": "0.8.115 — SSL yenilemesinde hatalı başarı bildirimlerinin düzeltilmesi",
+  "body": "## 0.8.115\n\nSSL yenilemesinde hatalarla tamamlanan işlemin tamamen başarılı gösterilmesi ve yanıltıcı çıktıların yenileme sayısına eklenmesi düzeltildi.\n\n- Win-acme hatalarla tamamlanma bildirdiğinde otomasyon hatalı tamamlandı durumunu kullanır. SSL ekranı ölçülmüş sayıları ve hata açıklamasını birlikte gösterir.\n- Yenileme sayısı yalnız tamamlanma satırlarından çıkarılır. Başarısızlık ifadesi veya adındaki success sözcüğü yenilemeyi başarılı saydırmaz.\n- Hata bilgisi hem normal hem hata çıktısından değerlendirilir. Sıfır dışı çıkış kodu ve hassas bilgi maskelemesi korunur.\n- Sağlayıcı çıktı biçimi, otomasyon durumu ve panel uyarısı için regresyon testleri eklendi.\n\nWindows x64 kurulum paketi: **AdaPanelSetup.exe**."
 }

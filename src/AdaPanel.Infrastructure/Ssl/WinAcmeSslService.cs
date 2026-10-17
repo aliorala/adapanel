@@ -3,6 +3,7 @@ using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Ssl;
 using AdaPanel.Core.Dtos.Sites;
@@ -484,14 +485,16 @@ public sealed class WinAcmeSslService(
 
         // SAYIM CIKTIDAN OKUNUR, cikis kodundan DEGIL.
         //
-        // wacs --renew, yenilenecek bir sey olmadiginda da tek tek yenilemeler basarisiz
-        // oldugunda da 0 doner. Eski kod bunu "1 sertifika yenilendi" sayiyordu: bes sertifika
-        // yenilense de "1", hicbiri yenilenmese de "1" diyordu -- yani sayi hicbir gercegi
-        // olcmuyordu.
-        var yenilenen = System.Text.RegularExpressions.Regex.Matches(
-            cikti ?? string.Empty,
-            @"(?im)^\s*.*renew(al|ed).*succe",
-            System.Text.RegularExpressions.RegexOptions.Multiline).Count;
+        // A zero exit code does not say how many renewals ran. win-acme 2.2.9 also emits
+        // "succeeded with errors" when a completed renewal has error-level log entries.
+        // Match the final outcome, not "success" inside a friendly name or "unsuccessful".
+        const string outcomePattern = @"^[^\r\n]*?\bRenewal(?:[ \t]+for[ \t]+[^\r\n]+)?[ \t]+succeeded(?<errors>[ \t]+with[ \t]+errors)?[ \t]*\r?$";
+        const RegexOptions outcomeOptions = RegexOptions.IgnoreCase | RegexOptions.Multiline
+            | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking;
+        var yenilenen = Regex.Matches(cikti ?? string.Empty, outcomePattern, outcomeOptions).Count;
+        // Errors on either stream matter even when stdout is the selected counting stream.
+        var reportedErrors = Regex.Matches(diagnostics, outcomePattern, outcomeOptions)
+            .Any(match => match.Groups["errors"].Success);
 
         // YENILEMEDEN SONRA KAYIT MUTLAKA TAZELENIR.
         //
@@ -515,7 +518,8 @@ public sealed class WinAcmeSslService(
         {
             RenewedCount = yenilenen,
             Measured = result.Success,
-            FailureReason = result.Success ? string.Empty : "win-acme yenileme komutu basarisiz oldu.",
+            FailureReason = !result.Success ? "win-acme yenileme komutu basarisiz oldu."
+                : reportedErrors ? "win-acme yenilemeyi hata kayitlariyla tamamladi; komut ciktisini inceleyin." : string.Empty,
             Output = diagnostics,
             VerifiedCount = dogrulama.Verified,
             MissingFromStoreCount = dogrulama.MissingFromStore,
