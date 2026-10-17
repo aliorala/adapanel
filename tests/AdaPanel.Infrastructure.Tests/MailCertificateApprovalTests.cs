@@ -670,6 +670,62 @@ public sealed class MailCertificateApprovalTests
     }
 
     [Theory]
+    [InlineData(587, false)]
+    [InlineData(465, false)]
+    [InlineData(587, true)]
+    [InlineData(465, true)]
+    public async Task FinalSmtpInspectionFailureCanRecoverAndTheNextSyncDoesNotRewrite(int failingPort, bool web)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        await f.UseWindowsStore();
+        await f.EditState(state => state["thumbprint"] = "old-thumbprint");
+        f.FailFinalInspectionPort = failingPort;
+        Task Apply() => web ? f.Service.SyncWebCertificateAsync(f.Host, f.Approve, f.Token)
+            : f.Service.SyncCertificateAsync(f.Approve, f.Token);
+        var before = await f.Bytes();
+        var error = await Assert.ThrowsAsync<AppException>(Apply);
+        Assert.Equal("mail.certificate_not_activated", error.MessageKey);
+        Assert.Contains("create Action", f.Commands); // Activation preceded the failed final inspection.
+        Assert.Equal(before, await f.Bytes());
+
+        f.FailFinalInspectionPort = 0;
+        f.Commands.Clear();
+        await Apply();
+        Assert.Single(f.Commands, command => command == "update Certificate cert-1");
+        Assert.Single(f.Commands, command => command == "create Action");
+        using var state = JsonDocument.Parse(await f.Bytes());
+        Assert.Equal(f.Thumbprint, state.RootElement.GetProperty("thumbprint").GetString());
+        Assert.True((await f.Service.GetCertificateStatusAsync(f.Token)).Active);
+        var published = await f.Bytes();
+        f.Commands.Clear();
+        await Apply();
+        Assert.Empty(f.Commands);
+        Assert.Equal(published, await f.Bytes());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedWebTlsRemainsSeparateFromSuccessfulMailActivation(bool web)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        await f.UseWindowsStore();
+        await f.EditState(state => state["thumbprint"] = "old-thumbprint");
+        f.FailTlsPort = 443;
+        if (web) await f.Service.SyncWebCertificateAsync(f.Host, f.Approve, f.Token);
+        else Assert.True((await f.Service.SyncCertificateAsync(f.Approve, f.Token))!.Active);
+        var status = await f.Service.GetCertificateStatusAsync(f.Token);
+        Assert.True(status.Active);
+        Assert.Equal("fail", status.WebCertificate!.Status);
+        Assert.Equal(new[] { 465, 587 }, status.Endpoints.Select(endpoint => endpoint.Port).Order());
+        Assert.All(status.Endpoints, endpoint => Assert.Equal("ok", endpoint.Status));
+        using var state = JsonDocument.Parse(await f.Bytes());
+        Assert.Equal(f.Thumbprint, state.RootElement.GetProperty("thumbprint").GetString());
+    }
+
+    [Theory]
     [InlineData("smtp.example.test", "smtp.example.test")]
     [InlineData("smtp.example.test", "*.example.test")]
     [InlineData("mail.example.test", "*.example.test")]
@@ -741,7 +797,7 @@ public sealed class MailCertificateApprovalTests
         internal bool StoreMaterial, FailStoreLookup, EnforceTrust;
         internal string Host = "mail.example.test";
         internal readonly List<string> StoreLookups = [];
-        internal int FailFinalInspectionPort;
+        internal int FailFinalInspectionPort, FailTlsPort;
         internal string CertificatePem = "", Thumbprint = "", PresentedThumbprint = "";
         internal readonly List<int> ProbedPorts = [];
         internal string DefaultHost = "other.example.test", DefaultId = "other-cert";
@@ -784,7 +840,7 @@ public sealed class MailCertificateApprovalTests
                 {
                     ProbedPorts.Add(port);
                     return Task.FromResult(new MailTlsEndpointDto { Port = port, Thumbprint = PresentedThumbprint,
-                        Status = FailTls || (port == FailFinalInspectionPort && ProbedPorts.Count(p => p == port) > 1)
+                        Status = FailTls || port == FailTlsPort || (port == FailFinalInspectionPort && ProbedPorts.Count(p => p == port) > 1)
                             || (!string.IsNullOrEmpty(expected) && expected != PresentedThumbprint) ? "fail" : "ok" });
                 }
             };
