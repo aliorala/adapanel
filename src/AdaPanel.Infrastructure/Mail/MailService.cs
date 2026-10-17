@@ -2655,7 +2655,7 @@ public sealed partial class MailService(
 
         if (state is null
             || (state.Source != "windows-store" &&
-                (!string.Equals(state.Source, "letsencrypt", StringComparison.OrdinalIgnoreCase) || !Directory.Exists(state.PemDirectory))))
+                !string.Equals(state.Source, "letsencrypt", StringComparison.OrdinalIgnoreCase)))
         {
             return null;
         }
@@ -2668,6 +2668,8 @@ public sealed partial class MailService(
                 && await MailListenersMatchAsync(state.HostName, material.Thumbprint, cancellationToken)) return null;
             return await ApplyStoreCertificateAsync(state.Domain, state.HostName, material, cancellationToken, beforeMutation);
         }
+        // A configured renewal source that disappeared is a failure, not an unchanged certificate.
+        // Let the PEM reader report missing/unreadable material before any provider work.
         var (certificatePem, privateKeyPem) = ReadPemPair(state.PemDirectory);
         var hash = ComputeHash(certificatePem + privateKeyPem);
         using var leaf = System.Security.Cryptography.X509Certificates.X509Certificate2.CreateFromPem(certificatePem, privateKeyPem);

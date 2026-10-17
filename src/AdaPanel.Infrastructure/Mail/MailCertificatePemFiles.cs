@@ -9,6 +9,7 @@ internal static class MailCertificatePemFiles
 {
     internal static (string CertificatePem, string PrivateKeyPem) Read(string directory, Action? afterSnapshot = null)
     {
+        if (string.IsNullOrWhiteSpace(directory)) throw FilesUnreadable();
         try
         {
             string SelectKey() => Directory.EnumerateFiles(directory, "*-key.pem")

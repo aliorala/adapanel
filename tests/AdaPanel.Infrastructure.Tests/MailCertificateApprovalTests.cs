@@ -22,6 +22,58 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class MailCertificateApprovalTests
 {
     [Theory]
+    [InlineData("missing", false)]
+    [InlineData("missing", true)]
+    [InlineData("file", false)]
+    [InlineData("file", true)]
+    [InlineData("empty", false)]
+    [InlineData("empty", true)]
+    [InlineData("null", false)]
+    [InlineData("null", true)]
+    public async Task MissingPemSourceIsAnErrorWithoutChangingTheRunningCertificateAndCanRecover(string kind, bool trusted)
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        using var original = JsonDocument.Parse(await f.Bytes());
+        var directory = original.RootElement.GetProperty("pemDirectory").GetString()!;
+        var missingPath = kind switch
+        {
+            "missing" => Path.Combine(directory, "not-created"),
+            "file" => Path.Combine(directory, "mail-key.pem"),
+            "empty" => "",
+            _ => null
+        };
+        await f.EditState(state => { state["source"] = "LetsEncrypt"; state["pemDirectory"] = missingPath; });
+        var before = await f.Bytes();
+        var error = await Assert.ThrowsAsync<AppException>(() => trusted
+            ? f.Service.SyncCertificateAsync(f.Token)
+            : f.Service.SyncCertificateAsync(f.Approve, f.Token));
+        Assert.Equal("mail.certificate_files_unreadable", error.MessageKey);
+        Assert.Empty(f.Commands);
+        Assert.Empty(f.ProbedPorts);
+        Assert.False(f.Written);
+        Assert.Equal(before, await f.Bytes());
+
+        await f.EditState(state => state["pemDirectory"] = directory);
+        Assert.True((await f.Service.SyncCertificateAsync(f.Token))!.Active);
+        f.Commands.Clear();
+        Assert.Null(await f.Service.SyncCertificateAsync(f.Token));
+        Assert.Empty(f.Commands);
+    }
+
+    [Fact]
+    public async Task ACertificateWithoutAManagedRenewalSourceStillSkipsPemSynchronization()
+    {
+        using var f = new Fixture(true);
+        await f.Initialize();
+        await f.EditState(state => { state["source"] = "self-signed"; state["pemDirectory"] = ""; });
+        var before = await f.Bytes();
+        Assert.Null(await f.Service.SyncCertificateAsync(f.Token));
+        Assert.Empty(f.Commands);
+        Assert.Equal(before, await f.Bytes());
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ProviderReceivesTheValidatedChainWhileSourceMaterialStaysUnchanged(bool store)

@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.113",
-  "name": "0.8.113 — SSL yenileme hata ayrıntılarının korunması",
-  "body": "## 0.8.113\n\nSSL yenilemesinde normal çıktı varken ayrı hata akışının kaybolmasına yol açan sorun düzeltildi.\n\n- Win-acme normal çıktı ve hata çıktısı birlikte işlem ayrıntılarında korunur. Normal ilerleme mesajları, zaman aşımı veya hata açıklamasını gizlemez.\n- Parola ve kimlik bilgileri, yanıt hazırlanırken mevcut maskeleme işleminden geçer.\n- Yenilenen sertifika sayısı ve başarı/başarısızlık kararı korunur. Hata akışındaki yinelenen başarı satırı ikinci bir yenileme olarak sayılmaz.\n- Karışık çıktı, zaman aşımı, hassas bilgi maskeleme ve yinelenen satır senaryoları için regresyon testleri eklendi.\n\nWindows x64 kurulum paketi: **AdaPanelSetup.exe**."
+  "tag_name": "0.8.114",
+  "name": "0.8.114 — Eksik posta sertifikası kaynağının bildirilmesi",
+  "body": "## 0.8.114\n\nKayıtlı Let's Encrypt PEM klasörü kaybolduğunda posta sertifikası eşitlemesinin sessizce atlanması düzeltildi.\n\n- Eksik klasör, klasör yerine dosya veya boş kaynak yolu artık açık bir hata üretir; değişiklik gerekmiyor sonucu verilmez.\n- Kaynak okunamıyorsa çalışan posta sertifikasına ve kayıtlı eşitleme durumuna dokunulmaz.\n- Kaynak yeniden erişilebilir olduğunda eşitleme tekrar denenebilir; başarılı işlemden sonra aynı sertifika gereksiz yere yeniden yazılmaz.\n- Windows sertifika deposu akışı ve otomatik yenileme kaynağı olmayan sertifikaların davranışı korunur.\n- Eksik kaynak, durum koruma ve hata sonrası yeniden deneme için regresyon testleri eklendi.\n\nWindows x64 kurulum paketi: **AdaPanelSetup.exe**."
 }
