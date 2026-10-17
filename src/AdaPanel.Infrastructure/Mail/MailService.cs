@@ -145,14 +145,15 @@ public sealed partial class MailService(
 
         var env = BuildEnvironment(password);
         var probe = await RunCliAsync(cli, "query domain --json", env, cancellationToken);
-        if (!probe.Success)
+        var domainQuery = MailQueryResult.Olc(probe);
+        if (!domainQuery.Measured)
         {
             // CLI var ama sunucuya bağlanılamıyor (henüz başlamamış olabilir) ya da kimlik doğrulama başarısız.
             return new MailWorkspaceDto { Installed = true, Configured = false };
         }
 
         var quotas = await ReadDomainQuotasAsync(cancellationToken);
-        var domainItems = ParseItems(probe.StandardOutput);
+        var domainItems = domainQuery.Items;
         var domains = domainItems
             .Select(item => new MailDomainDto
             {
@@ -201,16 +202,19 @@ public sealed partial class MailService(
                 var id = GetField(brief, "id");
                 if (string.IsNullOrWhiteSpace(id))
                 {
+                    accountsMeasured = false;
                     continue;
                 }
 
                 var detail = await GetObjectAsync(cli, "account", id, env, cancellationToken);
                 if (detail is null)
                 {
+                    accountsMeasured = false;
                     continue;
                 }
 
                 var address = GetField(detail.Value, "emailAddress", "name");
+                if (!IsValidEmailAddress(address)) accountsMeasured = false;
                 if (BelongsToDomain(address, normalized))
                 {
                     accounts.Add(new MailAccountDto
@@ -499,10 +503,12 @@ public sealed partial class MailService(
                 var memberId = GetField(brief, "id");
                 if (string.IsNullOrWhiteSpace(memberId))
                 {
-                    continue;
+                    throw new AppException("mail.domain_members_unmeasured", 502, 502, $"{domain}/{principalType}");
                 }
 
                 var detail = await GetObjectAsync(cli, principalType, memberId, env, cancellationToken);
+                if (detail is null)
+                    throw new AppException("mail.domain_members_unmeasured", 502, 502, $"{domain}/{principalType}");
                 var memberDomainId = detail is null ? null : GetField(detail.Value, "domainId");
                 var memberEmail = detail is null ? GetField(brief, "emailAddress") : GetField(detail.Value, "emailAddress");
                 var belongsToDomain =
@@ -511,7 +517,8 @@ public sealed partial class MailService(
 
                 if (belongsToDomain)
                 {
-                    await RunCliAsync(cli, $"delete {principalType} --ids {Arg(memberId)}", env, cancellationToken);
+                    var deletion = await RunCliAsync(cli, $"delete {principalType} --ids {Arg(memberId)}", env, cancellationToken);
+                    if (!deletion.Success) throw MapMailError(deletion);
                     continue;
                 }
 
@@ -522,7 +529,8 @@ public sealed partial class MailService(
                     if (removed)
                     {
                         var aliasPayload = "aliases={" + string.Join(",", entries) + "}";
-                        await RunCliAsync(cli, $"update account {Arg(memberId)} --field {CliJsonArg(aliasPayload)}", env, cancellationToken);
+                        var update = await RunCliAsync(cli, $"update account {Arg(memberId)} --field {CliJsonArg(aliasPayload)}", env, cancellationToken);
+                        if (!update.Success) throw MapMailError(update);
                     }
                 }
             }
@@ -3526,15 +3534,18 @@ public sealed partial class MailService(
     // sunucusuna bağlanılamadı" durumuna geçer, asılı kalmaz.
     private static readonly TimeSpan CliTimeout = TimeSpan.FromSeconds(30);
 
-    private static async Task<CommandResult> RunCliAsync(string cli, string arguments, IReadOnlyDictionary<string, string> env, CancellationToken cancellationToken)
+    internal Func<string, string, IReadOnlyDictionary<string, string>, CancellationToken, Task<CommandResult>>? CommandRunner { get; init; }
+
+    private async Task<CommandResult> RunCliAsync(string cli, string arguments, IReadOnlyDictionary<string, string> env, CancellationToken cancellationToken)
     {
+        if (CommandRunner is { } runner) return await runner(cli, arguments, env, cancellationToken);
         return await ProcessRunner.RunAsync(cli, arguments, cancellationToken: cancellationToken, environmentVariables: env, timeout: CliTimeout);
     }
 
     // Karmaşık JSON payload'u geçici dosyaya yazıp stalwart-cli'ye --file ile verir. Komut
     // satırında inline JSON (--json "<escaped>") Windows CommandLineToArgvW kurallarıyla
     // bozulabildiğinden create/update gibi tam-payload işlemlerinde bu yol kullanılır.
-    private static async Task<CommandResult> RunCliJsonAsync(string cli, string command, string json, IReadOnlyDictionary<string, string> env, CancellationToken cancellationToken)
+    private async Task<CommandResult> RunCliJsonAsync(string cli, string command, string json, IReadOnlyDictionary<string, string> env, CancellationToken cancellationToken)
     {
         // SIR SIZINTISI: bu payload posta kutusu parolasını, SMTP relay kimliğini ve TLS ÖZEL
         // ANAHTARINI (PEM) taşıyabilir. C:\Windows\TEMP'in varsayılan DACL'i yeni dosyalara
@@ -4018,7 +4029,10 @@ public sealed partial class MailService(
             return new MailQueueDto { Installed = true, Configured = false };
         }
 
-        var kayitlar = ParseItems(liste.StandardOutput);
+        var queueQuery = MailQueryResult.Olc(liste);
+        if (!queueQuery.Measured)
+            return new MailQueueDto { Installed = true, Configured = false };
+        var kayitlar = queueQuery.Items;
         var sinir = Math.Clamp(limit <= 0 ? VarsayilanKuyrukLimiti : limit, 1, AzamiKuyrukLimiti);
 
         var iletiler = new List<MailQueueMessageDto>();
@@ -4101,7 +4115,7 @@ public sealed partial class MailService(
 
     /// <summary>Zarf bilgisi gelmemiş (yalnız kimlik taşıyan) bir özet mi?</summary>
     private static bool KuyrukOzetiEksik(MailQueueMessageDto ileti) =>
-        ileti.Recipients.Count == 0 && ileti.CreatedAtUtc is null && ileti.SizeBytes == 0;
+        ileti.Recipients.Count == 0 || ileti.CreatedAtUtc is null || ileti.SizeBytes == 0;
 
     /// <summary>
     /// Stalwart <c>QueuedMessage</c> nesnesini panel görünümüne çevirir.
@@ -4573,7 +4587,7 @@ public sealed partial class MailService(
     /// olanlar için <see cref="RequireMailSettingsReloadAsync"/>.
     /// </para>
     /// </remarks>
-    private static async Task<MailReloadOutcome> ReloadMailSettingsAsync(
+    private async Task<MailReloadOutcome> ReloadMailSettingsAsync(
         string cli,
         IReadOnlyDictionary<string, string> env,
         CancellationToken cancellationToken)
@@ -4615,7 +4629,7 @@ public sealed partial class MailService(
     /// gerektiğini bildirir. Sessizce başarı saymak, yöneticiye ölçmediğimiz bir şeyi
     /// söylemek olurdu.
     /// </remarks>
-    private static async Task RequireMailSettingsReloadAsync(
+    private async Task RequireMailSettingsReloadAsync(
         string cli,
         IReadOnlyDictionary<string, string> env,
         string settingName,

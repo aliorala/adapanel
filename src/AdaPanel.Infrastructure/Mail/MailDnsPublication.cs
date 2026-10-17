@@ -34,6 +34,23 @@ namespace AdaPanel.Infrastructure.Mail;
 /// </remarks>
 public static class MailDnsPublication
 {
+    // Delete only the record we can identify, never all MX/A records sharing its owner name.
+    public static bool MatchesRecord(MailDnsRecordDto expected, SiteDnsRecordDto actual)
+    {
+        if (!string.Equals(expected.Type, actual.Type, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(expected.Host.TrimEnd('.'), actual.Host.TrimEnd('.'), StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(expected.Value)) return false;
+        return expected.Type.ToUpperInvariant() switch
+        {
+            "MX" => expected.Priority == actual.Priority && string.Equals(expected.Value.Trim().TrimEnd('.'),
+                actual.Value.Trim().TrimEnd('.'), StringComparison.OrdinalIgnoreCase),
+            "A" or "AAAA" => System.Net.IPAddress.TryParse(expected.Value.Trim(), out var left)
+                && System.Net.IPAddress.TryParse(actual.Value.Trim(), out var right) && left.Equals(right),
+            "TXT" => string.Equals(expected.Value.Trim(), actual.Value.Trim(), StringComparison.Ordinal),
+            _ => false
+        };
+    }
+
     /// <summary>Yayın sonucu: gerçekten yazıldı mı, kaç kayıt, hangi sebeple yazılmadı.</summary>
     /// <param name="Published">Kayıtlar Windows DNS bölgesine GERÇEKTEN yazıldı mı.</param>
     /// <param name="AppliedCount">Bölgeye yazılan kayıt sayısı. Yayınlanmadıysa 0.</param>

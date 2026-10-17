@@ -50,6 +50,22 @@ public sealed class WebmailService(
         var existing = await fileStore.ReadAsync<WebmailState?>(StatePath, null, cancellationToken);
         if (existing is { Port: > 0 } && await IsDeployedAndHealthyAsync(existing.Port, cancellationToken))
         {
+            var root = Path.GetDirectoryName(existing.EntryRoot);
+            if (!string.IsNullOrWhiteSpace(root))
+            {
+                var path = Path.Combine(root, "config", "config.inc.php");
+                if (File.Exists(path))
+                {
+                    using var lease = await MailCertificateLifecycle.EnterAsync(path, cancellationToken);
+                    var config = await File.ReadAllTextAsync(path, cancellationToken);
+                    if (config.Contains(ManagedMarker, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var options = await WebmailTlsConfiguration.PrepareAsync(fileStore, root, cancellationToken);
+                        var hardened = WebmailTlsConfiguration.Harden(config, options);
+                        if (hardened != config) await File.WriteAllTextAsync(path, hardened, cancellationToken);
+                    }
+                }
+            }
             return BuildWebmailUrl(existing, publicHost);
         }
 
@@ -68,7 +84,12 @@ public sealed class WebmailService(
         var installRoot = ResolveInstallRoot(component.InstallDir);
         var documentRoot = Path.Combine(installRoot, "public_html");
 
-        EnsureRoundcubeConfig(installRoot);
+        var configPath = Path.Combine(installRoot, "config", "config.inc.php");
+        if (!File.Exists(configPath) || File.ReadAllText(configPath).Contains(ManagedMarker, StringComparison.OrdinalIgnoreCase))
+        {
+            var tlsOptions = await WebmailTlsConfiguration.PrepareAsync(fileStore, installRoot, cancellationToken);
+            EnsureRoundcubeConfig(installRoot, tlsOptions);
+        }
         await Bootstrap.ComponentWebPublication.EnsureRoundcubeAssetsAsync(installRoot, documentRoot, cancellationToken);
         WebAppPublisher.EnsurePhpEntry(documentRoot);
         EnsureHealthEndpoint(documentRoot);
@@ -435,7 +456,7 @@ public sealed class WebmailService(
         return match ?? installDir;
     }
 
-    private void EnsureRoundcubeConfig(string installRoot)
+    private void EnsureRoundcubeConfig(string installRoot, string tlsOptions)
     {
         var configDir = Path.Combine(installRoot, "config");
         Directory.CreateDirectory(configDir);
@@ -468,8 +489,7 @@ public sealed class WebmailService(
         var dbPath = Path.Combine(dataDir, "roundcube.db").Replace('\\', '/');
         var desKey = GenerateDesKey();
 
-        // STARTTLS ile localhost'a bağlanırız; sertifika CN'i mail.<domain> olduğundan loopback'te
-        // doğrulamayı kapatırız (allow_self_signed) — trafik yine TLS ile şifrelenir.
+        // Loopback transport with the configured certificate hostname and Windows trust anchors.
         var config = $$"""
             <?php
             // {{ManagedMarker}}. Custom files without this marker are preserved.
@@ -479,8 +499,8 @@ public sealed class WebmailService(
             $config['smtp_host'] = 'tls://localhost:587';
             $config['smtp_user'] = '%u';
             $config['smtp_pass'] = '%p';
-            $config['imap_conn_options'] = ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false, 'allow_self_signed' => true]];
-            $config['smtp_conn_options'] = ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false, 'allow_self_signed' => true]];
+            $config['imap_conn_options'] = {{tlsOptions}};
+            $config['smtp_conn_options'] = {{tlsOptions}};
             $config['support_url'] = '';
             $config['product_name'] = 'AdaPanel Webmail';
             $config['des_key'] = '{{desKey}}';
@@ -493,8 +513,8 @@ public sealed class WebmailService(
             $config['plugins'] = ['managesieve'];
             $config['managesieve_host'] = 'localhost';
             $config['managesieve_port'] = 4190;
-            $config['managesieve_usetls'] = false;
-            $config['managesieve_conn_options'] = ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false, 'allow_self_signed' => true]];
+            $config['managesieve_usetls'] = true;
+            $config['managesieve_conn_options'] = {{tlsOptions}};
             $config['managesieve_vacation'] = 1;
             $config['temp_dir'] = '{{tempDir.Replace('\\', '/')}}';
             $config['log_dir'] = '{{logDir.Replace('\\', '/')}}';

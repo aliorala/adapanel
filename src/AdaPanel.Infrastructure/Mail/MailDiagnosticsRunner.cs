@@ -5,16 +5,17 @@ namespace AdaPanel.Infrastructure.Mail;
 
 /// <summary>
 /// Mail teşhisini (MX/A/SPF/DKIM/DMARC/PTR canlı DNS kontrolü) mail sunucusundan BAĞIMSIZ çalıştırır;
-/// hem Stalwart hem MailEnable servisleri aynı mantığı kullanır. Her kontrol izoledir, ASLA fırlatmaz.
+/// hem Stalwart hem MailEnable servisleri aynı mantığı kullanır. Hatalar izole edilir; iptal korunur.
 /// </summary>
 internal static class MailDiagnosticsRunner
 {
     public static async Task<MailDiagnosticsDto> RunAsync(MailDnsDto dns, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var normalized = dns.Domain.Trim().ToLowerInvariant();
         var mailHost = string.IsNullOrWhiteSpace(dns.MailHost) ? $"mail.{normalized}" : dns.MailHost.Trim().TrimEnd('.').ToLowerInvariant();
         var serverIp = dns.ServerAddress?.Trim() ?? string.Empty;
-        var dkim = dns.Records.FirstOrDefault(record => string.Equals(record.Purpose, "dkim", StringComparison.OrdinalIgnoreCase));
+        var dkimRecords = dns.Records.Where(record => string.Equals(record.Purpose, "dkim", StringComparison.OrdinalIgnoreCase)).ToArray();
         var spfExpected = dns.Records.FirstOrDefault(record => string.Equals(record.Purpose, "spf", StringComparison.OrdinalIgnoreCase))?.Value ?? string.Empty;
         var dmarcExpected = dns.Records.FirstOrDefault(record => string.Equals(record.Purpose, "dmarc", StringComparison.OrdinalIgnoreCase))?.Value ?? string.Empty;
 
@@ -50,31 +51,33 @@ internal static class MailDiagnosticsRunner
         checks.Add(await RunCheckAsync("spf", spfExpected, async () =>
         {
             var values = await TxtValuesAsync(lookup, normalized, cancellationToken);
-            var spf = values.FirstOrDefault(value => value.Contains("v=spf1", StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
-            return (!string.IsNullOrEmpty(spf), spf);
+            return CheckTxt("spf", values, spfExpected);
         }));
 
         // DKIM → <selector>._domainkey.<domain> TXT'sinde v=DKIM1 olmalı.
-        checks.Add(await RunCheckAsync("dkim", dkim?.Value ?? string.Empty, async () =>
+        checks.Add(await RunCheckAsync("dkim", string.Join(" | ", dkimRecords.Select(r => r.Host + ": " + r.Value)), async () =>
         {
-            var host = (dkim?.Host ?? string.Empty).Trim().TrimEnd('.');
-            if (string.IsNullOrEmpty(host))
+            if (dkimRecords.Length == 0) return (false, string.Empty);
+            var healthy = true;
+            var found = new List<string>();
+            foreach (var dkim in dkimRecords)
             {
-                return (false, string.Empty);
+                var host = dkim.Host.Trim().TrimEnd('.');
+                if (string.IsNullOrEmpty(host)) return (false, string.Empty);
+                var fqdn = host.EndsWith("." + normalized, StringComparison.OrdinalIgnoreCase) ? host : $"{host}.{normalized}";
+                var values = await TxtValuesAsync(lookup, fqdn, cancellationToken);
+                var result = CheckTxt("dkim", values, dkim.Value);
+                healthy &= result.Ok;
+                found.Add(host + ": " + result.Found);
             }
-
-            var fqdn = host.EndsWith(normalized, StringComparison.OrdinalIgnoreCase) ? host : $"{host}.{normalized}";
-            var values = await TxtValuesAsync(lookup, fqdn, cancellationToken);
-            var record = values.FirstOrDefault(value => value.Contains("v=DKIM1", StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
-            return (!string.IsNullOrEmpty(record), record);
+            return (healthy, string.Join(" | ", found));
         }));
 
         // DMARC → _dmarc.<domain> TXT'sinde v=DMARC1 olmalı.
         checks.Add(await RunCheckAsync("dmarc", dmarcExpected, async () =>
         {
             var values = await TxtValuesAsync(lookup, $"_dmarc.{normalized}", cancellationToken);
-            var record = values.FirstOrDefault(value => value.Contains("v=DMARC1", StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
-            return (!string.IsNullOrEmpty(record), record);
+            return CheckTxt("dmarc", values, dmarcExpected);
         }));
 
         // PTR → sunucu IP'sinin ters DNS'i mail.<domain> olmalı (sağlayıcıda ayarlanır).
@@ -108,7 +111,7 @@ internal static class MailDiagnosticsRunner
         };
     }
 
-    // Her teşhis adımını izole çalıştırır: sorgu başarısızsa "unknown" döner, ASLA fırlatmaz.
+    // Sorgu başarısızsa unknown; çağıranın iptali hata raporuna dönüştürülmez.
     private static async Task<MailDiagnosticCheckDto> RunCheckAsync(string key, string expected, Func<Task<(bool Ok, string Found)>> check)
     {
         try
@@ -116,6 +119,7 @@ internal static class MailDiagnosticsRunner
             var (ok, found) = await check();
             return new MailDiagnosticCheckDto { Key = key, Status = ok ? "ok" : "fail", Expected = expected, Found = found };
         }
+        catch (OperationCanceledException) { throw; }
         catch
         {
             return new MailDiagnosticCheckDto { Key = key, Status = "unknown", Expected = expected, Found = string.Empty };
@@ -134,6 +138,7 @@ internal static class MailDiagnosticsRunner
             await client.ConnectAsync(System.Net.IPAddress.Loopback, port, timeout.Token);
             return (client.Connected, $"dinleniyor (127.0.0.1:{port})");
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch
         {
             return (false, $"dinlenmiyor (127.0.0.1:{port})");
@@ -145,4 +150,51 @@ internal static class MailDiagnosticsRunner
         var response = await lookup.QueryAsync(name, QueryType.TXT, cancellationToken: cancellationToken);
         return response.Answers.TxtRecords().Select(record => string.Concat(record.Text)).ToList();
     }
+
+    // DNS configuration checks, not a delivery-time SPF/DMARC or message signature verifier.
+    internal static (bool Ok, string Found) CheckTxt(string kind, IEnumerable<string> values, string expected)
+    {
+        var records = values.Where(value => kind switch
+        {
+            "spf" => value.Equals("v=spf1", StringComparison.OrdinalIgnoreCase)
+                || value.StartsWith("v=spf1 ", StringComparison.OrdinalIgnoreCase),
+            "dmarc" => value.StartsWith("v=DMARC1;", StringComparison.Ordinal)
+                || value.Equals("v=DMARC1", StringComparison.Ordinal),
+            // A DKIM key record may omit v=; the key value is case sensitive.
+            "dkim" => ParseTags(value)?.ContainsKey("p") == true || value.StartsWith("v=DKIM1", StringComparison.Ordinal),
+            _ => false
+        }).ToArray();
+        var found = string.Join(" | ", records);
+        if (records.Length != 1) return (false, found);
+        if (kind == "spf")
+            return (!string.IsNullOrWhiteSpace(expected) && string.Equals(
+                NormalizeSpaces(records[0]), NormalizeSpaces(expected), StringComparison.Ordinal), found);
+        var actual = ParseTags(records[0]);
+        var wanted = ParseTags(expected);
+        if (actual is null || wanted is null) return (false, found);
+        if (kind == "dkim")
+        {
+            var key = RemoveSpaces(actual.GetValueOrDefault("p", ""));
+            var expectedKey = RemoveSpaces(wanted.GetValueOrDefault("p", ""));
+            return (key.Length > 0 && key == expectedKey
+                && (!actual.TryGetValue("v", out var version) || version == "DKIM1")
+                && actual.GetValueOrDefault("k", "rsa") == wanted.GetValueOrDefault("k", "rsa"), found);
+        }
+        return (actual.GetValueOrDefault("p") is "none" or "quarantine" or "reject"
+            && wanted.All(pair => actual.GetValueOrDefault(pair.Key) == pair.Value), found);
+    }
+
+    private static Dictionary<string, string>? ParseTags(string value)
+    {
+        var tags = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var part in value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var separator = part.IndexOf('=');
+            if (separator <= 0 || !tags.TryAdd(part[..separator].Trim(), part[(separator + 1)..].Trim())) return null;
+        }
+        return tags;
+    }
+
+    private static string NormalizeSpaces(string value) => string.Join(" ", value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    private static string RemoveSpaces(string value) => string.Concat(value.Where(c => !char.IsWhiteSpace(c)));
 }

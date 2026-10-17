@@ -184,13 +184,7 @@ public sealed class MailController(
         var zone = await dnsService.GetZoneAsync(domain, cancellationToken);
         foreach (var record in zone.Records)
         {
-            var matchesMailRecord = mailDns.Records.Any(mail =>
-                string.Equals(mail.Type, record.Type, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(mail.Host.Trim('.'), record.Host.Trim('.'), StringComparison.OrdinalIgnoreCase) &&
-                // TXT host'ları (SPF/DKIM/DMARC) çakışabilir; değer de eşleşmeli ki kullanıcının
-                // başka TXT kaydı yanlışlıkla silinmesin. MX/A için host+tip yeterli (mail'e özgü).
-                (!string.Equals(record.Type, "TXT", StringComparison.OrdinalIgnoreCase) ||
-                 string.Equals(mail.Value.Trim(), record.Value.Trim(), StringComparison.Ordinal)));
+            var matchesMailRecord = mailDns.Records.Any(mail => MailDnsPublication.MatchesRecord(mail, record));
 
             if (matchesMailRecord && !string.IsNullOrWhiteSpace(record.Id))
             {
