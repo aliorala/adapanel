@@ -8,6 +8,50 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed partial class QueuedBackupActorLifecycleTests
 {
     [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(-1)]
+    public async Task SslResponseKeepsBothCommandStreamsIncludingTimeoutDiagnosis(int exitCode)
+    {
+        using var f = new Fixture();
+        await f.PrepareNativeSsl("", true);
+        f.SslRelease.TrySetResult();
+        f.SslNativeResult = new CommandResult
+        {
+            ExitCode = exitCode,
+            StandardOutput = "Renewal succeeded\nChecking remaining renewals.",
+            StandardError = "Process timed out after 600 s; termination was requested.\n" + RenewalDiagnostic
+        };
+        var result = await f.SslNativeService.RenewAllAsync(f.Token);
+        Assert.Equal(exitCode == 0, result.Measured);
+        Assert.Equal(1, result.RenewedCount);
+        Assert.Contains("Checking remaining renewals.", result.Output);
+        Assert.Contains("Process timed out after 600 s", result.Output);
+        Assert.Contains(RenewalDiagnosis, result.Output);
+        AssertNoRenewalSecrets(JsonSerializer.Serialize(result));
+        Assert.Equal(1, f.SslCommands);
+    }
+
+    [Fact]
+    public async Task SslResponseDoesNotCountADiagnosticCopyOfTheSuccessLineTwice()
+    {
+        using var f = new Fixture();
+        await f.PrepareNativeSsl("", true);
+        f.SslRelease.TrySetResult();
+        f.SslNativeResult = new CommandResult
+        {
+            ExitCode = 1,
+            StandardOutput = "Renewal succeeded",
+            StandardError = "Renewal succeeded\n" + RenewalDiagnostic
+        };
+        var result = await f.SslNativeService.RenewAllAsync(f.Token);
+        Assert.False(result.Measured);
+        Assert.Equal(1, result.RenewedCount);
+        Assert.Contains(RenewalDiagnosis, result.Output);
+        AssertNoRenewalSecrets(JsonSerializer.Serialize(result));
+    }
+
+    [Theory]
     [InlineData(true, true)]
     [InlineData(true, false)]
     [InlineData(false, true)]

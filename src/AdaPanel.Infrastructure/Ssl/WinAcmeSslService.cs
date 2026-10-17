@@ -477,6 +477,10 @@ public sealed class WinAcmeSslService(
 
         var result = await RenewalCommand(wacs, "--renew --baseuri https://acme-v02.api.letsencrypt.org/", cancellationToken);
         var cikti = string.IsNullOrWhiteSpace(result.StandardOutput) ? result.StandardError : result.StandardOutput;
+        // Keep both diagnostic streams: progress on stdout must not hide errors/timeouts on stderr.
+        // Counting retains its original stream selection so a diagnostic copy is not counted twice.
+        var diagnostics = string.Join(Environment.NewLine,
+            new[] { result.StandardOutput, result.StandardError }.Where(text => !string.IsNullOrWhiteSpace(text)));
 
         // SAYIM CIKTIDAN OKUNUR, cikis kodundan DEGIL.
         //
@@ -512,7 +516,7 @@ public sealed class WinAcmeSslService(
             RenewedCount = yenilenen,
             Measured = result.Success,
             FailureReason = result.Success ? string.Empty : "win-acme yenileme komutu basarisiz oldu.",
-            Output = cikti ?? string.Empty,
+            Output = diagnostics,
             VerifiedCount = dogrulama.Verified,
             MissingFromStoreCount = dogrulama.MissingFromStore,
             UnverifiedCount = dogrulama.Unmeasured,

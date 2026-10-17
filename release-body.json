@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.112",
-  "name": "0.8.112 — Otomatik yenilemede posta sonucunun korunması",
-  "body": "## 0.8.112\n\nOtomatik SSL yenilemesinde posta sertifikasının iki kez eşitlenmesine ve ilk işlemin sonucunun özette kaybolmasına yol açan bağlantı düzeltildi.\n\n- SSL servisi içinde tamamlanan posta eşitlemesinin sonucu otomasyona aktarılır. Aynı yenileme turunda ikinci kez eşitleme yapılmaz.\n- Posta sertifikası güncellendiyse başarı bilgisi işlem özetinde korunur. Değişiklik gerekmeyen sonuç için güncellendi mesajı üretilmez.\n- Web yenilemesi ölçülemese bile tamamlanan posta eşitlemesinin sonucu korunur; web hatası başarıya çevrilmez.\n- İptal, yetki doğrulaması, posta hataları ve hassas bilgilerin hata kayıtlarından temizlenmesi korunur.\n- Win-acme kurulu/kurulu değil, değişen/değişmeyen sertifika ve manuel/otomatik çağrılar için regresyon testleri eklendi.\n\nWindows x64 kurulum paketi: **AdaPanelSetup.exe**."
+  "tag_name": "0.8.113",
+  "name": "0.8.113 — SSL yenileme hata ayrıntılarının korunması",
+  "body": "## 0.8.113\n\nSSL yenilemesinde normal çıktı varken ayrı hata akışının kaybolmasına yol açan sorun düzeltildi.\n\n- Win-acme normal çıktı ve hata çıktısı birlikte işlem ayrıntılarında korunur. Normal ilerleme mesajları, zaman aşımı veya hata açıklamasını gizlemez.\n- Parola ve kimlik bilgileri, yanıt hazırlanırken mevcut maskeleme işleminden geçer.\n- Yenilenen sertifika sayısı ve başarı/başarısızlık kararı korunur. Hata akışındaki yinelenen başarı satırı ikinci bir yenileme olarak sayılmaz.\n- Karışık çıktı, zaman aşımı, hassas bilgi maskeleme ve yinelenen satır senaryoları için regresyon testleri eklendi.\n\nWindows x64 kurulum paketi: **AdaPanelSetup.exe**."
 }
