@@ -8,6 +8,7 @@ using AdaPanel.Core.Dtos.RunningJobs;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Backup;
+using AdaPanel.Infrastructure.Bootstrap;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
 
@@ -1122,7 +1123,9 @@ public sealed class AutomationService(
                     {
                         // Kurulum akışı aynı bileşeni yeni sürümle yeniden kurar (upgrade yolu budur).
                         var result = await componentBootstrapper.InstallAsync(component.ComponentId, null, null, force: true, cancellationToken: cancellationToken);
-                        if (string.Equals(result.Status, "Installed", StringComparison.OrdinalIgnoreCase))
+                        if (string.Equals(result.Status, "Installed", StringComparison.OrdinalIgnoreCase)
+                            && result.VersionMeasured
+                            && ComponentBootstrapper.HasReachedVersion(result.Version, component.AvailableVersion))
                         {
                             applied++;
                             pending.Remove($"{component.DisplayName} {component.Version} -> {component.AvailableVersion}");
@@ -1130,7 +1133,8 @@ public sealed class AutomationService(
                         else
                         {
                             hasError = true;
-                            summary.AppendLine($"{component.ComponentId}: {result.Message}");
+                            summary.AppendLine($"{component.ComponentId}: Update target {component.AvailableVersion} was not verified " +
+                                $"(status: {result.Status}, version: {result.Version}, measured: {result.VersionMeasured}). {result.Message}");
                         }
                     }
                     catch (Exception exception)

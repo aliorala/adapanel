@@ -1031,6 +1031,11 @@ public sealed class ComponentBootstrapper(
         return false;
     }
 
+    /// <summary>Both versions must be measurable; an unknown version never satisfies an update target.</summary>
+    internal static bool HasReachedVersion(string actual, string target) =>
+        ParseVersionParts(actual) is not null && ParseVersionParts(target) is not null
+        && CompareVersions(actual, target) >= 0;
+
     /// <summary>Sürüm karşılaştırması: sol &gt; sağ ise pozitif, eşitse 0, küçükse negatif.</summary>
     internal static int CompareVersions(string? left, string? right)
     {
