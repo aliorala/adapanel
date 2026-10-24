@@ -31,6 +31,8 @@ namespace AdaPanel.Infrastructure.Tests;
 
 /// <summary>Actual controller, SQLite authority, service and native ACL processing. IIS is fake;
 /// native commands can affect only a guarded unique temp tree and the current process SID.</summary>
+// Native ACL process startup must not compete with unrelated integration tests.
+[Collection("Script host timing")]
 public sealed class FileRecursivePermissionBoundaryTests(ITestOutputHelper output)
 {
     [Theory]
@@ -216,13 +218,18 @@ public sealed class FileRecursivePermissionBoundaryTests(ITestOutputHelper outpu
     [Fact]
     public async Task FiveHundredFilesUseTheActualGuardedPermissionFlow()
     {
-        await using var f = await Fixture.Create("M", probeFiles: 500);
+        // This case launches 503 native commands; give the bulk fixture its own budget.
+        // Individual command deadlines and all permission/boundary assertions stay unchanged.
+        await using var f = await Fixture.Create("M", probeFiles: 500, fixtureTimeout: TimeSpan.FromMinutes(5));
         var clock = Stopwatch.StartNew();
-        await f.Run();
-        clock.Stop();
+        try { await f.Run(); }
+        finally
+        {
+            clock.Stop();
+            output.WriteLine("Actual guarded FileService ACL: 500 extra files, {0} commands, {1} ms.", f.NativeCalls.Count, clock.ElapsedMilliseconds);
+        }
         f.AssertNormalTreeChanged();
         Assert.Equal(f.OutsideBefore, f.OutsideAcl());
-        output.WriteLine("Actual guarded FileService ACL: 500 extra files, {0} commands, {1} ms.", f.NativeCalls.Count, clock.ElapsedMilliseconds);
     }
 
     private sealed class Fixture : IAsyncDisposable
@@ -230,7 +237,7 @@ public sealed class FileRecursivePermissionBoundaryTests(ITestOutputHelper outpu
         private const string Prefix = "adapanel-file-acl-boundary-";
         private const string Principal = "owned_acl_fixture";
         private readonly string root = Path.Combine(Path.GetTempPath(), Prefix + Guid.NewGuid().ToString("N"));
-        private readonly CancellationTokenSource lifetime = new(TimeSpan.FromSeconds(90));
+        private readonly CancellationTokenSource lifetime;
         private readonly CancellationTokenSource request;
         private readonly SqliteConnection connection = new("Data Source=:memory:");
         private readonly AdaPanelDbContext db;
@@ -258,8 +265,9 @@ public sealed class FileRecursivePermissionBoundaryTests(ITestOutputHelper outpu
         internal List<string> NativeCalls { get; } = [];
         internal List<string> Audits { get; } = [];
 
-        private Fixture(string rights)
+        private Fixture(string rights, TimeSpan? fixtureTimeout = null)
         {
+            lifetime = new CancellationTokenSource(fixtureTimeout ?? TimeSpan.FromSeconds(90));
             this.rights = rights;
             using (var identity = WindowsIdentity.GetCurrent()) currentSid = identity.User!;
             Assert.NotNull(currentSid);
@@ -329,9 +337,9 @@ public sealed class FileRecursivePermissionBoundaryTests(ITestOutputHelper outpu
         }
         private SetFilePermissionsRequest PermissionRequest { get; }
 
-        internal static async Task<Fixture> Create(string rights, string? alias = null, int probeFiles = 0)
+        internal static async Task<Fixture> Create(string rights, string? alias = null, int probeFiles = 0, TimeSpan? fixtureTimeout = null)
         {
-            var f = new Fixture(rights);
+            var f = new Fixture(rights, fixtureTimeout);
             try
             {
                 for (var index = 0; index < probeFiles; index++)

@@ -248,7 +248,9 @@ internal static class BackupSchedule
     {
         if (!plan.Takvimli)
         {
-            return (lastRunUtc ?? nowUtc).AddHours(Math.Max(1, plan.IntervalHours));
+            return ZamaniGeldi(plan, lastRunUtc, nowUtc, zone)
+                ? nowUtc
+                : lastRunUtc!.Value.AddHours(Math.Max(1, plan.IntervalHours));
         }
 
         if (ZamaniGeldi(plan, lastRunUtc, nowUtc, zone))

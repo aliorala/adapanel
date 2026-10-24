@@ -120,11 +120,12 @@ public sealed class AdvisorService(
 
                     items.Add(new AdvisorItemDto
                     {
-                        Id = $"ssl-binding-drift:{cert.HostName}",
+                        Id = $"ssl-binding-drift:{SslStateReconciler.Key(cert)}",
                         Severity = "critical",
                         TitleKey = "advisor.ssl.bindingDrift",
                         Detail = bagAyrinti,
-                        ActionSection = "sites"
+                        ActionSection = "sites",
+                        SslRepair = new(cert.SiteName, cert.HostName, cert.Port > 0 ? cert.Port : 443)
                     });
                 }
             }

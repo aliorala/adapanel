@@ -25,6 +25,7 @@ export type AttentionItem = {
   actionEndpoint: string;
   actionMethod: string;
   actionPayload: Record<string, string>;
+  sslRepair?: import('./sslRepair').SslRepairTarget | null;
 };
 
 /** AttentionSummaryDto ile birebir. */
@@ -56,7 +57,8 @@ function normalizeItem(raw: Partial<AttentionItem> | null | undefined): Attentio
     section: raw?.section ?? "",
     actionEndpoint: raw?.actionEndpoint ?? "",
     actionMethod: raw?.actionMethod ?? "",
-    actionPayload: raw?.actionPayload ?? {}
+    actionPayload: raw?.actionPayload ?? {},
+    sslRepair: raw?.sslRepair ?? null
   };
 }
 

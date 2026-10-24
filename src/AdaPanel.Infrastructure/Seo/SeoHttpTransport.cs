@@ -23,8 +23,8 @@ namespace AdaPanel.Infrastructure.Seo;
 /// <b>Neden sertifika doğrulaması kapalı:</b> bağlantı loopback'tedir; arada dinleyebilecek bir ağ
 /// yoktur, yani doğrulamanın koruduğu tehdit burada mevcut değildir. Buna karşılık panelde kendi
 /// imzalı sertifika çok yaygındır ve doğrulama açık kalsaydı tarama, sitenin SEO'suyla hiç
-/// ilgisi olmayan bir sebeple hep başarısız olurdu. (Aynı gerekçe <c>SiteHealthService</c>
-/// TLS yoklamasında da yazılı.)
+/// ilgisi olmayan bir sebeple hep başarısız olurdu. Bu içerik taraması sertifikanın güvenilir
+/// olduğunu kanıtlamaz; <c>SiteHealthService</c> ayrıca gerçek TLS doğrulaması yapar.
 /// </para>
 /// </remarks>
 public static class SeoHttpTransport

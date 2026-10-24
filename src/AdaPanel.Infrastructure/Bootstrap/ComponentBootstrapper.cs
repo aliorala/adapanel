@@ -122,7 +122,7 @@ public sealed class ComponentBootstrapper(
             "adminer" or "clamav" or "memcached" or
             "nodejs-lts" or "roundcube" or "stalwart-cli" or "stalwart-mail" or "win-acme" or
             "php-8.3" or "mariadb-11" or "mysql-8" or "postgresql-16" or "pgadmin4" or
-            "nginx" or "python-3" or "redis";
+            "nginx" or "python-3" or "redis" or "mailenable-standard";
     }
 
     public async Task<int> GetPendingUpdateCountAsync(CancellationToken cancellationToken = default)
@@ -795,7 +795,7 @@ public sealed class ComponentBootstrapper(
 
         try
         {
-            // Mail sunucusu çakışmasını engelle: biri kurulurken diğeri durdurulup yedeğe alınır
+            // Refuse an installation that conflicts with another active mail engine.
             // (ikisi de port 25/110/143'e bağlanamaz). Stalwart birincil, MailEnable yedek.
             await ResolveMailServerConflictAsync(component.Id, cancellationToken);
 
@@ -1479,6 +1479,8 @@ public sealed class ComponentBootstrapper(
         var normalizedId = component.Id.Trim().ToLowerInvariant();
         switch (normalizedId)
         {
+            case "mailenable-standard":
+                return await ResolveLatestMailEnableAsync(component, client, cancellationToken);
             case "adminer":
                 return await ResolveLatestGitHubAssetAsync(
                     component,
@@ -2267,6 +2269,26 @@ public sealed class ComponentBootstrapper(
         }
 
         return null;
+    }
+
+    internal static string? ParseMailEnableVersion(string releaseNotes, string currentVersion)
+    {
+        var major = VersionSeries(currentVersion, 1);
+        var versions = Regex.Matches(releaseNotes, @"(?m)^(\d+\.\d+)\s+\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4}\s*$")
+            .Select(m => m.Groups[1].Value).Where(v => VersionSeries(v, 1) == major).Distinct().ToArray();
+        return versions.OrderByDescending(v => Version.Parse(v)).FirstOrDefault();
+    }
+
+    private async Task<ComponentManifestItemDto?> ResolveLatestMailEnableAsync(
+        ComponentManifestItemDto component, HttpClient client, CancellationToken cancellationToken)
+    {
+        var notes = await client.GetStringAsync("https://www.mailenable.com/Standard-ReleaseNotes.txt", cancellationToken);
+        var version = ParseMailEnableVersion(notes, component.Version);
+        if (version is null) return null;
+        if (Version.Parse(version) <= Version.Parse(component.Version)) return component;
+        // Versioned vendor HTTPS URL. Installer execution still requires Authenticode validation.
+        return CopyComponent(component, version: version,
+            downloadUrl: $"https://www.mailenable.com/standard{version.Replace(".", "")}.exe", sha256: string.Empty);
     }
 
     // nginx: indirme sayfasındaki sürümlerden AYNI DALDAKİ (ör. 1.31.x) en yenisi alınır.
@@ -5050,41 +5072,37 @@ public sealed class ComponentBootstrapper(
     /// </summary>
     /// <summary>
     /// İki mail sunucusunun (Stalwart birincil, MailEnable yedek) aynı anda çalışıp port
-    /// çakışması yaratmasını engeller. Biri kurulurken diğerini durdurup devre dışı bırakır.
-    /// Best-effort: ilgili sunucu yoksa sessizce geçer.
+    /// çakışması yaratmasını engeller. Çalışan veya otomatik başlatılan diğer hizmet varsa kurulumu reddeder.
+    /// Existing mail services are never stopped or disabled by this check.
     /// </summary>
     private async Task ResolveMailServerConflictAsync(string componentId, CancellationToken cancellationToken)
     {
         var id = (componentId ?? string.Empty).Trim().ToLowerInvariant();
-
-        if (id is "stalwart-mail")
+        if (id is not ("stalwart-mail" or "mailenable-standard")) return;
+        // Installation is not a migration. Never kill the other mail engine before a
+        // download/upgrade: failure here used to leave working mail permanently disabled.
+        var otherProcess = id == "stalwart-mail" ? "MESMTPC" : "stalwart";
+        var processes = System.Diagnostics.Process.GetProcessesByName(otherProcess);
+        try
         {
-            // MailEnable yedeğe: tüm MailEnable Windows servislerini durdur + devre dışı bırak.
-            await ProcessRunner.RunAsync(
-                "powershell.exe",
-                "-NoProfile -NonInteractive -Command \"Get-Service -DisplayName 'MailEnable*' -ErrorAction SilentlyContinue | " +
-                "ForEach-Object { Stop-Service $_ -Force -ErrorAction SilentlyContinue; Set-Service $_ -StartupType Disabled -ErrorAction SilentlyContinue }\"",
-                cancellationToken: cancellationToken,
-                timeout: TimeSpan.FromSeconds(45));
+            if (processes.Length > 0)
+                throw new AppException("mail.provider_migration_required", 409, 409);
         }
-        else if (id is "mailenable-standard")
-        {
-            // Stalwart yedeğe: zamanlanmış görevini durdur+devre dışı bırak, sürecini sonlandır.
-            await ProcessRunner.RunAsync("schtasks.exe", "/End /TN \"AdaStalwart\"", cancellationToken: cancellationToken);
-            await ProcessRunner.RunAsync("schtasks.exe", "/Change /TN \"AdaStalwart\" /DISABLE", cancellationToken: cancellationToken);
-            foreach (var process in System.Diagnostics.Process.GetProcessesByName("stalwart"))
-            {
-                try
-                {
-                    process.Kill(entireProcessTree: true);
-                    process.WaitForExit(5000);
-                }
-                catch
-                {
-                    // best-effort
-                }
-            }
-        }
+        finally { foreach (var process in processes) process.Dispose(); }
+        var result = await ProcessRunner.RunPowerShellAsync(id == "stalwart-mail" ? """
+            $ErrorActionPreference = 'Stop'
+            $services = @(Get-CimInstance Win32_Service -Filter "Name LIKE 'ME%'" | Where-Object { $_.DisplayName -like 'MailEnable*' })
+            if ($services | Where-Object { $_.State -eq 'Running' -or $_.StartMode -eq 'Auto' }) { exit 2 }
+            exit 0
+            """ : """
+            $ErrorActionPreference = 'Stop'
+            $services = @(Get-CimInstance Win32_Service | Where-Object { $_.Name -eq 'AdaStalwart' -or $_.PathName -match '(?i)stalwart\.exe' })
+            if ($services | Where-Object { $_.State -eq 'Running' -or $_.StartMode -eq 'Auto' }) { exit 2 }
+            $task = Get-ScheduledTask -TaskName 'AdaStalwart' -ErrorAction SilentlyContinue
+            if ($task -and $task.State -ne 'Disabled') { exit 2 }
+            exit 0
+            """, cancellationToken);
+        if (!result.Success) throw new AppException("mail.provider_migration_required", 409, 409);
     }
 
     internal async Task StopManagedRuntimeAsync(string serviceName, string installDirectory, CancellationToken cancellationToken)

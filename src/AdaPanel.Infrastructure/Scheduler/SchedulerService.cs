@@ -441,8 +441,9 @@ if (-not $gorev) {{
     /// engellemek olurdu.
     /// </para>
     /// </summary>
-    private async Task<string?> PrepareLogPathAsync(string taskName, string? principalUserId, CancellationToken cancellationToken)
+    internal async Task<string?> PrepareLogPathAsync(string taskName, string? principalUserId, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             var klasor = TaskLogDirectory;
@@ -452,8 +453,13 @@ if (-not $gorev) {{
             // yonlendirmesi basarisiz olur ve gorev HIC calismaz -- yani kolaylik, isi bozar.
             if (!string.IsNullOrWhiteSpace(principalUserId))
             {
-                var script = $@"& icacls.exe '{EscapeSingleQuoted(klasor)}' /grant '{EscapeSingleQuoted(principalUserId)}:(OI)(CI)M' | Out-Null";
-                await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+                var script = $@"$ErrorActionPreference = 'Stop'
+& icacls.exe '{EscapeSingleQuoted(klasor)}' /grant '{EscapeSingleQuoted(principalUserId)}:(OI)(CI)M' | Out-Null
+if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}";
+                var result = await RunTaskCommandAsync(script, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!result.Success)
+                    throw new IOException($"Task log permission grant failed (exit code {result.ExitCode}).");
             }
 
             return Path.Combine(klasor, ResolveLogFileName(taskName));

@@ -1,4 +1,4 @@
-using System.Runtime.Versioning;
+﻿using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using AdaPanel.Core.Common;
@@ -2924,7 +2924,7 @@ public sealed partial class MailService(
         }
     }
 
-    private async Task<bool> TryIssueWithWinAcmeAsync(
+    internal async Task<bool> TryIssueWithWinAcmeAsync(
         string domain,
         string hostName,
         string contactEmail,
@@ -4300,6 +4300,7 @@ public sealed partial class MailService(
     /// <inheritdoc />
     public async Task<MailRelayDto> SetRelayAsync(SetMailRelayRequest request, CancellationToken cancellationToken = default)
     {
+        if (request.RecoverOnly) throw new AppException("mail.relay_recovery_unsupported", 409, 409);
         var (cli, env) = await RequireCliAsync(cancellationToken);
 
         if (request.Enabled && string.IsNullOrWhiteSpace(request.Host))

@@ -54,7 +54,7 @@ public sealed class UpdateInstallerLauncherTests
     public void LauncherAlwaysTriesToStartTheServiceAgain()
     {
         var script = Script();
-        Assert.Contains("Start-Service", script, StringComparison.Ordinal);
+        Assert.Contains("$service.Start()", script, StringComparison.Ordinal);
 
         // Tek deneme yetmez: servis ilk denemede kalkmayabilir.
         Assert.Contains("while (", script, StringComparison.Ordinal);
@@ -63,11 +63,10 @@ public sealed class UpdateInstallerLauncherTests
         Assert.Contains("panel servisi baslatilamadi", script, StringComparison.OrdinalIgnoreCase);
     }
 
-    // Kurulumun BAŞARISI, servisin kaç saniyede kalktığına göre yargılanmamalı. Yüklü bir
-    // sunucuda panel geç açılır ve bu, kurulumun başarısız olduğu anlamına gelmez: bir zaman
-    // aşımı yüzünden başarılı kurulum "tamamlanamadı" diye raporlanıyordu.
+    // Disk version remains diagnostic evidence. The executable recovery tests verify
+    // that a changed binary cannot erase an installer failure.
     [Fact]
-    public void LauncherJudgesSuccessByTheInstalledVersionNotByATimeout()
+    public void LauncherRecordsInstalledVersionForDiagnostics()
     {
         var script = Script();
         Assert.Contains("VersionInfo.ProductVersion", script, StringComparison.Ordinal);

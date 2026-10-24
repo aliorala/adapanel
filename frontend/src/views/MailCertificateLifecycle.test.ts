@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createPinia } from "pinia";
 import { createRenderer, h, nextTick, ref, ssrContextKey, type App, type Component, type Ref } from "vue";
 import MailView from "./MailView.vue";
-import { getMailCertificate, issueMailCertificate, type MailCertificate } from "../api/mail";
+import { getMailCertificate, issueMailCertificate, type MailCertificate, type MailWorkspace, type MailListPostingPolicy } from "../api/mail";
 import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
@@ -11,12 +11,17 @@ vi.mock("../api/mail", async original => ({
   ...await original<typeof import("../api/mail")>(),
   getMailWorkspace: vi.fn(async () => ({ installed: false, configured: false, selectedDomain: "", domains: [], accounts: [], aliases: [], lists: [] })),
   getMailPublicBaseUrl: vi.fn(async () => ""),
+  getMailClientSettings: vi.fn(async () => null),
+  getOutboundLimit: vi.fn(async () => ({ domain: "example.test", messagesPerHour: 0, configured: false })),
   getMailCertificate: vi.fn(), issueMailCertificate: vi.fn(),
 }));
 type State = {
   selectedDomain: string; certificate: MailCertificate | null; certificateLoad: { message: Ref<string> };
   certForm: { hostName: string; contactEmail: string }; notice: string; noticeError: boolean; busy: boolean;
   loadCertificate(): Promise<void>; issueCert(reuse?: boolean): Promise<void>;
+  workspace: MailWorkspace | null;
+  apply(workspace: MailWorkspace): void;
+  policyLabel(policy: MailListPostingPolicy): string;
 };
 const cert = (active = true, hostName = "mail.example.test"): MailCertificate => ({
   active, hostName, domain: "example.test", source: "windows-store", notAfterUtc: null, suggestedContactEmail: "owner@example.test"
@@ -42,6 +47,24 @@ async function mount() {
 }
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(getMailCertificate).mockResolvedValue(cert()); vi.mocked(issueMailCertificate).mockResolvedValue(cert()); });
 afterEach(() => { app?.unmount(); app = undefined; });
+
+it("preserves measured lists during a partial mailbox mutation, but never copies them to a different domain", async () => {
+  const { state } = await mount();
+  const original: MailWorkspace = { provider: "mailenable", installed: true, configured: false, selectedDomain: "example.test", domains: [], accounts: [], aliases: [],
+    lists: [{ address: "news@example.test", description: "", recipients: [], aliases: [], postingPolicy: "native-password", allowedSenders: [] }], listsMeasured: true };
+  state.apply(original);
+  state.apply({ ...original, lists: [], listsMeasured: false });
+  expect(state.workspace?.lists).toEqual(original.lists);
+  state.apply({ ...original, selectedDomain: "other.test", lists: [], listsMeasured: false });
+  expect(state.workspace?.lists).toEqual([]);
+});
+
+it.each(["native-members", "native-password", "native-moderated", "native-disabled", "native-unknown"] as const)
+("does not present %s as an open or authenticated-subscriber rule", async policy => {
+  const { state } = await mount();
+  expect(state.policyLabel(policy)).not.toBe("panel.mail.listPolicyAnyone");
+  expect(state.policyLabel(policy)).not.toBe("panel.mail.listPolicySubscribers");
+});
 
 it.each([true, false])("reuses the saved custom hostname for its own domain (active: %s)", async active => {
   const { state } = await mount();

@@ -4,6 +4,7 @@
       <div>
         <h2>{{ t("panel.mail.title") }}</h2>
         <p class="meta">{{ t("panel.mail.subtitle") }}</p>
+        <p v-if="workspace?.provider" class="meta">{{ t("panel.mail.activeProvider") }}: {{ workspace.provider === 'mailenable' ? 'MailEnable' : 'Stalwart' }}</p>
       </div>
       <button class="secondary compact" :disabled="loading" @click="refresh">{{ t("panel.mail.refresh") }}</button>
     </div>
@@ -343,7 +344,7 @@
             </label>
             <label class="stacked-field">
               <span class="field-label">{{ t("panel.mail.listDescription") }}</span>
-              <input v-model.trim="listForm.description" :placeholder="t('panel.mail.listDescriptionPlaceholder')" maxlength="512" />
+              <input v-model.trim="listForm.description" :placeholder="t('panel.mail.listDescriptionPlaceholder')" :maxlength="isMailEnable ? 256 : 512" />
             </label>
             <label class="stacked-field">
               <span class="field-label">{{ t("panel.mail.listSubscribers") }}</span>
@@ -354,10 +355,10 @@
               <span class="field-label">{{ t("panel.mail.listPostingPolicy") }}</span>
               <select v-model="listForm.postingPolicy">
                 <option value="anyone">{{ t("panel.mail.listPolicyAnyone") }}</option>
-                <option value="subscribers">{{ t("panel.mail.listPolicySubscribers") }}</option>
-                <option value="allowed">{{ t("panel.mail.listPolicyAllowed") }}</option>
+                <option v-if="!isMailEnable" value="subscribers">{{ t("panel.mail.listPolicySubscribers") }}</option>
+                <option v-if="!isMailEnable" value="allowed">{{ t("panel.mail.listPolicyAllowed") }}</option>
               </select>
-              <small class="field-hint">{{ t("panel.mail.listPostingPolicyHint") }}</small>
+              <small class="field-hint">{{ t(isMailEnable ? "panel.mail.mailEnableListPolicyHint" : "panel.mail.listPostingPolicyHint") }}</small>
             </label>
             <label v-if="listForm.postingPolicy !== 'anyone'" class="stacked-field">
               <span class="field-label">{{ t("panel.mail.listAllowedSenders") }}</span>
@@ -432,7 +433,7 @@
               <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="addListAlias(list.address)">
                 {{ t("panel.mail.listAddAlias") }}
               </button>
-              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="editListPolicy(list)">
+              <button v-if="!isMailEnable" class="secondary compact row-button" v-bind="writeGate(busy)" @click="editListPolicy(list)">
                 {{ t("panel.mail.listPostingPolicy") }}
               </button>
               <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="editListRecipients(list.address, list.recipients)">
@@ -503,9 +504,11 @@
             <button class="secondary compact" v-bind="writeGate(busy)" @click="saveDomainQuota">{{ t("panel.common.save") }}</button>
           </div>
 
+          <p v-if="isMailEnable" class="field-hint">{{ t("panel.mail.mailEnableAllocationHint") }}</p>
+
           <!-- GİDEN POSTA LİMİTİ: sunucunun itibarını koruyan sınır. Yalnız yönetici değiştirebilir —
                kendi limitini müşterinin yükseltebilmesi korumayı anlamsız kılardı. -->
-          <div v-if="isAdmin" class="quota-strip">
+          <div v-if="isAdmin && !isMailEnable" class="quota-strip">
             <label class="inline-field">
               <span class="field-label">{{ t("panel.mail.outboundLimit") }}</span>
               <input v-model.number="outboundLimit" type="number" min="0" />
@@ -527,13 +530,13 @@
             v-if="isAdmin && outboundLimitLoad.message.value"
             :message="outboundLimitLoad.message.value"
             @retry="loadOutboundLimit" />
-          <p class="field-hint">{{ t("panel.mail.outboundLimitHint") }}</p>
+          <p class="field-hint">{{ t(isMailEnable ? "panel.mail.mailEnableOutboundHint" : "panel.mail.outboundLimitHint") }}</p>
 
           <!-- SAHTECİLİK KURALI: sunucu, kimliksiz bir bağlantının buradaki alan adları adına
                göndermesini reddeder. Bu KIRDIĞIMIZ bir akış (PHP'nin ayarsız mail() çağrısı) ve
                sessiz ölmemesi gerekiyor: kullanıcı reddi gördüğünde alternatifi (kimlik
                doğrulamalı gönderim) burada yazılı bulur. Gerekçe: Mail/MailSenderPolicy. -->
-          <p class="field-hint">
+          <p v-if="!isMailEnable" class="field-hint">
             <strong>{{ t("panel.mail.senderPolicyTitle") }}</strong>
             {{ t("panel.mail.senderPolicyHint") }}
           </p>
@@ -891,6 +894,7 @@
       </template>
 
       <SectionLoadError v-if="spamLoad.message.value" :message="spamLoad.message.value" @retry="loadSpam" />
+      <p v-if="isMailEnable" class="field-hint">{{ t("panel.mail.mailEnableSpamHint") }}</p>
 
       <section v-if="spam && spam.installed && spam.configured" class="form-surface">
         <div class="section-head">
@@ -953,7 +957,7 @@
       -->
       <template v-if="isAdmin && !props.domain && workspace.installed && workspace.configured">
         <MailQueueCard />
-        <MailRelayCard />
+        <MailRelayCard :provider="workspace?.provider" />
       </template>
     </template>
   </section>
@@ -1053,6 +1057,7 @@ const authStore = useAuthStore();
 // müşteri/bayide bu uçlar 403 döner.
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const workspace = ref<MailWorkspace | null>(null);
+const isMailEnable = computed(() => workspace.value?.provider === "mailenable");
 const selectedDomain = ref((props.domain ?? "").toLowerCase());
 const adminPassword = ref("");
 const accountForm = reactive({ localPart: "", password: "", maxSizeMB: 1024 });
@@ -1271,6 +1276,11 @@ const outboundLimitState = ref<MailOutboundLimit | null>(null);
 const outboundLimitLoad = useSectionError();
 
 async function loadOutboundLimit() {
+  if (isMailEnable.value) {
+    outboundLimitState.value = null;
+    outboundLimitLoad.clear();
+    return;
+  }
   if (!selectedDomain.value || !isAdmin.value) {
     outboundLimitState.value = null;
     outboundLimitLoad.clear();
@@ -1803,6 +1813,10 @@ function parseRecipients(text: string): string[] {
 }
 
 async function addList() {
+  if (isMailEnable.value && listForm.postingPolicy !== "anyone") {
+    showError(t("panel.mail.mailEnableListPolicyHint"));
+    return;
+  }
   await run(async () => {
     apply(
       await createMailList(
@@ -1847,11 +1861,17 @@ async function savePublicBaseUrl() {
 function policyLabel(policy: MailListPostingPolicy) {
   if (policy === "subscribers") return t("panel.mail.listPolicySubscribers");
   if (policy === "allowed") return t("panel.mail.listPolicyAllowed");
-  return t("panel.mail.listPolicyAnyone");
+  if (policy === "native-members") return t("panel.mail.listPolicyNativeMembers");
+  if (policy === "native-password") return t("panel.mail.listPolicyNativePassword");
+  if (policy === "native-moderated") return t("panel.mail.listPolicyNativeModerated");
+  if (policy === "native-disabled") return t("panel.mail.listPolicyNativeDisabled");
+  if (policy === "native-unknown") return t("panel.mail.listPolicyNativeUnknown");
+  return policy === "anyone" ? t("panel.mail.listPolicyAnyone") : policy;
 }
 
 // Gonderim politikasi degistirme. Aboneler DEGISTIRILMEZ; yalnizca kural gonderilir.
 async function editListPolicy(list: MailList) {
+  if (isMailEnable.value) return;
   const value = await prompt({
     title: t("panel.mail.listPostingPolicyPrompt"),
     message: `${list.address} — ${t("panel.mail.listPostingPolicyOptions")}`,
@@ -2007,6 +2027,9 @@ async function run(operation: () => Promise<void>) {
 }
 
 function apply(next: MailWorkspace) {
+  if (next.listsMeasured === false && workspace.value?.selectedDomain === next.selectedDomain) {
+    next = { ...next, lists: workspace.value.lists };
+  }
   workspace.value = next;
   if (next.selectedDomain) {
     selectedDomain.value = next.selectedDomain;

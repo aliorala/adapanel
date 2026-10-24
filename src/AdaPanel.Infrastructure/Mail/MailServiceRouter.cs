@@ -5,20 +5,16 @@ using AdaPanel.Core.Interfaces;
 namespace AdaPanel.Infrastructure.Mail;
 
 /// <summary>
-/// IMailService dağıtıcısı. BİRİNCİL = Stalwart (modern, DKIM/SPF/DMARC yerleşik, CLI yönetimi);
-/// kuruluysa her zaman o kullanılır. MailEnable yalnızca YEDEK: Stalwart yokken ama MailEnable
-/// kuruluyken devreye girer. İkisi aynı anda çalışmaz (kurulum sırasında çakışma engellenir).
+/// Routes operations to the configured or unambiguously running mail provider.
+/// Ambiguous installations and simultaneously running engines fail closed.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class MailServiceRouter(
     MailService stalwartMailService,
-    MailEnableMailService mailEnableMailService) : IMailService
+    MailEnableMailService mailEnableMailService,
+    MailProviderSelection providerSelection) : IMailService
 {
-    private IMailService Active => MailService.IsInstalled()
-        ? stalwartMailService
-        : MailEnableMailService.IsInstalled()
-            ? mailEnableMailService
-            : stalwartMailService;
+    private IMailService Active => providerSelection.Current == "mailenable" ? mailEnableMailService : stalwartMailService;
 
     public Task<MailDnsDto> GetDnsRecordsAsync(string domain, CancellationToken cancellationToken = default)
         => Active.GetDnsRecordsAsync(domain, cancellationToken);
@@ -46,8 +42,14 @@ public sealed class MailServiceRouter(
     public Task<bool> EnsureServerHostnameAsync(bool applyChanges = true, CancellationToken cancellationToken = default)
         => Active.EnsureServerHostnameAsync(applyChanges, cancellationToken);
 
-    public Task<MailWorkspaceDto> GetWorkspaceAsync(string? domain, CancellationToken cancellationToken = default)
-        => Active.GetWorkspaceAsync(domain, cancellationToken);
+    public async Task<MailWorkspaceDto> GetWorkspaceAsync(string? domain, CancellationToken cancellationToken = default)
+    {
+        var provider = providerSelection.Current;
+        var workspace = await (provider == "mailenable" ? (IMailService)mailEnableMailService : stalwartMailService)
+            .GetWorkspaceAsync(domain, cancellationToken);
+        workspace.Provider = provider;
+        return workspace;
+    }
 
     public Task<MailWorkspaceDto> ConfigureAsync(ConfigureMailRequest request, CancellationToken cancellationToken = default)
         => Active.ConfigureAsync(request, cancellationToken);

@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -13,6 +13,7 @@ using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Support;
 using AdaPanel.Infrastructure.Iis;
+using AdaPanel.Infrastructure.Mail;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -34,7 +35,8 @@ public sealed class WinAcmeSslService(
     // MailEnableMailService (KomutKosucusu) icinde de var.
     Func<CancellationToken, Task<IReadOnlyCollection<IisHttpsBinding>?>>? bindingReader = null,
     IConcurrencyLock? concurrencyLock = null,
-    IMailService? mailService = null) : ISslService
+    IMailService? mailService = null,
+    MailEnableWebmail? mailEnableWebmail = null) : ISslService
 {
     private const string StatePath = "config/ssl.json";
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
@@ -458,14 +460,17 @@ public sealed class WinAcmeSslService(
             // BAG OLCUMU win-acme'ye BAGLI DEGIL: IIS bagi her halukarda okunabilir. win-acme
             // kurulu olmasa bile bagin yanlis sertifikada kalmasi GERCEK bir arizadir ve
             // soylenmelidir.
+            var webmailErrors = await SyncManagedWebmailAsync(beforeMutation, cancellationToken);
             var bagYok = await MeasureBindingsAndPersistAsync(cancellationToken);
-            var mailResult = await SyncMailCertificateAsync(beforeMutation, cancellationToken);
+            var mailSync = await SyncMailForRenewalAsync(beforeMutation, cancellationToken);
+            var mailResult = mailSync.Certificate;
+            webmailErrors = webmailErrors.Concat(mailSync.Errors).ToArray();
             return new RenewAllResultDto
             {
                 RenewedCount = 0,
                 Measured = false,
-                FailureReason = "win-acme kurulu degil; sertifikalar yenilenemiyor.",
-                Output = "win-acme kurulu degil.",
+                FailureReason = string.Join("\n", new[] { "win-acme kurulu degil; sertifikalar yenilenemiyor." }.Concat(webmailErrors)),
+                Output = string.Join("\n", new[] { "win-acme kurulu degil." }.Concat(webmailErrors)),
                 VerifiedCount = dogrulamaYok.Verified,
                 MissingFromStoreCount = dogrulamaYok.MissingFromStore,
                 UnverifiedCount = dogrulamaYok.Unmeasured,
@@ -521,16 +526,19 @@ public sealed class WinAcmeSslService(
         // gurultulu bir YANLIS POZITIFTEN sessiz bir YANLIS NEGATIFE cevirmisti: kayit
         // saglikli gorunur, bag eski sertifikada kalir, site o sertifika dolana kadar onu
         // sunar ve panel hicbir sey soylemez.
+        var webmailFailures = await SyncManagedWebmailAsync(beforeMutation, cancellationToken);
         var bag = await MeasureBindingsAndPersistAsync(cancellationToken);
 
-        var syncedMail = await SyncMailCertificateAsync(beforeMutation, cancellationToken);
+        var synchronizedMail = await SyncMailForRenewalAsync(beforeMutation, cancellationToken);
+        var syncedMail = synchronizedMail.Certificate;
+        webmailFailures = webmailFailures.Concat(synchronizedMail.Errors).ToArray();
 
         return new RenewAllResultDto
         {
             RenewedCount = yenilenen,
             Measured = result.Success,
-            FailureReason = failureReason,
-            Output = diagnostics,
+            FailureReason = string.Join("\n", new[] { failureReason }.Concat(webmailFailures).Where(s => !string.IsNullOrWhiteSpace(s))),
+            Output = string.Join("\n", new[] { diagnostics }.Concat(webmailFailures).Where(s => !string.IsNullOrWhiteSpace(s))),
             VerifiedCount = dogrulama.Verified,
             MissingFromStoreCount = dogrulama.MissingFromStore,
             UnverifiedCount = dogrulama.Unmeasured,
@@ -539,6 +547,36 @@ public sealed class WinAcmeSslService(
             MailSynchronizationPerformed = mailService is not null,
             MailCertificate = syncedMail
         };
+    }
+
+    private async Task<IReadOnlyList<string>> SyncManagedWebmailAsync(Func<CancellationToken, Task>? beforeMutation, CancellationToken token)
+    {
+        if (mailEnableWebmail is null) return [];
+        var rejected = false;
+        async Task Approve(CancellationToken ct)
+        {
+            if (beforeMutation is null) return;
+            try { await beforeMutation(ct); }
+            catch { rejected = true; throw; }
+        }
+        try { return await mailEnableWebmail.SyncManagedAsync(Approve, token); }
+        catch (Exception error) when (!rejected && error is not OperationCanceledException)
+        { return ["MailEnable webmail synchronization failed: " + (error is AppException app ? app.MessageKey : error.GetType().Name)]; }
+    }
+
+    private async Task<(MailCertificateDto? Certificate, IReadOnlyList<string> Errors)> SyncMailForRenewalAsync(
+        Func<CancellationToken, Task>? beforeMutation, CancellationToken token)
+    {
+        var rejected = false;
+        async Task Approve(CancellationToken ct)
+        {
+            if (beforeMutation is null) return;
+            try { await beforeMutation(ct); }
+            catch { rejected = true; throw; }
+        }
+        try { return (await SyncMailCertificateAsync(beforeMutation is null ? null : Approve, token), []); }
+        catch (Exception error) when (!rejected && error is not OperationCanceledException)
+        { return (null, ["SMTP certificate synchronization failed: " + (error is AppException app ? app.MessageKey : error.GetType().Name)]); }
     }
 
     private async Task<MailCertificateDto?> SyncMailCertificateAsync(Func<CancellationToken, Task>? beforeMutation, CancellationToken token)
@@ -1697,10 +1735,9 @@ public sealed class WinAcmeSslService(
         }
     }
 
-    // IIS HTTPS binding'i artık PowerShell WebAdministration ile yapılır (New-WebBinding -SslFlags 1
-    // + AddSslCertificate). Microsoft.Web.Administration reflection bazı IIS sürümlerinde SNI
-    // sertifikası bağlamayı "bağlanamadı" ile reddediyordu; PowerShell yöntemi güvenilir çalışır.
-    private async Task EnsureHttpsBindingAsync(string siteName, string hostName, int port, X509Certificate2 certificate, CancellationToken cancellationToken)
+    // Existing bindings retain their IP and SSL flags. The native script measures the
+    // IIS snapshot before/after attachment and restores only a still-owned target.
+    internal async Task EnsureHttpsBindingAsync(string siteName, string hostName, int port, X509Certificate2 certificate, CancellationToken cancellationToken)
     {
         var thumbprint = certificate.Thumbprint ?? string.Empty;
         if (string.IsNullOrWhiteSpace(thumbprint))
@@ -1708,35 +1745,10 @@ public sealed class WinAcmeSslService(
             throw new AppException("ssl.binding_failed", 500, 500, "Sertifika parmak izi (thumbprint) yok.");
         }
 
-        var site = siteName.Replace("'", "''");
-        var dn = (hostName ?? string.Empty).Replace("'", "''");
-        var thumb = thumbprint.Replace("'", "''");
-
-        var script = $$"""
-            Import-Module WebAdministration -ErrorAction Stop
-            $ErrorActionPreference = 'Stop'
-            $site = '{{site}}'; $dn = '{{dn}}'; $port = {{port}}; $thumb = '{{thumb}}'
-            Get-WebBinding -Name $site -Protocol https -Port $port -HostHeader $dn -ErrorAction SilentlyContinue |
-              Remove-WebBinding -ErrorAction SilentlyContinue
-            if ($dn) {
-              New-WebBinding -Name $site -Protocol https -Port $port -HostHeader $dn -SslFlags 1
-              $b = Get-WebBinding -Name $site -Protocol https -Port $port -HostHeader $dn
-            } else {
-              New-WebBinding -Name $site -Protocol https -Port $port
-              $b = Get-WebBinding -Name $site -Protocol https -Port $port
-            }
-            # Sertifika hangi depodaysa ORADAN bağla. win-acme LE sertifikasını WebHosting'e koyar;
-            # self-signed/import ise My'da olur. Yanlış depo "güvenli değil" / boş binding'e yol açar.
-            $store = 'My'
-            if (-not (Test-Path "Cert:\LocalMachine\My\$thumb") -and (Test-Path "Cert:\LocalMachine\WebHosting\$thumb")) {
-              $store = 'WebHosting'
-            }
-            $b.AddSslCertificate($thumb, $store)
-            'OK'
-            """;
+        var script = SslBindingMutation.Script(siteName, hostName ?? string.Empty, port, thumbprint);
 
         var result = await HttpsBindingCommand(script, cancellationToken);
-        if (!result.Success)
+        if (!result.Success || result.StandardOutput.Trim() != "OK")
         {
             throw new AppException(
                 "ssl.binding_failed",

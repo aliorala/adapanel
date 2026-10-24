@@ -24,4 +24,11 @@ public interface IWebmailService
     /// alındığında çağrılır). Best-effort: webmail kurulu değilse / DNS yoksa / sertifika alınamazsa sessiz geçer.
     /// </summary>
     Task SecureWebmailForDomainAsync(string domain, string contactEmail, CancellationToken cancellationToken = default);
+
+    async Task SecureWebmailForDomainAsync(string domain, string contactEmail, Func<CancellationToken, Task>? beforeMutation,
+        CancellationToken cancellationToken = default)
+    {
+        if (beforeMutation is not null) await beforeMutation(cancellationToken);
+        await SecureWebmailForDomainAsync(domain, contactEmail, cancellationToken);
+    }
 }

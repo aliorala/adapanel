@@ -2767,7 +2767,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     /// bakmadığı bir metin dosyasına gömülüyordu.
     /// </para>
     /// </summary>
-    private async Task TryRestoreIisSitesAsync(
+    internal async Task TryRestoreIisSitesAsync(
         string extractedRoot,
         List<string> report,
         List<BackupRestoreWarningDto> uyarilar,
@@ -2775,6 +2775,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     {
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var snapshotPath = Path.Combine(extractedRoot, "iis", "sites.json");
             if (!File.Exists(snapshotPath))
             {
@@ -2810,12 +2811,18 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                     }
 
                     await iisSiteService.CreateSiteAsync(create, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var restoredBindings = 1;
                     foreach (var binding in extraBindings)
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         try
                         {
                             await iisSiteService.AddBindingAsync(site.Name, binding, cancellationToken);
+                            cancellationToken.ThrowIfCancellationRequested();
+                            restoredBindings++;
                         }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                         catch (Exception bindingException)
                         {
                             report.Add($"  {site.Name}: ek bağlama {binding.HostName}:{binding.Port} eklenemedi — {bindingException.Message}");
@@ -2828,8 +2835,9 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                         }
                     }
 
-                    report.Add($"  {site.Name}: yeniden kuruldu ({1 + extraBindings.Count} http bağlama). İçerik için site yedeğini geri yükleyin; HTTPS'i SSL ekranından yeniden verin.");
+                    report.Add($"  {site.Name}: yeniden kuruldu ({restoredBindings} http bağlama). İçerik için site yedeğini geri yükleyin; HTTPS'i SSL ekranından yeniden verin.");
                 }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception siteException)
                 {
                     report.Add($"  {site.Name}: KURULAMADI — {siteException.Message}");
@@ -2842,6 +2850,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                 }
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             report.Add($"IIS envanteri geri yüklenemedi: {exception.Message}");
@@ -2867,7 +2876,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     /// açılır ve rapora "parolayı FTP ekranından sıfırlayın" düşülür. Hesap zaten varsa parolasına
     /// dokunulmaz (CreateFtpUserAsync mevcut hesapta yalnız ACL/ana dizini tazeler — idempotent).
     /// </summary>
-    private async Task TryRestoreFtpUsersAsync(
+    internal async Task TryRestoreFtpUsersAsync(
         string extractedRoot,
         List<string> report,
         List<BackupRestoreWarningDto> uyarilar,
@@ -2875,6 +2884,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     {
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var snapshotPath = Path.Combine(extractedRoot, "config", "ftp-users.json");
             if (!File.Exists(snapshotPath))
             {
@@ -2907,8 +2917,10 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                         SiteName = user.SiteName,
                         HomePath = user.HomePath
                     }, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                     report.Add($"  FTP {user.UserName}: hazır — parolayı FTP ekranından sıfırlayın (parolalar yedeğe giremez).");
                 }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception exception)
                 {
                     report.Add($"  FTP {user.UserName}: KURULAMADI — {exception.Message}");
@@ -2921,6 +2933,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                 }
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             report.Add($"FTP envanteri geri yüklenemedi: {exception.Message}");
@@ -2944,6 +2957,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         {
             await File.WriteAllLinesAsync(Path.Combine(extractedRoot, "iis-restore-report.txt"), report, cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch
         {
             // rapor yazılamazsa akış bozulmaz

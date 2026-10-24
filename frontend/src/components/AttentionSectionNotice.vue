@@ -1,4 +1,5 @@
 <template>
+  <p v-if="repairResult" :class="['notice', { error: !repairResult.verified }]" role="status">{{ repairResult.message }}</p>
   <!-- Madde yoksa HİÇBİR ŞEY gösterilmez. Sürekli duran bir "her şey yolunda" kutusu,
        gerçek bir sorun çıktığında fark edilmeyi zorlaştırır. -->
   <!--
@@ -27,6 +28,7 @@
         <span v-if="item.descriptionKey" class="attention-desc">{{ t(item.descriptionKey) }}</span>
         <!-- Teknik ayrıntı (sürüm, servis adı) çeviriye tabi değildir; olduğu gibi gösterilir. -->
         <small v-if="item.detail" class="attention-detail">{{ item.detail }}</small>
+        <SslBindingRepair v-if="item.sslRepair" :target="item.sslRepair" @result="repairResult = $event" @refresh="emit('refresh')" />
       </li>
     </ul>
   </details>
@@ -43,12 +45,14 @@
  * Tek bir yerden beslenir (MainLayout'un banner yuvası), bu yüzden hedef sayfaların hiçbirine
  * ayrı ayrı eklemek gerekmez.
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AttentionItem } from "../api/attention";
+import SslBindingRepair from './SslBindingRepair.vue';
 
 const props = defineProps<{ items: AttentionItem[] }>();
-const emit = defineEmits<{ (event: "open"): void }>();
+const repairResult = ref<{ message: string; verified: boolean } | null>(null);
+const emit = defineEmits<{ (event: "open"): void; (event: "refresh"): void }>();
 
 const i18n = useI18n();
 // Yer tutuculu metinler ("{count} madde") de bu sarmalayicidan gectigi icin PARAMETRE alir;

@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using Xunit;
 
 namespace AdaPanel.Infrastructure.Tests;
@@ -91,6 +91,7 @@ public sealed class AuditCoverageTests
         ["MigrationController.cs#DiscoverCpanelAsync"] = "cPanel/WHM keşfi: uzak sunucudan hesap listesi okur, bu sunucuda hiçbir şey değişmez.",
         ["MigrationController.cs#ValidateAsync"] = "Göç ön-kontrolü: 'bağlanır mı' der, göçü BAŞLATMAZ.",
         ["SoftwareController.cs#CheckForUpdatesAsync"] = "Güncelleme yoklaması: upstream sürümleri okur, hiçbir bileşene dokunmaz.",
+        ["SslRepairController.cs#PlanAsync"] = "SSL onarım önizlemesi yalnız mevcut IIS bağlamasını ve sertifikaları okur, kısa ömürlü korumalı plan belirteci üretir; IIS/sertifika deposu veya kalıcı kayda yazmaz. Davranış testi: SslBindingRepairTests.Preview_is_read_only_and_exposes_both_certificates_for_explicit_selection.",
         ["MailAutodiscoverController.cs#OutlookPostAsync"] = "Outlook autodiscover: istemciye ayar XML'i döner (protokol gereği POST), sunucuda hiçbir şey değişmez.",
         ["NginxController.cs#TestAsync"] = "nginx -t: yapılandırmayı doğrular, uygulamaz.",
         ["AuthController.cs#BeginTwoFactorSetupAsync"] = "2FA kurulumunu BAŞLATIR (QR/gizli üretir); etkinleştirme ayrı uçtadır ve o kayıt yazar.",
@@ -168,6 +169,7 @@ public sealed class AuditCoverageTests
     /// </remarks>
     private static readonly IReadOnlyDictionary<string, string> KiraciyaAitOlmayanlar = new Dictionary<string, string>(StringComparer.Ordinal)
     {
+        ["InstallationReportingController.cs#\"installation.reporting.changed\"#\"panel\""] = "Kurulum bildirimi izni panel genelidir; yalnız yönetici değiştirir ve belirli bir aboneliğe ait değildir.",
         // --- AKTÖR ZATEN KONUNUN KENDİSİ ---
         //
         // Kullanıcının kendi hesabına yaptığı işlemler. Kayıt <c>UserId</c> üzerinden zaten o
@@ -225,7 +227,7 @@ public sealed class AuditCoverageTests
         ["MailController.cs#\"mail.certificate.issued\"#string.IsNullOrWhiteSpace(request.HostName) ? request.Domain : request.HostName"] = "POSTA SUNUCUSUNUN kendi TLS sertifikası; her kiracının istemcisi bu sertifikayı görür.",
         ["MailController.cs#\"mail.spam.updated\"#\"mail-server\""] = "Spam filtresi sunucu genelidir (itibar/kara liste riski ortaktır).",
         ["MailController.cs#\"mail.queue.message_deleted\"#id"] = "Kuyruk kimliğinden alan adına gidilemez: silinen ileti kuyruktan da kalkar, sahibi ÖLÇÜLEMEZ — tahmin edilmez.",
-        ["MailController.cs#\"mail.relay.updated\"#request.Enabled ? $\"{request.Host}:{request.Port}\" : \"mail-server\""] = "Röle, sunucunun TÜM giden postasının teslim yolunu belirler.",
+        ["MailController.cs#request.RecoverOnly ? \"mail.relay.recovered\" : \"mail.relay.updated\"#request.RecoverOnly ? \"mail-server\" : request.Enabled ? $\"{request.Host}:{request.Port}\" : \"mail-server\""] = "Röle güncellemesi ve yarım kalan işlemin kurtarılması sunucunun TÜM giden postasının teslim yolunu belirler; yalnız yönetici çağırabilir, tek bir kiracıya ait değildir.",
         ["MigrationController.cs#\"migration.discover.trust_exception\"#$\"host:{host}\""] = "Konu, kimliği DOĞRULANAMAYAN bir KAYNAK SUNUCUDUR (Plesk/WHM) ve o sunucu bu panelin değildir: hiçbir aboneliğe ait olamaz, üstelik keşif anında bu sunucuda henüz hiçbir site/abonelik oluşmamıştır. Uç zaten admin-only. Kayıt, yöneticinin doğrulanmamış bir uca API anahtarı göndermeyi bilerek onayladığını yazar; göçün KENDİSİ (migration.site) konusunu AYRICA yazar ve hedef sitenin sahibine bağlanır.",
         ["NotificationsController.cs#\"notifications.settings.updated\"#\"notifications\""] = "Panelin bildirim kanalı (SMTP/webhook) sunucu genelidir.",
         ["NotificationsController.cs#\"notifications.test_sent\"#\"notifications\""] = "Panel bildirim kanalının sınanması.",

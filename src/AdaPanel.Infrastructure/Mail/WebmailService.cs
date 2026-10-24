@@ -1,4 +1,4 @@
-using AdaPanel.Core.Common;
+﻿using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Core.Dtos.Php;
 using AdaPanel.Core.Dtos.Sites;
@@ -25,7 +25,9 @@ public sealed class WebmailService(
     IHttpClientFactory httpClientFactory,
     JsonFileStore fileStore,
     ISslService sslService,
-    ILogger<WebmailService> logger) : IWebmailService
+    ILogger<WebmailService> logger,
+    MailProviderSelection? providerSelection = null,
+    MailEnableWebmail? mailEnableWebmail = null) : IWebmailService
 {
     private const string StatePath = "config/webmail.json";
     private const string ComponentId = "roundcube";
@@ -43,6 +45,8 @@ public sealed class WebmailService(
 
     public async Task<WebmailOpenDto> OpenAsync(string publicHost, CancellationToken cancellationToken = default)
     {
+        if (providerSelection?.Current == "mailenable")
+            return await mailEnableWebmail!.OpenAsync(publicHost, cancellationToken);
         // HIZLI YOL: webmail zaten kurulu, site ayakta ve sağlıklıysa kurulumu TEKRARLAMA — anında
         // URL dön. (Eskiden her tıkta siteyi silip yeniden kuruyor, tüm ağaca izin veriyor, config
         // yeniden yazıyor, sağlık problarını bekliyordu → uzun bekleme.) Ağır kurulum yalnız ilk
@@ -136,8 +140,21 @@ public sealed class WebmailService(
     }
 
     // profesyonel paneller gibi: bir mail domaini SSL alınca webmail.<domain> de otomatik HTTPS olur. Best-effort.
-    public async Task SecureWebmailForDomainAsync(string domain, string contactEmail, CancellationToken cancellationToken = default)
+    public Task SecureWebmailForDomainAsync(string domain, string contactEmail, CancellationToken cancellationToken = default) =>
+        SecureWebmailForDomainAsync(domain, contactEmail, null, cancellationToken);
+
+    public async Task SecureWebmailForDomainAsync(string domain, string contactEmail, Func<CancellationToken, Task>? beforeMutation,
+        CancellationToken cancellationToken = default)
     {
+        // MailEnable Web Mail owns its IIS application and bindings. Never modify a
+        // leftover Roundcube site when a different mail provider is active.
+        if (providerSelection?.Current == "mailenable")
+        {
+            await (mailEnableWebmail ?? throw new AppException("mail.webmail.mailenable_not_ready", 503, 503))
+                .SecureForDomainAsync(domain, contactEmail, beforeMutation, cancellationToken);
+            return;
+        }
+        if (beforeMutation is not null) await beforeMutation(cancellationToken);
         var webmailHost = ResolveWebmailHost(domain);
         if (webmailHost is null)
         {
@@ -197,6 +214,8 @@ public sealed class WebmailService(
 
     public async Task<WebmailDiagnosticsDto> DiagnoseAsync(string publicHost, CancellationToken cancellationToken = default)
     {
+        if (providerSelection?.Current == "mailenable")
+            return await mailEnableWebmail!.DiagnoseAsync(publicHost, cancellationToken);
         var state = await fileStore.ReadAsync<WebmailState?>(StatePath, null, cancellationToken);
         if (state is null || state.Port <= 0)
         {

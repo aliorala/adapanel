@@ -1,4 +1,4 @@
-using AdaPanel.Core.Common;
+﻿using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Infrastructure.Mail;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -45,10 +45,9 @@ public sealed class MailEnableDurustlukTests
     [Fact]
     public async Task Sertifika_durumu_OLCULMEDEN_etkin_denmez()
     {
-        var durum = await Servis().GetCertificateStatusAsync();
-
-        Assert.False(durum.Active);
-        Assert.Contains("unmeasured", durum.Source, StringComparison.OrdinalIgnoreCase);
+        var servis = new MailEnableMailService(NullLogger<MailEnableMailService>.Instance)
+        { KomutKosucusu = (_, _) => throw new AppException("mail.command_failed", 500, 500) };
+        await Assert.ThrowsAsync<AppException>(() => servis.GetCertificateStatusAsync());
     }
 
     /// <summary>
@@ -61,8 +60,8 @@ public sealed class MailEnableDurustlukTests
         var hata = await Assert.ThrowsAsync<AppException>(() =>
             Servis().IssueCertificateAsync(new IssueMailCertificateRequest { Domain = "ornek.com" }));
 
-        Assert.Equal("mail.certificate_issue_not_supported", hata.MessageKey);
-        Assert.Equal(409, hata.HttpStatusCode);
+        Assert.Equal("mail.settings_unmeasured", hata.MessageKey);
+        Assert.Equal(503, hata.HttpStatusCode);
     }
 
     /// <summary>
@@ -75,8 +74,8 @@ public sealed class MailEnableDurustlukTests
         var hata = await Assert.ThrowsAsync<AppException>(() =>
             Servis().SetDomainQuotaAsync(new SetMailDomainQuotaRequest { Domain = "ornek.com", MaxSizeMB = 500 }));
 
-        Assert.Equal("mail.domain_quota_not_supported", hata.MessageKey);
-        Assert.Equal(409, hata.HttpStatusCode);
+        Assert.Equal("mail.configuration_unavailable", hata.MessageKey);
+        Assert.Equal(503, hata.HttpStatusCode);
     }
 
     /// <summary><c>UpdateSpamSettingsAsync</c> istegi YANKILIYORDU.</summary>
@@ -119,10 +118,9 @@ public sealed class MailEnableDurustlukTests
     [Fact]
     public async Task Dinleyiciler_OKUNMUYORSA_dinleyici_YOK_denmez()
     {
-        var goruntu = await Servis().GetListenersAsync();
-
-        Assert.False(goruntu.Measured);
-        Assert.Empty(goruntu.Listeners);
+        var servis = new MailEnableMailService(NullLogger<MailEnableMailService>.Instance)
+        { KomutKosucusu = (_, _) => throw new AppException("mail.command_failed", 500, 500) };
+        await Assert.ThrowsAsync<AppException>(() => servis.GetListenersAsync());
     }
 
     /// <summary>
@@ -134,7 +132,7 @@ public sealed class MailEnableDurustlukTests
     public async Task Kuyruk_okunmuyorsa_tek_ileti_icin_BULUNAMADI_denmez()
     {
         var hata = await Assert.ThrowsAsync<AppException>(() => Servis().GetQueueMessageAsync("1"));
-        Assert.Equal("mail.queue_not_supported", hata.MessageKey);
+        Assert.Equal("mail.queue_unavailable", hata.MessageKey);
 
         var silme = await Assert.ThrowsAsync<AppException>(() => Servis().DeleteQueueMessageAsync("1"));
         Assert.Equal(hata.MessageKey, silme.MessageKey);
@@ -145,17 +143,17 @@ public sealed class MailEnableDurustlukTests
     /// bu uc metot bu turda incelendi ve TEMIZ cikti; kural geri kaymasin diye olculuyor.
     /// </summary>
     [Fact]
-    public async Task Kuyruk_role_ve_giden_limiti_YAPILANDIRILMADI_der()
+    public async Task Kuyruk_ve_role_okunamiyorsa_bos_basarili_sonuc_donmez()
     {
-        var servis = Servis();
+        var servis = new MailEnableMailService(NullLogger<MailEnableMailService>.Instance)
+        {
+            QueueRoot = () => null,
+            KomutKosucusu = (_, _) => throw new AppException("mail.command_failed", 502, 502)
+        };
 
-        var kuyruk = await servis.GetQueueAsync(50);
-        Assert.True(kuyruk.Installed);
-        Assert.False(kuyruk.Configured);
-
-        var role = await servis.GetRelayAsync();
-        Assert.True(role.Installed);
-        Assert.False(role.Configured);
+        await Assert.ThrowsAsync<AppException>(() => servis.GetQueueAsync(50));
+        var role = await Assert.ThrowsAsync<AppException>(() => servis.GetRelayAsync());
+        Assert.Equal("mail.command_failed", role.MessageKey);
 
         var limit = await servis.GetOutboundLimitAsync("ornek.com");
         Assert.False(limit.Configured);
@@ -164,15 +162,17 @@ public sealed class MailEnableDurustlukTests
         Assert.Null(await servis.GetClientSettingsAsync("ornek.com"));
     }
 
-    /// <summary>NOBETCI: dagitim listeleri "yok" degil "desteklenmiyor" der (409).</summary>
+    /// <summary>An unreadable native list backend must not claim successful creation.</summary>
     [Fact]
-    public async Task Dagitim_listeleri_DESTEKLENMIYOR_der()
+    public async Task Dagitim_listeleri_OKUNAMIYORSA_basarili_denmez()
     {
+        var service = new MailEnableMailService(NullLogger<MailEnableMailService>.Instance)
+        { KomutKosucusu = (_, _) => throw new AppException("mail.command_failed", 502, 502) };
         var olustur = await Assert.ThrowsAsync<AppException>(() =>
-            Servis().CreateMailListAsync(new CreateMailListRequest { Address = "liste@ornek.com" }));
+            service.CreateMailListAsync(new CreateMailListRequest { Domain = "ornek.com", Address = "liste@ornek.com" }));
 
-        Assert.Equal("mail.lists_unsupported", olustur.MessageKey);
-        Assert.Equal(409, olustur.HttpStatusCode);
+        Assert.Equal("mail.command_failed", olustur.MessageKey);
+        Assert.Equal(502, olustur.HttpStatusCode);
     }
 
     // =====================================================================================

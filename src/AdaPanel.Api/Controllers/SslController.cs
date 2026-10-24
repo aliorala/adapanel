@@ -116,7 +116,12 @@ public sealed class SslController(
             owner);
 
         await target.RunAsync(current => ApproveAsync(current, cancellationToken), cancellationToken);
-        await TrySecureWebmailAsync(certificate.HostName, input.ContactEmail, cancellationToken);
+        await TrySecureWebmailAsync(certificate.HostName, input.ContactEmail, async token =>
+        {
+            var original = await iisSiteService.GetSiteAsync(input.SiteName, token);
+            target.ValidateSnapshot(original);
+            await ApproveAsync(original, token);
+        }, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.issued"));
     }
@@ -178,7 +183,12 @@ public sealed class SslController(
             owner);
 
         await target.RunAsync(current => ApproveAsync(current, cancellationToken), cancellationToken);
-        await TrySecureWebmailAsync(certificate.HostName, string.Empty, cancellationToken);
+        await TrySecureWebmailAsync(certificate.HostName, string.Empty, async token =>
+        {
+            var original = await iisSiteService.GetSiteAsync(input.SiteName, token);
+            target.ValidateSnapshot(original);
+            await ApproveAsync(original, token);
+        }, cancellationToken);
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.imported"));
     }
 
@@ -199,19 +209,26 @@ public sealed class SslController(
         };
 
     // Best-effort: site SSL aldıktan sonra webmail.<domain>'i de otomatik HTTPS yap (profesyonel paneller gibi).
-    // İsteği ASLA bozmaz — webmail kurulu değilse / DNS yoksa / sertifika alınamazsa sessiz geçer.
-    private async Task TrySecureWebmailAsync(string? domain, string? contactEmail, CancellationToken cancellationToken)
+    // Webmail failures are best-effort; cancellation and revoked authority must propagate.
+    private async Task TrySecureWebmailAsync(string? domain, string? contactEmail,
+        Func<CancellationToken, Task> beforeMutation, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(domain))
         {
             return;
         }
 
+        var rejected = false;
+        async Task Approve(CancellationToken token)
+        {
+            try { await beforeMutation(token); }
+            catch { rejected = true; throw; }
+        }
         try
         {
-            await webmailService.SecureWebmailForDomainAsync(domain, contactEmail ?? string.Empty, cancellationToken);
+            await webmailService.SecureWebmailForDomainAsync(domain, contactEmail ?? string.Empty, Approve, cancellationToken);
         }
-        catch
+        catch (Exception error) when (!rejected && error is not OperationCanceledException)
         {
             // best-effort — SSL akışını bozma
         }

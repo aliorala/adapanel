@@ -1,4 +1,4 @@
-using System.Runtime.Versioning;
+﻿using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using AdaPanel.Core.Common;
@@ -16,7 +16,10 @@ namespace AdaPanel.Infrastructure.Mail;
 /// alias (address map). Yönetici parolası gerekmez (yerel makine COM yönetimi).
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger) : IMailService
+public sealed partial class MailEnableMailService(
+    ILogger<MailEnableMailService> logger,
+    JsonFileStore? fileStore = null,
+    MailService? certificateIssuerService = null) : IMailService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -45,16 +48,18 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
         Environment.GetFolderPath(Environment.SpecialFolder.Windows),
         "SysWOW64", "WindowsPowerShell", "v1.0", "powershell.exe");
 
-    // MailEnable kurulu mu? (servis dizini + COM). Router bunu kullanır.
-    public static bool IsInstalled()
-    {
-        var dir = Environment.ExpandEnvironmentVariables("%ProgramFiles(x86)%\\Mail Enable\\BIN\\MEInstaller.exe");
-        return System.IO.File.Exists(dir);
-    }
+    // A registered SMTP service and its installation files must agree; leftover files
+    // alone must not select a provider after MailEnable has been uninstalled.
+    public static bool IsInstalled() => MailEnableInstallation.DiscoverRoot() is not null;
 
     public async Task<MailWorkspaceDto> GetWorkspaceAsync(string? domain, CancellationToken cancellationToken = default)
     {
         var (workspace, _) = await WorkspaceOkuAsync(domain, cancellationToken);
+        if (workspace.Configured && !string.IsNullOrWhiteSpace(workspace.SelectedDomain))
+        {
+            workspace.Lists = await ReadNativeListsAsync(workspace.SelectedDomain, cancellationToken);
+            workspace.ListsMeasured = true;
+        }
         return workspace;
     }
 
@@ -75,53 +80,63 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
         CancellationToken cancellationToken)
     {
         var olculdu = true;
-        var selected = (domain ?? string.Empty).Trim().ToLowerInvariant();
+        var selected = string.IsNullOrWhiteSpace(domain) ? string.Empty : ValidateDomain(domain);
         var script = $$"""
             $ErrorActionPreference = 'Stop'
             $domains = @()
             $po = New-Object -ComObject 'MEAOPO.PostOffice'
             $seen = @{}
-            if ($po.FindFirstPostoffice() -eq 0) {
+            $po.Name = ''; $po.Account = ''; $po.Status = -1
+            if ($po.FindFirstPostoffice() -eq 1) {
               $n = 0
               do {
                 $nm = "$($po.Name)"
                 # Bazı MailEnable COM sürümlerinde FindNext sonu doğru bildirmez (sonsuz
                 # döngü/timeout). Tekrar eden ad gelirse enumerasyonu sonlandır.
-                if ($seen.ContainsKey($nm)) { break }
+                if ($seen.ContainsKey($nm)) { throw 'Postoffice enumeration repeated a record.' }
                 $seen[$nm] = $true
                 $domains += [pscustomobject]@{ name = $nm; status = [int]$po.Status }
                 $n++
-              } while ($po.FindNextPostoffice() -eq 0 -and $n -lt 500)
+                $po.Name = ''; $po.Account = ''; $po.Status = -1
+              } while ($po.FindNextPostoffice() -eq 1 -and $n -lt 500)
+              if ($n -ge 500) { throw 'Postoffice enumeration exceeded safety limit.' }
             }
             $accounts = @(); $aliases = @()
             $sel = '{{PsLiteralRaw(selected)}}'
             if ($sel) {
               $mb = New-Object -ComObject 'MEAOPO.Mailbox'
               $mb.Postoffice = $sel
-              if ($mb.FindFirstMailbox() -eq 0) {
+              $mb.Mailbox = ''; $mb.Status = -1; $mb.Limit = -1; $mb.RedirectStatus = -1; $mb.RedirectAddress = ''
+              if ($mb.FindFirstMailbox() -eq 1) {
                 $n = 0; $seenMb = @{}
                 do {
                   $mbn = "$($mb.Mailbox)"
-                  if ($seenMb.ContainsKey($mbn)) { break }
+                  if ($seenMb.ContainsKey($mbn)) { throw 'Mailbox enumeration repeated a record.' }
                   $seenMb[$mbn] = $true
                   $accounts += [pscustomobject]@{ mailbox = $mbn; status = [int]$mb.Status; limit = [int]$mb.Limit }
                   $n++
-                } while ($mb.FindNextMailbox() -eq 0 -and $n -lt 5000)
+                  $mb.Postoffice = $sel
+                  $mb.Mailbox = ''; $mb.Status = -1; $mb.Limit = -1; $mb.RedirectStatus = -1; $mb.RedirectAddress = ''
+                } while ($mb.FindNextMailbox() -eq 1 -and $n -lt 5000)
+                if ($n -ge 5000) { throw 'Mailbox enumeration exceeded safety limit.' }
               }
               $am = New-Object -ComObject 'MEAOAM.AddressMap'
-              if ($am.FindFirstAddressMap() -eq 0) {
+              $am.Account = ''; $am.SourceAddress = ''; $am.DestinationAddress = ''; $am.Scope = ''
+              if ($am.FindFirstAddressMap() -eq 1) {
                 $n = 0; $seenAm = @{}
                 do {
                   $src = "$($am.SourceAddress)"; $dst = "$($am.DestinationAddress)"
                   $key = "$src=>$dst"
-                  if ($seenAm.ContainsKey($key)) { break }
+                  if ($seenAm.ContainsKey($key)) { throw 'Address enumeration repeated a record.' }
                   $seenAm[$key] = $true
-                  $isCatchAll = $src -match [regex]::Escape("[SMTP:$sel]")
-                  if (($src -match [regex]::Escape("@$sel") -or $isCatchAll) -and $dst -match 'SMTP:') {
+                  $isCatchAll = $src -ieq "[SMTP:$sel]" -or $src -ieq "[SMTP:*@$sel]"
+                  if (($src.EndsWith("@$sel]", [StringComparison]::OrdinalIgnoreCase) -or $isCatchAll) -and $dst -match '^\[SMTP:') {
                     $aliases += [pscustomobject]@{ source = $src; destination = $dst }
                   }
                   $n++
-                } while ($am.FindNextAddressMap() -eq 0 -and $n -lt 20000)
+                  $am.Account = ''; $am.SourceAddress = ''; $am.DestinationAddress = ''; $am.Scope = ''
+                } while ($am.FindNextAddressMap() -eq 1 -and $n -lt 20000)
+                if ($n -ge 20000) { throw 'Address enumeration exceeded safety limit.' }
               }
             }
             [pscustomobject]@{ domains = $domains; accounts = $accounts; aliases = $aliases } | ConvertTo-Json -Depth 5 -Compress
@@ -140,7 +155,7 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             return (new MailWorkspaceDto
             {
                 Installed = true,
-                Configured = true,
+                Configured = false,
                 SelectedDomain = selected,
                 StatusMessage = "Mail yönetim bileşenine (MailEnable COM) erişilemedi. MailEnable kurulu ve COM kayıtlı olmalı. Ayrıntı: "
                     + (string.IsNullOrWhiteSpace(exception.Details) ? exception.Message : exception.Details)
@@ -153,11 +168,14 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
         {
             Installed = true,
             Configured = true,
+            Provider = "mailenable",
+            ListsMeasured = false,
             SelectedDomain = selected
         };
 
         if (data is null)
         {
+            workspace.Configured = false;
             // SORGU HATASI ile BOS SONUC AYNI GORUNTUYE DUSUYORDU. Ayristirilamayan bir cikti
             // "hic posta kutusu yok" DEGILDIR; bunu soylemek, kotayi dolduran bir kiraciya
             // sinirsiz kutu actiran hata sinifidir (bkz. ef2fda8).
@@ -167,6 +185,16 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
         }
 
         var root = data.Value;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("domains", out var domainsJson) || domainsJson.ValueKind != JsonValueKind.Array ||
+            (!string.IsNullOrWhiteSpace(selected) &&
+             (!root.TryGetProperty("accounts", out var accountsJson) || accountsJson.ValueKind != JsonValueKind.Array ||
+              !root.TryGetProperty("aliases", out var aliasesJson) || aliasesJson.ValueKind != JsonValueKind.Array)))
+        {
+            workspace.Configured = false;
+            workspace.StatusMessage = "MailEnable inventory is incomplete; mailbox counts were not measured.";
+            return (workspace, false);
+        }
         workspace.Domains = ReadArray(root, "domains")
             .Select(item => new MailDomainDto
             {
@@ -178,6 +206,7 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
 
         if (!string.IsNullOrWhiteSpace(selected))
         {
+            workspace.AccountsMeasured = true;
             workspace.Accounts = ReadArray(root, "accounts")
                 .Select(item => new MailAccountDto
                 {
@@ -208,6 +237,7 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
                 .ToArray();
         }
 
+        await ApplyDomainAllocationsAsync(workspace, cancellationToken);
         return (workspace, olculdu);
     }
 
@@ -217,14 +247,35 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
 
     public async Task<MailWorkspaceDto> CreateDomainAsync(CreateMailDomainRequest request, CancellationToken cancellationToken = default)
     {
-        var domain = request.DomainName.Trim().ToLowerInvariant();
+        using var mutation = await AcquireMutationAsync(cancellationToken);
+        var domain = ValidateDomain(request.DomainName);
         var script = $$"""
             $ErrorActionPreference = 'Stop'
+            $existingDomain = New-Object -ComObject 'MEAOSM.Domain'
+            $existingDomain.DomainName = '{{PsLiteralRaw(domain)}}'
+            if ($existingDomain.GetDomain() -eq 1 -and $existingDomain.AccountName -ine '{{PsLiteralRaw(domain)}}') { throw 'Domain belongs to another postoffice.' }
             $po = New-Object -ComObject 'MEAOPO.PostOffice'
             $po.Account = '{{PsLiteralRaw(domain)}}'
             $po.Name = '{{PsLiteralRaw(domain)}}'
-            $po.Status = 1
-            [void]$po.AddPostoffice()
+            $po.Status = -1
+            if ($po.GetPostoffice() -ne 1) {
+              $po.Status = 1
+              if ($po.AddPostoffice() -ne 1) { throw 'Postoffice creation failed.' }
+            }
+            $smtpDomain = New-Object -ComObject 'MEAOSM.Domain'
+            $smtpDomain.DomainName = '{{PsLiteralRaw(domain)}}'
+            if ($smtpDomain.GetDomain() -eq 1) {
+              if ($smtpDomain.AccountName -ine '{{PsLiteralRaw(domain)}}') { throw 'Domain belongs to another postoffice.' }
+            } else {
+              $smtpDomain.AccountName = '{{PsLiteralRaw(domain)}}'
+              $smtpDomain.Status = 1
+              $smtpDomain.DomainRedirectionStatus = 0
+              $smtpDomain.DomainRedirectionHosts = ''
+              if ($smtpDomain.AddDomain() -ne 1) { throw 'SMTP domain creation failed.' }
+            }
+            $smtpDomain = New-Object -ComObject 'MEAOSM.Domain'
+            $smtpDomain.DomainName = '{{PsLiteralRaw(domain)}}'
+            if ($smtpDomain.GetDomain() -ne 1 -or $smtpDomain.AccountName -ine '{{PsLiteralRaw(domain)}}') { throw 'SMTP domain readback failed.' }
             'OK'
             """;
         await RunComAsync(script, cancellationToken);
@@ -244,16 +295,13 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
 
     public async Task<MailWorkspaceDto> DeleteDomainAsync(string domainName, CancellationToken cancellationToken = default)
     {
-        var domain = domainName.Trim().ToLowerInvariant();
-        var script = $$"""
-            $ErrorActionPreference = 'Stop'
-            $po = New-Object -ComObject 'MEAOPO.PostOffice'
-            $po.Account = '{{PsLiteralRaw(domain)}}'
-            $po.Name = '{{PsLiteralRaw(domain)}}'
-            [void]$po.RemovePostoffice()
-            'OK'
-            """;
-        await RunComAsync(script, cancellationToken);
+        using var mutation = await AcquireMutationAsync(cancellationToken);
+        var domain = ValidateDomain(domainName);
+        var (before, measured) = await WorkspaceOkuAsync(domain, cancellationToken);
+        if (!measured) throw new AppException("mail.domain_delete_unverified", 502, 502);
+        if (before.Accounts.Count != 0 || before.Aliases.Count != 0)
+            throw new AppException("mail.domain_not_empty", 409, 409);
+        await RunVerifiedCommandAsync(DeleteEmptyDomainScript(domain), cancellationToken);
 
         var (workspace, olculdu) = await WorkspaceOkuAsync(null, cancellationToken);
         KapiAcVarlik(
@@ -268,9 +316,14 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
 
     public async Task<MailWorkspaceDto> CreateAccountAsync(CreateMailAccountRequest request, CancellationToken cancellationToken = default)
     {
-        var domain = request.Domain.Trim().ToLowerInvariant();
-        var local = GetMailboxLocal(request.Address).ToLowerInvariant();
+        using var mutation = await AcquireMutationAsync(cancellationToken);
+        ValidateQuota(request.MaxSizeMB);
+        var domain = ValidateDomain(request.Domain);
+        var local = ValidateLocalAddress(request.Address, domain, false);
         var full = $"{local}@{domain}";
+
+        await EnsureDomainAllocationAsync(domain, full, request.MaxSizeMB, cancellationToken);
+        await RunVerifiedCommandAsync(AccountCreationPreflight(domain, local, full), cancellationToken);
 
         // SILMENIN KARDESI: burada da IKI nesne yazilir (MEAOPO.Mailbox + MEAOAU.Login) ama
         // eskiden yalniz KUTU dogrulaniyordu. `AddLogin()` sessizce basarisiz olursa (COM
@@ -295,14 +348,53 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             full,
             hatalar);
 
+        // A mailbox and login alone do not route incoming SMTP mail to the mailbox.
+        await RunComAsync(MailboxMappingScript(domain, local, full, request.MaxSizeMB), cancellationToken);
+        (workspace, olculdu) = await WorkspaceOkuAsync(domain, cancellationToken);
+        if (!olculdu || !workspace.Accounts.Any(a => a.Address.Equals(full, StringComparison.OrdinalIgnoreCase)
+            && a.MaxSizeMB == request.MaxSizeMB))
+            throw new AppException("mail.account_quota_not_applied", 502, 502);
         return workspace;
+    }
+
+    internal static string MailboxMappingScript(string domain, string local, string address, int quotaMb)
+    {
+        ValidateQuota(quotaMb);
+        var quota = quotaMb == 0 ? -1 : checked(quotaMb * 1024);
+        return $$"""
+            $ErrorActionPreference = 'Stop'
+            $map = New-Object -ComObject 'MEAOAM.AddressMap'
+            $map.SourceAddress = '[SMTP:{{PsLiteralRaw(address)}}]'
+            $mapExists = $map.GetAddressMap() -eq 1
+            if ($mapExists) {
+              if ($map.DestinationAddress -ine '[SF:{{PsLiteralRaw(domain)}}/{{PsLiteralRaw(local)}}]') { throw 'Address is assigned to another destination.' }
+            }
+            $mb = New-Object -ComObject 'MEAOPO.Mailbox'
+            $mb.Postoffice = '{{PsLiteralRaw(domain)}}'
+            $mb.Mailbox = '{{PsLiteralRaw(local)}}'
+            if ($mb.GetMailbox() -ne 1) { throw 'Mailbox readback failed.' }
+            $mb.Limit = {{quota}}
+            if ($mb.EditMailbox($mb.Postoffice, $mb.Mailbox, $mb.RedirectAddress, $mb.RedirectStatus, $mb.Status, $mb.Limit, $mb.Size) -ne 1) { throw 'Mailbox quota was not applied.' }
+            if (-not $mapExists) {
+              $map.Account = '{{PsLiteralRaw(domain)}}'
+              $map.SourceAddress = '[SMTP:{{PsLiteralRaw(address)}}]'
+              $map.DestinationAddress = '[SF:{{PsLiteralRaw(domain)}}/{{PsLiteralRaw(local)}}]'
+              $map.Scope = '0'
+              if ($map.AddAddressMap() -ne 1) { throw 'Mailbox address mapping failed.' }
+            }
+            $verify = New-Object -ComObject 'MEAOAM.AddressMap'
+            $verify.SourceAddress = '[SMTP:{{PsLiteralRaw(address)}}]'
+            if ($verify.GetAddressMap() -ne 1 -or $verify.DestinationAddress -ine '[SF:{{PsLiteralRaw(domain)}}/{{PsLiteralRaw(local)}}]') { throw 'Mailbox address mapping readback failed.' }
+            'OK'
+            """;
     }
 
     public async Task<MailWorkspaceDto> DeleteAccountAsync(string address, CancellationToken cancellationToken = default)
     {
+        using var mutation = await AcquireMutationAsync(cancellationToken);
         var (local, domain) = SplitAddress(address);
         var full = $"{local}@{domain}";
-        var json = await RunComAsync(SilmeBetigi(domain, local, full), cancellationToken);
+        var json = await RunComAsync(DomainOwnershipGuard(domain) + SilmeBetigi(domain, local, full), cancellationToken);
         var sonda = SondayiOku(json);
 
         // BU SINIFIN EN AGIR NOKTASIYDI: iki BOS catch, sonra kosulsuz 'OK'. Kutu silinmeyip
@@ -324,14 +416,16 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             full,
             SilmeHatalari(sonda));
 
+        await RunVerifiedCommandAsync(RemoveMailboxMappingsScript(domain, local), cancellationToken);
         return workspace;
     }
 
     public async Task<MailWorkspaceDto> SetAccountPasswordAsync(SetMailAccountPasswordRequest request, CancellationToken cancellationToken = default)
     {
+        using var mutation = await AcquireMutationAsync(cancellationToken);
         var (local, domain) = SplitAddress(request.Address);
         var full = $"{local}@{domain}";
-        var json = await RunComAsync(ParolaBetigi(domain, full, request.Password), cancellationToken);
+        var json = await RunComAsync(DomainOwnershipGuard(domain) + ParolaBetigi(domain, full, request.Password), cancellationToken);
         var sonda = SondayiOku(json);
         var kayit = GirisSondasiniYorumla(sonda.Ayristirildi, sonda.OnceDoldu, sonda.KontrolDoldu, sonda.SonraDoldu);
         var parola = ParolaSonucunuYorumla(kayit, sonda.Eslesme);
@@ -344,31 +438,37 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
 
     public async Task<MailWorkspaceDto> CreateAliasAsync(CreateMailAliasRequest request, CancellationToken cancellationToken = default)
     {
-        var domain = request.Domain.Trim().ToLowerInvariant();
-        var aliasLocal = GetMailboxLocal(request.Address).ToLowerInvariant();
+        using var mutation = await AcquireMutationAsync(cancellationToken);
+        var domain = ValidateDomain(request.Domain);
+        var aliasLocal = ValidateLocalAddress(request.Address, domain, true);
         var aliasAddress = $"{aliasLocal}@{domain}";
-        var target = request.Target.Trim().ToLowerInvariant();
-        // "*" yerel kısmı = catch-all (yakala-tümü). MailEnable'da kaynak çıplak alan adıdır:
+        var (targetLocal, targetDomain) = SplitAddress(request.Target);
+        var target = $"{targetLocal}@{targetDomain}";
+        if (aliasAddress.Equals(target, StringComparison.OrdinalIgnoreCase))
+            throw new AppException("mail.alias_self_reference", 400, 400);
+        // "*" yerel kısmı = catch-all (yakala-tümü). Kaynak [SMTP:*@domain] biçimindedir:
         // domaine gelip eşleşmeyen TÜM adresler hedefe yönlenir (panel "catch-all" gibi).
         var isCatchAll = aliasLocal is "*" or "@" or "";
-        var source = isCatchAll ? domain : aliasAddress;
+        var source = isCatchAll ? $"*@{domain}" : aliasAddress;
         var script = $$"""
             $ErrorActionPreference = 'Stop'
             $am = New-Object -ComObject 'MEAOAM.AddressMap'
             $am.SourceAddress = '[SMTP:{{PsLiteralRaw(source)}}]'
+            if ($am.GetAddressMap() -eq 1) { throw 'Address already exists.' }
+            $am.Account = '{{PsLiteralRaw(domain)}}'
             $am.DestinationAddress = '[SMTP:{{PsLiteralRaw(target)}}]'
             $am.Scope = 0
-            $am.Status = 1
-            [void]$am.AddAddressMap()
+            if ($am.AddAddressMap() -ne 1) { throw 'Alias creation failed.' }
             'OK'
             """;
-        await RunComAsync(script, cancellationToken);
+        await RunComAsync(DomainOwnershipGuard(domain) + script, cancellationToken);
 
         var (workspace, olculdu) = await WorkspaceOkuAsync(domain, cancellationToken);
         var beklenenAdres = isCatchAll ? $"*@{domain}" : aliasAddress;
         KapiAcVarlik(
             olculdu,
-            workspace.Aliases.Any(item => string.Equals(item.Address, beklenenAdres, StringComparison.OrdinalIgnoreCase)),
+            workspace.Aliases.Any(item => string.Equals(item.Address, beklenenAdres, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(item.Target, target, StringComparison.OrdinalIgnoreCase)),
             olmali: true,
             "mail.alias_create_unverified",
             "mail.alias_create_not_applied",
@@ -378,20 +478,16 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
 
     public async Task<MailWorkspaceDto> DeleteAliasAsync(string address, CancellationToken cancellationToken = default)
     {
-        var (local, domain) = SplitAddress(address);
-        // Catch-all kaydının kaynağı çıplak alan adıdır; "*@domain" silinirken bunu eşle.
-        var clean = local is "*" or "@" or "" ? domain : ExtractSmtp(address);
-        var script = $$"""
-            $ErrorActionPreference = 'Stop'
-            $am = New-Object -ComObject 'MEAOAM.AddressMap'
-            $am.SourceAddress = '[SMTP:{{PsLiteralRaw(clean)}}]'
-            try { [void]$am.RemoveAddressMap() } catch {}
-            'OK'
-            """;
-        await RunComAsync(script, cancellationToken);
+        using var mutation = await AcquireMutationAsync(cancellationToken);
+        var (local, domain) = SplitAddress(address, allowCatchAll: true);
+        // Remove the documented wildcard map and any legacy bare-domain alias.
+        var catchAll = local is "*" or "@" or "";
+        var clean = catchAll ? $"*@{domain}" : ExtractSmtp(address);
+        var script = DeleteAliasScript(clean, domain);
+        await RunVerifiedCommandAsync(DomainOwnershipGuard(domain) + script, cancellationToken);
+        if (catchAll) await RunVerifiedCommandAsync(DomainOwnershipGuard(domain) + DeleteAliasScript(domain, domain), cancellationToken);
 
-        // Bos catch duruyor (kayit zaten yoksa firlatmasin) AMA sonuc artik OLCULUYOR:
-        // silinmemis bir takma ad "silindi" diye gosterilemez.
+        // Read back the alias inventory after the command-level ownership check.
         var (workspace, olculdu) = await WorkspaceOkuAsync(domain, cancellationToken);
         var silinenAdres = string.Equals(clean, domain, StringComparison.OrdinalIgnoreCase)
             ? $"*@{domain}"
@@ -406,79 +502,42 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
         return workspace;
     }
 
-    // Dağıtım listeleri yalnızca Stalwart'ta desteklenir; MailEnable yedeğinde net hata döner.
-    public Task<MailWorkspaceDto> CreateMailListAsync(CreateMailListRequest request, CancellationToken cancellationToken = default)
-        => throw new AppException("mail.lists_unsupported", 409, 409);
-
-    public Task<MailWorkspaceDto> SetMailListRecipientsAsync(SetMailListRecipientsRequest request, CancellationToken cancellationToken = default)
-        => throw new AppException("mail.lists_unsupported", 409, 409);
-
-    public Task<MailWorkspaceDto> DeleteMailListAsync(string address, CancellationToken cancellationToken = default)
-        => throw new AppException("mail.lists_unsupported", 409, 409);
-
-    // EK ADRESLER de listenin bir parçasıdır: liste yoksa alias'ı da olamaz. Cevap bilerek
-    // "posta sunucusu kurulu değil" DEĞİL, "bu sunucu dağıtım listesi desteklemiyor" — kullanıcı
-    // yanlış sebebi kovalamasın.
-    public Task<MailWorkspaceDto> AddMailListAliasAsync(MailListAliasRequest request, CancellationToken cancellationToken = default)
-        => throw new AppException("mail.lists_unsupported", 409, 409);
-
-    public Task<MailWorkspaceDto> RemoveMailListAliasAsync(MailListAliasRequest request, CancellationToken cancellationToken = default)
-        => throw new AppException("mail.lists_unsupported", 409, 409);
-
-    /// <summary>
-    /// MailEnable dinleyicileri panelden OKUNMUYOR: sonuc "dinleyici YOK" DEGIL, "OLCULMEDI".
-    /// </summary>
-    /// <remarks>
-    /// ONCEKI HALI bos koleksiyon donuyordu ve arayuz (MailView.vue) bos listeyi
-    /// <c>panel.mail.noListeners</c> -- yani "dinleyici yok" -- diye yaziyordu. Hicbir sey
-    /// olculmeden verilen bu cevap, 25/587/143 portlarini GERCEKTEN dinleyen bir sunucuda
-    /// yoneticiye "posta hic dinlenmiyor" gosteriyordu: yanlis sebebi kovalatan bir tanidir.
-    /// </remarks>
     public Task<MailListenerSnapshotDto> GetListenersAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult(new MailListenerSnapshotDto { Installed = true, Measured = false });
+        => ReadListenersAsync(cancellationToken);
 
-    /// <summary>
-    /// MailEnable kuyruğu bu panelden okunmuyor: durum "kuyruk boş" DEĞİL, "yapılandırılmadı"
-    /// olarak bildirilir. Boş liste dönmek, takılı iletileri olan bir sunucuda yöneticiye
-    /// "gönderilecek bir şey yok" göstermek olurdu.
-    /// </summary>
     public Task<MailQueueDto> GetQueueAsync(int limit, CancellationToken cancellationToken = default)
-        => Task.FromResult(new MailQueueDto { Installed = true, Configured = false });
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new MailEnableQueue(QueueRoot).Read(limit));
+    }
 
-    /// <summary>
-    /// Kuyruk OKUNMUYOR, dolayisiyla tek ileti de okunamaz -- ve bu "ileti BULUNAMADI" DEGILDIR.
-    /// </summary>
-    /// <remarks>
-    /// ONCEKI HALI <c>null</c> donuyordu; ucta bu <c>mail.queue_message_not_found</c> (404)
-    /// oluyordu. Yani hic bakilmamis bir kuyruk icin panel "boyle bir ileti yok" diyordu.
-    /// Kardes metot <c>DeleteQueueMessageAsync</c> ayni durumda ZATEN
-    /// <c>mail.queue_not_supported</c> firlatiyordu; iki uc ayni gercek icin iki ayri sey
-    /// soyluyordu.
-    /// </remarks>
     public Task<MailQueueMessageDto?> GetQueueMessageAsync(string id, CancellationToken cancellationToken = default)
-        => throw new AppException("mail.queue_not_supported", 400, 400);
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new MailEnableQueue(QueueRoot).ReadOne(id));
+    }
 
-    /// <summary>Desteklenmiyor — ve BAŞARILI DÖNMÜYOR (silinmemiş iletiyi silindi sanmak en kötüsü).</summary>
     public Task<bool> DeleteQueueMessageAsync(string id, CancellationToken cancellationToken = default)
-        => throw new AppException("mail.queue_not_supported", 400, 400);
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new MailEnableQueue(QueueRoot).Delete(id));
+    }
 
-    /// <summary>MailEnable'da röle panelden yönetilmiyor; "kapalı" değil "yapılandırılmadı" bildirilir.</summary>
-    public Task<MailRelayDto> GetRelayAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult(new MailRelayDto { Installed = true, Configured = false });
-
-    public Task<MailRelayDto> SetRelayAsync(SetMailRelayRequest request, CancellationToken cancellationToken = default)
-        => throw new AppException("mail.relay_not_supported", 400, 400);
+    internal Func<string?> QueueRoot { get; init; } = MailEnableQueue.InstalledRoot;
 
     /// <summary>
     /// İstemci ayarları ölçülemiyor → null. Autodiscover ucu bu durumda 404 döner; uydurma
     /// port/ad yayınlamak, istemciyi çalışmayan bir yapılandırmaya kilitlerdi.
     /// </summary>
     public Task<MailClientSettingsDto?> GetClientSettingsAsync(string domain, CancellationToken cancellationToken = default)
-        => Task.FromResult<MailClientSettingsDto?>(null);
+        => ReadClientSettingsAsync(domain, cancellationToken);
 
     public async Task<MailWorkspaceDto> SetAccountQuotaAsync(SetMailAccountQuotaRequest request, CancellationToken cancellationToken = default)
     {
+        using var mutation = await AcquireMutationAsync(cancellationToken);
+        ValidateQuota(request.MaxSizeMB);
         var (local, domain) = SplitAddress(request.Address);
+        await EnsureDomainAllocationAsync(domain, $"{local}@{domain}", request.MaxSizeMB, cancellationToken);
         // MailEnable Limit birimi KB'dir; 0/negatif = sınırsız.
         var limitKb = request.MaxSizeMB > 0 ? request.MaxSizeMB * 1024 : -1;
         var script = $$"""
@@ -486,12 +545,12 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             $mb = New-Object -ComObject 'MEAOPO.Mailbox'
             $mb.Postoffice = '{{PsLiteralRaw(domain)}}'
             $mb.Mailbox = '{{PsLiteralRaw(local)}}'
-            [void]$mb.GetMailbox()
+            if ($mb.GetMailbox() -ne 1) { throw 'Mailbox could not be read.' }
             $mb.Limit = {{limitKb}}
-            [void]$mb.EditMailbox()
+            if ($mb.EditMailbox($mb.Postoffice, $mb.Mailbox, $mb.RedirectAddress, $mb.RedirectStatus, $mb.Status, $mb.Limit, $mb.Size) -ne 1) { throw 'Mailbox update failed.' }
             'OK'
             """;
-        await RunComAsync(script, cancellationToken);
+        await RunComAsync(DomainOwnershipGuard(domain) + script, cancellationToken);
 
         // KOTA GERI OKUNUR. Kardes sinifta (MailService) bu kapi 0.4.x'te kapatilmisti;
         // MailEnable yedeginde acik kalmisti.
@@ -509,22 +568,6 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             $"{adres}: istenen {beklenenMb} MB, olculen {(hesap is null ? "hesap yok" : hesap.MaxSizeMB + " MB")}");
         return workspace;
     }
-
-    /// <summary>
-    /// MailEnable'da alan adi seviyesinde disk kotasi YOKTUR -- ve panel bunu artik SOYLUYOR.
-    /// </summary>
-    /// <remarks>
-    /// ONCEKI HALI: metot hicbir kota uygulamadan mevcut calisma alanini donuyordu. Cagiran uc
-    /// ise denetim kaydina "Domain mail quota set to N MB" yaziyordu. Yani kotasiz bir alan adi
-    /// panelde KOTALI gorunuyordu. Sessiz basari yerine acik ret: yoneticinin sinirin var
-    /// oldugunu SANMASI, hic sinir koymamaktan daha tehlikelidir.
-    /// </remarks>
-    public Task<MailWorkspaceDto> SetDomainQuotaAsync(SetMailDomainQuotaRequest request, CancellationToken cancellationToken = default)
-        => throw new AppException(
-            "mail.domain_quota_not_supported",
-            409,
-            409,
-            $"MailEnable alan adi seviyesinde disk kotasi desteklemiyor ({request.Domain.Trim().ToLowerInvariant()}). Kutu bazli kota kullanin.");
 
     /// <summary>
     /// MailEnable'da giden posta limiti panel üzerinden kurulamıyor: durum "limitsiz" DEĞİL,
@@ -554,15 +597,16 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             $mb = New-Object -ComObject 'MEAOPO.Mailbox'
             $mb.Postoffice = '{{PsLiteralRaw(domain)}}'
             $mb.Mailbox = '{{PsLiteralRaw(local)}}'
-            [void]$mb.GetMailbox()
-            $status = 0; $contents = ''
-            try { $status = [int]$mb.GetAutoResponderStatus() } catch {}
-            try { $contents = [string]$mb.GetAutoResponderContents() } catch {}
+            if ($mb.GetMailbox() -ne 1) { throw 'Mailbox could not be read.' }
+            $status = [int]$mb.GetAutoResponderStatus()
+            $contents = [string]$mb.GetAutoResponderContents()
             [pscustomobject]@{ enabled = $status; message = $contents } | ConvertTo-Json -Compress
             """;
         var json = await RunComAsync(script, cancellationToken);
         var data = ParseJson(json);
-        if (data is null)
+        if (data is null || data.Value.ValueKind != JsonValueKind.Object ||
+            !data.Value.TryGetProperty("enabled", out var enabled) || enabled.ValueKind != JsonValueKind.Number || !enabled.TryGetInt32(out var state) || state is not (0 or 1) ||
+            !data.Value.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.String)
         {
             // SORGU HATASI ile BOS SONUC AYNI GORUNTUYE DUSUYORDU: ayristirilamayan cikti
             // "otomatik yanit kapali, mesaj bos" olarak gosteriliyordu. Kullanici tatilde
@@ -584,6 +628,9 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
 
     public async Task<MailAutoResponderDto> SetAutoResponderAsync(SetMailAutoResponderRequest request, CancellationToken cancellationToken = default)
     {
+        using var mutation = await AcquireMutationAsync(cancellationToken);
+        if (!string.IsNullOrWhiteSpace(request.Subject))
+            throw new AppException("mail.autoresponder_subject_not_supported", 409, 409);
         var (local, domain) = SplitAddress(request.Address);
         var status = request.Enabled ? 1 : 0;
         var script = $$"""
@@ -591,16 +638,16 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             $mb = New-Object -ComObject 'MEAOPO.Mailbox'
             $mb.Postoffice = '{{PsLiteralRaw(domain)}}'
             $mb.Mailbox = '{{PsLiteralRaw(local)}}'
-            [void]$mb.GetMailbox()
+            if ($mb.GetMailbox() -ne 1) { throw 'Mailbox could not be read.' }
             [void]$mb.SetAutoResponderContents('{{PsLiteralRaw(request.Message)}}')
             [void]$mb.SetAutoResponderStatus({{status}})
             'OK'
             """;
-        await RunComAsync(script, cancellationToken);
+        await RunComAsync(DomainOwnershipGuard(domain) + script, cancellationToken);
 
         // GERI OKUMA ZATEN VARDI, SONUCUNA BAKILMIYORDU. Artik bakiliyor.
         var olculen = await GetAutoResponderAsync(request.Address, cancellationToken);
-        if (olculen.Enabled != request.Enabled)
+        if (olculen.Enabled != request.Enabled || !string.Equals(olculen.Message, request.Message, StringComparison.Ordinal))
         {
             throw new AppException(
                 "mail.autoresponder_not_applied",
@@ -636,40 +683,11 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
         return Task.FromResult(dto);
     }
 
-    /// <summary>
-    /// Sertifika durumu MailEnable tarafinda panelden OKUNAMIYOR: <c>Active=false</c>.
-    /// </summary>
-    /// <remarks>
-    /// ONCEKI HALI sabit <c>Active = true</c> idi -- yani hicbir sey olculmeden "sertifika
-    /// etkin" deniyordu. Sertifikasiz bir posta sunucusu panelde YESIL gorunuyordu; TLS'siz
-    /// gonderim yapan bir sunucunun sahibi sorunu ancak istemci hata verince ogrenirdi.
-    /// </remarks>
     public Task<MailCertificateDto> GetCertificateStatusAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult(new MailCertificateDto
-        {
-            Active = false,
-            Source = "mailenable-unmeasured"
-        });
-
-    /// <summary>
-    /// MailEnable yedeginde sertifika ALIMI YOK -- ve panel artik bunu SOYLUYOR.
-    /// </summary>
-    /// <remarks>
-    /// ONCEKI HALI: metot HIC issuance yapmadan <c>Active = true</c> donuyordu. Kullanici
-    /// "Sertifika al" dugmesine basiyor, panel basarili diyor, sunucuda hicbir sey degismiyordu.
-    /// </remarks>
-    public Task<MailCertificateDto> IssueCertificateAsync(IssueMailCertificateRequest request, CancellationToken cancellationToken = default)
-        => throw new AppException(
-            "mail.certificate_issue_not_supported",
-            409,
-            409,
-            $"MailEnable yedeginde sertifika alimi panelden yapilamiyor ({request.Domain}). Sertifikayi MailEnable yonetiminden yukleyin.");
+        => InspectCertificateAsync(cancellationToken);
 
     /// <summary>MailEnable tarafinda karsilama adi panelden yonetilmiyor.</summary>
     public Task<bool> EnsureServerHostnameAsync(bool applyChanges = true, CancellationToken cancellationToken = default) => Task.FromResult(false);
-
-    public Task<MailCertificateDto?> SyncCertificateAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult<MailCertificateDto?>(null);
 
     /// <summary>
     /// Spam ayarlari MailEnable tarafinda panelden OKUNMUYOR: <c>Configured=false</c>.
@@ -770,12 +788,12 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             $mb = & $MeKutuFabrikasi
             $mb.Postoffice = '{{PsLiteralRaw(domain)}}'
             $mb.Mailbox = '{{PsLiteralRaw(local)}}'
-            try { [void]$mb.RemoveMailbox() } catch { $kutuHata = "$($_.Exception.Message)" }
+            try { [void]$mb.RemoveMailbox() } catch { $kutuHata = "$($_.Exception.GetType().Name)" }
             $girisHata = ''
             $lg = & $MeGirisFabrikasi
             $lg.Account = '{{PsLiteralRaw(domain)}}'
             $lg.UserName = '{{PsLiteralRaw(full)}}'
-            try { [void]$lg.RemoveLogin() } catch { $girisHata = "$($_.Exception.Message)" }
+            try { [void]$lg.RemoveLogin() } catch { $girisHata = "$($_.Exception.GetType().Name)" }
             {{GirisSondasiBetigi("sonra", domain, full, null)}}
             {{GirisSondasiBetigi("kontrol", domain, KontrolKullanicisi(domain), null)}}
             {{SondaCiktisi}}
@@ -804,7 +822,7 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             $mb.Limit = -1
             $mb.RedirectAddress = ''
             $mb.RedirectStatus = 0
-            try { [void]$mb.AddMailbox() } catch { $kutuHata = "$($_.Exception.Message)" }
+            try { [void]$mb.AddMailbox() } catch { $kutuHata = "$($_.Exception.GetType().Name)" }
             $girisHata = ''
             $lg = & $MeGirisFabrikasi
             $lg.Account = '{{PsLiteralRaw(domain)}}'
@@ -812,7 +830,7 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             $lg.Password = '{{PsLiteralRaw(parola)}}'
             $lg.Rights = 'USER'
             $lg.Status = 1
-            try { [void]$lg.AddLogin() } catch { $girisHata = "$($_.Exception.Message)" }
+            try { [void]$lg.AddLogin() } catch { $girisHata = "$($_.Exception.GetType().Name)" }
             {{GirisSondasiBetigi("sonra", domain, full, null)}}
             {{GirisSondasiBetigi("kontrol", domain, KontrolKullanicisi(domain), null)}}
             {{SondaCiktisi}}
@@ -833,9 +851,7 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             $lg.Account = '{{PsLiteralRaw(domain)}}'
             $lg.UserName = '{{PsLiteralRaw(full)}}'
             [void]$lg.GetLogin()
-            $lg.Password = '{{PsLiteralRaw(parola)}}'
-            $lg.Status = 1
-            [void]$lg.EditLogin()
+            [void]$lg.EditLogin($lg.UserName, $lg.Status, '{{PsLiteralRaw(parola)}}', $lg.Account, $lg.Description, $lg.LoginAttempts, $lg.LastAttempt, $lg.LastSuccessfulLogin, $lg.Rights)
             {{GirisSondasiBetigi("sonra", domain, full, parola)}}
             {{GirisSondasiBetigi("kontrol", domain, KontrolKullanicisi(domain), null)}}
             {{SondaCiktisi}}
@@ -857,7 +873,7 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             : $$"""
 
                 if (-not ${{onek}}Hata) {
-                  try { ${{onek}}Eslesme = ("$(${{onek}}Nesne.Password)" -ceq '{{PsLiteralRaw(beklenenParola)}}') } catch { ${{onek}}Hata = "parola:$($_.Exception.Message)" }
+                  try { ${{onek}}Eslesme = ("$(${{onek}}Nesne.Password)" -ceq '{{PsLiteralRaw(beklenenParola)}}') } catch { ${{onek}}Hata = "parola:$($_.Exception.GetType().Name)" }
                 }
                 """;
 
@@ -870,12 +886,12 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
               ${{onek}}Nesne.Account = '{{PsLiteralRaw(domain)}}'
               ${{onek}}Nesne.UserName = '{{PsLiteralRaw(kullanici)}}'
               ${{onek}}Nesne.Rights = '{{SondaNobetcisi}}'
-            } catch { ${{onek}}Hata = "atama:$($_.Exception.Message)" }
+            } catch { ${{onek}}Hata = "atama:$($_.Exception.GetType().Name)" }
             if (-not ${{onek}}Hata) {
-              try { [void]${{onek}}Nesne.GetLogin() } catch { ${{onek}}Hata = "getlogin:$($_.Exception.Message)" }
+              try { [void]${{onek}}Nesne.GetLogin() } catch { ${{onek}}Hata = "getlogin:$($_.Exception.GetType().Name)" }
             }
             if (-not ${{onek}}Hata) {
-              try { ${{onek}}Haklar = "$(${{onek}}Nesne.Rights)" } catch { ${{onek}}Hata = "oku:$($_.Exception.Message)" }
+              try { ${{onek}}Haklar = "$(${{onek}}Nesne.Rights)" } catch { ${{onek}}Hata = "oku:$($_.Exception.GetType().Name)" }
             }{{parolaOlcumu}}
             """;
     }
@@ -1195,7 +1211,7 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
 
     // --- yardımcılar ---
 
-    private async Task<string> RunComAsync(string script, CancellationToken cancellationToken)
+    internal async Task<string> RunComAsync(string script, CancellationToken cancellationToken)
     {
         // GOVDE OLCUM DIKISI (uretimde null; bkz. KomutKosucusu).
         if (KomutKosucusu is not null)
@@ -1215,7 +1231,9 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
         // dosyayı bulup okuyabiliyordu. Silme (finally) bir temizliktir, erişim denetimi değildir:
         // süreç ortada ölürse dosya kalır. Dosya AÇILIRKEN kilitlenir.
         var tempScript = SecureTempFile.BuildPath("adapanel-me", ".ps1");
-        await SecureTempFile.WriteAsync(tempScript, script, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+        // Windows PowerShell 5.1 otherwise decodes the script with the ANSI code page,
+        // corrupting non-ASCII mailbox passwords before the COM call.
+        await SecureTempFile.WriteAsync(tempScript, script, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true), cancellationToken);
         try
         {
             var result = await ProcessRunner.RunAsync(
@@ -1226,15 +1244,13 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
 
             if (!result.Success)
             {
-                logger.LogWarning(
-                    "MailEnable COM command failed. ExitCode={ExitCode} Error={Error}",
-                    result.ExitCode,
-                    result.StandardError);
+                // PowerShell stderr can include source lines containing credentials.
+                logger.LogWarning("MailEnable command failed. ExitCode={ExitCode}", result.ExitCode);
                 throw new AppException(
                     "mail.command_failed",
                     500,
                     500,
-                    string.IsNullOrWhiteSpace(result.StandardError) ? result.StandardOutput : result.StandardError);
+                    "MailEnable command failed. Script output is withheld because it may contain credentials.");
             }
 
             return result.StandardOutput;
@@ -1243,6 +1259,13 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
         {
             try { System.IO.File.Delete(tempScript); } catch { /* en iyi çaba */ }
         }
+    }
+
+    private async Task RunVerifiedCommandAsync(string script, CancellationToken cancellationToken)
+    {
+        var output = await RunComAsync(script, cancellationToken);
+        if (!string.Equals(output.Trim(), "OK", StringComparison.Ordinal))
+            throw new AppException("mail.command_failed", 502, 502, "MailEnable did not confirm the operation.");
     }
 
     private static JsonElement? ParseJson(string output)
@@ -1302,6 +1325,26 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
     private static int NormalizeLimitToMb(int limitKb)
         => limitKb <= 0 ? 0 : limitKb / 1024;
 
+    private static void ValidateQuota(int quotaMb)
+    {
+        if (quotaMb is < 0 or > 1024 * 1024) throw new AppException("mail.invalid_quota", 400, 400);
+    }
+
+    internal static string DeleteAliasScript(string source, string domain) => $$"""
+        $ErrorActionPreference = 'Stop'
+        $am = New-Object -ComObject 'MEAOAM.AddressMap'
+        $am.SourceAddress = '[SMTP:{{PsLiteralRaw(source)}}]'
+        if ($am.GetAddressMap() -eq 1) {
+          if ($am.DestinationAddress -notmatch '^\[SMTP:[^\r\n\[\]]+\]$') { throw 'Address is not an alias.' }
+          if ($am.Account -and $am.Account -ine '{{PsLiteralRaw(domain)}}') { throw 'Address belongs to another postoffice.' }
+          if ($am.RemoveAddressMap() -ne 1) { throw 'Alias removal failed.' }
+        }
+        $verify = New-Object -ComObject 'MEAOAM.AddressMap'
+        $verify.SourceAddress = '[SMTP:{{PsLiteralRaw(source)}}]'
+        if ($verify.GetAddressMap() -eq 1) { throw 'Alias removal readback failed.' }
+        'OK'
+        """;
+
     private static string GetMailboxLocal(string address)
     {
         var clean = ExtractSmtp(address);
@@ -1309,11 +1352,43 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
         return at > 0 ? clean[..at] : clean;
     }
 
-    private static (string Local, string Domain) SplitAddress(string address)
+    private static (string Local, string Domain) SplitAddress(string address, bool allowCatchAll = false)
     {
         var clean = ExtractSmtp(address).ToLowerInvariant();
-        var at = clean.IndexOf('@');
-        return at > 0 ? (clean[..at], clean[(at + 1)..]) : (clean, string.Empty);
+        var at = clean.LastIndexOf('@');
+        if (at <= 0) throw new AppException("mail.invalid_address", 400, 400);
+        var domain = ValidateDomain(clean[(at + 1)..]);
+        return (ValidateLocalAddress(clean, domain, allowCatchAll), domain);
+    }
+
+    internal static string ValidateDomain(string domain)
+    {
+        var normalized = DomainNames.Normalize(domain);
+        try { normalized = new System.Globalization.IdnMapping().GetAscii(normalized); }
+        catch (ArgumentException) { throw new AppException("mail.invalid_domain", 400, 400); }
+        if (normalized.Length > 253 || !normalized.Contains('.') || normalized.Split('.').Any(label =>
+            label.Length is 0 or > 63 || label[0] == '-' || label[^1] == '-' ||
+            label.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-')))
+            throw new AppException("mail.invalid_domain", 400, 400);
+        return normalized;
+    }
+
+    internal static string ValidateLocalAddress(string address, string domain, bool allowCatchAll)
+    {
+        var clean = ExtractSmtp(address).ToLowerInvariant();
+        if (allowCatchAll && clean is "*" or "@") return "*";
+        var at = clean.LastIndexOf('@');
+        if (at >= 0)
+        {
+            if (!ValidateDomain(clean[(at + 1)..]).Equals(domain, StringComparison.OrdinalIgnoreCase))
+                throw new AppException("mail.invalid_address", 400, 400);
+            clean = clean[..at];
+        }
+        if (allowCatchAll && clean == "*") return clean;
+        if (clean.Length is 0 or > 64 || clean.StartsWith('.') || clean.EndsWith('.') || clean.Contains("..") ||
+            clean.Any(c => !char.IsAsciiLetterOrDigit(c) && !".!#$%&'+-=^_`{|}~".Contains(c)))
+            throw new AppException("mail.invalid_address", 400, 400);
+        return clean;
     }
 
     private static string ExtractSmtp(string value)

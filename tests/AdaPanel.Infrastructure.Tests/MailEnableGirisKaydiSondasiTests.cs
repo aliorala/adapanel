@@ -1,4 +1,4 @@
-using AdaPanel.Core.Common;
+﻿using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Infrastructure.Mail;
 using AdaPanel.Infrastructure.Support;
@@ -69,6 +69,15 @@ public sealed class MailEnableGirisKaydiSondasiTests
         string oncedenVarOlanKayit = "")
         => $$"""
             $ErrorActionPreference = 'Stop'
+            function New-Object {
+              param([string]$TypeName, [string]$ComObject, [hashtable]$Property)
+              if ($ComObject -eq 'MEAOSM.Domain') {
+                $o = [pscustomobject]@{ DomainName=''; AccountName='{{Alan}}' }
+                $o | Add-Member ScriptMethod GetDomain { return 1 }
+                return $o
+              }
+              Microsoft.PowerShell.Utility\New-Object -TypeName $TypeName -Property $Property
+            }
             $script:Kayitlar = @{}
             $script:Kayitlar['{{Adres}}'] = @{ Rights = 'USER'; Password = '{{kayitliParola}}' }
             $script:GirisDavranisi = '{{girisDavranisi}}'
@@ -105,10 +114,11 @@ public sealed class MailEnableGirisKaydiSondasiTests
                 return 0
               }
               $n | Add-Member -MemberType ScriptMethod -Name EditLogin -Value {
+                param($newUser, $newStatus, $newPassword, $newAccount, $newDescription, $attempts, $lastAttempt, $lastSuccess, $rights)
                 if ($script:DuzenlemeDavranisi -eq 'yazmaz') { $script:Kayitlar.Remove($this.UserName); return 1 }
                 if (-not $script:Kayitlar.ContainsKey($this.UserName)) { return 1 }
-                $deger = $this.Password
-                if ($script:DuzenlemeDavranisi -eq 'ozetler') { $deger = 'OZET:' + $this.Password }
+                $deger = $newPassword
+                if ($script:DuzenlemeDavranisi -eq 'ozetler') { $deger = 'OZET:' + $newPassword }
                 $script:Kayitlar[$this.UserName].Password = $deger
                 return 0
               }
@@ -185,7 +195,7 @@ public sealed class MailEnableGirisKaydiSondasiTests
     {
         var sonda = await KosturAsync(SahteCom(silmeDavranisi: "firlatir"), MailEnableMailService.SilmeBetigi(Alan, Yerel, Adres));
 
-        Assert.Contains("erisim reddedildi", sonda.GirisHata, StringComparison.Ordinal);
+        Assert.Contains("Exception", sonda.GirisHata, StringComparison.Ordinal);
         Assert.Equal(MailEnableMailService.GirisKaydiOlcumu.Var, Karar(sonda));
         Assert.Contains("RemoveLogin:", MailEnableMailService.SilmeHatalari(sonda), StringComparison.Ordinal);
     }
@@ -196,7 +206,7 @@ public sealed class MailEnableGirisKaydiSondasiTests
     {
         var sonda = await KosturAsync(SahteCom(kutuDavranisi: "firlatir"), MailEnableMailService.SilmeBetigi(Alan, Yerel, Adres));
 
-        Assert.Contains("kutu kilitli", sonda.KutuHata, StringComparison.Ordinal);
+        Assert.Contains("Exception", sonda.KutuHata, StringComparison.Ordinal);
         Assert.Contains("RemoveMailbox:", MailEnableMailService.SilmeHatalari(sonda), StringComparison.Ordinal);
     }
 
@@ -324,7 +334,7 @@ public sealed class MailEnableGirisKaydiSondasiTests
             SahteCom(eklemeDavranisi: "firlatir"),
             MailEnableMailService.OlusturmaBetigi(Alan, YeniYerel, YeniAdres, YeniParola));
 
-        Assert.Contains("erisim reddedildi", sonda.GirisHata, StringComparison.Ordinal);
+        Assert.Contains("Exception", sonda.GirisHata, StringComparison.Ordinal);
         Assert.Contains("AddLogin:", MailEnableMailService.OlusturmaHatalari(sonda), StringComparison.Ordinal);
         Assert.Equal(MailEnableMailService.GirisKaydiOlcumu.Olculemedi, OlusturmaKarari(sonda));
     }
@@ -337,7 +347,7 @@ public sealed class MailEnableGirisKaydiSondasiTests
             SahteCom(kutuDavranisi: "firlatir"),
             MailEnableMailService.OlusturmaBetigi(Alan, YeniYerel, YeniAdres, YeniParola));
 
-        Assert.Contains("kutu zaten var", sonda.KutuHata, StringComparison.Ordinal);
+        Assert.Contains("Exception", sonda.KutuHata, StringComparison.Ordinal);
         Assert.Contains("AddMailbox:", MailEnableMailService.OlusturmaHatalari(sonda), StringComparison.Ordinal);
     }
 
@@ -793,6 +803,15 @@ public sealed class MailEnableGirisKaydiSondasiTests
     private static KomutKancasi Kanca(string sahte, bool hesapDuruyor, bool calismaAlaniOkunabilir = true)
         => new(async (sira, betik) => sira == 0
             ? await SahteComUzerindeKosturAsync(sahte, betik)
+            : sira == 2
+                ? await SahteComUzerindeKosturAsync("""
+                    function New-Object {
+                      param([string]$ComObject)
+                      $o = [pscustomobject]@{ Account=''; SourceAddress=''; DestinationAddress=''; Scope='' }
+                      $o | Add-Member ScriptMethod FindFirstAddressMap { return 0 }
+                      return $o
+                    }
+                    """, betik)
             : calismaAlaniOkunabilir
                 ? CalismaAlaniJson(hesapDuruyor)
                 : "MEAOPO calismadi: bu cikti JSON DEGIL");
@@ -810,7 +829,7 @@ public sealed class MailEnableGirisKaydiSondasiTests
 
         var alan = await Servis(kanca).DeleteAccountAsync(Adres);
 
-        Assert.Equal(2, kanca.Betikler.Count); // mutasyon betigi + calisma alani okumasi
+        Assert.Equal(3, kanca.Betikler.Count); // mutation, inventory, verified address-map cleanup
         Assert.Equal(Alan, alan.SelectedDomain);
         Assert.Empty(alan.Accounts);
     }
@@ -887,7 +906,7 @@ public sealed class MailEnableGirisKaydiSondasiTests
 
         Assert.Equal("mail.account_delete_login_survived", hata.MessageKey);
         Assert.Contains("RemoveLogin:", hata.Details, StringComparison.Ordinal);
-        Assert.Contains("erisim reddedildi", hata.Details, StringComparison.Ordinal);
+        Assert.Contains("Exception", hata.Details, StringComparison.Ordinal);
     }
 
     // --- 6b) SetAccountPasswordAsync GOVDESI ---

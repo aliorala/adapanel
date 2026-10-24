@@ -258,6 +258,7 @@
              hicbirine ayri ayri eklemek gerekmez. Madde yoksa hicbir sey gorunmez. -->
         <AttentionSectionNotice
           :items="attentionItemsFor(activeSection)"
+          @refresh="loadAttention(false)"
           @open="attentionOpen = true" />
         <p v-if="showDefaultPortWarning" class="notice warn-banner" role="status">
           {{ t("panel.dashboard.defaultPortWarning") }}
@@ -508,6 +509,7 @@
              açar. Yapay zeka istemcileri kendinden imzalı sertifikayı kabul etmiyor, bu yüzden
              MCP bağlantısının ön koşulu. -->
         <PanelAccessCard />
+        <InstallationReportingCard />
         </template>
       </section>
 
@@ -682,6 +684,7 @@ import { useSubscriptionStore } from "../stores/subscription";
 import { useSystemStore } from "../stores/system";
 import AttentionSectionNotice from "../components/AttentionSectionNotice.vue";
 import PanelAccessCard from "../components/PanelAccessCard.vue";
+import InstallationReportingCard from "../components/InstallationReportingCard.vue";
 import DashboardOverviewView from "./DashboardOverviewView.vue";
 import { checkForUpdate, type UpdateStatus } from "../api/update";
 import { useSectionError } from "../composables/useNotice";

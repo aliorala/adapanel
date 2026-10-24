@@ -22,6 +22,7 @@ public sealed class AdvisorItemDto
 
     /// <summary>"Düzelt" butonunun gideceği panel bölümü (boşsa buton gösterilmez).</summary>
     public string ActionSection { get; set; } = string.Empty;
+    public AdaPanel.Core.Dtos.Ssl.SslRepairTarget? SslRepair { get; set; }
 }
 
 /// <summary>Advisor taramasının tüm bulguları + önem sayıları.</summary>

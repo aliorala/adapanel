@@ -14,7 +14,7 @@ export type MailAccount = { address: string; active: boolean | null; maxSizeMB: 
 export type MailAlias = { address: string; target: string; active: boolean };
 // Plesk'in "kimler gonderebilir" karsiligi. Stalwart'in MailingList nesnesinde boyle bir alan
 // YOK; kural RCPT asamasina baglanan sistem sieve script'iyle uygulanir (canli dogrulandi).
-export type MailListPostingPolicy = "anyone" | "subscribers" | "allowed";
+export type MailListPostingPolicy = "anyone" | "subscribers" | "allowed" | "native-members" | "native-password" | "native-moderated" | "native-disabled" | "native-unknown";
 
 export type MailList = {
   address: string;
@@ -52,6 +52,7 @@ export type MailSpamSettings = {
 };
 
 export type MailWorkspace = {
+  provider?: "stalwart" | "mailenable";
   installed: boolean;
   configured: boolean;
   selectedDomain: string;
@@ -59,6 +60,7 @@ export type MailWorkspace = {
   accounts: MailAccount[];
   aliases: MailAlias[];
   lists: MailList[];
+  listsMeasured?: boolean;
   statusMessage?: string;
 };
 
@@ -468,6 +470,7 @@ export async function deleteMailQueueMessage(id: string) {
 }
 
 export type MailRelay = {
+  securityStatus?: string;
   installed: boolean;
   configured: boolean;
   enabled: boolean;
@@ -486,6 +489,7 @@ export type MailRelay = {
 };
 
 export type SetMailRelayPayload = {
+  recoverOnly?: boolean;
   enabled: boolean;
   host: string;
   port: number;

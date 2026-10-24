@@ -1,6 +1,7 @@
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Dtos.Ssl;
 using AdaPanel.Infrastructure.Health;
+using System.Net.Security;
 using Xunit;
 
 namespace AdaPanel.Infrastructure.Tests;
@@ -113,6 +114,28 @@ public sealed class SiteHealthEvaluationTests
     [InlineData(60, false, true, "ok")]
     public void EvaluateCertificateStatus_CoversTheRealFailureModes(int? daysLeft, bool nameMismatch, bool live, string expected)
         => Assert.Equal(expected, SiteHealthService.EvaluateCertificateStatus(daysLeft, nameMismatch, live));
+
+    [Theory]
+    [InlineData(SslPolicyErrors.RemoteCertificateChainErrors)]
+    [InlineData(SslPolicyErrors.RemoteCertificateNameMismatch)]
+    [InlineData(SslPolicyErrors.RemoteCertificateNotAvailable)]
+    public void CertificatePolicyErrorsCannotBeHiddenByAValidExpiry(SslPolicyErrors errors)
+        => Assert.Equal("fail", SiteHealthService.EvaluateCertificateStatus(60, false, true, errors));
+
+    [Fact]
+    public void UnmeasuredMailDnsIsNotReportedAsMissingRecords()
+    {
+        var records = SiteHealthService.BuildMailChecks(null);
+        Assert.Equal(4, records.Count);
+        Assert.All(records, record => Assert.Equal("unknown", record.Status));
+        var summary = SiteHealthService.BuildMailSummary(records);
+        Assert.Equal("unknown", summary.Status);
+        Assert.Equal("ölçülemedi", summary.Value);
+
+        var measuredEmpty = SiteHealthService.BuildMailChecks(new SiteHealthService.DnsProbe());
+        Assert.All(measuredEmpty, record => Assert.Equal("fail", record.Status));
+        Assert.Equal("yok", SiteHealthService.BuildMailSummary(measuredEmpty).Value);
+    }
 
     [Fact]
     public void DaysLeft_CountsWholeDaysAndGoesNegativeAfterExpiry()

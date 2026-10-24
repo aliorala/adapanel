@@ -340,22 +340,22 @@
       "serviceName": "AdaStalwart",
       "processName": "stalwart",
       "silentArgs": "__GENERATED__",
-      "note": "Modern, tek binary e-posta sunucusu (SMTP/IMAP/POP3/JMAP) — yerleşik DKIM/SPF/DMARC. AdaPanel'in VARSAYILAN mail sunucusudur; önerilen yığında otomatik kurulur. MailEnable yedektir; biri kurulurken diğeri durdurulur (çakışma yok).",
+      "note": "Modern, tek binary e-posta sunucusu (SMTP/IMAP/POP3/JMAP) — yerleşik DKIM/SPF/DMARC. AdaPanel'in VARSAYILAN mail sunucusudur; önerilen yığında otomatik kurulur. MailEnable alternatifidir; çalışan posta sunucusu otomatik değiştirilmez.",
       "default": true
     },
     {
       "id": "mailenable-standard",
       "displayName": "MailEnable Standard (Mail Server)",
-      "version": "10.58",
+      "version": "10.61",
       "type": "installer",
-      "downloadUrl": "https://www.mailenable.com/standard1058.exe",
-      "sha256": "",
+      "downloadUrl": "https://www.mailenable.com/standard1061.exe",
+      "sha256": "3573444fec870da933df7818e1d610749ca3a8e43b91faba946b7e3dd00cfa31",
       "installDir": "%ProgramFiles(x86)%\\Mail Enable",
       "postInstall": [],
       "dependencies": [],
       "serviceName": "",
       "silentArgs": "/s",
-      "note": "Olgun Windows e-posta sunucusu (SMTP/POP3/IMAP + web yönetim). YEDEK mail sunucusudur (varsayılan Stalwart); yalnız elle kurulur. Stalwart kuruluyken otomatik durdurulur (çakışma engellenir). Standard sürümde DKIM imzalama/mailing list yoktur.",
+      "note": "Windows posta sunucusu: SMTP, POP3, IMAP ve MailEnable Web Mail. Diğer posta sunucusundan geçiş hesap ve ileti taşıması gerektirir; kurulum çalışan hizmeti otomatik durdurmaz. Güvenlik güncellemeleri denetlenir, kurulum yönetici tarafından başlatılır.",
       "default": false
     },
     {

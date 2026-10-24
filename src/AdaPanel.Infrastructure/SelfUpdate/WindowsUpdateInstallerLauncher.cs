@@ -247,6 +247,7 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
               )
               Write-UpdateState 'installing' '' $null
               $process = Start-Process -FilePath $packagePath -ArgumentList $arguments -WindowStyle Hidden -PassThru -Wait
+              $failExitCode = $process.ExitCode
               Write-UpdateLog "Installer exited with code $($process.ExitCode)."
               Write-UpdateState 'installer-finished' '' $process.ExitCode
               if ($process.ExitCode -notin @(0, 1641, 3010)) {
@@ -261,28 +262,22 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
               Write-UpdateState 'failed' $failReason $failExitCode
             }
 
-            # KURULUM OLDU MU? Cevap SUREDEN bagimsiz: kurulumdan hemen sonra disktekI panel
-            # dosyasinin surumune bakilir. Eskiden hukum "servis 40 saniyede kalkti mi" sorusuna
-            # gore veriliyordu; yuklu bir sunucuda panel acilirken IIS sitelerini, bilesenleri ve
-            # sema gocunu tarar, bu sure rahatca asilir ve KURULUM BASARILI OLDUGU HALDE
-            # "tamamlanamadi" yaziliyordu. Bir surenin dolmasi bir seyin basarisiz oldugu anlamina
-            # gelmez; olcut sonucun kendisidir.
+            # Keep the disk version as diagnostic evidence, separate from the installer's
+            # completion result and the subsequent service recovery result.
             $kuruldu = $false
             try {
               if ($serviceImagePath -and (Test-Path -LiteralPath $serviceImagePath)) {
                 $versionAfter = (Get-Item -LiteralPath $serviceImagePath).VersionInfo.ProductVersion
                 Write-UpdateLog "Version after install: '$versionAfter' (before: '$versionBefore')"
                 $kuruldu = $versionAfter -and $versionBefore -and ($versionAfter -ne $versionBefore)
+                Write-UpdateLog "Binary version changed: $kuruldu"
               }
             }
             catch { Write-UpdateLog "Could not read version after install: $($_.Exception.Message)" }
 
-            if ($kuruldu) {
-              # Kurulum OLDU. Bundan sonra olacaklar (servisin gec kalkmasi gibi) bu gercegi
-              # degistirmez; ayri bir durum olarak bildirilir.
-              $failed = $false
-              $failReason = ''
-            }
+            # A changed binary alone does not prove a complete installation: the installer
+            # may have failed after copying it. Keep its verdict and exit code. A running
+            # panel can still publish its own measured verdict through Write-UpdateState.
 
             # GUVENCE: panel servisi olu birakilamaz. Bu dongu bir HUKUM degil, bir KURTARMA
             # denemesidir; sonucu "kurulum basarili miydi" sorusunu etkilemez.
@@ -291,8 +286,9 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
               $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
               if ($null -eq $service) {
                 Write-UpdateLog "Service '$serviceName' not found; nothing to start."
-                if (-not $kuruldu) { $failed = $true }
-                if ($failReason -eq '') { $failReason = "Panel servisi bulunamadi." }
+                $failed = $true
+                $recoveryReason = "Panel servisi bulunamadi."
+                $failReason = if ($failReason -eq '') { $recoveryReason } else { $failReason + "`n" + $recoveryReason }
               }
               else {
                 # Servis calisana kadar denenir. Buradaki ust sinir bir "basari suresi" DEGILDIR;
@@ -303,7 +299,12 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
                   $service.Refresh()
                   if ($service.Status -eq 'Running') { break }
                   $deneme++
-                  try { Start-Service -Name $serviceName -ErrorAction Stop }
+                  # Start-Service can wait inside the cmdlet and defeat this deadline.
+                  # ServiceController sends the request; pending states are only polled.
+                  try {
+                    if ($service.Status -eq 'Stopped') { $service.Start() }
+                    elseif ($service.Status -eq 'Paused') { $service.Continue() }
+                  }
                   catch { Write-UpdateLog "Service start attempt $deneme failed: $($_.Exception.Message)" }
                   Start-Sleep -Seconds 5
                 }
@@ -317,13 +318,15 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
                   Write-UpdateLog "Service '$serviceName' is NOT running (status: $($service.Status))."
                   # Panel ayakta degilse kullanici bunu MUTLAKA bilmeli -- kurulum olmus olsa bile.
                   $failed = $true
-                  $failReason = "Kurulum tamamlandi ancak panel servisi baslatilamadi (durum: $($service.Status))."
+                  $recoveryReason = "panel servisi baslatilamadi (durum: $($service.Status))."
+                  $failReason = if ($failReason -eq '') { $recoveryReason } else { $failReason + "`n" + $recoveryReason }
                 }
               }
             }
             catch {
               $failed = $true
-              if ($failReason -eq '') { $failReason = "Servis kurtarma adimi basarisiz: $($_.Exception.Message)" }
+              $recoveryReason = "Servis kurtarma adimi basarisiz: $($_.Exception.Message)"
+              $failReason = if ($failReason -eq '') { $recoveryReason } else { $failReason + "`n" + $recoveryReason }
               Write-UpdateLog "Service recovery failed: $($_.Exception.ToString())"
             }
 
@@ -342,7 +345,7 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
 
               Write-UpdateState 'failed' $failReason $failExitCode
             }
-            else { Write-UpdateState 'succeeded' '' 0 }
+            else { Write-UpdateState 'succeeded' '' $failExitCode }
 
             Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
             if ($failed) { exit 1 }

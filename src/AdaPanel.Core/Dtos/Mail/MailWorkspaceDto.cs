@@ -6,6 +6,7 @@ namespace AdaPanel.Core.Dtos.Mail;
 /// </summary>
 public sealed class MailWorkspaceDto
 {
+    public string Provider { get; set; } = string.Empty;
     /// <summary>hMailServer COM bileşeni bu sunucuda mevcut mu.</summary>
     public bool Installed { get; set; }
 
@@ -41,6 +42,9 @@ public sealed class MailWorkspaceDto
 
     /// <summary>Seçili alan adına ait dağıtım listeleri (Stalwart mailing-list).</summary>
     public IReadOnlyCollection<MailListDto> Lists { get; set; } = [];
+
+    /// <summary>False for partial mutation responses that measured mailboxes but not lists.</summary>
+    public bool ListsMeasured { get; set; } = true;
 
     /// <summary>Bir sorun varsa (örn. COM erişilemedi) kullanıcıya gösterilecek tanı mesajı.</summary>
     public string StatusMessage { get; set; } = string.Empty;

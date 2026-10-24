@@ -19,6 +19,8 @@ namespace AdaPanel.Core.Dtos.Mail;
 /// </remarks>
 public sealed class MailRelayDto
 {
+    /// <summary>Provider-reported security settings; not evidence of successful mail delivery.</summary>
+    public string SecurityStatus { get; set; } = "unknown";
     /// <summary>Posta sunucusu bu makinede kurulu mu?</summary>
     public bool Installed { get; set; }
 

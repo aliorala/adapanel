@@ -15,6 +15,32 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class SchedulerUpdatePreservationTests
 {
     [Theory]
+    [InlineData(0)]
+    [InlineData(5)]
+    public async Task Limited_task_remains_runnable_when_log_permission_grant_fails(int aclExitCode)
+    {
+        using var fixture = new Fixture(existing: true);
+        var request = fixture.Request();
+        var log = await File.ReadAllBytesAsync(fixture.Output);
+        var commands = fixture.Service.TaskCommand!;
+        fixture.Service.TaskCommand = (script, token) =>
+            script.Contains("& icacls.exe", StringComparison.Ordinal)
+                ? Task.FromResult(new CommandResult { ExitCode = aclExitCode })
+                : commands(script, token);
+        var task = await fixture.Service.CreateTaskAsync(request, ScheduledTaskPrivilege.Limited, fixture.Token);
+        Assert.Equal(request.Command, task.Command);
+        Assert.Equal(request.Arguments, task.Arguments);
+        Assert.Equal("limited", task.RunAs);
+        Assert.Equal(aclExitCode == 0, task.CapturesOutput);
+        using var state = JsonDocument.Parse(await File.ReadAllTextAsync(fixture.State));
+        var saved = state.RootElement.EnumerateArray().Single(item =>
+            item.GetProperty("TaskName").GetString() == request.Name);
+        var action = saved.GetProperty("Actions")[0];
+        Assert.Equal(aclExitCode == 0 ? "cmd.exe" : request.Command, action.GetProperty("Execute").GetString());
+        Assert.Equal(log, await File.ReadAllBytesAsync(fixture.Output));
+    }
+
+    [Theory]
     [InlineData("action")]
     [InlineData("trigger")]
     [InlineData("principal")]

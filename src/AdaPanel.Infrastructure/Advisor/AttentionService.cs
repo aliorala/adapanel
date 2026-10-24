@@ -55,6 +55,7 @@ public sealed class AttentionService(
                     // kullanici yalnizca sorunun adini goruyordu.
                     DescriptionKey = item.DetailKey,
                     Detail = item.Detail,
+                    SslRepair = item.SslRepair,
                     AffectedCount = item.AffectedCount,
                     Section = string.IsNullOrWhiteSpace(item.ActionSection) ? "advisor" : item.ActionSection
                 });

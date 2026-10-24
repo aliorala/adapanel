@@ -1,4 +1,4 @@
-using AdaPanel.Api.Extensions;
+﻿using AdaPanel.Api.Extensions;
 using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Mail;
@@ -834,7 +834,7 @@ public sealed class MailController(
             throw new Core.Common.AppException("mail.queue_message_not_found", 404, 404);
         }
 
-        await auditService.AuditAsync(HttpContext, "mail.queue.message_deleted", id, "Queued message was deleted before delivery.");
+        await auditService.AuditAsync(HttpContext, "mail.queue.message_deleted", id, "Message was removed from the delivery queue. This does not recall any copy already delivered.");
         return Ok(ApiResponse<bool>.Ok(true, "mail.queue_message_deleted"));
     }
 
@@ -865,13 +865,14 @@ public sealed class MailController(
         // Yazılan şey OLGUDUR: giden postanın nereye teslim edildiği ve kimlik doğrulaması olup olmadığı.
         await auditService.AuditAsync(
             HttpContext,
-            "mail.relay.updated",
-            request.Enabled ? $"{request.Host}:{request.Port}" : "mail-server",
-            request.Enabled
+            request.RecoverOnly ? "mail.relay.recovered" : "mail.relay.updated",
+            request.RecoverOnly ? "mail-server" : request.Enabled ? $"{request.Host}:{request.Port}" : "mail-server",
+            request.RecoverOnly ? "Pending outbound mail relay transaction recovery completed; no new relay configuration applied."
+                : request.Enabled
                 ? $"Outbound mail relayed through '{request.Host}:{request.Port}' (implicit TLS: {request.ImplicitTls}, authenticated: {!string.IsNullOrWhiteSpace(request.Username)})."
                 : "Outbound mail relay was removed; delivery returned to direct MX routing.");
 
-        return Ok(ApiResponse<MailRelayDto>.Ok(relay, request.Enabled ? "mail.relay_saved" : "mail.relay_removed"));
+        return Ok(ApiResponse<MailRelayDto>.Ok(relay, request.RecoverOnly ? "mail.relay_recovered" : request.Enabled ? "mail.relay_saved" : "mail.relay_removed"));
     }
 
     /// <summary>

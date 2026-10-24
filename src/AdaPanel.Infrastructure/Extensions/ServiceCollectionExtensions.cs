@@ -20,6 +20,13 @@ public static class ServiceCollectionExtensions
         services.Configure<PanelRuntimeOptions>(configuration.GetSection(PanelRuntimeOptions.SectionName));
         services.AddDataProtection();
         services.AddHttpClient();
+        services.AddHttpClient(Diagnostics.InstallationReportingService.ClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AllowAutoRedirect = false, UseCookies = false
+            });
+        services.AddSingleton<Diagnostics.InstallationReportingService>();
+        services.AddHostedService<Diagnostics.InstallationReportingWorker>();
         services.AddHttpClient("AdaPanel.LocalHealth")
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
@@ -124,6 +131,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICacheService, Cache.CacheService>();
         services.AddScoped<IFileService, Files.FileService>();
         services.AddScoped<ISslService, Ssl.WinAcmeSslService>();
+        services.AddScoped<Ssl.SslBindingRepairService>();
         services.AddScoped<IFtpService, Ftp.FtpService>();
         services.AddScoped<IWafService, Waf.WafService>();
         services.AddScoped<ILogViewerService, Logs.LogViewerService>();
@@ -180,6 +188,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Mail.StalwartRuntime>();
         services.AddScoped<Mail.MailService>();
         services.AddScoped<Mail.MailEnableMailService>();
+        services.AddScoped<Mail.MailProviderSelection>();
+        services.AddScoped<Mail.MailEnableWebmail>();
         services.AddScoped<IMailService, Mail.MailServiceRouter>();
         // Dağıtım listesinden self-servis çıkma (kimliksiz genel uçtan çağrılır).
         services.AddScoped<Mail.MailListUnsubscribeService>();

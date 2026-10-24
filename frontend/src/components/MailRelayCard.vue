@@ -27,6 +27,10 @@
       <!-- "Kurulu değil" ile "sunucuya bağlanılamadı" ayrı: ikincisinde ayar OKUNAMADI, yani
            ekrandaki boş form mevcut yapılandırma sanılmamalı. -->
       <p v-if="!relay.installed" class="empty-state">{{ t("panel.mail.notInstalled") }}</p>
+      <div v-else-if="provider === 'mailenable' && relay.securityStatus === 'recovery-pending'" class="stacked-field">
+        <p class="notice error" role="alert">{{ t("panel.mail.relayRecoveryPending") }}</p>
+        <button type="button" class="compact" :disabled="busy || loading" @click="recover">{{ t("panel.mail.relayRecover") }}</button>
+      </div>
       <p v-else-if="!relay.configured" class="notice error" role="alert">{{ t("panel.mail.relayUnavailable") }}</p>
 
       <template v-else>
@@ -36,6 +40,8 @@
           </span>
           <span v-if="relay.hasPassword" class="status-pill">{{ t("panel.mail.relayHasPassword") }}</span>
         </div>
+        <p v-if="provider === 'mailenable'" class="field-hint relay-warning">{{ t("panel.mail.mailEnableRelayTlsHint") }}</p>
+        <p v-if="provider === 'mailenable' && relay.enabled && relay.securityStatus !== 'verified-settings'" class="notice error" role="alert">{{ t("panel.mail.mailEnableRelayInsecure") }}</p>
 
         <label class="toggle-field">
           <input v-model="form.enabled" type="checkbox" :disabled="busy" />
@@ -57,7 +63,7 @@
             <span class="field-label">{{ t("panel.mail.relayProtocol") }}</span>
             <select v-model="form.protocol" :disabled="busy">
               <option value="smtp">SMTP</option>
-              <option value="lmtp">LMTP</option>
+              <option v-if="provider !== 'mailenable'" value="lmtp">LMTP</option>
             </select>
           </label>
           <label class="stacked-field">
@@ -75,10 +81,10 @@
             </small>
           </label>
           <label class="toggle-field">
-            <input v-model="form.implicitTls" type="checkbox" :disabled="busy" />
+            <input v-model="form.implicitTls" type="checkbox" :disabled="busy || (provider === 'mailenable' && !form.implicitTls)" />
             <span>{{ t("panel.mail.relayImplicitTls") }}</span>
           </label>
-          <label class="toggle-field">
+          <label v-if="provider !== 'mailenable'" class="toggle-field">
             <input v-model="form.allowInvalidCerts" type="checkbox" :disabled="busy" />
             <span>{{ t("panel.mail.relayAllowInvalidCerts") }}</span>
           </label>
@@ -108,6 +114,7 @@ import SectionLoadError from "./SectionLoadError.vue";
 import { useNotice, useSectionError } from "../composables/useNotice";
 
 const { t } = useI18n();
+const props = defineProps<{ provider?: "stalwart" | "mailenable" }>();
 const { confirm } = useConfirm();
 const { notice, noticeError, showNotice, showError } = useNotice();
 const loadError = useSectionError();
@@ -152,7 +159,7 @@ function applyToForm(current: MailRelay) {
   form.port = current.port > 0 ? current.port : 587;
   form.protocol = current.protocol || "smtp";
   form.implicitTls = current.implicitTls;
-  form.allowInvalidCerts = current.allowInvalidCerts;
+  form.allowInvalidCerts = props.provider === "mailenable" ? false : current.allowInvalidCerts;
   form.username = current.username;
   // Parola sunucudan dönmediği için burada da SIFIRLANIR: ekranda saklı parolanın yerine
   // sahte bir değer göstermek, "değiştirdim" sanılan bir kaydetmeye yol açardı.
@@ -164,6 +171,30 @@ function applyToForm(current: MailRelay) {
  * değiştirir; yanlışlıkla basılması postayı sessizce durdurabilir. Bu yüzden onay istenir ve
  * onayda sonucun ne olacağı (rölenin kurulması ya da kaldırılması) tek tek yazılır.
  */
+async function recover() {
+  await confirm({
+    title: t("panel.mail.relayRecover"),
+    message: t("panel.mail.relayRecoverConfirm"),
+    impact: [t("panel.mail.relayRecoverImpact")],
+    tone: "neutral",
+    confirmLabel: t("panel.mail.relayRecover"),
+    action: async () => {
+      busy.value = true;
+      try {
+        const restored = await setMailRelay({ recoverOnly: true, enabled: false, host: "", port: 587,
+          protocol: "smtp", implicitTls: false, allowInvalidCerts: false, username: "", password: "" });
+        relay.value = restored;
+        applyToForm(restored);
+        showNotice(t("mail.relay_recovered"));
+      } catch (error) {
+        showError(error);
+      } finally {
+        busy.value = false;
+      }
+    }
+  });
+}
+
 async function save() {
   if (!relay.value) {
     return;

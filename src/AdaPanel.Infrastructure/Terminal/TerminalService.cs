@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Terminal;
@@ -12,6 +12,8 @@ namespace AdaPanel.Infrastructure.Terminal;
 public sealed class TerminalService(IOptions<PanelRuntimeOptions> runtimeOptions) : ITerminalService
 {
     private const int MaximumOutputLength = 200_000;
+    internal Func<StreamReader, CancellationToken, Task<string>> PipeReader { get; init; } =
+        (reader, token) => ProcessRunner.TavanliOkuAsync(reader, ProcessRunner.DefaultOutputCharLimit, token, preservePartialOnCancellation: true);
     private readonly string dataRoot = Path.GetFullPath(
         Environment.ExpandEnvironmentVariables(runtimeOptions.Value.DataRoot));
 
@@ -61,32 +63,39 @@ public sealed class TerminalService(IOptions<PanelRuntimeOptions> runtimeOptions
         // SONRA boruyu tuketmeye devam etme davranisi da (yoksa arac write'ta asilir) oradan geliyor.
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(TimeSpan.FromSeconds(request.TimeoutSeconds));
-        var outputTask = ProcessRunner.TavanliOkuAsync(
-            process.StandardOutput, ProcessRunner.DefaultOutputCharLimit, timeoutSource.Token, preservePartialOnCancellation: true);
-        var errorTask = ProcessRunner.TavanliOkuAsync(
-            process.StandardError, ProcessRunner.DefaultOutputCharLimit, timeoutSource.Token, preservePartialOnCancellation: true);
+        var outputTask = PipeReader(process.StandardOutput, timeoutSource.Token);
+        var errorTask = PipeReader(process.StandardError, timeoutSource.Token);
+        var completion = Task.WhenAll(process.WaitForExitAsync(timeoutSource.Token), outputTask, errorTask);
 
+        var interrupted = false;
         try
         {
             // A child can retain stdout/stderr after PowerShell exits. The deadline applies
             // to the entire request, including those pipes, rather than only the parent PID.
-            await Task.WhenAll(process.WaitForExitAsync(timeoutSource.Token), outputTask, errorTask);
+            await completion.WaitAsync(timeoutSource.Token);
         }
         catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
         {
+            interrupted = true;
+            _ = completion.ContinueWith(static task => _ = task.Exception,
+                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
             await TryKillAsync(process);
         }
         catch
         {
+            timeoutSource.Cancel();
             await TryKillAsync(process);
+            await ProcessRunner.TopluyorAsync(outputTask, errorTask, TimeSpan.FromSeconds(2));
             throw;
         }
 
+        // Cancellation of a pipe read is not guaranteed to complete promptly on Windows.
+        // Observe readers after stopping the process, but never let cleanup extend indefinitely.
+        var (standardOutput, standardError) = interrupted
+            ? await ProcessRunner.TopluyorAsync(outputTask, errorTask, TimeSpan.FromSeconds(2))
+            : (await outputTask, await errorTask);
         cancellationToken.ThrowIfCancellationRequested();
         var timedOut = timeoutSource.IsCancellationRequested;
-        if (timedOut) await TryKillAsync(process);
-        var standardOutput = await outputTask;
-        var standardError = await errorTask;
         stopwatch.Stop();
 
         return new TerminalCommandResultDto
@@ -151,8 +160,7 @@ public sealed class TerminalService(IOptions<PanelRuntimeOptions> runtimeOptions
             {
                 process.Kill(entireProcessTree: true);
                 // Allow handles and the working-directory lease to close, with a bounded cleanup.
-                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                await process.WaitForExitAsync(cleanup.Token);
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(2));
             }
         }
         catch

@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 
 namespace AdaPanel.Core.Dtos.Mail;
 
@@ -214,6 +214,9 @@ public sealed class SetMailPublicBaseUrlRequest
 /// </remarks>
 public sealed class SetMailRelayRequest
 {
+    /// <summary>Only restore a pending MailEnable transaction; ignore desired relay settings.</summary>
+    public bool RecoverOnly { get; set; }
+
     /// <summary>false ise röle KALDIRILIR: yönlendirme eski hâline döner ve saklı parola silinir.</summary>
     public bool Enabled { get; set; }
 

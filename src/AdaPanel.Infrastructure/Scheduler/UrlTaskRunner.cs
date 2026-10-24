@@ -99,6 +99,12 @@ public static class UrlTaskRunner
     /// <summary>HTTP durumu 400+ (curl -f: 22, CURLE_HTTP_RETURNED_ERROR).</summary>
     public const int HttpHataKod = 22;
 
+    /// <summary>Çıktı yazılamadı (curl: 23, CURLE_WRITE_ERROR).</summary>
+    public const int YazmaHataKod = 23;
+
+    /// <summary>Yanıt aktarımı kesildi (curl: 56, CURLE_RECV_ERROR).</summary>
+    public const int AlimHataKod = 56;
+
     /// <summary>Süre aşıldı (curl: 28, CURLE_OPERATION_TIMEDOUT).</summary>
     public const int SureAsimiKod = 28;
 
@@ -274,16 +280,23 @@ public static class UrlTaskRunner
     /// aynı reddi günlüğe yazmak ve görevi boşuna geciktirmekten başka bir şey yapmazdı. Aynı şekilde
     /// 4xx de geçici değildir (429 hariç — o AÇIKÇA "sonra tekrar dene" demektir).
     /// </remarks>
-    private static async Task<(int Kod, bool YenidenDene)> TekDenemeAsync(
+    internal static async Task<(int Kod, bool YenidenDene)> TekDenemeAsync(
         HttpClient istemci,
         Uri adres,
         TextWriter cikti,
         TextWriter hata,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? attemptTimeout = null)
     {
+        // ResponseHeadersRead ends HttpClient.Timeout coverage at the headers.
+        // Keep one deadline alive through body reads and output writes as well.
+        var timeout = attemptTimeout ?? EnCokSure;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(timeout);
+        var transferToken = deadline.Token;
         try
         {
-            using var yanit = await istemci.GetAsync(adres, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            using var yanit = await istemci.GetAsync(adres, HttpCompletionOption.ResponseHeadersRead, transferToken);
 
             if (!yanit.IsSuccessStatusCode)
             {
@@ -299,16 +312,28 @@ public static class UrlTaskRunner
 
             // Gövde AKTARILARAK yazılır, belleğe alınmaz: bir cron adresi büyük bir dosya
             // döndürebilir ve tamamını dizeye okumak paneli bellek hatasına sokardı.
-            await using var akis = await yanit.Content.ReadAsStreamAsync(cancellationToken);
+            await using var akis = await yanit.Content.ReadAsStreamAsync(transferToken);
             using var okuyucu = new StreamReader(akis);
             var tampon = new char[8192];
-            int okunan;
-            while ((okunan = await okuyucu.ReadAsync(tampon, cancellationToken)) > 0)
+            while (true)
             {
-                await cikti.WriteAsync(tampon.AsMemory(0, okunan), cancellationToken);
+                int okunan;
+                try
+                {
+                    okunan = await okuyucu.ReadAsync(tampon, transferToken);
+                }
+                catch (IOException exception)
+                {
+                    transferToken.ThrowIfCancellationRequested();
+                    await hata.WriteLineAsync($"AdaPanel: yanit okunamadi: {exception.Message} — {adres}");
+                    return (AlimHataKod, true);
+                }
+                if (okunan == 0) break;
+                await cikti.WriteAsync(tampon.AsMemory(0, okunan), transferToken);
             }
 
-            await cikti.FlushAsync(cancellationToken);
+            await cikti.FlushAsync(transferToken);
+            transferToken.ThrowIfCancellationRequested();
             return (BasariliKod, false);
         }
         catch (Exception istisna) when (OutboundBlockedException.Cikar(istisna) is { } engellenen)
@@ -321,9 +346,8 @@ public static class UrlTaskRunner
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            // HttpClient.Timeout aşıldığında OperationCanceledException atılır; çağıranın iptali
-            // ile karıştırılmaması için token AYRICA sorgulanıyor.
-            await hata.WriteLineAsync($"AdaPanel: sure asildi ({EnCokSure.TotalSeconds:0} sn) — {adres}");
+            // The per-attempt deadline is distinct from the caller's cancellation.
+            await hata.WriteLineAsync($"AdaPanel: sure asildi ({timeout.TotalSeconds:0} sn) — {adres}");
             return (SureAsimiKod, true);
         }
         catch (OperationCanceledException)
@@ -339,6 +363,13 @@ public static class UrlTaskRunner
             // Ağ arızası ve bağlanamama GEÇİCİ sayılır (curl --retry ile aynı); "çok yönlendirme"
             // ise sunucunun kalıcı bir yapılandırma hatasıdır, denemek yalnız gecikme üretir.
             return (kod, kod is BaglanamadiKod or CozulemediKod);
+        }
+        catch (IOException exception)
+        {
+            // Network body reads are handled above. A failed output must not trigger
+            // another HTTP request to a cron endpoint that may already have run.
+            await hata.WriteLineAsync($"AdaPanel: cikti yazilamadi: {exception.Message} — {adres}");
+            return (YazmaHataKod, false);
         }
     }
 

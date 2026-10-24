@@ -1063,7 +1063,7 @@ public sealed class AutomationService(
     /// </summary>
     private static readonly string[] AutoUpdateExcludedPrefixes =
     [
-        "mysql", "mariadb", "postgres", "mssql", "sqlserver", "stalwart", "docker"
+        "mysql", "mariadb", "postgres", "mssql", "sqlserver", "stalwart", "mailenable", "docker"
     ];
 
     internal static bool IsAutoUpdatable(string componentId)
@@ -1227,7 +1227,9 @@ public sealed class AutomationService(
             LastSslStatus = state.LastSslStatus,
             LastSslDetails = state.LastSslDetails,
             NextSslRunUtc = state.AutoSslRenewEnabled
-                ? (state.LastSslRunUtc ?? DateTime.UtcNow).AddHours(Math.Max(1, state.SslRenewIntervalHours))
+                ? IsDue(state.LastSslRunUtc, state.SslRenewIntervalHours, now)
+                    ? now
+                    : state.LastSslRunUtc!.Value.AddHours(Math.Max(1, state.SslRenewIntervalHours))
                 : null,
             LastLogCleanupRunUtc = state.LastLogCleanupRunUtc,
             LastLogCleanupStatus = state.LastLogCleanupStatus,

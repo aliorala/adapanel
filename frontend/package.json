@@ -1,6 +1,6 @@
 {
   "name": "adapanel-frontend",
-  "version": "0.8.118",
+  "version": "0.8.119",
   "private": true,
   "type": "module",
   "scripts": {
@@ -15,15 +15,15 @@
     "axios": "^1.8.4",
     "naive-ui": "^2.40.3",
     "pinia": "^2.1.7",
-    "vue": "^3.5.13",
+    "vue": "^3.5.44",
     "vue-i18n": "11.4.5",
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.7",
     "typescript": "^5.7.2",
-    "vite": "^8.0.16",
-    "vitest": "^4.1.11",
+    "vite": "^8.3.5",
+    "vitest": "^4.1.12",
     "vue-tsc": "^2.1.10"
   }
 }
