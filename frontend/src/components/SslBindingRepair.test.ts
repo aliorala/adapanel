@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { createRenderer, h, ssrContextKey, type App, type Component } from 'vue';
+import { createRenderer, createSSRApp, h, ssrContextKey, type App, type Component } from 'vue';
+import { renderToString } from 'vue/server-renderer';
 import Repair from './SslBindingRepair.vue';
 import { getSslRepairPlan, applySslRepair, type SslRepairOption, type SslRepairPlan } from '../api/sslRepair';
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }));
@@ -41,4 +42,16 @@ it('does not submit blocked options or duplicate clicks', async () => {
   const state = mount(); await state.apply({ ...option, planToken: '' });
   expect(applySslRepair).not.toHaveBeenCalled();
   state.busy = true; await state.apply(option); expect(applySslRepair).not.toHaveBeenCalled();
+});
+
+it('renders the specific chain failure while keeping the valid current certificate and blocking application', async () => {
+  const state = mount();
+  const blocked = { ...option, candidate: { ...cert, valid: false, validationIssues: ['ssl.repair.reason.untrusted_root'] }, planToken: '', blockedReason: 'ssl.repair.invalid_candidate' };
+  vi.mocked(getSslRepairPlan).mockResolvedValue({ siteName: 'site', recordHostName: target.hostName, options: [blocked] });
+  await state.inspect();
+  const html = await renderToString(createSSRApp({ ...Repair, setup: () => state } as Component, { target }));
+  expect(html).toContain('ssl.repair.reason.untrusted_root');
+  expect(html).toContain('ssl.repair.valid');
+  expect(html).not.toContain('ssl.repair.apply');
+  await state.apply(blocked); expect(applySslRepair).not.toHaveBeenCalled();
 });

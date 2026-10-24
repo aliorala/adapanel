@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using AdaPanel.Core.Dtos.Components;
 using AdaPanel.Core.Dtos.Sites;
@@ -118,8 +118,8 @@ public sealed class SslStateVerificationWiringTests : IDisposable
     /// oluyordu.
     /// </para>
     /// <para>
-    /// Test GERCEK Windows sertifika deposunu kullanir (kullanici deposu; yonetici yetkisi
-    /// gerekmez) ve kendi ekledigi sertifikayi sonunda temizler.
+    /// Gerçek sertifika nesnesi ve üretim reconciliation seçicisi kullanılır. Envanter ve
+    /// özel test kökü bellektedir; makinenin deposuna sertifika/özel anahtar yazılmaz.
     /// </para>
     /// </remarks>
     [Fact]
@@ -127,35 +127,38 @@ public sealed class SslStateVerificationWiringTests : IDisposable
     {
         var host = $"adapanel-test-{Guid.NewGuid():N}.invalid";
         using var sertifika = KendindenImzaliUret(host, gun: 89);
-        DepoyaEkle(sertifika);
+        // Panelin kaydi: "suresi bes gun once doldu" (yenilemeden onceki donmus gercek).
+        KayitYaz(NotAfterUtc: DateTime.UtcNow.AddDays(-5), host: host);
 
-        try
+        var service = new WinAcmeSslService(_dbContext, new SahteSiteServisi(_ust), new SahteDnsServisi(),
+            Depo(), new SahteBootstrapper(), NullLogger<WinAcmeSslService>.Instance)
         {
-            // Panelin kaydi: "suresi bes gun once doldu" (yenilemeden onceki donmus gercek).
-            KayitYaz(NotAfterUtc: DateTime.UtcNow.AddDays(-5), host: host);
+            CertificateProbeAsync = (record, _) => Task.FromResult(WinAcmeSslService.ProbeReconciliationCertificate(record,
+                name => name == "My" ? [new X509Certificate2(sertifika)] : [], policy =>
+                {
+                    Assert.Equal(X509RevocationMode.Online, policy.RevocationMode);
+                    policy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+                    policy.CustomTrustStore.Add(sertifika);
+                    policy.RevocationMode = X509RevocationMode.NoCheck; // Offline fixture only.
+                }))
+        };
+        var sonuc = await service.RenewAllAsync();
 
-            var sonuc = await Servis().RenewAllAsync();
+        Assert.Equal(1, sonuc.VerifiedCount);
+        Assert.Equal(0, sonuc.MissingFromStoreCount);
 
-            Assert.Equal(1, sonuc.VerifiedCount);
-            Assert.Equal(0, sonuc.MissingFromStoreCount);
+        var kayit = Assert.Single(await KayitOkuAsync());
 
-            var kayit = Assert.Single(await KayitOkuAsync());
+        // ARTIK "SURESI DOLDU" DEMIYOR: tarih gercek sertifikadan geldi.
+        Assert.True(kayit.NotAfterUtc > DateTime.UtcNow, $"Kayittaki bitis hâlâ gecmiste: {kayit.NotAfterUtc:o}");
+        Assert.Equal(sertifika.NotAfter.ToUniversalTime(), kayit.NotAfterUtc);
 
-            // ARTIK "SURESI DOLDU" DEMIYOR: tarih gercek sertifikadan geldi.
-            Assert.True(kayit.NotAfterUtc > DateTime.UtcNow, $"Kayittaki bitis hâlâ gecmiste: {kayit.NotAfterUtc:o}");
-            Assert.Equal(sertifika.NotAfter.ToUniversalTime(), kayit.NotAfterUtc);
+        // Parmak izi de tazelendi: yenilenen sertifika ARTIK dogru kimlikle taniniyor.
+        Assert.Equal(sertifika.Thumbprint, kayit.Thumbprint);
+        Assert.True(kayit.IsPresentInStore);
 
-            // Parmak izi de tazelendi: yenilenen sertifika ARTIK dogru kimlikle taniniyor.
-            Assert.Equal(sertifika.Thumbprint, kayit.Thumbprint);
-            Assert.True(kayit.IsPresentInStore);
-
-            // Kaynak da OLCULDU: kayit "letsencrypt" diyordu, depodaki sertifika kendinden imzali.
-            Assert.Equal("self-signed", kayit.Source);
-        }
-        finally
-        {
-            DepodanSil(sertifika);
-        }
+        // Kaynak da OLCULDU: kayit "letsencrypt" diyordu, depodaki sertifika kendinden imzali.
+        Assert.Equal("self-signed", kayit.Source);
     }
 
     /// <summary>
@@ -218,33 +221,9 @@ public sealed class SslStateVerificationWiringTests : IDisposable
         var names = new SubjectAlternativeNameBuilder();
         names.AddDnsName(host);
         istek.CertificateExtensions.Add(names.Build());
-        using var uretilen = istek.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddDays(gun));
-
-        // Ozel anahtarli kalici kopya (KULLANICI deposu -> yonetici yetkisi gerekmez).
-        return new X509Certificate2(
-            uretilen.Export(X509ContentType.Pfx),
-            string.Empty,
-            X509KeyStorageFlags.Exportable | X509KeyStorageFlags.PersistKeySet | X509KeyStorageFlags.UserKeySet);
-    }
-
-    private static void DepoyaEkle(X509Certificate2 sertifika)
-    {
-        using var depo = new X509Store(StoreName.My, StoreLocation.CurrentUser);
-        depo.Open(OpenFlags.ReadWrite);
-        depo.Add(sertifika);
-    }
-
-    private static void DepodanSil(X509Certificate2 sertifika)
-    {
-        try
-        {
-            using var depo = new X509Store(StoreName.My, StoreLocation.CurrentUser);
-            depo.Open(OpenFlags.ReadWrite);
-            depo.Remove(sertifika);
-        }
-        catch (CryptographicException)
-        {
-        }
+        istek.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        istek.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new("1.3.6.1.5.5.7.3.1") }, false));
+        return istek.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddDays(gun));
     }
 
     private void KayitYaz(DateTime NotAfterUtc, string? host = null)

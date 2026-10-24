@@ -766,8 +766,57 @@ public sealed class WinAcmeSslService(
             return SslStoreProbe.Unmeasured();
         }
 
-        var sertifika = FindBestCertificate(kayit.HostName, out var depoOkunabildi);
-        return BuildProbe(depoOkunabildi, sertifika);
+        return ProbeReconciliationCertificate(kayit, name =>
+        {
+            using var store = new X509Store(name, StoreLocation.LocalMachine);
+            store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
+            return store.Certificates.Cast<X509Certificate2>().ToArray();
+        });
+    }
+
+    internal static SslStoreProbe ProbeReconciliationCertificate(SslCertificateDto record,
+        Func<string, IReadOnlyCollection<X509Certificate2>> readStore, Action<X509ChainPolicy>? configureTrust = null)
+    {
+        var certificates = new List<X509Certificate2>();
+        var complete = true;
+        try
+        {
+            foreach (var name in new[] { "My", "WebHosting" })
+            {
+                try { certificates.AddRange(readStore(name)); }
+                catch (CryptographicException error) when (error.HResult is unchecked((int)0x80092004) or unchecked((int)0x80070002))
+                { /* A known absent store is an empty inventory, not an access failure. */ }
+                catch (Exception error) when (error is CryptographicException or UnauthorizedAccessException or System.Security.SecurityException or IOException)
+                { complete = false; }
+            }
+            return BuildReconciliationProbe(record, certificates, complete, configureTrust);
+        }
+        finally { foreach (var certificate in certificates) certificate.Dispose(); }
+    }
+
+    internal static SslStoreProbe BuildReconciliationProbe(SslCertificateDto record, IReadOnlyCollection<X509Certificate2> certificates,
+        bool storesComplete, Action<X509ChainPolicy>? configureTrust = null,
+        Func<X509Certificate2, SslCertificateSelection.TrustOutcome>? trustAssessment = null)
+    {
+        // A failed store read cannot prove a replacement or absence. Material already
+        // measured at the recorded thumbprint can still refresh its own metadata.
+        var existing = certificates.Where(c => c.Thumbprint.Equals(record.Thumbprint, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(c => c.HasPrivateKey).FirstOrDefault();
+        var outcomes = new Dictionary<X509Certificate2, SslCertificateSelection.TrustOutcome>(ReferenceEqualityComparer.Instance);
+        SslCertificateSelection.TrustOutcome Assess(X509Certificate2 certificate)
+        {
+            if (!outcomes.TryGetValue(certificate, out var outcome))
+                outcomes[certificate] = outcome = trustAssessment?.Invoke(certificate)
+                    ?? SslCertificateSelection.EvaluateTrust(certificate, record.HostName, configureTrust);
+            return outcome;
+        }
+        // A transient OCSP/CRL/AIA failure is not evidence that a different expected
+        // certificate should replace the recorded one, even when another chain builds.
+        if (existing is not null && (!storesComplete || Assess(existing) == SslCertificateSelection.TrustOutcome.Unknown))
+            return BuildProbe(true, existing);
+        var selected = storesComplete ? SslCertificateSelection.SelectForReconciliation(certificates, record.HostName, configureTrust, Assess) : null;
+        if (selected is not null || existing is not null) return BuildProbe(true, selected ?? existing);
+        return storesComplete ? SslStoreProbe.NotFound() : SslStoreProbe.Unmeasured();
     }
 
     /// <summary>

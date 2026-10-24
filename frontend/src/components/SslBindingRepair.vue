@@ -12,10 +12,14 @@
         <small>{{ option.bindingInformation }}</small>
         <dl>
           <dt>{{ t('ssl.repair.current') }}</dt>
-          <dd v-if="option.current"><code>{{ option.current.thumbprint }}</code><br>{{ formatDateTime(option.current.notAfterUtc) }} · {{ t(option.current.valid ? 'ssl.repair.valid' : 'ssl.repair.unverified') }}</dd>
+          <dd v-if="option.current"><code>{{ option.current.thumbprint }}</code><br>{{ formatDateTime(option.current.notAfterUtc) }} · {{ t(option.current.valid ? 'ssl.repair.valid' : 'ssl.repair.unverified') }}
+            <ul v-if="!option.current.valid && option.current.validationIssues?.length"><li v-for="issue in option.current.validationIssues" :key="issue">{{ t(issue) }}</li></ul>
+          </dd>
           <dd v-else>{{ t('ssl.repair.unverified') }}</dd>
           <dt>{{ t('ssl.repair.candidate') }}</dt>
-          <dd><code>{{ option.candidate.thumbprint }}</code><br>{{ option.candidate.subject }}<br>{{ formatDateTime(option.candidate.notAfterUtc) }} · {{ t(option.candidate.valid ? 'ssl.repair.valid' : 'ssl.repair.unverified') }}</dd>
+          <dd><code>{{ option.candidate.thumbprint }}</code><br>{{ option.candidate.subject }}<br>{{ formatDateTime(option.candidate.notAfterUtc) }} · {{ t(option.candidate.valid ? 'ssl.repair.valid' : 'ssl.repair.unverified') }}
+            <ul v-if="!option.candidate.valid && option.candidate.validationIssues?.length"><li v-for="issue in option.candidate.validationIssues" :key="issue">{{ t(issue) }}</li></ul>
+          </dd>
         </dl>
         <p v-if="option.blockedReason" class="notice">{{ t(option.blockedReason) }}</p>
         <button v-else type="button" class="compact" v-bind="writeGate(busy || !option.planToken)" @click="apply(option)">{{ t('ssl.repair.apply') }}</button>

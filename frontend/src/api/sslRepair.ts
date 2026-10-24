@@ -1,7 +1,7 @@
 import { apiClient } from './client';
 import { UserFacingError } from '../utils/apiError';
 export type SslRepairTarget = { siteName: string; hostName: string; port: number };
-type Certificate = { thumbprint: string; subject: string; notAfterUtc: string; valid: boolean };
+type Certificate = { thumbprint: string; subject: string; notAfterUtc: string; valid: boolean; validationIssues?: string[] | null };
 export type SslRepairOption = { hostName: string; bindingInformation: string; current: Certificate | null; candidate: Certificate; planToken: string; blockedReason: string };
 export type SslRepairPlan = { siteName: string; recordHostName: string; options: SslRepairOption[] };
 type Result = { bindingApplied: boolean; tlsVerified: boolean; detail: string };

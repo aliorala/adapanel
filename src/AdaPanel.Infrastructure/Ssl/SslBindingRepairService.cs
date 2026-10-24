@@ -42,7 +42,7 @@ public sealed class SslBindingRepairService(JsonFileStore files, IIisSiteService
             if (!request.HostName.StartsWith("*.", StringComparison.Ordinal) && !Same(binding.HostName, request.HostName)) continue;
             if (string.IsNullOrWhiteSpace(binding.HostName) || binding.HostName.Contains('*')) continue;
             var candidate = CertificateReader(record.Thumbprint, binding.HostName, Same(record.Thumbprint, binding.Thumbprint) ? binding.StoreName : "");
-            if (candidate is null || !candidate.MatchesHost) continue;
+            if (candidate is null || (request.HostName.StartsWith("*.", StringComparison.Ordinal) && !candidate.MatchesHost)) continue;
             var current = CertificateReader(binding.Thumbprint, binding.HostName, binding.StoreName);
             var blocked = BlockReason(binding, inventory, candidate, current);
             var plan = new ProtectedPlan(actor, DateTime.UtcNow.AddMinutes(5), request, record.Thumbprint,
@@ -177,27 +177,27 @@ public sealed class SslBindingRepairService(JsonFileStore files, IIisSiteService
         if (Same(exactStore, "My")) exactStore = "My";
         else if (Same(exactStore, "WebHosting")) exactStore = "WebHosting";
         else if (exactStore.Length > 0) return null;
+        CertificateEvidence? keyless = null;
         foreach (var storeName in exactStore.Length > 0 ? new[] { exactStore } : new[] { "My", "WebHosting" })
         {
             using var store = new X509Store(storeName, StoreLocation.LocalMachine);
-            store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
+            try { store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly); }
+            catch (CryptographicException error) when (error.HResult is unchecked((int)0x80092004) or unchecked((int)0x80070002))
+            { continue; } // An absent optional store is not an unreadable existing store.
             var all = store.Certificates;
             try
             {
-                var certificate = all.Cast<X509Certificate2>().FirstOrDefault(c => Same(c.Thumbprint, thumbprint) && c.HasPrivateKey);
+                var certificate = all.Cast<X509Certificate2>().Where(c => Same(c.Thumbprint, thumbprint))
+                    .OrderByDescending(c => c.HasPrivateKey).FirstOrDefault();
                 if (certificate is null) continue;
-                var matches = certificate.MatchesHostname(host, allowWildcards: true, allowCommonName: false);
-                using var chain = new X509Chain();
-                chain.ChainPolicy.RevocationMode = X509RevocationMode.Online;
-                chain.ChainPolicy.UrlRetrievalTimeout = TimeSpan.FromSeconds(10);
-                chain.ChainPolicy.ApplicationPolicy.Add(new Oid("1.3.6.1.5.5.7.3.1"));
-                var valid = matches && certificate.NotBefore.ToUniversalTime() <= DateTime.UtcNow
-                    && certificate.NotAfter.ToUniversalTime() > DateTime.UtcNow && chain.Build(certificate);
-                return new(new(certificate.Thumbprint, certificate.Subject, certificate.NotAfter.ToUniversalTime(), valid), storeName, matches, certificate.HasPrivateKey);
+                var evidence = new CertificateEvidence(SslRepairCertificateValidation.Describe(certificate, host, DateTime.UtcNow),
+                    storeName, SslCertificateSelection.MatchesHost(certificate, host), certificate.HasPrivateKey);
+                if (certificate.HasPrivateKey) return evidence;
+                keyless ??= evidence;
             }
             finally { foreach (var certificate in all) certificate.Dispose(); }
         }
-        return null;
+        return keyless;
     }
 
     private async Task<IReadOnlyList<BindingSnapshot>> ReadInventoryAsync(CancellationToken token)
