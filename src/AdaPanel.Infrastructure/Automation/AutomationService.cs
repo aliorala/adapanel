@@ -374,9 +374,40 @@ public sealed class AutomationService(
         // hangilerinin siteye gittiği burada tutulur (anahtar "motor|ad").
         var siteIcindeYedeklenen = new HashSet<string>(StringComparer.Ordinal);
         var bagimsizDenenen = new HashSet<string>(StringComparer.Ordinal);
+        var prePruned = new BackupPruneResultDto();
+
+        async Task<BackupPruneResultDto> PrunePhaseAsync()
+        {
+            if (approval is not null) await approval.CheckAsync(cancellationToken);
+            var remote = string.Equals(state.BackupTargetType, "local", StringComparison.OrdinalIgnoreCase)
+                ? null
+                : new BackupPruneRemoteOptions
+                {
+                    RemoteUrl = state.BackupRemoteUrl,
+                    UserName = state.BackupRemoteUserName,
+                    Password = ResolveRemotePassword(state),
+                    Region = state.BackupRemoteRegion
+                };
+            return approval is null
+                ? await backupService.PruneAsync(state.BackupRetentionDays, remote, cancellationToken)
+                : await backupService.PruneAsync(state.BackupRetentionDays, remote, approval.CheckAsync, cancellationToken);
+        }
 
         try
         {
+            // Free only already replaceable restore points before allocating new archives.
+            // The normal post-production pass can then retire points replaced by this run.
+            try
+            {
+                prePruned = await PrunePhaseAsync();
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException && approval?.Rejected(exception) != true)
+            {
+                hasError = true;
+                summary.AppendLine($"pre-prune: {exception.Message}");
+                logger.LogWarning(exception, "Yedek oncesi budama basarisiz; yedek uretimi devam edecek.");
+            }
+
             if (state.BackupSites)
             {
                 var sites = await iisSiteService.GetSitesAsync(cancellationToken);
@@ -568,26 +599,12 @@ public sealed class AutomationService(
                 }
             }
 
-            // Uzak rotasyon: hedef off-site ise budama uzak kopyaları da silsin (kimlikleri güncel ayardan geçir).
-            var pruneRemote = string.Equals(state.BackupTargetType, "local", StringComparison.OrdinalIgnoreCase)
-                ? null
-                : new BackupPruneRemoteOptions
-                {
-                    RemoteUrl = state.BackupRemoteUrl,
-                    UserName = state.BackupRemoteUserName,
-                    Password = ResolveRemotePassword(state),
-                    Region = state.BackupRemoteRegion
-                };
-            // DIKKAT: buraya hasError=true iken de gelinir (her kaynak ayri try/catch ile yedeklenir).
-            // Budamanin kendisi bu yuzden KAYNAK BAZINDA korumali: cutoff sonrasi kullanilabilir
-            // yedegi olmayan bir kaynagin eskilerine dokunmaz (bkz. BackupService.PruneAsync).
-            // Burada "hata varsa hic budama" demek, tek bir sitenin hatasi yuzunden butun sunucunun
-            // saklama politikasini durdurmak olurdu.
-            var pruned = approval is null
-                ? await backupService.PruneAsync(state.BackupRetentionDays, pruneRemote, cancellationToken)
-                : await backupService.PruneAsync(state.BackupRetentionDays, pruneRemote, approval.CheckAsync, cancellationToken);
+            // The explicit age limit still applies after failed production. The planner
+            // selects whole restore points, so an active incremental chain remains intact.
+            var postPruned = await PrunePhaseAsync();
+            var pruned = CombinePrunePhases(prePruned, postPruned);
 
-            var budama = SummarizePrune(pruned);
+            var budama = SummarizePrune(pruned, failureCountsAreAttempts: true);
             foreach (var satir in budama.TechnicalLines)
             {
                 summary.AppendLine(satir);
@@ -607,12 +624,24 @@ public sealed class AutomationService(
         {
             state.LastBackupRunUtc = DateTime.UtcNow;
             state.LastBackupStatus = "failed";
-            state.LastBackupDetails = exception.Message;
+            var preSummary = SummarizePrune(prePruned);
+            state.LastBackupDetails = BuildDetails(exception.Message,
+                summary + $"pre-prune: {preSummary.Sentence}.\n" + string.Join('\n', preSummary.TechnicalLines));
             logger.LogError(exception, "Otomatik yedekleme job'u başarısız oldu.");
         }
     }
 
     private sealed record BackupOutcome(bool Complete, HashSet<string> IncludedDatabases, string Detail);
+
+    internal static BackupPruneResultDto CombinePrunePhases(BackupPruneResultDto before, BackupPruneResultDto after) => new()
+    {
+        Removed = before.Removed + after.Removed,
+        LocalDeleteFailed = before.LocalDeleteFailed + after.LocalDeleteFailed,
+        RemoteDeleteFailed = before.RemoteDeleteFailed + after.RemoteDeleteFailed,
+        Failures = [.. before.Failures, .. after.Failures],
+        RetainedExpired = after.RetainedExpired,
+        RetentionNotes = [.. after.RetentionNotes]
+    };
 
     private static BackupOutcome EvaluateBackupResult(
         BackupRecordDto? record,
@@ -711,30 +740,39 @@ public sealed class AutomationService(
     /// <c>scan=truncated; reason=...</c> olarak var).
     /// </para>
     /// </remarks>
-    internal static PruneSummary SummarizePrune(BackupPruneResultDto pruned)
+    internal static PruneSummary SummarizePrune(BackupPruneResultDto pruned, bool failureCountsAreAttempts = false)
     {
         var cumle = $"{pruned.Removed} eski yedek silindi";
+        if (pruned.RetainedExpired > 0)
+            cumle += $", {pruned.RetainedExpired} suresi dolmus yedek geri yukleme korumasi nedeniyle tutuldu";
         if (pruned.RemoteDeleteFailed > 0)
         {
-            cumle += $", {pruned.RemoteDeleteFailed} yedegin uzak kopyasi SILINEMEDI";
+            cumle += failureCountsAreAttempts
+                ? $", {pruned.RemoteDeleteFailed} uzak kopya silme denemesi basarisiz"
+                : $", {pruned.RemoteDeleteFailed} yedegin uzak kopyasi SILINEMEDI";
         }
 
         if (pruned.LocalDeleteFailed > 0)
         {
-            cumle += $", {pruned.LocalDeleteFailed} yedegin yerel dosyasi silinemedi";
+            cumle += failureCountsAreAttempts
+                ? $", {pruned.LocalDeleteFailed} yerel dosya silme denemesi basarisiz"
+                : $", {pruned.LocalDeleteFailed} yedegin yerel dosyasi silinemedi";
         }
 
         if (!pruned.HasFailures)
         {
-            return new PruneSummary(false, cumle, []);
+            return new PruneSummary(false, cumle,
+                pruned.RetentionNotes.Select(note => $"retention: {note}").ToArray());
         }
 
         var satirlar = new List<string>
         {
-            $"prune: removed={pruned.Removed}; remote_delete_failed={pruned.RemoteDeleteFailed}; "
+            (failureCountsAreAttempts ? "prune: failed_delete_attempts; " : "prune: ")
+            + $"removed={pruned.Removed}; remote_delete_failed={pruned.RemoteDeleteFailed}; "
             + $"local_delete_failed={pruned.LocalDeleteFailed}"
         };
         satirlar.AddRange(pruned.Failures.Select(basarisiz => $"prune: {basarisiz}"));
+        satirlar.AddRange(pruned.RetentionNotes.Select(note => $"retention: {note}"));
 
         return new PruneSummary(true, cumle, satirlar);
     }
@@ -874,8 +912,7 @@ public sealed class AutomationService(
                 ? "HIC BASARILI YEDEK YOK."
                 : $"En son basarili yedek: {lastSuccess.Value:yyyy-MM-dd HH:mm} UTC ({(now - lastSuccess.Value).TotalDays:F1} gun once).";
 
-            // Saklama suresinden eski tek yedek: budama korumasi onu tutuyor ama artik ESKI veriyi
-            // geri yukluyorsunuz demektir. Bunu ayrica soylemek gerekir.
+            // An old archive may remain until rotation succeeds or while its chain is active.
             var retentionNote = state.BackupRetentionDays > 0 &&
                                 lastSuccess is not null &&
                                 now - lastSuccess.Value > TimeSpan.FromDays(state.BackupRetentionDays)
@@ -890,8 +927,8 @@ public sealed class AutomationService(
                 "backup-health",
                 "AdaPanel uyari: otomatik yedekleme saglikli degil",
                 $"{runText}\r\n{state.LastBackupDetails}\r\n\r\n{lastSuccessText}{retentionNote}\r\n\r\n" +
-                "Yeni yedek uretilemedigi surece eski yedekler budanmaz (kaynak bazinda koruma devrede), " +
-                "ancak elinizde GUNCEL bir geri yukleme noktasi olusmaz. Yedekleme ekranindan elle bir " +
+                "Pozitif saklama suresini dolduran yedekler yeni kopya olmasa da silinir; " +
+                "suresi dolmamis bir halkaya bagli zincir butun tutulur. Yedekleme ekranindan elle bir " +
                 "yedek deneyip donen hatayi giderin."));
         }
         catch (Exception exception)

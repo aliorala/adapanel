@@ -210,7 +210,7 @@ public sealed class AutomationBackupOutcomeTests
         };
         await fixture.Configure(backupSites: false, backupDatabases: false, backupMail: type == "mail", backupPanel: type == "panel");
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fixture.Service.RunBackupNowAsync(cancellation.Token));
-        Assert.Equal(0, fixture.PruneCalls);
+        Assert.Equal(1, fixture.PruneCalls); // Pre-production rotation ran; cancellation prevents the post pass.
     }
 
     [Theory]
@@ -233,7 +233,7 @@ public sealed class AutomationBackupOutcomeTests
         }
         await fixture.Configure(backupSites: inSite, backupDatabases: !inSite);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fixture.Service.RunBackupNowAsync(cancellation.Token));
-        Assert.Equal(0, fixture.PruneCalls);
+        Assert.Equal(1, fixture.PruneCalls); // Only the safe pre-production pass ran.
         Assert.Equal(inSite ? 0 : 1, fixture.DatabaseCalls.Count);
     }
 

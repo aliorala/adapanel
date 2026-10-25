@@ -451,12 +451,14 @@ public sealed partial class BackupService(
         var encryptedPath = localPath + BackupArchiveCipher.EncryptedExtension;
         try
         {
-            await BackupArchiveCipher.EncryptFileAsync(localPath, encryptedPath, password, cancellationToken);
+            using var output = PendingBackupArtifact.Reserve(encryptedPath + ".tmp-" + Guid.NewGuid().ToString("N"));
+            await BackupArchiveCipher.EncryptFileAsync(localPath, output.Path, password, cancellationToken);
+            File.Move(output.Path, encryptedPath, overwrite: false);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception)
         {
-            TryDeleteFile(encryptedPath);
             TryDeleteFile(localPath);
+            if (exception is OperationCanceledException) throw;
             throw new AppException("backup.encryption_failed", 500, 500, exception.Message);
         }
 
@@ -464,6 +466,27 @@ public sealed partial class BackupService(
         // duran asıl dosya korumasız olurdu.
         TryDeleteFile(localPath);
         return (encryptedPath, fileName + BackupArchiveCipher.EncryptedExtension, true);
+    }
+
+    // Producers reserve with CreateNew before writing; finalization adopts that ownership
+    // and follows wrapper replacements until the completed archive is indexed.
+    private sealed class PendingBackupArtifact(string path) : IDisposable
+    {
+        public string Path { get; set; } = path;
+        private bool keep;
+
+        public static PendingBackupArtifact Reserve(string path)
+        {
+            using var reservation = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            return new PendingBackupArtifact(path);
+        }
+
+        public void Keep() => keep = true;
+
+        public void Dispose()
+        {
+            if (!keep) TryDeleteFile(Path);
+        }
     }
 
     private static void TryDeleteFile(string path)
@@ -509,11 +532,12 @@ public sealed partial class BackupService(
         var compressedPath = localPath + BackupDumpCompression.CompressedExtension;
         try
         {
-            await BackupDumpCompression.CompressFileAsync(localPath, compressedPath, cancellationToken);
+            using var output = PendingBackupArtifact.Reserve(compressedPath + ".tmp-" + Guid.NewGuid().ToString("N"));
+            await BackupDumpCompression.CompressFileAsync(localPath, output.Path, cancellationToken);
+            File.Move(output.Path, compressedPath, overwrite: false);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            TryDeleteFile(compressedPath);
             logger?.LogWarning(exception, "Yedek sikistirilamadi, duz dosya korundu: {File}", fileName);
             warnings.Add(new BackupRestoreWarningDto
             {
@@ -581,6 +605,7 @@ public sealed partial class BackupService(
         //
         // İkisi de FinalizeBackupAsync'te toplanmıştır: dört yedek akışının her birinde ayrı ayrı
         // yazılsaydı, biri unutulduğunda o tür sessizce ham (ve/veya şifresiz) kalırdı.
+        using var artifact = new PendingBackupArtifact(localPath);
         var warnings = new List<BackupRestoreWarningDto>();
 
         // BÜTÜNLÜK TAM BURADA, SARMALAYICILARDAN ÖNCE ÖLÇÜLÜR.
@@ -597,9 +622,11 @@ public sealed partial class BackupService(
 
         var (compressedPath, compressedName, compressed) =
             await CompressArchiveAsync(localPath, fileName, format, warnings, cancellationToken);
+        artifact.Path = compressedPath;
 
         var password = await ResolveEncryptionPasswordAsync(request.EncryptionPassword, cancellationToken);
         var (finalPath, finalName, encrypted) = await ProtectArchiveAsync(compressedPath, compressedName, password, cancellationToken);
+        artifact.Path = finalPath;
 
         var target = ResolveTarget(request.TargetType, request.RemoteUrl, request.RemoteUserName, request.RemotePassword, request.RemoteRegion);
         await EnsureRemoteTargetAllowedAsync(target, cancellationToken);
@@ -692,11 +719,20 @@ public sealed partial class BackupService(
         // İNDEKS YAN KAYDI kayıttan ÖNCE yazılır: kayıt listede görünüp indeksi olmayan bir halka,
         // bir sonraki turda "temel okunamadı" diye zorunlu tam yedeğe düşürür (zararsız ama
         // gereksiz). Yazamazsak da yedek geçerlidir; yalnızca sonraki tur tam yedek olur.
+        using var sidecarArtifact = new PendingBackupArtifact(string.Empty);
+        var sidecarWritten = false;
         if (fileIndex is not null)
         {
             try
             {
+                var sidecarPath = fileStore.ResolvePath(IndexSidecarPath(record.Id));
+                Directory.CreateDirectory(Path.GetDirectoryName(sidecarPath)!);
+                // Reserve before handing the path to JsonFileStore (which replaces files).
+                // A collision never becomes this operation's cleanup responsibility.
+                using (new FileStream(sidecarPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
+                sidecarArtifact.Path = sidecarPath;
                 await fileStore.WriteAsync(IndexSidecarPath(record.Id), fileIndex, CancellationToken.None);
+                sidecarWritten = true;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -746,6 +782,8 @@ public sealed partial class BackupService(
 
         ApplyContentWarnings(record, contentWarnings ?? []);
         await AppendRecordAsync(record, CancellationToken.None);
+        artifact.Keep();
+        if (sidecarWritten) sidecarArtifact.Keep();
         // Preserve cancellation for the caller, after persisting both the archive and warnings.
         if (remoteCancellation is not null)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(remoteCancellation).Throw();
@@ -1215,7 +1253,8 @@ public sealed partial class BackupService(
         var includedDatabases = new List<BackupDatabaseRef>();
         var includedComponents = new List<BackupComponentRef>();
         var mailMessages = MailMessageOutcome.NotRequested;
-        await using (var zipStream = new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write))
+        using var artifact = PendingBackupArtifact.Reserve(targetPath);
+        await using (var zipStream = new FileStream(targetPath, FileMode.Open, FileAccess.Write))
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
         {
             var yazilan = AddFilesToArchive(archive, taranan, yazilacak, atlananlar);
@@ -1320,6 +1359,7 @@ public sealed partial class BackupService(
         if (request.IncludeFiles && !atlananlar.Any)
             includedComponents.Add(new() { Kind = "files", Source = site.Name });
 
+        artifact.Keep(); // Ownership passes to finalization, including cancellation after publication.
         return await FinalizeBackupAsync(
             targetPath,
             fileName,
@@ -1830,6 +1870,7 @@ public sealed partial class BackupService(
         var ext = engine.Equals("mssql", StringComparison.OrdinalIgnoreCase) ||
                   engine.Equals("sqlserver", StringComparison.OrdinalIgnoreCase) ? "bak" : "sql";
         var tempDump = Path.Combine(Path.GetTempPath(), $"adabk-{Guid.NewGuid():N}.{ext}");
+        using var dumpArtifact = PendingBackupArtifact.Reserve(tempDump);
         try
         {
             await databaseService.ExportDumpAsync(new AdaPanel.Core.Dtos.Databases.DatabaseDumpRequest
@@ -1931,6 +1972,7 @@ public sealed partial class BackupService(
         // Path.Combine'a verilmesi yedeği hedef klasörün dışına yazabilirdi.
         var fileName = NewArtifactFileName(placement.Source, extension);
         var targetPath = Path.Combine(backupsDirectory, fileName);
+        using var artifact = PendingBackupArtifact.Reserve(targetPath);
         var dump = await databaseService.ExportDumpAsync(new AdaPanel.Core.Dtos.Databases.DatabaseDumpRequest
         {
             Engine = request.Engine,
@@ -1948,6 +1990,7 @@ public sealed partial class BackupService(
                 includedDatabases.Add(new BackupDatabaseRef { Engine = dump.Engine, DatabaseName = dump.DatabaseName });
         }
 
+        artifact.Keep(); // Ownership passes to finalization.
         return await FinalizeBackupAsync(
             targetPath,
             fileName,
@@ -2046,7 +2089,8 @@ public sealed partial class BackupService(
         var includedComponents = new List<BackupComponentRef>();
         var atlananlar = new BackupSkipLog();
 
-        await using (var zipStream = new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write))
+        using var artifact = PendingBackupArtifact.Reserve(targetPath);
+        await using (var zipStream = new FileStream(targetPath, FileMode.Open, FileAccess.Write))
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
         {
             // adapanel.db (+ WAL/SHM) — çalışan panel kilitleyebilir → paylaşımlı okuma ile ekle.
@@ -2119,6 +2163,7 @@ public sealed partial class BackupService(
             AddTextEntry(archive, "manifest.json", manifest);
         }
 
+        artifact.Keep();
         return await FinalizeBackupAsync(targetPath, fileName, "panel", "panel", "zip", request, placement, atlananlar, cancellationToken,
             includedDatabases: [], includedComponents: includedComponents);
     }
@@ -2268,7 +2313,8 @@ public sealed partial class BackupService(
         {
             new() { Kind = "subscription", Source = kaynak }
         };
-        await using (var zipStream = new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write))
+        using var artifact = PendingBackupArtifact.Reserve(targetPath);
+        await using (var zipStream = new FileStream(targetPath, FileMode.Open, FileAccess.Write))
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
         {
             var yazilanDosya = AddFilesToArchive(archive, taranan, yazilacak, atlananlar);
@@ -2408,6 +2454,7 @@ public sealed partial class BackupService(
         if (request.IncludeFiles && !atlananlar.Any)
             includedComponents.AddRange(siteBilgileri.Keys.Select(site => new BackupComponentRef { Kind = "files", Source = site }));
 
+        artifact.Keep();
         return await FinalizeBackupAsync(
             targetPath,
             fileName,
@@ -3000,14 +3047,19 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         var targetPath = Path.Combine(backupsDirectory, fileName);
 
         BackupRestoreWarningDto? postaUyarisi;
+        var archiveProduced = false;
         try
         {
             postaUyarisi = await WithMailOfflineAsync(installDirectory,
-                ct => CreateMailArchiveAsync(dataDirectory, targetPath, ct), cancellationToken);
+                async ct =>
+                {
+                    await CreateMailArchiveAsync(dataDirectory, targetPath, ct);
+                    archiveProduced = true;
+                }, cancellationToken);
         }
         catch
         {
-            TryDeleteFile(targetPath);
+            if (archiveProduced) TryDeleteFile(targetPath);
             throw;
         }
 
@@ -3828,10 +3880,8 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Kararın ayrı olmasının sebebi: budama yalnızca tarihe bakarsa, yedekler HİÇ alınamazken de
-    /// çalışır. Gecelik otomasyon her kaynağı ayrı try/catch ile yedekler ve hepsi patlasa bile
-    /// buraya gelir: MariaDB 14 gün kapalı kalırsa her gece yedek başarısız olur, naif bir budama
-    /// eskiyi silmeye devam eder ve 15. gün geri yüklenecek TEK bir yedek kalmaz.
+    /// Pozitif gün süresi kesin yaş sınırıdır: eski/legacy/son kopya da süre dolunca silinir.
+    /// Süre kapalıyken yalnız adet budaması son kullanılabilir noktayı ve kapsamını korur.
     /// </para>
     /// <para>
     /// Artımsal zincirlerde ikinci bir tuzak vardır: zincirin ortasındaki (özellikle 0 numaralı)
@@ -3865,6 +3915,8 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             result.LocalDeleteFailed += removed.LocalDeleteFailed;
             result.RemoteDeleteFailed += removed.RemoteDeleteFailed;
             result.Failures.AddRange(removed.Failures);
+            result.RetainedExpired += removed.RetainedExpired;
+            result.RetentionNotes.AddRange(removed.RetentionNotes);
         }
         return result;
     }
@@ -3881,8 +3933,9 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         // retentionDays <= 0 → süreye göre silme yok; yalnızca sayı limiti çalışsın diye cutoff
         // ULAŞILAMAZ bir geçmişe alınır (hiçbir kayıt "süresi dolmuş" sayılmaz).
         var cutoff = retentionDays > 0 ? DateTime.UtcNow.AddDays(-retentionDays) : DateTime.MinValue;
-        var silinecekler = BackupPrunePlanner.Select(records, cutoff, keepCount, IsUsableBackup,
+        var analysis = BackupPrunePlanner.Analyze(records, cutoff, keepCount, IsUsableBackup,
             BackupReplacementPolicy.CanReplace);
+        var silinecekler = analysis.Selected;
         var removedIds = new HashSet<string>(StringComparer.Ordinal);
         var selectedIds = silinecekler.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
         // Invalid graph/identity metadata is not permission to remove arbitrary archives.
@@ -3894,7 +3947,20 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         // BAŞARISIZLIK ÇAĞIRANA DA GİDER. Eskiden yalnız günlüğe yazılıyordu; gece işi bunu
         // göremediği için durumunu "completed" bırakıyor ve özetinde yalnız başarıları sayıyordu
         // (bkz. BackupPruneResultDto'nun gerekçesi).
-        var sonuclar = new BackupPruneResultDto();
+        var sonuclar = new BackupPruneResultDto { RetainedExpired = analysis.RetainedExpired.Count };
+        foreach (var retained in analysis.RetainedExpired)
+        {
+            var explanation = retained.Reason switch
+            {
+                "minimum_restore_point_count" => "Asgari geri yukleme noktasi sayisi korundu.",
+                "no_recent_usable_backup" => "Daha yeni kullanilabilir yedek yok.",
+                "unmeasured_coverage" => "Eski yedegin icerik kapsami olculmemis.",
+                _ => "Yeni yedegin ayni kapsami ve kopyalari korudugu dogrulanamadi."
+            };
+            var name = Path.GetFileName(retained.Record.Name.Replace('\\', '/'));
+            name = new string(name.Where(character => !char.IsControl(character)).ToArray());
+            sonuclar.RetentionNotes.Add($"{name}: {retained.Reason}; {explanation}");
+        }
 
         // ÇAĞIRANIN VERDİĞİ KİMLİK VARSAYILANDIR, ama abonelik yedeklerinin kimliği kendi
         // programından gelir: sunucu geneli budama (AutomationService) kapsamına abonelik

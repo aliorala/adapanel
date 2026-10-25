@@ -22,6 +22,12 @@ public sealed class BackupPruneResultDto
     /// <summary>Kaydı ve dosyaları (yerel + varsa uzak) TAMAMEN silinmiş yedek sayısı.</summary>
     public int Removed { get; set; }
 
+    /// <summary>Expired records deliberately kept by restore-point protection, not deletion failures.</summary>
+    public int RetainedExpired { get; set; }
+
+    /// <summary>Sanitized archive names and stable reason codes for protected expired records.</summary>
+    public List<string> RetentionNotes { get; set; } = [];
+
     /// <summary>
     /// Yerel kopyası silinen ama UZAK kopyası silinemeyen yedek sayısı. Bu kayıtlar
     /// <c>deleted_remote_failed</c> olarak işaretlenir, listeden ÇIKARILMAZ (yetim üretmemek için)

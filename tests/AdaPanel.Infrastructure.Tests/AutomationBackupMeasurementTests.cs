@@ -178,7 +178,7 @@ public sealed class AutomationBackupMeasurementTests
         var result = await fixture.Service.RunBackupNowAsync();
         Assert.Equal("failed", result.LastBackupStatus);
         Assert.Empty(fixture.SiteBackups);
-        Assert.Equal(0, fixture.PruneCalls);
+        Assert.Equal(1, fixture.PruneCalls); // Existing eligible points were pruned before inventory failed.
     }
 
     [Fact]

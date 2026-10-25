@@ -131,7 +131,7 @@ public sealed partial class QueuedBackupActorLifecycleTests
         await held.DisposeAsync();
         Assert.Null(await action.WaitAsync(f.Token));
         Assert.Equal(new[] { f.Other }, produced);
-        Assert.Equal(new[] { f.Other }, pruned);
+        Assert.Equal(new[] { f.Other, f.Other }, pruned); // Both retention phases stay scoped to the remaining neighbor.
         var remaining = Assert.Single(await f.ManualSchedule.GetSchedulesAsync(f.Token));
         Assert.Equal(f.Other, remaining.UserId);
         Assert.Equal("completed", remaining.LastStatus);

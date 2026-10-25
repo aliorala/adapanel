@@ -56,35 +56,39 @@ public sealed partial class BackupService
     private static async Task CreateMailArchiveAsync(string dataDirectory, string targetPath, CancellationToken cancellationToken)
     {
         EnsureRestoreRootIsNotLink(dataDirectory);
-        await using var output = new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        using var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true);
-        archive.CreateEntry("data/");
-        var pending = new Stack<string>();
-        pending.Push(dataDirectory);
-        while (pending.TryPop(out var directory))
+        using var artifact = PendingBackupArtifact.Reserve(targetPath);
+        await using (var output = new FileStream(targetPath, FileMode.Open, FileAccess.Write, FileShare.None))
+        using (var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
         {
-            foreach (var path in Directory.EnumerateFileSystemEntries(directory))
+            archive.CreateEntry("data/");
+            var pending = new Stack<string>();
+            pending.Push(dataDirectory);
+            while (pending.TryPop(out var directory))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var attributes = File.GetAttributes(path);
-                if (attributes.HasFlag(FileAttributes.ReparsePoint))
-                    throw new AppException("backup.invalid_entry_path", 400, 400, path);
-                var name = "data/" + Path.GetRelativePath(dataDirectory, path).Replace('\\', '/');
-                if (attributes.HasFlag(FileAttributes.Directory))
+                foreach (var path in Directory.EnumerateFileSystemEntries(directory))
                 {
-                    archive.CreateEntry(name + "/");
-                    pending.Push(path);
-                }
-                else
-                {
-                    var entry = archive.CreateEntry(name, CompressionLevel.Optimal);
-                    await using var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                    await using var destination = entry.Open();
-                    await source.CopyToAsync(destination, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var attributes = File.GetAttributes(path);
+                    if (attributes.HasFlag(FileAttributes.ReparsePoint))
+                        throw new AppException("backup.invalid_entry_path", 400, 400, path);
+                    var name = "data/" + Path.GetRelativePath(dataDirectory, path).Replace('\\', '/');
+                    if (attributes.HasFlag(FileAttributes.Directory))
+                    {
+                        archive.CreateEntry(name + "/");
+                        pending.Push(path);
+                    }
+                    else
+                    {
+                        var entry = archive.CreateEntry(name, CompressionLevel.Optimal);
+                        await using var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                        await using var destination = entry.Open();
+                        await source.CopyToAsync(destination, cancellationToken);
+                    }
                 }
             }
+            cancellationToken.ThrowIfCancellationRequested();
         }
-        cancellationToken.ThrowIfCancellationRequested();
+        artifact.Keep();
     }
 
     private static async Task StageMailArchiveAsync(string archivePath, string stagingDirectory, CancellationToken cancellationToken)

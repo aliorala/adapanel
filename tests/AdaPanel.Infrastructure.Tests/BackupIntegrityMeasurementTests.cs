@@ -240,31 +240,37 @@ public sealed class BackupIntegrityMeasurementTests
     }
 
     // ===========================================================================================
-    // 3) SONUC: BOZUK ARSIV "TAZE YEDEK" SAYILMAZ (budamanin kaynak korumasi)
+    // 3) COUNT-ONLY: corrupt archives cannot replace a usable restore point.
     // ===========================================================================================
 
     [Fact]
-    public async Task Bozuk_taze_yedek_ESKILERI_sildirmez()
+    public async Task Adet_budamada_bozuk_taze_yedek_saglam_eskiyi_sildirmez()
     {
-        // EN PAHALI SONUC: budama, "bu kaynagin guncel yedegi var" derse eskilerini siler.
-        // Sifir baytlik bir arsiv taze yedek sayilsaydi, panel korumasi olmayan bir kaynakta
-        // GERCEK eski yedekleri silerdi.
+        // Positive age limits expire old copies explicitly. Count-only rotation still
+        // requires a usable replacement; a present but corrupt archive is not sufficient.
         using var alan = new ButunlukAlani();
         var servis = alan.ServisKur(new SahteDokumcu(bosDokum: false));
 
         var eski = alan.ZipKayit("eski", gunOnce: 40);
-        var tazeBozuk = alan.YerelKayit("taze", icerikBaytlari: 0);
+        var tazeBozuk = alan.YerelKayit("taze", icerikBaytlari: 32);
         tazeBozuk.IntegrityState = BackupIntegrity.Unsound;
+        Assert.Equal(BackupIntegrity.Unsound, BackupArchiveProbe.Measure(tazeBozuk.Path, "zip").State);
+        var owner = Guid.NewGuid();
+        foreach (var record in new[] { eski, tazeBozuk })
+        {
+            record.Type = "subscription";
+            record.Source = record.SubscriptionUserId = owner.ToString("N");
+        }
         await alan.KayitlariYazAsync(eski, tazeBozuk);
 
-        var sonuc = await servis.PruneAsync(14, cancellationToken: alan.Iptal);
+        var sonuc = await servis.PruneSubscriptionAsync(owner, retentionDays: 0, keepCount: 1, cancellationToken: alan.Iptal);
 
         Assert.Equal(0, sonuc.Removed);
         Assert.True(File.Exists(eski.Path), "Bozuk taze yedek yuzunden GERCEK eski yedek silindi.");
     }
 
     [Fact]
-    public async Task Saglam_taze_yedek_eskileri_ESKISI_GIBI_sildirir()
+    public async Task Adet_budamada_saglam_taze_yedek_eskiyi_sildirir()
     {
         // KARSI KONTROL: koruma daralmadi, yalnizca bozuk yedegi kapsam disi birakti.
         using var alan = new ButunlukAlani();
@@ -273,9 +279,15 @@ public sealed class BackupIntegrityMeasurementTests
         var eski = alan.ZipKayit("eski", gunOnce: 40);
         var taze = alan.ZipKayit("taze");
         taze.IntegrityState = BackupIntegrity.Sound;
+        var owner = Guid.NewGuid();
+        foreach (var record in new[] { eski, taze })
+        {
+            record.Type = "subscription";
+            record.Source = record.SubscriptionUserId = owner.ToString("N");
+        }
         await alan.KayitlariYazAsync(eski, taze);
 
-        var sonuc = await servis.PruneAsync(14, cancellationToken: alan.Iptal);
+        var sonuc = await servis.PruneSubscriptionAsync(owner, retentionDays: 0, keepCount: 1, cancellationToken: alan.Iptal);
 
         Assert.Equal(1, sonuc.Removed);
         Assert.False(File.Exists(eski.Path));

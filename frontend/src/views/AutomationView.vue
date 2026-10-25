@@ -52,6 +52,7 @@
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.automation.retentionDays") }}</span>
           <input v-model.number="form.backupRetentionDays" type="number" min="0" max="3650" />
+          <span class="field-hint">{{ t("panel.automation.retentionHint") }}</span>
         </label>
         <label class="toggle-field">
           <input v-model="form.backupSites" type="checkbox" />

@@ -21,7 +21,7 @@ public sealed class BackupPruneReplacementTests
 
     [Theory]
     [MemberData(nameof(IncompleteCases))]
-    public async Task AnIncompleteRecentArchiveCannotDeleteTheLastCompleteArchive(bool countPolicy, string failure)
+    public async Task IncompleteReplacementBlocksCountPruningButNotExplicitAgeExpiry(bool countPolicy, string failure)
     {
         using var fixture = new Fixture(countPolicy);
         var complete = fixture.Record("complete", 40, Included("foo", "Foo"));
@@ -46,8 +46,8 @@ public sealed class BackupPruneReplacementTests
 
         var result = await fixture.Prune();
 
-        Assert.Equal(0, result.Removed);
-        await fixture.AssertPresent(complete, incomplete);
+        Assert.Equal(countPolicy ? 0 : 1, result.Removed);
+        await fixture.AssertPresent(countPolicy ? [complete, incomplete] : [incomplete]);
     }
 
     [Theory]
@@ -61,7 +61,7 @@ public sealed class BackupPruneReplacementTests
     [InlineData(true, "legacy-to-empty")]
     [InlineData(false, "empty-to-legacy")]
     [InlineData(true, "empty-to-legacy")]
-    public async Task AReplacementMustNotDiscardMeasuredOrUnknownDatabaseCoverage(bool countPolicy, string scenario)
+    public async Task CoverageReplacementIsRequiredOnlyForCountPruning(bool countPolicy, string scenario)
     {
         using var fixture = new Fixture(countPolicy);
         var complete = fixture.Record("complete", 40, scenario == "legacy-to-empty" ? null : scenario == "empty-to-legacy" ? [] : Included("foo", "Foo"));
@@ -75,8 +75,8 @@ public sealed class BackupPruneReplacementTests
 
         var result = await fixture.Prune();
 
-        Assert.Equal(0, result.Removed);
-        await fixture.AssertPresent(complete, smaller);
+        Assert.Equal(countPolicy ? 0 : 1, result.Removed);
+        await fixture.AssertPresent(countPolicy ? [complete, smaller] : [smaller]);
     }
 
     [Theory]
@@ -128,7 +128,7 @@ public sealed class BackupPruneReplacementTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task ARecentIncrementalLinkCannotHideItsIncompleteBase(bool countPolicy)
+    public async Task IncompleteActiveChainCannotReplaceForCountPruningButDoesNotOverrideIndependentExpiry(bool countPolicy)
     {
         using var fixture = new Fixture(countPolicy);
         var complete = fixture.Record("complete", 40, Included("foo", "Foo"));
@@ -145,14 +145,14 @@ public sealed class BackupPruneReplacementTests
 
         var result = await fixture.Prune();
 
-        Assert.Equal(0, result.Removed);
-        await fixture.AssertPresent(complete, chainBase, recent);
+        Assert.Equal(countPolicy ? 0 : 1, result.Removed);
+        await fixture.AssertPresent(countPolicy ? [complete, chainBase, recent] : [chainBase, recent]);
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task APartlyMeasuredLegacyChainCannotBeReplacedByAnUnknownDatabaseScope(bool countPolicy)
+    public async Task LegacyChainCoverageBlocksCountPruningButNotWholeChainAgeExpiry(bool countPolicy)
     {
         using var fixture = new Fixture(countPolicy);
         var chainBase = fixture.Record("legacy-base", 40, null);
@@ -164,22 +164,22 @@ public sealed class BackupPruneReplacementTests
         measured.BaseBackupId = chainBase.Id;
         var replacement = fixture.Record("unknown", 1, null);
         await fixture.Save(chainBase, measured, replacement);
-        Assert.Equal(0, (await fixture.Prune()).Removed);
-        await fixture.AssertPresent(chainBase, measured, replacement);
+        Assert.Equal(countPolicy ? 0 : 2, (await fixture.Prune()).Removed);
+        await fixture.AssertPresent(countPolicy ? [chainBase, measured, replacement] : [replacement]);
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task AnInvalidStoredDatabaseReferenceCannotBeTreatedAsAnEmptyScope(bool countPolicy)
+    public async Task InvalidCoverageBlocksCountReplacementButNotExplicitAgeExpiry(bool countPolicy)
     {
         using var fixture = new Fixture(countPolicy);
         var previous = fixture.Record("invalid-reference", 40, []);
         previous.IncludedDatabases = [null!];
         var replacement = fixture.Record("empty", 1, []);
         await fixture.Save(previous, replacement);
-        Assert.Equal(0, (await fixture.Prune()).Removed);
-        await fixture.AssertPresent(previous, replacement);
+        Assert.Equal(countPolicy ? 0 : 1, (await fixture.Prune()).Removed);
+        await fixture.AssertPresent(countPolicy ? [previous, replacement] : [replacement]);
     }
 
     [Fact]

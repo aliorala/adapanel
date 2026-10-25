@@ -305,6 +305,7 @@ public sealed class SubscriptionBackupScheduleService(
     {
         var ozet = new StringBuilder();
         var durum = "completed";
+        var prePruned = new BackupPruneResultDto();
 
         try
         {
@@ -334,6 +335,38 @@ public sealed class SubscriptionBackupScheduleService(
                     if (approval is not null) await approval.CheckAsync(token);
                 }
             }
+            async Task<BackupPruneResultDto> PrunePhaseAsync(bool beforeProduction)
+            {
+                Func<CancellationToken, Task>? recheck = beforeProduction
+                    ? BeforeProductionAsync
+                    : approval is null ? null : approval.CheckAsync;
+                if (recheck is not null) await recheck(cancellationToken);
+                var remote = string.Equals(kayit.TargetType, "local", StringComparison.OrdinalIgnoreCase)
+                    ? null
+                    : new BackupPruneRemoteOptions
+                    {
+                        RemoteUrl = kayit.RemoteUrl,
+                        UserName = kayit.RemoteUserName,
+                        Password = UzakParolaCoz(kayit),
+                        Region = kayit.RemoteRegion
+                    };
+                return recheck is null
+                    ? await backupService.PruneSubscriptionAsync(userId, kayit.RetentionDays, kayit.KeepCount, remote, cancellationToken)
+                    : await backupService.PruneSubscriptionAsync(userId, kayit.RetentionDays, kayit.KeepCount, remote, recheck, cancellationToken);
+            }
+
+            try
+            {
+                prePruned = await PrunePhaseAsync(beforeProduction: true);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException &&
+                exception is not ScheduledRunNoLongerDueException && approval?.Rejected(exception) != true)
+            {
+                durum = "completed_with_errors";
+                ozet.Append($"pre-prune: {exception.Message}. ");
+                logger.LogWarning(exception, "Abonelik yedegi oncesi budama basarisiz: {UserId}", userId);
+            }
+
             var record = approval is null && beforeScheduledBackup is null
                 ? await backupService.BackupSubscriptionAsync(request, cancellationToken)
                 : await backupService.BackupSubscriptionAsync(request, BeforeProductionAsync, cancellationToken);
@@ -357,25 +390,27 @@ public sealed class SubscriptionBackupScheduleService(
                     record.Warnings));
             }
 
-            var uzak = string.Equals(kayit.TargetType, "local", StringComparison.OrdinalIgnoreCase)
-                ? null
-                : new BackupPruneRemoteOptions
-                {
-                    RemoteUrl = kayit.RemoteUrl,
-                    UserName = kayit.RemoteUserName,
-                    Password = UzakParolaCoz(kayit),
-                    Region = kayit.RemoteRegion
-                };
-
             // Budama YALNIZCA bu aboneliğin yedeklerini kapsar ve zinciri kırmaz
             // (bkz. BackupPrunePlanner: zincir tek bir geri yükleme noktasıdır).
-            var budanan = approval is null
-                ? await backupService.PruneSubscriptionAsync(userId, kayit.RetentionDays, kayit.KeepCount, uzak, cancellationToken)
-                : await backupService.PruneSubscriptionAsync(userId, kayit.RetentionDays, kayit.KeepCount, uzak,
-                    approval.CheckAsync, cancellationToken);
+            var postPruned = await PrunePhaseAsync(beforeProduction: false);
+            var budanan = new BackupPruneResultDto
+            {
+                Removed = prePruned.Removed + postPruned.Removed,
+                LocalDeleteFailed = prePruned.LocalDeleteFailed + postPruned.LocalDeleteFailed,
+                RemoteDeleteFailed = prePruned.RemoteDeleteFailed + postPruned.RemoteDeleteFailed,
+                Failures = [.. prePruned.Failures, .. postPruned.Failures],
+                RetainedExpired = postPruned.RetainedExpired,
+                RetentionNotes = [.. postPruned.RetentionNotes]
+            };
             if (budanan.Removed > 0)
             {
                 ozet.Append($" {budanan.Removed} eski yedek silindi.");
+            }
+            if (budanan.RetainedExpired > 0)
+            {
+                ozet.Append($" {budanan.RetainedExpired} suresi dolmus yedek geri yukleme korumasi nedeniyle tutuldu.");
+                foreach (var note in budanan.RetentionNotes)
+                    ozet.Append($" retention: {note}.");
             }
 
             // BUDAMA BAŞARISIZLIĞI DURUMU DEĞİŞTİRİR: aynı hata sınıfı gece otomasyonunda ölçüldü
@@ -386,7 +421,7 @@ public sealed class SubscriptionBackupScheduleService(
             {
                 durum = "completed_with_errors";
                 ozet.Append(
-                    $" prune: remote_delete_failed={budanan.RemoteDeleteFailed}; "
+                    $" prune (basarisiz silme denemeleri): remote_delete_failed={budanan.RemoteDeleteFailed}; "
                     + $"local_delete_failed={budanan.LocalDeleteFailed}.");
                 foreach (var basarisiz in budanan.Failures)
                 {
@@ -401,8 +436,11 @@ public sealed class SubscriptionBackupScheduleService(
         catch (Exception exception) when (exception is not ScheduledRunNoLongerDueException && approval?.Rejected(exception) != true)
         {
             durum = "failed";
-            ozet.Clear();
+            if (ozet.Length > 0) ozet.Append(' ');
             ozet.Append(exception.Message);
+            var preSummary = AutomationService.SummarizePrune(prePruned);
+            ozet.Append($" pre-prune: {preSummary.Sentence}.");
+            foreach (var line in preSummary.TechnicalLines) ozet.Append($" {line}.");
             logger.LogError(exception, "Abonelik yedegi alinamadi: {UserId}", userId);
         }
 
