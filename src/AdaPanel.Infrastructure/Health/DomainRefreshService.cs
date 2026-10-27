@@ -86,7 +86,8 @@ internal sealed class DomainRefreshService(
     {
         var result = new DomainRefreshResultDto { SiteName = siteName, ZoneName = siteName };
         // Only this read-only inspection shares measurements. Repairs must read again after writes.
-        var reads = applyChanges ? null : new InspectionReads(siteName, dnsService, mailService, cancellationToken, snapshot);
+        var reads = applyChanges ? null : new InspectionReads(siteName, dnsService,
+            () => ReadSiteMailAsync(siteName, cancellationToken), cancellationToken, snapshot);
         if (!string.IsNullOrWhiteSpace(snapshot?.Error))
         {
             result.Error = snapshot.Error;
@@ -380,6 +381,8 @@ internal sealed class DomainRefreshService(
         try
         {
             var dns = await reads.Mail.Value;
+            var zone = await reads.Zone.Value;
+            EnsureMailZoneMatches(dns, zone);
             var applicable = dns.Records.Where(record => !string.IsNullOrWhiteSpace(record.Value)).ToList();
             if (applicable.Count == 0)
             {
@@ -400,10 +403,8 @@ internal sealed class DomainRefreshService(
             {
                 // Olcemedik. "Eksik yok" demek yerine panelin kendi dosyasina duseriz -- ama bu
                 // yalnizca Windows DNS hic yokken olur (o durumda zaten ayri bir bulgu uretiliyor).
-                var dosya = string.Equals(dns.Domain, siteName, StringComparison.OrdinalIgnoreCase)
-                    ? (await reads.Zone.Value).Records.Select(record => $"{record.Type}|{record.Host}|{record.Value}")
-                        .ToHashSet(StringComparer.OrdinalIgnoreCase)
-                    : await ReadZoneKeysAsync(dns.Domain, cancellationToken);
+                var dosya = zone.Records.Select(record => $"{record.Type}|{record.Host}|{record.Value}")
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
                 return applicable.Count(record => !dosya.Contains($"{record.Type}|{record.Host}|{record.Value}"));
             }
 
@@ -677,10 +678,12 @@ internal sealed class DomainRefreshService(
 
         // --- Bolge Windows DNS'te var mi ---
         IReadOnlyList<SiteDnsRecordDto> zoneKayitlari = [];
+        var zoneName = "";
         var windowsDnsHazir = false;
         try
         {
             var zone = await (reads?.Zone.Value ?? dnsService.GetZoneAsync(siteName, cancellationToken));
+            zoneName = zone.ZoneName;
             zoneKayitlari = zone.Records.ToList();
             windowsDnsHazir = zone.IsWindowsDnsAvailable && zone.IsWindowsZonePresent;
             if (!zone.IsWindowsZonePresent)
@@ -758,7 +761,7 @@ internal sealed class DomainRefreshService(
             logger.LogDebug(exception, "Yayinlanmis kayitlar okunamadi ({SiteName}).", siteName);
         }
 
-        await AddMailFindingsAsync(siteName, zoneKayitlari, findings, cancellationToken, reads);
+        await AddMailFindingsAsync(siteName, zoneName, zoneKayitlari, findings, cancellationToken, reads);
         return findings;
     }
 
@@ -773,6 +776,7 @@ internal sealed class DomainRefreshService(
     /// </summary>
     private async Task AddMailFindingsAsync(
         string siteName,
+        string zoneName,
         IReadOnlyList<SiteDnsRecordDto> zoneKayitlari,
         List<RepairFindingDto> findings,
         CancellationToken cancellationToken,
@@ -785,10 +789,18 @@ internal sealed class DomainRefreshService(
         {
             try
             {
-                await (reads?.Mail.Value ?? mailService.GetDnsRecordsAsync(siteName, cancellationToken));
+                var mail = await (reads?.Mail.Value ?? ReadSiteMailAsync(siteName, cancellationToken));
+                if (!SameDomain(mail.Domain, zoneName)) throw new AppException("mail.invalid_domain", 409, 409);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
+                // Only this provider's explicit domain-not-found response proves absence.
+                // Connectivity, access and DKIM measurement failures leave existence unknown.
+                if (exception is not AppException { MessageKey: "mail.operation_failed", Code: 404, HttpStatusCode: 404 })
+                {
+                    findings.Add(InspectionFailure("Mail", exception));
+                    return;
+                }
                 findings.Add(new RepairFindingDto
                 {
                     Key = "repair.mail_domain_missing",
@@ -804,10 +816,10 @@ internal sealed class DomainRefreshService(
         // uyari 40 kez cikar ve "40/40 alan adi guncel degil" gibi anlamsiz bir tablo olusur.
     }
 
-    private sealed class InspectionReads(string siteName, IDnsService dns, IMailService mail, CancellationToken token,
+    private sealed class InspectionReads(string siteName, IDnsService dns, Func<Task<MailDnsDto>> readMail, CancellationToken token,
         DnsInspectionDto? snapshot = null)
     {
-        public Lazy<Task<MailDnsDto>> Mail { get; } = new(() => mail.GetDnsRecordsAsync(siteName, token));
+        public Lazy<Task<MailDnsDto>> Mail { get; } = new(readMail);
         public Lazy<Task<SiteDnsZoneDto>> Zone { get; } = new(() => snapshot is null
             ? dns.GetZoneAsync(siteName, token) : Task.FromResult(snapshot.Zone));
         public Lazy<Task<IReadOnlyCollection<string>?>> Published { get; } = new(() => snapshot is null
@@ -817,11 +829,30 @@ internal sealed class DomainRefreshService(
     /// <summary>Son posta kaydi uygulamasinda olusan hatalar; cagiran bunu rapora tasir.</summary>
     private IReadOnlyList<string> MailRecordErrors { get; set; } = [];
 
+    private async Task<MailDnsDto> ReadSiteMailAsync(string siteName, CancellationToken cancellationToken)
+    {
+        var site = await siteService.GetSiteAsync(siteName, cancellationToken);
+        var domain = SiteDomainSelection.WebDomain(site);
+        if (string.IsNullOrWhiteSpace(domain)) throw new AppException("mail.invalid_domain", 409, 409);
+        var mail = await mailService.GetDnsRecordsAsync(domain, cancellationToken);
+        if (!SameDomain(mail.Domain, domain)) throw new AppException("mail.invalid_domain", 409, 409);
+        return mail;
+    }
+
+    private static bool SameDomain(string left, string right) => string.Equals(
+        left.Trim().TrimEnd('.'), right.Trim().TrimEnd('.'), StringComparison.OrdinalIgnoreCase);
+
+    private static void EnsureMailZoneMatches(MailDnsDto mail, SiteDnsZoneDto zone)
+    {
+        // Relative mail record hosts are only safe in the domain's own zone.
+        if (!SameDomain(mail.Domain, zone.ZoneName)) throw new AppException("mail.invalid_domain", 409, 409);
+    }
+
     private async Task<int> ApplyMailRecordsAsync(string siteName, CancellationToken cancellationToken)
     {
         try
         {
-            var dns = await mailService.GetDnsRecordsAsync(siteName, cancellationToken);
+            var dns = await ReadSiteMailAsync(siteName, cancellationToken);
             var applicable = dns.Records.Where(record => !string.IsNullOrWhiteSpace(record.Value)).ToList();
             if (applicable.Count == 0)
             {
@@ -832,7 +863,10 @@ internal sealed class DomainRefreshService(
             // değiştirmez. Bu yüzden "kaç kayıt gönderildi" DEĞİL, "kaç kayıt gerçekten değişti"
             // raporlanır — yoksa her tazeleme, hiçbir eksiği olmayan alan adlarını da "güncellendi"
             // diye gösterir ve rapor güvenilmez hâle gelir.
-            var before = await ReadZoneKeysAsync(dns.Domain, cancellationToken);
+            var zone = await dnsService.GetZoneAsync(siteName, cancellationToken);
+            EnsureMailZoneMatches(dns, zone);
+            var before = zone.Records.Select(record => $"{record.Type}|{record.Host}|{record.Value}")
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             // TEK SENKRON, tum kayitlar birden.
             //
@@ -846,7 +880,7 @@ internal sealed class DomainRefreshService(
             try
             {
                 await dnsService.EnsureMissingRecordsAsync(
-                    dns.Domain,
+                    siteName,
                     applicable.Select(record => new UpsertDnsRecordRequest
                     {
                         Type = record.Type,
@@ -865,7 +899,7 @@ internal sealed class DomainRefreshService(
 
             MailRecordErrors = hatalar;
 
-            var after = await ReadZoneKeysAsync(dns.Domain, cancellationToken);
+            var after = await ReadZoneKeysAsync(siteName, cancellationToken);
             return after.Count(key => !before.Contains(key));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -873,6 +907,8 @@ internal sealed class DomainRefreshService(
             // Posta tarafının yokluğu bir HATA DEĞİLDİR: posta sunucusu kurulu olmayan bir panelde
             // ya da posta kullanmayan bir sitede bu beklenen durumdur. DNS tazelemesi yine de geçerli.
             logger.LogDebug(exception, "Posta kayıtları uygulanmadı ({SiteName}); posta alan adı yok olabilir.", siteName);
+            if (exception is AppException { MessageKey: "mail.invalid_domain" })
+                MailRecordErrors = [DescribeError(exception)];
             return 0;
         }
     }

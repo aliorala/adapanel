@@ -2088,6 +2088,7 @@ public sealed partial class BackupService(
         var includedParts = new List<string>();
         var includedComponents = new List<BackupComponentRef>();
         var atlananlar = new BackupSkipLog();
+        var taskWarnings = new List<BackupRestoreWarningDto>();
 
         using var artifact = PendingBackupArtifact.Reserve(targetPath);
         await using (var zipStream = new FileStream(targetPath, FileMode.Open, FileAccess.Write))
@@ -2120,7 +2121,7 @@ public sealed partial class BackupService(
 
             // Planlı görevler (\AdaPanel\ klasörü): Windows Görev Zamanlayıcı'da yaşarlar, panel dosyalarında DEĞİL —
             // ham görev XML'i (principal/tetikleyici/eylem birebir) yedeğe girer; panel geri yüklemesinde otomatik kaydedilir.
-            var exportedTasks = await TryExportScheduledTasksAsync(cancellationToken);
+            var exportedTasks = await TryExportScheduledTasksAsync(taskWarnings, cancellationToken, TaskExportRunner);
             if (exportedTasks.Count > 0)
             {
                 var index = new List<object>();
@@ -2128,7 +2129,8 @@ public sealed partial class BackupService(
                 {
                     var entryName = $"tasks/{i:000}.xml";
                     AddTextEntry(archive, entryName, exportedTasks[i].Xml);
-                    index.Add(new { name = exportedTasks[i].Name, entry = entryName });
+                    var scripts = await ArchiveTaskScriptsAsync(archive, exportedTasks[i], i, taskWarnings, cancellationToken);
+                    index.Add(new { name = exportedTasks[i].Name, entry = entryName, scripts });
                     includedComponents.Add(new() { Kind = "task", Source = exportedTasks[i].Name });
                 }
 
@@ -2158,6 +2160,8 @@ public sealed partial class BackupService(
                 kind = "panel-config",
                 createdAtUtc = DateTime.UtcNow,
                 parts = includedParts,
+                scheduledTasks = new { scope = "\\AdaPanel\\", count = exportedTasks.Count,
+                    status = taskWarnings.Count == 0 ? "complete" : "partial", directScriptsOnly = true },
                 note = "DataProtection keys and certificates are intentionally excluded (machine-bound)."
             }, BackupJsonOptions);
             AddTextEntry(archive, "manifest.json", manifest);
@@ -2165,7 +2169,7 @@ public sealed partial class BackupService(
 
         artifact.Keep();
         return await FinalizeBackupAsync(targetPath, fileName, "panel", "panel", "zip", request, placement, atlananlar, cancellationToken,
-            includedDatabases: [], includedComponents: includedComponents);
+            contentWarnings: taskWarnings, includedDatabases: [], includedComponents: includedComponents);
     }
 
     // =====================================================================================
@@ -2572,23 +2576,27 @@ public sealed partial class BackupService(
         return hedef;
     }
 
-    private sealed record ScheduledTaskExport(string Name, string Xml);
+    internal sealed record ScheduledTaskExport(string Name, string Xml);
 
-    private sealed record ScheduledTaskIndexEntry(string Name, string Entry);
+    private sealed record ScheduledTaskIndexEntry(string Name, string Entry, List<TaskScriptEntry>? Scripts = null);
 
     // Planlı görevlerin ham XML dökümü (best-effort: dışa aktarılamazsa panel yedeği yine de oluşur).
-    private static async Task<List<ScheduledTaskExport>> TryExportScheduledTasksAsync(CancellationToken cancellationToken)
+    internal static async Task<List<ScheduledTaskExport>> TryExportScheduledTasksAsync(
+        List<BackupRestoreWarningDto> warnings, CancellationToken cancellationToken,
+        Func<string, CancellationToken, Task<CommandResult>>? runner = null)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
-            const string script = @"$list = Get-ScheduledTask -TaskPath '\AdaPanel\' -ErrorAction SilentlyContinue | ForEach-Object {
-  [pscustomobject]@{ Name = $_.TaskName; Xml = [string](Export-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath) }
-}
-$list | ConvertTo-Json -Depth 3";
-            var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+            const string script = @"$list = @(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskPath -eq '\AdaPanel\' } | ForEach-Object {
+  [pscustomobject]@{ Name = $_.TaskName; Xml = [string](Export-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath -ErrorAction Stop) }
+})
+ConvertTo-Json -InputObject $list -Depth 3";
+            var result = await (runner ?? ProcessRunner.RunPowerShellStrictAsync)(script, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!result.Success || string.IsNullOrWhiteSpace(result.StandardOutput))
             {
-                return [];
+                throw new IOException("Task export did not return a measured inventory.");
             }
 
             using var document = System.Text.Json.JsonDocument.Parse(result.StandardOutput);
@@ -2597,15 +2605,17 @@ $list | ConvertTo-Json -Depth 3";
             {
                 System.Text.Json.JsonValueKind.Array => System.Text.Json.JsonSerializer.Deserialize<ScheduledTaskExport[]>(root) ?? [],
                 System.Text.Json.JsonValueKind.Object => [System.Text.Json.JsonSerializer.Deserialize<ScheduledTaskExport>(root)!],
-                _ => []
+                _ => throw new IOException("Task inventory is not an array or object.")
             };
 
-            return items
-                .Where(item => !string.IsNullOrWhiteSpace(item.Name) && !string.IsNullOrWhiteSpace(item.Xml))
-                .ToList();
+            if (items.Any(item => item is null || string.IsNullOrWhiteSpace(item.Name) || string.IsNullOrWhiteSpace(item.Xml)))
+                throw new IOException("Task inventory contains an incomplete definition.");
+            return items.ToList();
         }
-        catch
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            // Command output/XML may contain credentials: expose no raw process/exception text.
+            warnings.Add(new() { MessageKey = "backup.task_export_failed", Target = "tasks", Detail = "Zamanlanmış görev envanteri okunamadı; görev yedeği eksik." });
             return [];
         }
     }
@@ -2732,6 +2742,13 @@ $list | ConvertTo-Json -Depth 3";
                 }
 
                 // XML'i base64 taşı: tırnak/özel karakter kaçış derdi tamamen ortadan kalkar.
+                // No archive-controlled absolute write: the owner transfers scripts separately.
+                // Register only when the original script and the archived copy both match.
+                if (item.Scripts is not null && !await TaskScriptsMatchAsync(extractedRoot, item.Scripts, cancellationToken))
+                {
+                    uyarilar.Add(TaskScriptWarning("backup.restore_task_script_missing", item.Name));
+                    continue;
+                }
                 var xml = await File.ReadAllTextAsync(xmlPath, cancellationToken);
                 var sonuc = await kaydedici(item.Name, xml, cancellationToken);
                 if (!sonuc.Success)

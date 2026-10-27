@@ -1040,6 +1040,7 @@ import { usePagination } from "../composables/usePagination";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { copyToClipboard } from "../utils/clipboard";
+import { siteWebDomain } from "../utils/siteDomain";
 
 // Site bağlamından (Web Siteleri > site > Mail) gelindiğinde o sitenin alan adını
 // önceden seçmek için opsiyonel prop (profesyonel paneller gibi domain-içi Mail sekmesi).
@@ -1058,7 +1059,7 @@ const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const workspace = ref<MailWorkspace | null>(null);
 const isMailEnable = computed(() => workspace.value?.provider === "mailenable");
-const selectedDomain = ref((props.domain ?? "").toLowerCase());
+const selectedDomain = ref("");
 const adminPassword = ref("");
 const accountForm = reactive({ localPart: "", password: "", maxSizeMB: 1024 });
 const autoResponderFor = ref("");
@@ -1325,12 +1326,8 @@ const mailDomains = computed(() => {
     map.set(domain.name.toLowerCase(), { name: domain.name, accountCount: domain.accountCount, active: true });
   }
   for (const site of sitesStore.sites) {
-    for (const binding of site.bindings ?? []) {
-      const host = (binding.hostName ?? "").trim().toLowerCase();
-      if (!host || !host.includes(".")) continue;
-      const bare = host.startsWith("www.") ? host.slice(4) : host;
-      if (!map.has(bare)) map.set(bare, { name: bare, accountCount: 0, active: false });
-    }
+    const domain = siteWebDomain(site);
+    if (domain && !map.has(domain)) map.set(domain, { name: domain, accountCount: 0, active: false });
   }
 
   // Servis alt alanlarını GİZLE: mail./webmail./autodiscover. gibi host'lar posta sunucusunun KENDİ adresleridir
@@ -1442,8 +1439,7 @@ onMounted(async () => {
   await loadPublicBaseUrl();
 });
 
-// profesyonel paneller gibi: site bağlamından gelince (domain prop) o alan adı için mail otomatik etkin olsun;
-// kullanıcı ayrıca "alan adı ekle" adımı görmesin.
+// Opening a site tab only selects existing mail. Creation requires the list's explicit Manage action.
 async function ensureSiteDomain() {
   const target = (props.domain ?? "").trim().toLowerCase();
   if (!target || !workspace.value?.installed || workspace.value?.statusMessage) {
@@ -1451,15 +1447,12 @@ async function ensureSiteDomain() {
   }
   const exists = workspace.value.domains.some((item) => item.name.toLowerCase() === target);
   if (exists) {
+    selectedDomain.value = target;
+    await refresh();
     return;
   }
-  try {
-    apply(await createMailDomain(target));
-    selectedDomain.value = target;
-    apply(await getMailWorkspace(target));
-  } catch {
-    // Otomatik oluşturma başarısızsa kullanıcı listeden elle seçebilir.
-  }
+  selectedDomain.value = "";
+  showNotice(`${target}: ${t("panel.mail.mailOff")}`, false);
 }
 
 async function refresh() {

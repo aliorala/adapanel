@@ -321,7 +321,10 @@ public sealed class BackupSkippedFileTests
                 new SahteTercihServisi(YedekKoku),
                 null!,
                 DosyaDeposu,
-                null!);
+                null!)
+            {
+                TaskExportRunner = (_, _) => Task.FromResult(new CommandResult { StandardOutput = "[]" })
+            };
 
         public BackupSiteRequest SiteIstegi() => new()
         {

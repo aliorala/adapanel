@@ -108,7 +108,8 @@
           @remove-binding="handleRemoveBinding" />
 
         <!-- POSTA: tek araç → doğrudan. -->
-        <MailView v-else-if="primary === 'mail'" :domain="selectedSiteName" />
+        <MailView v-else-if="primary === 'mail' && selectedMailDomain" :key="selectedSiteName" :domain="selectedMailDomain" />
+        <p v-else-if="primary === 'mail'" class="notice error" role="alert">{{ t("mail.invalid_domain") }}</p>
 
         <!-- BARINDIRMA ve DNS / BAŞLARKEN: dikey araç listesi (alt alta). -->
         <div v-else class="tool-stack">
@@ -139,6 +140,7 @@
 
 <script setup lang="ts">
 import { primarySiteUrl } from "../utils/siteUrl";
+import { siteWebDomain } from "../utils/siteDomain";
 import { computed, onMounted, ref, watch } from "vue";
 import router from "../router";
 import { allowNavigation } from "../composables/navigationGuard";
@@ -238,6 +240,7 @@ const defaultSiteRoot = ref("C:\\inetpub\\wwwroot");
 
 const selectedSiteName = computed(() => sitesStore.selectedSiteName);
 const selectedSite = computed(() => sitesStore.selectedSite);
+const selectedMailDomain = computed(() => siteWebDomain(selectedSite.value));
 
 const primaryUrl = computed(() => primarySiteUrl(selectedSite.value?.bindings ?? [], selectedSite.value?.name));
 
