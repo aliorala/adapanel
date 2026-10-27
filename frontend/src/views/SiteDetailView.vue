@@ -389,7 +389,7 @@ const gercekBaglamalar = computed(() =>
  * Adresi ACMA isi ust baglam cubugundaki baglantiya devredildi; buradaki `openSite`
  * sarmalayicisi o dugmeyle birlikte kalkti.
  */
-const primaryUrl = computed(() => primarySiteUrl(props.site?.bindings ?? []));
+const primaryUrl = computed(() => primarySiteUrl(props.site?.bindings ?? [], props.site?.name));
 
 function submitBinding() {
   if (!props.site) {

@@ -299,6 +299,7 @@ import { useAppsStore } from "../stores/apps";
 import { useSitesStore } from "../stores/sites";
 import { useSoftwareStore } from "../stores/software";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { primarySiteUrl } from "../utils/siteUrl";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
@@ -452,16 +453,7 @@ const canInstall = computed(() => isActive() && !locked.value && isAdministrator
 // Sonucu görebilmesi için sitenin adresi: nip.io önizleme bağlamalarını atla, asıl domaini göster.
 const siteUrl = computed(() => {
   const site = sitesStore.sites.find((item) => item.name === selectedSiteName.value);
-  if (!site) return "";
-
-  const binding = site.bindings.find((item) => item.hostName && !item.hostName.toLowerCase().endsWith(".nip.io"))
-    ?? site.bindings[0];
-  if (!binding) return "";
-
-  const protocol = (binding.protocol || "http").toLowerCase();
-  const host = binding.hostName || window.location.hostname;
-  const standardPort = (protocol === "http" && binding.port === 80) || (protocol === "https" && binding.port === 443);
-  return `${protocol}://${host}${standardPort ? "" : `:${binding.port}`}`;
+  return primarySiteUrl(site?.bindings ?? [], site?.name);
 });
 
 onMounted(async () => {

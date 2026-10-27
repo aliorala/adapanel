@@ -10,6 +10,7 @@ import { useSitesStore } from "../stores/sites";
 import { invalidateSessionRequests } from "../api/client";
 
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
+vi.mock("../router", () => ({ default: { push: vi.fn() } }));
 vi.mock("../api/siteHosting", async original => ({ ...await original<object>(), getSiteHostingSettings: vi.fn(), updateSiteHostingSettings: vi.fn(), runComposerInstall: vi.fn() }));
 vi.mock("../api/quota", () => ({ getQuota: vi.fn(), setQuota: vi.fn(), removeQuota: vi.fn(), installFsrm: vi.fn() }));
 vi.mock("../api/git", () => ({ getGitDeployment: vi.fn(), configureGitDeployment: vi.fn(), deployGit: vi.fn() }));

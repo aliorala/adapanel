@@ -409,7 +409,7 @@ function isRunning(site: SiteRecord): boolean {
 }
 
 function siteUrl(site: SiteRecord): string {
-  return primarySiteUrl(site.bindings);
+  return primarySiteUrl(site.bindings, site.name);
 }
 
 const notice = ref("");

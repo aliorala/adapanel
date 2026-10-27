@@ -239,7 +239,7 @@ const defaultSiteRoot = ref("C:\\inetpub\\wwwroot");
 const selectedSiteName = computed(() => sitesStore.selectedSiteName);
 const selectedSite = computed(() => sitesStore.selectedSite);
 
-const primaryUrl = computed(() => primarySiteUrl(selectedSite.value?.bindings ?? []));
+const primaryUrl = computed(() => primarySiteUrl(selectedSite.value?.bindings ?? [], selectedSite.value?.name));
 
 watch(
   () => props.openRequest,
