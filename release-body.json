@@ -1,5 +1,5 @@
 {
-  "body": "## 0.8.123\n\nFTP sitelerinin başlatılması ve durum denetimi düzeltildi.\n\n- FTP kurulumu web sitesi başlatma komutu yerine IIS'in FTP'ye özel başlatma yöntemini kullanır.\n- FTP servisi ve hedef FTP sitesi çalışıyor olarak doğrulanmadan altyapı hazır kabul edilmez. Başlangıç hataları gizlenmez.\n- FTP durum kontrolü ve otomatik başlatma ayarı FTP'nin kendi yapılandırmasından okunur ve uygulanır.\n- Güncelleme dosyasına ağ erişimi kesildiğinde veya aktarım zaman aşımına uğradığında genel hata yerine açıklayıcı indirme hatası gösterilir. Yarım indirilen dosyalar temizlenir; önceki doğrulanmış paket korunur.\n\n---\n\n## Kurulum\n\nWindows x64 kurulum paketi: **AdaPanelSetup.exe**.\n\nGüncellemeden sonra FTP ekranında sunucu hazırlığını yeniden çalıştırın. Önceki denemede oluşturulamayan FTP hesabını yeniden oluşturun. Güvenlik duvarı, modem port yönlendirmesi ve dışarıdan dosya aktarımı ayrıca doğrulanmalıdır.",
-  "tag_name": "0.8.123",
-  "name": "0.8.123 — FTP başlatma ve güncelleme hata düzeltmeleri"
+  "tag_name": "0.8.124",
+  "name": "0.8.124 — IIS FTP uyumluluk düzeltmesi",
+  "body": "## 0.8.124\n\nFTP başlatma düzeltmesinin Windows Server uyumluluğu tamamlandı.\n\n- FTP başlatma ve durum denetiminden önce IIS yönetim kütüphanesi Windows'un IIS klasöründen açıkça yüklenir. WebAdministration modülünün tek başına bu kütüphaneyi yüklemediği sistemlerde oluşan ServerManager bulunamadı hatası giderildi.\n- 0.8.123 içindeki FTP'ye özel başlatma, gerçek durum doğrulaması ve açıklayıcı güncelleme indirme hataları korunur.\n\n## Kurulum\n\nWindows x64: **AdaPanelSetup.exe**. Güncellemeden sonra FTP sayfasını yeniden açın. Önceki başarısız denemede oluşturulamayan hesaplar ayrıca oluşturulmalıdır."
 }

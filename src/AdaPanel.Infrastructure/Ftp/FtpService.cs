@@ -40,6 +40,9 @@ public sealed partial class FtpService(
     // to the HTTP runtime and can fail with 0x800710D8 for an FTP-only site.
     // Microsoft: iis/configuration/system.applicationhost/sites/site/ftpserver/start
     private const string FtpRuntimeScript = """
+        # Importing WebAdministration does not reliably load MWA in a fresh PowerShell process.
+        # Use the installed IIS assembly, matching this process's System32 filesystem view.
+        Add-Type -Path "$env:windir\System32\inetsrv\Microsoft.Web.Administration.dll" -ErrorAction Stop
         function Read-AdaFtpRuntime([string]$name, [switch]$Start) {
           $manager = New-Object Microsoft.Web.Administration.ServerManager -ErrorAction Stop
           try {

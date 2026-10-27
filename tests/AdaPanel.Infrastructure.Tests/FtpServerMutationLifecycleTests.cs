@@ -240,6 +240,7 @@ public sealed class FtpServerMutationLifecycleTests
     [InlineData("applied")]
     [InlineData("already-started")]
     [InlineData("already-starting")]
+    [InlineData("assembly-load-failed")]
     public async Task TheGeneratedScriptMeasuresTlsOnlyAfterCriticalNativeSteps(string mode)
     {
         using var f = await Fixture.Create("tls", desired: true);
@@ -278,10 +279,11 @@ public sealed class FtpServerMutationLifecycleTests
             """;
         var initialState = mode == "already-started" ? 1 : mode == "already-starting" ? 0 : 3;
         var result = await ProcessRunner.RunPowerShellAsync(fakeNative + Environment.NewLine + FakeFtpRuntimeScript(mode, initialState) + Environment.NewLine + f.ConfigurationScript, f.Token);
-        if (mode is "restart-failed" or "ftp-start-failed" or "ftp-not-running")
+        if (mode is "restart-failed" or "ftp-start-failed" or "ftp-not-running" or "assembly-load-failed")
         {
             Assert.False(result.Success);
             Assert.DoesNotContain(FtpTlsMeasurement.Stamp, result.StandardOutput, StringComparison.Ordinal);
+            if (mode == "assembly-load-failed") Assert.Contains("Measured assembly load failure", result.StandardError, StringComparison.Ordinal);
         }
         else
         {
@@ -327,6 +329,12 @@ public sealed class FtpServerMutationLifecycleTests
     // A memory-only stand-in for the documented MWA configuration API. HTTP start/state
     // are deliberately unavailable, so the generated script must use ftpServer's API.
     private static string FakeFtpRuntimeScript(string mode, int initialState = 3) => $$"""
+        $script:mwaLoaded = $false
+        function Add-Type { [CmdletBinding()]param($Path)
+          if ($Path -ne "$env:windir\System32\inetsrv\Microsoft.Web.Administration.dll") { throw 'Unexpected MWA assembly path' }
+          if ('{{mode}}' -eq 'assembly-load-failed') { throw 'Measured assembly load failure' }
+          $script:mwaLoaded = $true
+        }
         $script:ftpStarted = {{(initialState is 0 or 1 ? "$true" : "$false")}}
         $script:ftpState = {{initialState}}
         $script:runtimeReads = 0
@@ -351,6 +359,7 @@ public sealed class FtpServerMutationLifecycleTests
         $script:runtime | Add-Member ScriptMethod Dispose { }
         function New-Object { [CmdletBinding()]param($TypeName)
           if ($TypeName -ne 'Microsoft.Web.Administration.ServerManager') { throw 'Unexpected object creation' }
+          if (-not $script:mwaLoaded) { throw 'Cannot find type [Microsoft.Web.Administration.ServerManager]: assembly was not explicitly loaded' }
           $script:runtimeReads++
           if ('{{mode}}' -eq 'already-starting' -and $script:runtimeReads -gt 1) { $script:ftpState = 1 }
           return $script:runtime
