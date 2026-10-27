@@ -36,6 +36,33 @@ public sealed partial class FtpService(
     private const int FtpPort = 21;
     private const int PassivePortStart = 50000;
     private const int PassivePortEnd = 51000;
+    // FTP sites have their own runtime methods/state. Site.Start()/Get-Website.State belong
+    // to the HTTP runtime and can fail with 0x800710D8 for an FTP-only site.
+    // Microsoft: iis/configuration/system.applicationhost/sites/site/ftpserver/start
+    private const string FtpRuntimeScript = """
+        function Read-AdaFtpRuntime([string]$name, [switch]$Start) {
+          $manager = New-Object Microsoft.Web.Administration.ServerManager -ErrorAction Stop
+          try {
+            $sites = $manager.GetApplicationHostConfiguration().GetSection('system.applicationHost/sites').GetCollection()
+            $matches = @($sites | Where-Object { [string]$_.GetAttributeValue('name') -eq $name })
+            if ($matches.Count -gt 1) { throw 'Ambiguous FTP site measurement.' }
+            if ($matches.Count -eq 0) {
+              if ($Start) { throw "FTP site not found: $name" }
+              return [pscustomobject]@{ Exists = $false; State = ''; LastStartupStatus = '' }
+            }
+            $ftp = $matches[0].GetChildElement('ftpServer')
+            $state = [int]$ftp.GetAttributeValue('state')
+            # FTPSVC can already be starting this site through serverAutoStart.
+            if ($Start -and $state -ne 1 -and $state -ne 0) {
+              $ftp.Methods['Start'].CreateInstance().Execute() | Out-Null
+            }
+            $state = [int]$ftp.GetAttributeValue('state')
+            $stateNames = @('Starting', 'Started', 'Stopping', 'Stopped', 'Unknown')
+            if ($state -lt 0 -or $state -ge $stateNames.Count) { throw "Unknown FTP runtime state: $state" }
+            return [pscustomobject]@{ Exists = $true; State = $stateNames[$state]; LastStartupStatus = $ftp.GetAttributeValue('lastStartupStatus') }
+          } finally { $manager.Dispose() }
+        }
+        """;
     private readonly string dataRoot = Path.GetFullPath(Environment.ExpandEnvironmentVariables(runtimeOptions.Value.DataRoot));
 
     // Per-instance transport seams keep lifecycle tests off native accounts and IIS.
@@ -235,6 +262,7 @@ public sealed partial class FtpService(
     {
         var script = $$"""
             $ErrorActionPreference = 'Stop'
+            {{FtpRuntimeScript}}
             $portOlculdu = $false
             $siteOlculdu = $false
             $servisOlculdu = $false
@@ -252,9 +280,9 @@ public sealed partial class FtpService(
             } catch { }
             try {
               Import-Module WebAdministration -ErrorAction Stop
-              $siteler = @(Get-Website -ErrorAction Stop | Where-Object { $_.Name -eq '{{EscapePowerShellLiteral(FtpSiteName)}}' })
-              if ($siteler.Count -gt 1) { throw 'Ambiguous FTP site measurement.' }
-              if ($siteler.Count -eq 1) { $siteVar = $true; $siteDurum = [string]$siteler[0].State }
+              $ftpRuntime = Read-AdaFtpRuntime '{{EscapePowerShellLiteral(FtpSiteName)}}'
+              $siteVar = $ftpRuntime.Exists
+              $siteDurum = $ftpRuntime.State
               $siteOlculdu = $true
             } catch { }
             $satirlar = @()
@@ -1168,7 +1196,7 @@ public sealed partial class FtpService(
         // iyilestirilecek sey altyapi degil KULLANICI kayitlaridir.
         await HealHomeLinksAsync(cancellationToken, beforeMutation);
 
-        // HIZLI YOL: altyapı bir kez tam kurulduysa (bayrak) ve FTPSVC çalışıyorsa ağır yeniden-kurulumu + FTPSVC
+        // HIZLI YOL: altyapı bir kez tam kurulduysa (bayrak), FTPSVC ve FTP sitesi çalışıyorsa ağır yeniden-kurulumu + FTPSVC
         // yeniden başlatmayı ATLA → 2. ve sonraki FTP kullanıcısı eklemesi saniyelerce beklemeden, anında olur.
         // (SSL politikası değişimi gibi gerçekten gereken durumlar force=true ile tam yeniden kurar.)
         if (!forceReconfigure && await IsFtpInfrastructureReadyAsync(cancellationToken))
@@ -1198,12 +1226,13 @@ public sealed partial class FtpService(
         var script = $$"""
             $ErrorActionPreference = 'Stop'
             Import-Module WebAdministration -ErrorAction Stop
+            {{FtpRuntimeScript}}
             $siteName = '{{EscapePowerShellLiteral(FtpSiteName)}}'
             $root = '{{EscapePowerShellLiteral(ftpRoot)}}'
             if (-not (Test-Path "IIS:\Sites\$siteName")) {
               New-WebFtpSite -Name $siteName -Port {{FtpPort}} -PhysicalPath $root -Force | Out-Null
             }
-            Set-ItemProperty "IIS:\Sites\$siteName" -Name serverAutoStart -Value $true
+            Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.serverAutoStart -Value $true
             # KRITIK KOK NEDEN (2026-06-21): FTP per-site ayarlari Set-WebConfigurationProperty -Location ile
             # YAZILAMAZ. ftpServer config <site> etiketinin ICINE gomulu; -Location ise <location> bloklarina
             # bakar -> sessizce "configuration object not found at location" UYARISI verip HICBIR SEYI
@@ -1231,9 +1260,21 @@ public sealed partial class FtpService(
             Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.ftpServer/firewallSupport' -Name lowDataChannelPort -Value {{PassivePortStart}}
             Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.ftpServer/firewallSupport' -Name highDataChannelPort -Value {{PassivePortEnd}}
             {{externalIpLine}}
-            Start-WebSite -Name $siteName -ErrorAction Stop
             # Restart failure must not be reported as a verified TLS application.
             Restart-Service FTPSVC -Force -ErrorAction Stop
+            $ftpService = Get-Service FTPSVC -ErrorAction Stop
+            $ftpService.WaitForStatus('Running', [TimeSpan]::FromSeconds(15))
+            Read-AdaFtpRuntime $siteName -Start | Out-Null
+            $startDeadline = [DateTime]::UtcNow.AddSeconds(10)
+            do {
+              # A fresh manager reads runtime state after the start, not the HTTP site's state.
+              $ftpRuntime = Read-AdaFtpRuntime $siteName
+              if ($ftpRuntime.Exists -and $ftpRuntime.State -eq 'Started') { break }
+              if ([DateTime]::UtcNow -ge $startDeadline) {
+                throw "FTP site failed to start: $siteName; state=$($ftpRuntime.State); lastStartupStatus=$($ftpRuntime.LastStartupStatus)"
+              }
+              Start-Sleep -Milliseconds 250
+            } while ($true)
             if (-not (Get-NetFirewallRule -DisplayName 'AdaPanel FTP Control' -ErrorAction SilentlyContinue)) {
               New-NetFirewallRule -DisplayName 'AdaPanel FTP Control' -Direction Inbound -Action Allow -Protocol TCP -LocalPort {{FtpPort}} -Profile Any | Out-Null
             }
@@ -1312,9 +1353,8 @@ public sealed partial class FtpService(
         return olcum;
     }
 
-    // Altyapı hazır mı (hızlı kontrol): daha önce tam kuruldu (bayrak) VE FTPSVC çalışıyor mu. FTPSVC kontrolü
-    // Get-Service ile yapılır (yavaş 'Import-Module WebAdministration' YOK → sub-saniye). Biri bile sağlanmazsa false →
-    // çağıran tam kurulumu çalıştırır (kendini onarır). Böylece ağır betik + servis restart yalnız gerektiğinde çalışır.
+    // A running FTP service does not prove this FTP site is started. Check both before
+    // skipping repair, otherwise a stopped site can remain broken behind a stale ready marker.
     private async Task<bool> IsFtpInfrastructureReadyAsync(CancellationToken cancellationToken)
     {
         var state = await fileStore.ReadAsync(InfraStatePath, new FtpInfraState(), cancellationToken);
@@ -1323,10 +1363,16 @@ public sealed partial class FtpService(
             return false;
         }
 
-        var probe = await RunScriptAsync(
-            "if ((Get-Service FTPSVC -ErrorAction SilentlyContinue).Status -eq 'Running') { 'up' } else { 'down' }",
-            cancellationToken);
-        return probe.Success && probe.StandardOutput.Contains("up", StringComparison.OrdinalIgnoreCase);
+        var probe = await RunScriptAsync($$"""
+            if ((Get-Service FTPSVC -ErrorAction SilentlyContinue).Status -eq 'Running') {
+              $ErrorActionPreference = 'Stop'
+              Import-Module WebAdministration -ErrorAction Stop
+              {{FtpRuntimeScript}}
+              $runtime = Read-AdaFtpRuntime '{{EscapePowerShellLiteral(FtpSiteName)}}'
+              if ($runtime.Exists -and $runtime.State -eq 'Started') { 'up' } else { 'down' }
+            } else { 'down' }
+            """, cancellationToken);
+        return probe.Success && probe.StandardOutput.Trim().Equals("up", StringComparison.OrdinalIgnoreCase);
     }
 
     // IIS FTP sunucu rolü (FTPSVC servisi) yoksa OTOMATİK KURAR. Windows Server: Web-Ftp-Server (+ yönetim

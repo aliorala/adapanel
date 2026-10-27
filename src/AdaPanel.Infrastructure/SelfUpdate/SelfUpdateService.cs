@@ -736,24 +736,36 @@ public sealed class SelfUpdateService : ISelfUpdateService
         {
         var client = httpClientFactory.CreateClient();
         client.Timeout = Timeout.InfiniteTimeSpan;
-        using var response = await client.GetAsync(packageUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        if (response.StatusCode == HttpStatusCode.NotFound)
+        // Translate transport failures only while transferring the package. Caller
+        // cancellation and later filesystem/verification failures retain their meaning.
+        try
         {
-            throw new AppException("update.download_not_found", 404, 404, $"Url={packageUri}");
-        }
+            using var response = await client.GetAsync(packageUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                throw new AppException("update.download_not_found", 404, 404, $"Url={packageUri}");
+            }
 
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new AppException(
-                "update.download_failed",
-                (int)response.StatusCode,
-                502,
-                $"Url={packageUri}\r\nStatusCode={(int)response.StatusCode} {response.ReasonPhrase}");
-        }
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new AppException(
+                    "update.download_failed",
+                    (int)response.StatusCode,
+                    502,
+                    $"Url={packageUri}\r\nStatusCode={(int)response.StatusCode} {response.ReasonPhrase}");
+            }
 
-        await using (var stream = File.Create(destination))
-        {
+            await using var stream = File.Create(destination);
             await response.Content.CopyToAsync(stream, cancellationToken);
+        }
+        catch (HttpRequestException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new AppException("update.download_failed", 502, 502);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new AppException("update.download_timeout", 504, 504);
         }
 
         // Keep the verified bytes stable while the native identity reader and
