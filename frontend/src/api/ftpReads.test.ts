@@ -32,3 +32,12 @@ it('preserves measured unknown server status without converting it to a failure'
   await expect(getFtpStatus()).resolves.toMatchObject({isConfigured:false,statusMessage:'ftp.server_status_unknown'});
 });
 it('preserves an empty measured user list',async()=>{body={success:true,data:[]};await expect(getFtpUsers()).resolves.toEqual([]);});
+
+it.each([[null,null],[undefined,undefined],[52000,null],[undefined,52500]])('keeps an incomplete passive range unknown (%s, %s)', async(start,end)=>{
+  body={success:true,data:{...status,passivePortStart:start,passivePortEnd:end}};
+  await expect(getFtpStatus()).resolves.toMatchObject({passivePortStart:null,passivePortEnd:null});
+});
+it.each([[52500,52000],[0,51000],[50000,65536],['52000',52500]])('rejects invalid passive ranges (%s, %s)',async(start,end)=>{
+  body={success:true,data:{...status,passivePortStart:start,passivePortEnd:end}};
+  await expect(getFtpStatus()).rejects.toEqual(new UserFacingError('panel.ftp.resultUnconfirmed'));
+});

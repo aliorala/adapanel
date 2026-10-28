@@ -964,6 +964,7 @@
       <template v-if="isAdmin && !props.domain && workspace.installed && workspace.configured">
         <MailQueueCard />
         <MailRelayCard :provider="workspace?.provider" />
+        <MailServerIdentityCard :is-admin="isAdmin" :domains="mailDomains" />
       </template>
     </template>
   </section>
@@ -1035,6 +1036,7 @@ import { UserFacingError } from "../utils/apiError";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import MailQueueCard from "../components/MailQueueCard.vue";
 import MailRelayCard from "../components/MailRelayCard.vue";
+import MailServerIdentityCard from "../components/MailServerIdentityCard.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import TablePager from "../components/TablePager.vue";

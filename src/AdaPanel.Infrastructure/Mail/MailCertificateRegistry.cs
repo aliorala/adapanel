@@ -61,7 +61,7 @@ internal static class MailCertificateRegistry
 
     // Caller owns MailCertificateLifecycle for the complete read/provider/write operation.
     // Re-read immediately before writing: never publish an obsolete snapshot over another host.
-    internal static async Task UpsertAsync<T>(JsonFileStore store, T state, CancellationToken token)
+    internal static async Task UpsertAsync<T>(JsonFileStore store, T state, CancellationToken token, string? initialPrimaryHostName = null)
     {
         var current = await ReadAsync(store, token);
         var replacement = JsonSerializer.SerializeToNode(state, Json)!.AsObject();
@@ -78,7 +78,8 @@ internal static class MailCertificateRegistry
             records[existing] = (JsonObject)replacement.DeepClone();
         }
         else records.Add((JsonObject)replacement.DeepClone());
-        SetCanonicalField(replacement, "primaryHostName", JsonValue.Create(current.PrimaryHostName.Length > 0 ? current.PrimaryHostName : host));
+        SetCanonicalField(replacement, "primaryHostName", JsonValue.Create(current.PrimaryHostName.Length > 0
+            ? current.PrimaryHostName : !string.IsNullOrWhiteSpace(initialPrimaryHostName) ? initialPrimaryHostName : host));
         SetCanonicalField(replacement, "certificates", new JsonArray(records.Select(r => (JsonNode?)r).ToArray()));
         await store.WriteAsync(MailCertificateStoreReference.StatePath, replacement, token);
     }

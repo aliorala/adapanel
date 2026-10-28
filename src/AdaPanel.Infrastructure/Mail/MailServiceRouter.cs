@@ -45,6 +45,12 @@ public sealed class MailServiceRouter(
     public Task<bool> EnsureServerHostnameAsync(bool applyChanges = true, CancellationToken cancellationToken = default)
         => Active.EnsureServerHostnameAsync(applyChanges, cancellationToken);
 
+    public Task<MailServerIdentityDto> GetServerIdentityAsync(CancellationToken cancellationToken = default)
+        => Active.GetServerIdentityAsync(cancellationToken);
+
+    public Task<MailServerIdentityDto> SetServerIdentityAsync(SetMailServerIdentityRequest request, CancellationToken cancellationToken = default)
+        => Active.SetServerIdentityAsync(request, cancellationToken);
+
     public async Task<MailWorkspaceDto> GetWorkspaceAsync(string? domain, CancellationToken cancellationToken = default)
     {
         var provider = providerSelection.Current;

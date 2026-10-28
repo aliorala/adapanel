@@ -22,7 +22,14 @@ function sameIdentity(value: unknown, expected: string) { return typeof value ==
 function isStatus(value: unknown): value is FtpServerStatus {
   return record(value) && ['serverAddress','statusMessage','serviceState','siteState','controlPortOwner'].every(key => typeof value[key] === 'string')
     && ['isConfigured','isSiteRunning','hasControlPortConflict'].every(key => typeof value[key] === 'boolean')
-    && ['controlPort','passivePortStart','passivePortEnd'].every(key => typeof value[key] === 'number' && Number.isInteger(value[key]) && (value[key] as number) > 0 && (value[key] as number) <= 65535);
+    && typeof value.controlPort === 'number' && Number.isInteger(value.controlPort) && value.controlPort > 0 && value.controlPort <= 65535
+    && ['passivePortStart','passivePortEnd'].every(key => value[key] == null || (typeof value[key] === 'number' && Number.isInteger(value[key]) && (value[key] as number) >= 1025 && (value[key] as number) <= 65535))
+    && (value.passivePortStart == null || value.passivePortEnd == null || (value.passivePortStart as number) <= (value.passivePortEnd as number));
+}
+function measuredStatus(body: unknown): FtpServerStatus {
+  const status = measured(body, isStatus);
+  return status.passivePortStart == null || status.passivePortEnd == null
+    ? { ...status, passivePortStart: null, passivePortEnd: null } : status;
 }
 
 export type FtpUser = {
@@ -52,8 +59,8 @@ export type FtpUser = {
 export type FtpServerStatus = {
   serverAddress: string;
   controlPort: number;
-  passivePortStart: number;
-  passivePortEnd: number;
+  passivePortStart: number | null;
+  passivePortEnd: number | null;
   /** YALNIZ `statusMessage === "ftp.server_ready"` iken true (bkz. FtpService.GetServerStatusAsync). */
   isConfigured: boolean;
   /** Durumun SEBEBİ, i18n anahtarı olarak: `ftp.server_ready`, `ftp.control_port_conflict`, … */
@@ -71,7 +78,7 @@ export type FtpServerStatus = {
 
 export async function ensureFtpServer() {
   const response = await apiClient.post<ApiEnvelope<FtpServerStatus>>("/ftp/ensure", {});
-  return measured(response.data, isStatus);
+  return measuredStatus(response.data);
 }
 
 /**
@@ -83,7 +90,7 @@ export async function ensureFtpServer() {
  */
 export async function getFtpStatus() {
   const response = await apiClient.get<ApiEnvelope<FtpServerStatus>>("/ftp/status");
-  return measured(response.data, isStatus);
+  return measuredStatus(response.data);
 }
 
 export async function getFtpUsers() {

@@ -1,7 +1,9 @@
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Mail;
+using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Mail;
@@ -97,7 +99,7 @@ public sealed partial class MailService
             await InspectMailCertificateAsync(current, material.Thumbprint, token);
             if (current.Active) return current;
         }
-        await PushCertificateToStalwartAsync(host, material.CertificatePem, material.PrivateKeyPem, token, beforeMutation);
+        var publication = await PushCertificateToStalwartAsync(host, material.CertificatePem, material.PrivateKeyPem, token, beforeMutation);
         var state = new MailCertificateState
         {
             Domain = domain, HostName = host, Source = "windows-store", Thumbprint = material.Thumbprint,
@@ -107,8 +109,50 @@ public sealed partial class MailService
         var dto = new MailCertificateDto { Domain = domain, HostName = host, Source = state.Source, NotAfterUtc = state.NotAfterUtc };
         await InspectMailCertificateAsync(dto, state.Thumbprint, token);
         if (!dto.Active) throw new AppException("mail.certificate_not_activated", 502, 502, host);
-        await MailCertificateRegistry.UpsertAsync(fileStore, state, token);
+        await MailCertificateRegistry.UpsertAsync(fileStore, state, token, publication.InitialPrimary);
         return dto;
+    }
+
+    private async Task<string?> ResolveInitialCertificatePrimaryAsync(CertificateSettings settings, string targetHost, CancellationToken token)
+    {
+        if (!string.IsNullOrWhiteSpace((await MailCertificateRegistry.ReadAsync(fileStore, token)).PrimaryHostName)) return null;
+        var peer = await ReadManagedWebmailPeerAsync(token);
+        var pin = await ReadServerIdentityPinAsync(token);
+        var explicitHost = peer ?? (string.IsNullOrWhiteSpace(pin?.HostName) ? null : pin.HostName);
+        var candidate = (explicitHost ?? settings.DefaultHostname).Trim().ToLowerInvariant();
+        if (Uri.CheckHostName(candidate) != UriHostNameType.Dns || !candidate.Contains('.') || candidate.Contains('*'))
+        {
+            if (explicitHost is not null) throw new AppException("mail.certificate_not_activated", 409, 409);
+            return null; // Fresh native placeholder: the first successful trusted certificate may initialize the primary.
+        }
+        // Renewal of this same explicit name is safe even if its previous certificate expired.
+        if (candidate.Equals(targetHost, StringComparison.OrdinalIgnoreCase)) return candidate;
+        var probes = await Task.WhenAll(new[] { 587, 465 }.Select(port => TlsProbe(candidate, port, null, token)));
+        if (probes.All(p => p.Status == "ok")) return candidate;
+        if (explicitHost is not null)
+            throw new AppException("mail.certificate_not_activated", 409, 409,
+                "The saved mail client identity could not be validated; it was not replaced.");
+        return null; // An untrusted native bootstrap certificate is not an established client identity.
+    }
+
+    private async Task<string?> ReadManagedWebmailPeerAsync(CancellationToken token)
+    {
+        var state = await fileStore.ReadAsync<System.Text.Json.Nodes.JsonObject?>("config/webmail.json", null, token);
+        if (state is null) return null;
+        var entry = MailCertificateRegistry.Field(state, "entryRoot");
+        if (string.IsNullOrWhiteSpace(entry)) return null;
+        if (!Path.IsPathFullyQualified(entry) || Path.GetDirectoryName(entry) is not { } root)
+            throw new AppException("mail.certificate_not_activated", 409, 409);
+        var path = Path.Combine(root, "config", "config.inc.php");
+        if (!File.Exists(path)) return null;
+        using var lease = await MailCertificateLifecycle.EnterAsync(path, token);
+        var config = await File.ReadAllTextAsync(path, token);
+        if (!config.Contains(WebmailTlsConfiguration.Marker, StringComparison.OrdinalIgnoreCase)) return null;
+        var peers = Regex.Matches(config, @"'peer_name'\s*=>\s*'(?<host>[A-Za-z0-9.-]+)'")
+            .Select(match => match.Groups["host"].Value.ToLowerInvariant()).Distinct(StringComparer.Ordinal).ToArray();
+        if (peers.Length > 1 || peers.Length == 0 && config.Contains("peer_name", StringComparison.Ordinal))
+            throw new AppException("mail.certificate_not_activated", 409, 409);
+        return peers.SingleOrDefault();
     }
 
     private async Task<MailCertificateState[]> ReadCertificateStatesAsync(CancellationToken token) =>

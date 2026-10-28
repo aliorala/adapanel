@@ -58,6 +58,12 @@ public interface IMailService
     /// </param>
     Task<bool> EnsureServerHostnameAsync(bool applyChanges = true, CancellationToken cancellationToken = default);
 
+    Task<MailServerIdentityDto> GetServerIdentityAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult(MailServerIdentityDto.Unsupported());
+
+    Task<MailServerIdentityDto> SetServerIdentityAsync(SetMailServerIdentityRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(MailServerIdentityDto.Unsupported());
+
     Task<MailWorkspaceDto> GetWorkspaceAsync(string? domain, CancellationToken cancellationToken = default);
 
     Task<MailWorkspaceDto> ConfigureAsync(ConfigureMailRequest request, CancellationToken cancellationToken = default);

@@ -658,6 +658,7 @@ import SectionLoadError from "../components/SectionLoadError.vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import MainLayout from "../layouts/MainLayout.vue";
+import { getMailWorkspace } from "../api/mail";
 import { getSessionEpoch, readSecureEntryPath, setSessionExpiredHandler } from "../api/client";
 import { getFtpUsers } from "../api/ftp";
 import { getMyDatabases } from "../api/myDatabases";
@@ -813,6 +814,8 @@ const panelUpdate = ref<UpdateStatus | null>(null);
 const panelUpdateLoad = useSectionError();
 const measuredFtpCount = ref<number | null>(null);
 const measuredDatabaseCount = ref<number | null>(null);
+const measuredMailCount = ref<number | null>(null);
+const measuredAccountCount = ref<number | null>(null);
 const measuredSites = ref(false);
 let dashboardRead = 0;
 let dashboardActive = true;
@@ -905,6 +908,8 @@ function canReadDashboardSection(section: string) {
 const canReadFtpCount = computed(() => (isAdmin.value || isReseller.value) && canReadDashboardSection("sites"));
 const ftpUserCount = computed(() => canReadFtpCount.value ? measuredFtpCount.value : null);
 const databaseCount = computed(() => canReadDashboardSection("database") ? measuredDatabaseCount.value : null);
+const mailAccountCount = computed(() => canReadDashboardSection("mail") ? measuredMailCount.value : null);
+const managedAccountCount = computed(() => (isAdmin.value || isReseller.value) ? measuredAccountCount.value : null);
 const sitesCount = computed(() => canReadDashboardSection("sites") && measuredSites.value && sitesStore.loaded ? sitesStore.sites.length : null);
 const totalBindingCount = computed(() => sitesCount.value === null ? null :
   sitesStore.sites.reduce((sum, site) => sum + site.bindings.length, 0));
@@ -912,6 +917,8 @@ function resetDashboardCounts() {
   dashboardRead++;
   measuredFtpCount.value = null;
   measuredDatabaseCount.value = null;
+  measuredMailCount.value = null;
+  measuredAccountCount.value = null;
   measuredSites.value = false;
 }
 watch(dashboardActorKey, resetDashboardCounts, { flush: "sync" });
@@ -1008,12 +1015,12 @@ const dashboardSections = computed<SectionItem[]>(() => {
     { id: "sites", label: t("panel.navigation.sites"), description: t("panel.sites.workspaceSubtitle"), glyph: "WS", badge: sitesStore.sites.length ? String(sitesStore.sites.length) : undefined },
     // Plesk gibi üst-düzey "Müşteriler & Bayiler" girişi (admin) / "Müşteriler" (bayi):
     // hesap yönetimi ekranı (UsersView) — kullanıcılar, planlar, kotalar, alt kullanıcılar.
-    { id: "accounts", label: isReseller.value ? t("panel.navigation.customers") : t("panel.navigation.accounts"), description: t("panel.navigation.accountsDesc"), glyph: "MU" },
+    { id: "accounts", label: isReseller.value ? t("panel.navigation.customers") : t("panel.navigation.accounts"), description: t("panel.navigation.accountsDesc"), glyph: "MU", badge: managedAccountCount.value === null ? undefined : String(managedAccountCount.value) },
     { id: "sitebuilder", label: t("panel.navigation.siteBuilder"), description: t("panel.siteBuilder.subtitle"), glyph: "SK" },
-    { id: "mail", label: t("panel.navigation.mail"), description: t("panel.mail.subtitle"), glyph: "ML" },
-    { id: "ftp", label: t("panel.ftp.title"), description: t("panel.ftp.subtitle"), glyph: "FP" },
+    { id: "mail", label: t("panel.navigation.mail"), description: t("panel.mail.subtitle"), glyph: "ML", badge: mailAccountCount.value === null ? undefined : String(mailAccountCount.value) },
+    { id: "ftp", label: t("panel.ftp.title"), description: t("panel.ftp.subtitle"), glyph: "FP", badge: ftpUserCount.value === null ? undefined : String(ftpUserCount.value) },
     { id: "files", label: t("panel.navigation.files"), description: t("panel.files.subtitle"), glyph: "FL" },
-    { id: "database", label: t("panel.navigation.database"), description: t("panel.database.subtitle"), glyph: "DB" },
+    { id: "database", label: t("panel.navigation.database"), description: t("panel.database.subtitle"), glyph: "DB", badge: databaseCount.value === null ? undefined : String(databaseCount.value) },
     { id: "monitor", label: t("panel.navigation.monitor"), description: t("panel.monitor.subtitle"), glyph: "MN", badgeTitle: attentionBadgeTitle("monitor"), badge: attentionBadge("monitor") },
     // Danışman rozeti = bekleyen dikkat maddesi sayısı; Mağaza rozeti = bekleyen güncelleme
     // sayısı (yoksa eskisi gibi kurulu bileşen sayısı).
@@ -1486,6 +1493,16 @@ async function loadDashboardData() {
   // Each count is measured independently. A failed server overview must not turn
   // readable tenant data into zero, or prevent those scoped requests from running.
   const reads: Promise<unknown>[] = [systemStore.fetchOverview()];
+  if (canReadDashboardSection("mail")) reads.push(getMailWorkspace().then(workspace => {
+    // No selected domain: read the scoped domain inventory and its counts, without
+    // downloading individual mailboxes, aliases or mailing lists.
+    if (typeof workspace.installed !== "boolean" || typeof workspace.configured !== "boolean" ||
+      !Array.isArray(workspace.domains) || (workspace.installed && !workspace.configured) ||
+      workspace.domains.some(domain => domain.accountCountMeasured !== true ||
+        !Number.isSafeInteger(domain.accountCount) || domain.accountCount < 0))
+      throw new Error(t("panel.common.loadFailed"));
+    if (current()) measuredMailCount.value = workspace.domains.reduce((sum, domain) => sum + domain.accountCount, 0);
+  }));
   if (canReadDashboardSection("sites")) reads.push(sitesStore.fetchSites().then(() => {
     if (current()) measuredSites.value = sitesStore.loaded;
   }));
@@ -1500,9 +1517,16 @@ async function loadDashboardData() {
       throw new Error(t("panel.common.loadFailed"));
     if (current()) measuredDatabaseCount.value = databases.length;
   }));
-  if (reseller) reads.push(authStore.fetchUsers());
+  if (admin || reseller) reads.push(authStore.fetchUsers().then(users => {
+    if (!Array.isArray(users) || users.some(user => !user || typeof user.id !== "string" || !user.id ||
+      !["Administrator", "Reseller", "Customer", "Operator"].includes(user.role)) || new Set(users.map(user => user.id)).size !== users.length)
+      throw new Error(t("panel.common.loadFailed"));
+    // Additional subscription users and panel staff are not separate customers/resellers.
+    if (current()) measuredAccountCount.value = users.filter(user => !user.parentUserId &&
+      (user.role === "Customer" || (admin && user.role === "Reseller"))).length;
+  }));
   if (admin) {
-    reads.push(authStore.fetchUsers(), authStore.fetchAuditLogs(), phpStore.fetchVersions(),
+    reads.push(authStore.fetchAuditLogs(), phpStore.fetchVersions(),
       authStore.fetchSecuritySettings().then(settings => {
         if (!current()) return;
         securityForm.secureEntryPath = settings.secureEntryPath.replace("/", "");
@@ -1515,12 +1539,13 @@ async function loadDashboardData() {
         await setPanelLocale(preferences.defaultLanguage);
         if (current()) applyAppearance(preferences);
       }),
-      softwareStore.fetchCatalog().then(async catalog => {
+      softwareStore.fetchCatalog(),
+      databasesStore.fetchEngines().then(async statuses => {
         if (!current()) return;
-        const installedIds = new Set(catalog.installed.map(component => component.componentId));
-        const engines = [["mariadb-11", "mariadb"], ["mysql-8", "mysql"], ["postgresql-16", "postgresql"]]
-          .filter(([id]) => installedIds.has(id!)).map(([, engine]) => engine!);
-        const workspaces = await Promise.all(engines.map(engine => databasesStore.fetchWorkspace(engine)));
+        const engines = statuses.filter(status => status.installed);
+        // An installed engine without working credentials is unknown, not empty.
+        if (engines.some(engine => !engine.ready)) throw new Error(t("panel.common.loadFailed"));
+        const workspaces = await Promise.all(engines.map(engine => databasesStore.fetchWorkspace(engine.engine)));
         if (workspaces.some(workspace => !Array.isArray(workspace.databases))) throw new Error(t("panel.common.loadFailed"));
         if (current()) measuredDatabaseCount.value = workspaces.reduce((sum, workspace) => sum + workspace.databases.length, 0);
       }));

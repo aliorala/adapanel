@@ -2659,6 +2659,13 @@ public sealed partial class MailService(
             fileStore.ResolvePath(CertificateStatePath), cancellationToken);
         // Cancellation can arrive after acquisition while this caller's continuation is queued.
         cancellationToken.ThrowIfCancellationRequested();
+        return await IssueCertificateCoreAsync(request, cancellationToken);
+    }
+
+    // Caller owns MailCertificateLifecycle; identity preparation must not acquire it twice.
+    private async Task<MailCertificateDto> IssueCertificateCoreAsync(IssueMailCertificateRequest request, CancellationToken cancellationToken,
+        bool persistContact = true)
+    {
         var domain = request.Domain.Trim().ToLowerInvariant();
         var hostName = string.IsNullOrWhiteSpace(request.HostName)
             ? $"mail.{domain}"
@@ -2692,7 +2699,7 @@ public sealed partial class MailService(
         if (issued)
         {
             source = "letsencrypt";
-            if (!string.IsNullOrWhiteSpace(contactEmail))
+            if (persistContact && !string.IsNullOrWhiteSpace(contactEmail))
             {
                 await fileStore.WriteAsync(
                     Support.AcmeContactSettings.Path,
@@ -2707,7 +2714,7 @@ public sealed partial class MailService(
 
         var (certificatePem, privateKeyPem) = ReadPemPair(pemDirectory);
         var notAfter = TryGetNotAfterUtc(certificatePem);
-        var endpoints = await PushCertificateToStalwartAsync(hostName, certificatePem, privateKeyPem, cancellationToken);
+        var (endpoints, initialPrimary) = await PushCertificateToStalwartAsync(hostName, certificatePem, privateKeyPem, cancellationToken);
 
         var state = new MailCertificateState
         {
@@ -2719,7 +2726,7 @@ public sealed partial class MailService(
             NotAfterUtc = notAfter,
             Thumbprint = endpoints[0].Thumbprint
         };
-        await MailCertificateRegistry.UpsertAsync(fileStore, state, cancellationToken);
+        await MailCertificateRegistry.UpsertAsync(fileStore, state, cancellationToken, initialPrimary);
 
         var published = new MailCertificateDto
         {
@@ -2812,11 +2819,11 @@ public sealed partial class MailService(
         }
 
         // win-acme zamanlanmış görevi sertifikayı yenilemiş; Stalwart'a yeniden bas.
-        var endpoints = await PushCertificateToStalwartAsync(state.HostName, certificatePem, privateKeyPem, cancellationToken, beforeMutation);
+        var (endpoints, initialPrimary) = await PushCertificateToStalwartAsync(state.HostName, certificatePem, privateKeyPem, cancellationToken, beforeMutation);
         state.ContentHash = hash;
         state.Thumbprint = leaf.Thumbprint;
         state.NotAfterUtc = TryGetNotAfterUtc(certificatePem);
-        await MailCertificateRegistry.UpsertAsync(fileStore, state, cancellationToken);
+        await MailCertificateRegistry.UpsertAsync(fileStore, state, cancellationToken, initialPrimary);
 
         return new MailCertificateDto
         {
@@ -2831,6 +2838,9 @@ public sealed partial class MailService(
 
     public async Task<bool> EnsureServerHostnameAsync(bool applyChanges = true, CancellationToken cancellationToken = default)
     {
+        using var operation = await MailCertificateLifecycle.EnterAsync(fileStore.ResolvePath(CertificateStatePath), cancellationToken);
+        var identity = await ReadServerIdentityPinAsync(cancellationToken);
+        if (identity is not null) return await EnsurePinnedIdentityAsync(identity, applyChanges, cancellationToken);
         var registry = await MailCertificateRegistry.ReadAsync(fileStore, cancellationToken);
         // ONCE TERS DNS (PTR): karsilama adi sertifikayla degil, PTR ILE tutmali.
         //
@@ -2862,25 +2872,7 @@ public sealed partial class MailService(
         // silindiginde oluyor). Guncelleme TUM nesneyi yeniden dogruladigi icin bu sarkan referans
         // SystemSettings uzerindeki HER degisikligi engeller ve hata mesaji ("defaultDomainId:
         // required") sebebi hic anlatmaz. Bu yuzden once gecerli bir alana onariliyor.
-        var alanSorgusu = await QueryAsync(cli, "domain", env, cancellationToken);
-        if (!alanSorgusu.Measured)
-        {
-            // "ALAN YOK" DEGIL, "SORAMADIM". Ikisi de false donuyordu ve DENETIM MODUNDA
-            // (applyChanges: false) bu, "onarilacak bir sey yok" demek oluyordu: onarma dugmesi
-            // hic cikmiyor, yanlis karsilama adi kalici hale geliyordu.
-            logger.LogWarning(
-                "Posta karsilama adi DENETLENEMEDI: alan adi listesi okunamadi. "
-                + "Karsilama adinin dogru olup olmadigi bu turda OLCULMEDI.");
-            throw new IOException("SMTP hostname inspection could not read the mail domain inventory.");
-        }
-
-        var domainIds = alanSorgusu.Items
-            .Select(item => GetField(item, "id"))
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .ToList();
-
-        if (domainIds.Count != alanSorgusu.Items.Count)
-            throw new IOException("SMTP hostname inspection received an incomplete mail domain inventory.");
+        var domainIds = await ReadIdentityDomainIdsAsync(cli, env, cancellationToken);
 
         if (domainIds.Count == 0)
         {
@@ -3194,7 +3186,7 @@ public sealed partial class MailService(
                 ? RunCliAsync(cli, command, env, cancellationToken)
                 : RunCliJsonAsync(cli, command, json, env, cancellationToken);
 
-    private async Task<MailTlsEndpointDto[]> PushCertificateToStalwartAsync(string hostName, string certificatePem, string privateKeyPem,
+    private async Task<(MailTlsEndpointDto[] Endpoints, string? InitialPrimary)> PushCertificateToStalwartAsync(string hostName, string certificatePem, string privateKeyPem,
         CancellationToken cancellationToken, Func<CancellationToken, Task>? beforeMutation = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -3231,6 +3223,8 @@ public sealed partial class MailService(
 
         var settingsRead = MailQueryResult.Olc(await RunCertificateCommandAsync(cli, "get SystemSettings --json", null, env, cancellationToken));
         var settings = ReadCertificateSettings(settingsRead);
+        // Capture the pre-publication client identity, while its old certificate is still served.
+        var initialPrimary = await ResolveInitialCertificatePrimaryAsync(settings, hostName, cancellationToken);
         // A read can block. Revalidate directly before the first provider mutation.
         if (beforeMutation is not null) await beforeMutation(cancellationToken);
 
@@ -3291,7 +3285,7 @@ public sealed partial class MailService(
         if (probes.Any(p => p.Status != "ok"))
             throw new AppException("mail.certificate_not_activated", 502, 502,
                 string.Join("; ", probes.Select(p => $"{p.Port}: {p.Status} {p.Detail}")));
-        return probes;
+        return (probes, initialPrimary);
     }
 
     private async Task<string?> ResolveComponentExecutableAsync(string componentId, string executableName, CancellationToken cancellationToken)

@@ -241,6 +241,7 @@ public sealed class FtpServerMutationLifecycleTests
     [InlineData("already-started")]
     [InlineData("already-starting")]
     [InlineData("assembly-load-failed")]
+    [InlineData("custom-network")]
     public async Task TheGeneratedScriptMeasuresTlsOnlyAfterCriticalNativeSteps(string mode)
     {
         using var f = await Fixture.Create("tls", desired: true);
@@ -258,6 +259,10 @@ public sealed class FtpServerMutationLifecycleTests
             function Get-ChildItem { [CmdletBinding()]param($Path) [pscustomobject]@{ FriendlyName = 'AdaPanel FTPS'; Thumbprint = 'AABBCC' } }
             function New-SelfSignedCertificate { [CmdletBinding()]param($DnsName,$FriendlyName,$CertStoreLocation,$KeyExportPolicy,$NotAfter) throw 'Unexpected certificate creation' }
             function Set-WebConfigurationProperty { [CmdletBinding()]param($PSPath,$Filter,$Name,$Value) }
+            function Get-WebConfigurationProperty { [CmdletBinding()]param($PSPath,$Filter,$Name)
+              $value = if ('{{mode}}' -eq 'custom-network') { if ($Name -eq 'lowDataChannelPort') { 52000 } else { 52500 } } else { 0 }
+              [pscustomobject]@{ Value = $value }
+            }
             function Start-WebSite { [CmdletBinding()]param($Name) throw 'HTTP startup must not be used for an FTP-only site' }
             function Get-Service { [CmdletBinding()]param($Name)
               $service = [pscustomobject]@{}
@@ -268,9 +273,20 @@ public sealed class FtpServerMutationLifecycleTests
               if ('{{mode}}' -eq 'restart-failed') { throw 'Measured restart failure' }
               $script:restarted = $true
             }
-            function Get-NetFirewallRule { [CmdletBinding()]param($DisplayName) return $true }
+            function Get-NetFirewallRule { [CmdletBinding()]param($DisplayName) [pscustomobject]@{ DisplayName = $DisplayName } }
+            function Get-NetFirewallPortFilter { [CmdletBinding()]param([Parameter(ValueFromPipeline=$true)]$InputObject)
+              process { if ($InputObject.DisplayName -ne 'AdaPanel FTP Passive') { throw 'Touched a custom firewall rule' }; return $InputObject }
+            }
+            function Set-NetFirewallPortFilter { [CmdletBinding()]param([Parameter(ValueFromPipeline=$true)]$InputObject,$Protocol,$LocalPort)
+              process {
+                $expected = if ('{{mode}}' -eq 'custom-network') { '52000-52500' } else { '50000-51000' }
+                if ($InputObject.DisplayName -ne 'AdaPanel FTP Passive' -or $LocalPort -ne $expected) { throw 'Wrong managed rule/range' }
+                $script:firewallUpdated = $true
+              }
+            }
             function New-NetFirewallRule { [CmdletBinding()]param($DisplayName,$Direction,$Action,$Protocol,$LocalPort,$Profile) throw 'Unexpected firewall creation' }
             function Get-ItemProperty { [CmdletBinding()]param($Path,$Name)
+              if ($Name -eq 'ftpServer.firewallSupport.externalIp4Address') { return '' }
               if (-not $script:restarted) { throw 'Measurement before restart' }
               if (-not $script:ftpStarted) { throw 'TLS measurement before FTP start' }
               if ($Name -eq 'ftpServer.security.ssl.serverCertHash' -and '{{mode}}' -eq 'certificate-unmeasured') { throw 'Certificate property unreadable' }
@@ -278,7 +294,8 @@ public sealed class FtpServerMutationLifecycleTests
             }
             """;
         var initialState = mode == "already-started" ? 1 : mode == "already-starting" ? 0 : 3;
-        var result = await ProcessRunner.RunPowerShellAsync(fakeNative + Environment.NewLine + FakeFtpRuntimeScript(mode, initialState) + Environment.NewLine + f.ConfigurationScript, f.Token);
+        var result = await ProcessRunner.RunPowerShellAsync(fakeNative + Environment.NewLine + FakeFtpRuntimeScript(mode, initialState) + Environment.NewLine + f.ConfigurationScript
+            + Environment.NewLine + "if (-not $script:firewallUpdated) { throw 'Managed firewall range was not synchronized' }", f.Token);
         if (mode is "restart-failed" or "ftp-start-failed" or "ftp-not-running" or "assembly-load-failed")
         {
             Assert.False(result.Success);
@@ -289,7 +306,7 @@ public sealed class FtpServerMutationLifecycleTests
         {
             Assert.True(result.Success, result.StandardError);
             var measurement = FtpTlsMeasurement.Olc(true, result.StandardOutput);
-            if (mode is "applied" or "already-started" or "already-starting") Assert.True(measurement.Verified);
+            if (mode is "applied" or "already-started" or "already-starting" or "custom-network") Assert.True(measurement.Verified);
             else { Assert.Null(measurement.Verified); Assert.Equal(FtpTlsPolicyState.Unmeasured, measurement.Certificate); }
         }
     }
@@ -305,6 +322,23 @@ public sealed class FtpServerMutationLifecycleTests
     }
 
     [Theory]
+    [InlineData(52000, 52500, 52000, 52500)]
+    [InlineData(null, null, null, null)]
+    [InlineData(52000, null, null, null)]
+    [InlineData(52500, 52000, null, null)]
+    [InlineData(0, 0, null, null)]
+    public async Task StatusReportsTheMeasuredPassiveRangeAndKeepsIncompleteOrInvalidRangesUnknown(
+        int? low, int? high, int? expectedLow, int? expectedHigh)
+    {
+        using var f = await Fixture.Create("ensure");
+        f.PassiveLow = low; f.PassiveHigh = high;
+        var status = await f.Service.GetServerStatusAsync(f.Token);
+        Assert.Equal(expectedLow, status.PassivePortStart);
+        Assert.Equal(expectedHigh, status.PassivePortEnd);
+        Assert.True(status.IsConfigured);
+    }
+
+    [Theory]
     [InlineData(1, "Started")]
     [InlineData(3, "Stopped")]
     public async Task RuntimeProbeReadsFtpStateRatherThanTheHttpSiteState(int ftpState, string expected)
@@ -317,6 +351,7 @@ public sealed class FtpServerMutationLifecycleTests
             function Get-CimInstance { [CmdletBinding()]param($ClassName,$Filter) [pscustomobject]@{ State = 'Running'; ProcessId = 100 } }
             function Get-Website { [CmdletBinding()]param() throw 'HTTP runtime must not be measured' }
             function Get-Command { [CmdletBinding()]param($Name) return $null }
+            function Get-WebConfigurationProperty { [CmdletBinding()]param($PSPath,$Filter,$Name) throw 'Measured passive range unavailable' }
             """;
         var result = await ProcessRunner.RunPowerShellAsync(fakeNative + Environment.NewLine + FakeFtpRuntimeScript("probe", ftpState) + Environment.NewLine + f.ProbeScript, f.Token);
         Assert.True(result.Success, result.StandardError);
@@ -395,6 +430,7 @@ public sealed class FtpServerMutationLifecycleTests
         internal string? ConfigurationScript;
         internal string? ProbeScript;
         internal string RuntimeSiteState = "Started";
+        internal int? PassiveLow = 50000, PassiveHigh = 51000;
 
         private Fixture(string route, string boundary, bool desired, bool token)
         {
@@ -468,7 +504,7 @@ public sealed class FtpServerMutationLifecycleTests
         private async Task<CommandResult> NativeScript(string script, bool strict, CancellationToken token)
         {
             if (script.Contains("Get-NetTCPConnection", StringComparison.Ordinal)) { ProbeScript = script; return new CommandResult { ExitCode = 0, StandardOutput =
-                "{\"siteMeasured\":true,\"serviceMeasured\":true,\"siteExists\":true,\"siteState\":\"" + RuntimeSiteState + "\",\"serviceState\":\"Running\",\"servicePids\":[100],\"portMeasured\":true,\"listeners\":[{\"pid\":100,\"process\":\"fixture\",\"services\":[\"FTPSVC\"]}]}" }; }
+                "{\"siteMeasured\":true,\"serviceMeasured\":true,\"siteExists\":true,\"siteState\":\"" + RuntimeSiteState + "\",\"serviceState\":\"Running\",\"servicePids\":[100],\"portMeasured\":true,\"passivePortStart\":" + (PassiveLow?.ToString() ?? "null") + ",\"passivePortEnd\":" + (PassiveHigh?.ToString() ?? "null") + ",\"listeners\":[{\"pid\":100,\"process\":\"fixture\",\"services\":[\"FTPSVC\"]}]}" }; }
             if (script.StartsWith("if (Get-Service FTPSVC", StringComparison.Ordinal))
             { await Pause("feature"); return new CommandResult { ExitCode = 0, StandardOutput = "present" }; }
             if (script.StartsWith("if ((Get-Service FTPSVC", StringComparison.Ordinal)) return new CommandResult { ExitCode = 0, StandardOutput = RuntimeSiteState == "Started" ? "up" : "down" };

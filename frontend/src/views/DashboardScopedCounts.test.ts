@@ -8,6 +8,7 @@ import { useSetupStore } from "../stores/setup";
 import { useSystemStore } from "../stores/system";
 import { useSoftwareStore } from "../stores/software";
 import { useSitesStore } from "../stores/sites";
+import { useDatabasesStore } from "../stores/databases";
 
 const shared = vi.hoisted(() => ({ epoch: 0, route: { value: { query: { section: "home" } as Record<string, string> } } }));
 vi.mock("../api/client", () => ({
@@ -22,6 +23,7 @@ vi.mock("../composables/navigationGuard", () => ({ allowNavigation: vi.fn(async 
 
 type State = {
   mode: string; bootstrapState: string; ftpUserCount: number | null; databaseCount: number | null; sitesCount: number | null; totalBindingCount: number | null;
+  mailAccountCount: number | null; dashboardSections: { id: string; badge?: string }[];
   banner: string; bannerError: boolean;
   loadDashboardData(): Promise<void>; refreshDashboard(): Promise<void>; logout(): Promise<void>; handleSessionExpired(): void;
   initializeView(): Promise<void>; submitLogin(): Promise<void>;
@@ -44,6 +46,11 @@ beforeEach(() => {
     documentElement: { dataset: { theme: "dark" }, style: { setProperty: vi.fn(), removeProperty: vi.fn() } } });
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn() });
   vi.mocked(apiClient.get).mockImplementation(async url => {
+    if (url === "/mail") return envelope({ installed: true, configured: true, domains: [
+      { name: "first.test", accountCount: 2, accountCountMeasured: true },
+      { name: "second.test", accountCount: 3, accountCountMeasured: true }
+    ], accounts: [] });
+    if (url === "/db/engines") return envelope([]);
     if (url === "/my-databases") return envelope(ownedRows);
     if (url === "/ftp/users") return envelope(ftpRows);
     if (url === "/scope/sites" || url === "/users" || url === "/audit-logs?take=25" || url === "/php/versions") return envelope([]);
@@ -82,6 +89,110 @@ it.each(["Customer", "Reseller"] as const)("loads %s database count from owned d
   expect(apiClient.get).toHaveBeenCalledWith("/my-databases");
   expect(state.databaseCount).toBe(2);
   expect(vi.mocked(apiClient.get).mock.calls.some(([url]) => url.startsWith("/db"))).toBe(false);
+});
+
+it("publishes mailbox totals across all scoped domains and owned database totals as menu badges", async () => {
+  const { state } = await mount("Customer");
+  const badge = (id: string) => state.dashboardSections.find(section => section.id === id)?.badge;
+  expect(badge("mail")).toBeUndefined(); expect(badge("database")).toBeUndefined();
+  await state.loadDashboardData();
+  expect(state.mailAccountCount).toBe(5); expect(badge("mail")).toBe("5"); expect(badge("database")).toBe("2");
+  expect(apiClient.get).toHaveBeenCalledWith("/mail", { params: {} });
+  const fallback = vi.mocked(apiClient.get).getMockImplementation()!;
+  vi.mocked(apiClient.get).mockImplementation((url, config) => url === "/mail" ? Promise.reject(new Error("offline")) : fallback(url, config));
+  await state.loadDashboardData().catch(() => undefined);
+  expect(badge("mail")).toBeUndefined(); expect(badge("database")).toBe("2");
+});
+
+it.each([false, undefined])("hides the mailbox badge if any domain count is unmeasured (%s)", async measured => {
+  const { state } = await mount("Customer"), fallback = vi.mocked(apiClient.get).getMockImplementation()!;
+  vi.mocked(apiClient.get).mockImplementation((url, config) => url === "/mail" ? Promise.resolve(envelope({ installed: true, configured: true,
+    domains: [{ accountCount: 5, accountCountMeasured: true }, { accountCount: 0, accountCountMeasured: measured }] })) : fallback(url, config));
+  await state.loadDashboardData().catch(() => undefined);
+  expect(state.mailAccountCount).toBeNull(); expect(state.dashboardSections.find(section => section.id === "mail")?.badge).toBeUndefined();
+});
+
+it("publishes all three scoped menu counts and hides only the FTP badge after its read fails", async () => {
+  const { state } = await mount("Reseller");
+  const badge = (id: string) => state.dashboardSections.find(section => section.id === id)?.badge;
+  expect(badge("ftp")).toBeUndefined();
+  await state.loadDashboardData();
+  expect(badge("mail")).toBe("5");
+  expect(badge("ftp")).toBe("3");
+  expect(badge("database")).toBe("2");
+  const fallback = vi.mocked(apiClient.get).getMockImplementation()!;
+  vi.mocked(apiClient.get).mockImplementation((url, config) => url === "/ftp/users" ? Promise.reject(new Error("offline")) : fallback(url, config));
+  await state.loadDashboardData().catch(() => undefined);
+  expect(badge("ftp")).toBeUndefined();
+  expect(badge("mail")).toBe("5");
+  expect(badge("database")).toBe("2");
+});
+
+it("shows a measured empty FTP inventory as a zero menu badge", async () => {
+  ftpRows = [];
+  const { state } = await mount("Reseller");
+  await state.loadDashboardData();
+  expect(state.dashboardSections.find(section => section.id === "ftp")?.badge).toBe("0");
+});
+
+it.each([['Administrator', '2'], ['Reseller', '1']] as const)("counts principal customer/reseller accounts in the %s menu", async (role, expected) => {
+  const { state } = await mount(role), fallback = vi.mocked(apiClient.get).getMockImplementation()!;
+  const rows = [
+    { id: "staff", role: "Administrator" }, { id: "operator", role: "Operator" },
+    { id: "reseller", role: "Reseller" }, { id: "customer", role: "Customer" },
+    { id: "additional-user", role: "Customer", parentUserId: "customer" }
+  ];
+  vi.mocked(apiClient.get).mockImplementation((url, config) => url === "/users" ? Promise.resolve(envelope(rows)) : fallback(url, config));
+  expect(state.dashboardSections.find(section => section.id === "accounts")?.badge).toBeUndefined();
+  await state.loadDashboardData();
+  expect(state.dashboardSections.find(section => section.id === "accounts")?.badge).toBe(expected);
+  expect(vi.mocked(apiClient.get).mock.calls.filter(([url]) => url === "/users")).toHaveLength(1);
+  vi.mocked(apiClient.get).mockImplementation((url, config) => url === "/users" ? Promise.reject(new Error("offline")) : fallback(url, config));
+  await state.loadDashboardData().catch(() => undefined);
+  expect(state.dashboardSections.find(section => section.id === "accounts")?.badge).toBeUndefined();
+});
+
+it("keeps a late managed account count out of a different actor's menu", async () => {
+  const { state } = await mount("Administrator"), fallback = vi.mocked(apiClient.get).getMockImplementation()!;
+  const pending = deferred<ReturnType<typeof envelope>>();
+  vi.mocked(apiClient.get).mockImplementation((url, config) => url === "/users" ? pending.promise : fallback(url, config));
+  const reading = state.loadDashboardData(); await flush(); signIn("Reseller");
+  pending.resolve(envelope([{ id: "another-customer", role: "Customer" }])); await reading;
+  expect(state.dashboardSections.find(section => section.id === "accounts")?.badge).toBeUndefined();
+});
+
+it("shows measured empty mailbox and database inventories as zero badges", async () => {
+  ownedRows = []; const { state } = await mount("Customer"), fallback = vi.mocked(apiClient.get).getMockImplementation()!;
+  vi.mocked(apiClient.get).mockImplementation((url, config) => url === "/mail" ? Promise.resolve(envelope({ installed: true, configured: true, domains: [] })) : fallback(url, config));
+  await state.loadDashboardData();
+  for (const id of ["mail", "database"]) expect(state.dashboardSections.find(section => section.id === id)?.badge).toBe("0");
+});
+
+it("does not request mail without section access or publish a late response into another actor", async () => {
+  const { state } = await mount("Customer", ["database"]); await state.loadDashboardData();
+  expect(apiClient.get).not.toHaveBeenCalledWith("/mail", expect.anything());
+  signIn("Customer"); const pending = deferred<ReturnType<typeof envelope>>(), fallback = vi.mocked(apiClient.get).getMockImplementation()!;
+  vi.mocked(apiClient.get).mockImplementation((url, config) => url === "/mail" ? pending.promise : fallback(url, config));
+  const reading = state.loadDashboardData(); await flush(); signIn("Reseller");
+  pending.resolve(envelope({ installed: true, configured: true, domains: [{ accountCount: 9, accountCountMeasured: true }] })); await reading;
+  expect(state.mailAccountCount).toBeNull();
+});
+
+it("counts every installed admin database engine including discovered installations outside the software catalog", async () => {
+  const { state } = await mount("Administrator"), store = useDatabasesStore();
+  vi.spyOn(store, "fetchEngines").mockResolvedValue([
+    { engine: "mariadb", installed: true, ready: true }, { engine: "mysql", installed: true, ready: true },
+    { engine: "postgresql", installed: true, ready: true }, { engine: "absent", installed: false, ready: false }
+  ] as never);
+  const fetch = vi.spyOn(store, "fetchWorkspace").mockImplementation(async engine => ({ engine, databases: [{ name: engine }] } as never));
+  await state.loadDashboardData(); expect(state.databaseCount).toBe(3); expect(fetch).toHaveBeenCalledTimes(3);
+  expect(state.dashboardSections.find(section => section.id === "database")?.badge).toBe("3");
+});
+
+it("leaves the admin database badge unknown when an installed engine is not ready", async () => {
+  const { state } = await mount("Administrator");
+  vi.spyOn(useDatabasesStore(), "fetchEngines").mockResolvedValue([{ engine: "mariadb", installed: true, ready: false }] as never);
+  await state.loadDashboardData().catch(() => undefined); expect(state.databaseCount).toBeNull();
 });
 it("loads a reseller's FTP count from the scoped existing endpoint", async () => {
   const { state } = await mount("Reseller"); await state.loadDashboardData();
@@ -183,8 +294,8 @@ it("does not call privileged endpoints after the actor changes while subscriptio
   pending.resolve(envelope({ isSuspended: false })); await reading;
   expect(apiClient.get).not.toHaveBeenCalledWith("/ftp/users"); expect(apiClient.get).not.toHaveBeenCalledWith("/security/settings");
 });
-it("an unavailable admin catalog makes the DB count unknown while independent FTP remains measured", async () => {
-  const { state } = await mount("Administrator"); vi.mocked(useSoftwareStore().fetchCatalog).mockRejectedValueOnce(new Error("catalog unavailable"));
+it("an unavailable admin engine inventory makes the DB count unknown while independent FTP remains measured", async () => {
+  const { state } = await mount("Administrator"); vi.spyOn(useDatabasesStore(), "fetchEngines").mockRejectedValueOnce(new Error("engines unavailable"));
   await state.loadDashboardData().catch(() => undefined);
   expect(state.databaseCount).toBeNull(); expect(state.ftpUserCount).toBe(3);
 });

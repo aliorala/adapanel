@@ -204,6 +204,22 @@ public sealed class FtpHomeRepairLifecycleTests
     }
 
     [Theory]
+    [InlineData(false, "1|1|AABBCC")]
+    [InlineData(true, "1|1|yok")]
+    public async Task AMeasuredBrokenInfrastructureCannotCreateALocalAccountOrPublishAnAccount(bool required, string measurement)
+    {
+        await using var f = await Fixture.Create();
+        f.AccountExists = false;
+        await f.ConfigureInfrastructure(required, measurement);
+        var before = await f.Records();
+        var error = await Assert.ThrowsAsync<AppException>(() => f.CreateAccount(f.SiteA.Name));
+        Assert.Equal("ftp.site_configuration_failed", error.MessageKey);
+        Assert.False(f.AccountExists);
+        Assert.Equal(before.Single().CreatedAtUtc, (await f.Records()).Single().CreatedAtUtc);
+        Assert.Equal(0, FtpAccountLifecycle.References(f.Name));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task NativeFailureOrAuthorityRejectionDoesNotLeakTheAccountLease(bool authority)
@@ -237,6 +253,7 @@ public sealed class FtpHomeRepairLifecycleTests
         internal FtpService Service { get; }
         internal bool PauseSnapshot, PauseRepair, PauseCreation, FailRepair;
         internal bool AccountExists = true;
+        private string? infrastructureMeasurement;
         internal CancellationToken Token => lifetime.Token;
 
         private Fixture()
@@ -281,6 +298,12 @@ public sealed class FtpHomeRepairLifecycleTests
             CreateLink(Paths(name)[0], SiteA.PhysicalPath);
         }
         internal Task<Row[]> Records() => store.ReadAsync("config/ftp-users.json", Array.Empty<Row>(), Token);
+        internal async Task ConfigureInfrastructure(bool required, string measurement)
+        {
+            infrastructureMeasurement = measurement;
+            await store.WriteAsync("config/ftp-infra.json", new { configured = false }, Token);
+            await store.WriteAsync("config/ftp-tls.json", new { requireSsl = required }, Token);
+        }
         internal Task Save(Row row) => store.WriteAsync("config/ftp-users.json", new[] { row }, Token);
         internal Task<FtpUserDto> CreateAccount(string site) => Service.CreateFtpUserAsync(
             new CreateFtpUserRequest { UserName = Name, SiteName = site, Password = "FixturePassword123!" }, Token);
@@ -331,6 +354,8 @@ public sealed class FtpHomeRepairLifecycleTests
         }
         private async Task<CommandResult> Script(string script, bool strict, CancellationToken token)
         {
+            if (script.Contains("Restart-Service FTPSVC", StringComparison.Ordinal))
+                return new CommandResult { ExitCode = 0, StandardOutput = "ADAPANEL-FTP-TLS=" + infrastructureMeasurement };
             if (script.StartsWith("if (Get-Service FTPSVC", StringComparison.Ordinal)) return new CommandResult { ExitCode = 0, StandardOutput = "present" };
             if (script.StartsWith("if ((Get-Service FTPSVC", StringComparison.Ordinal)) return new CommandResult { ExitCode = 0, StandardOutput = "up" };
             if (script.Contains("Set-LocalUser", StringComparison.Ordinal)) return new CommandResult { ExitCode = 0, StandardOutput = "ADAPANEL-SURESIZ" };

@@ -6,9 +6,10 @@ public sealed class FtpServerStatusDto
 
     public int ControlPort { get; set; } = 21;
 
-    public int PassivePortStart { get; set; } = 50000;
+    /// <summary>Measured IIS passive range; null when the current range is unknown.</summary>
+    public int? PassivePortStart { get; set; }
 
-    public int PassivePortEnd { get; set; } = 51000;
+    public int? PassivePortEnd { get; set; }
 
     /// <summary>
     /// FTP GERÇEKTEN HİZMET VERİYOR MU — "kurulum betiği hata vermedi" DEĞİL.

@@ -82,7 +82,7 @@
       </div>
       <div class="summary-item">
         <span>{{ t("panel.ftp.passivePorts") }}</span>
-        <strong>{{ serverStatus.passivePortStart }}-{{ serverStatus.passivePortEnd }}</strong>
+        <strong>{{ serverStatus.passivePortStart != null && serverStatus.passivePortEnd != null ? `${serverStatus.passivePortStart}-${serverStatus.passivePortEnd}` : '—' }}</strong>
       </div>
       <div class="summary-item">
         <span>{{ t("panel.ftp.serverAddress") }}</span>

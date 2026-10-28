@@ -123,9 +123,7 @@ public sealed partial class FtpService(
         var durum = new FtpServerStatusDto
         {
             ServerAddress = await GetFtpClientHostAsync(preferences.ServerAddress, cancellationToken),
-            ControlPort = FtpPort,
-            PassivePortStart = PassivePortStart,
-            PassivePortEnd = PassivePortEnd
+            ControlPort = FtpPort
         };
 
         var olcum = await ProbeFtpRuntimeAsync(cancellationToken);
@@ -139,6 +137,8 @@ public sealed partial class FtpService(
         }
 
         durum.ServiceState = olcum.ServiceState;
+        durum.PassivePortStart = olcum.PassivePortStart;
+        durum.PassivePortEnd = olcum.PassivePortEnd;
         durum.SiteState = olcum.SiteState;
         durum.IsSiteRunning = olcum.SiteExists && olcum.SiteState.Equals("Started", StringComparison.OrdinalIgnoreCase);
 
@@ -249,7 +249,9 @@ public sealed partial class FtpService(
         string ServiceState,
         IReadOnlyCollection<int> ServicePids,
         bool PortOlculebildi,
-        IReadOnlyCollection<FtpPortDinleyici> Listeners);
+        IReadOnlyCollection<FtpPortDinleyici> Listeners,
+        int? PassivePortStart,
+        int? PassivePortEnd);
 
     /// <summary>
     /// FTP çalışma zamanını TEK bir PowerShell çağrısında ölçer (servis, site, portu dinleyen tüm
@@ -273,6 +275,8 @@ public sealed partial class FtpService(
             $siteDurum = ''
             $servisDurum = ''
             $servisPidleri = @()
+            $passiveLow = $null
+            $passiveHigh = $null
             try {
               $svc = Get-CimInstance Win32_Service -Filter "Name='FTPSVC'" -ErrorAction Stop
               if ($svc) {
@@ -288,6 +292,10 @@ public sealed partial class FtpService(
               $siteDurum = $ftpRuntime.State
               $siteOlculdu = $true
             } catch { }
+            try {
+              $passiveLow = (Get-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.ftpServer/firewallSupport' -Name lowDataChannelPort -ErrorAction Stop).Value
+              $passiveHigh = (Get-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.ftpServer/firewallSupport' -Name highDataChannelPort -ErrorAction Stop).Value
+            } catch { $passiveLow = $null; $passiveHigh = $null }
             $satirlar = @()
             if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
               try {
@@ -309,6 +317,8 @@ public sealed partial class FtpService(
               serviceState = $servisDurum
               servicePids = @($servisPidleri)
               portMeasured = $portOlculdu
+              passivePortStart = $passiveLow
+              passivePortEnd = $passiveHigh
               listeners = @($satirlar | Group-Object pid | ForEach-Object { $_.Group[0] })
             } | ConvertTo-Json -Depth 5 -Compress
             """;
@@ -354,10 +364,16 @@ public sealed partial class FtpService(
             var servicePids = DiziOku(kok, "servicePids").ToArray();
             if (servicePids.Any(item => item.ValueKind != JsonValueKind.Number || !item.TryGetInt32(out var pid) || pid <= 0)) return null;
 
+            int? passiveStart = null, passiveEnd = null;
+            if (kok.TryGetProperty("passivePortStart", out var low) && low.ValueKind == JsonValueKind.Number && low.TryGetInt32(out var measuredLow)
+                && kok.TryGetProperty("passivePortEnd", out var high) && high.ValueKind == JsonValueKind.Number && high.TryGetInt32(out var measuredHigh)
+                && measuredLow >= 1025 && measuredHigh <= 65535 && measuredHigh >= measuredLow)
+            { passiveStart = measuredLow; passiveEnd = measuredHigh; }
+
             return new FtpRuntimeOlcum(
                 siteExists, siteState.GetString() ?? string.Empty, serviceState.GetString() ?? string.Empty,
                 servicePids.Select(item => item.GetInt32()).ToArray(), portMeasured,
-                dinleyiciler);
+                dinleyiciler, passiveStart, passiveEnd);
         }
         catch (JsonException)
         {
@@ -574,7 +590,11 @@ public sealed partial class FtpService(
         approvedHomePath = homePath;
         await Approve(cancellationToken);
         Directory.CreateDirectory(homePath);
-        await EnsureFtpInfrastructureAsync(false, cancellationToken, Approve);
+        var infrastructure = await EnsureFtpInfrastructureAsync(false, cancellationToken, Approve);
+        // A measured broken policy/certificate cannot produce a usable new account. The
+        // fast path is deliberately unmeasured and remains valid; optional TLS stays optional.
+        if (infrastructure.Failed)
+            throw new AppException("ftp.site_configuration_failed", 500, 500, infrastructure.Detail);
 
         // BU ÇAĞRI hesabı gerçekten AÇTI mı? Geri alma yalnız BUNA bakar (gerekçe: RollbackCreateAsync).
         var hesabiBuCagriActi = false;
@@ -1219,14 +1239,14 @@ public sealed partial class FtpService(
 
         // Pasif (PASV) mod: sunucu, veri kanalı için istemciye bir IP bildirir. Bu IP yanlış/iç IP olursa
         // istemci bağlanır, giriş yapar ama DİZİN LİSTESİ/transfer TAKILIR. Panelde tanımlı public IPv4'ü
-        // FTP sitesine externalIp4Address olarak yazıyoruz; tanımlı değilse IIS kendi IP'sini kullanır.
+        // FTP sitesinin boş externalIp4Address ayarını doldururuz; mevcut NAT tercihi korunur.
         var preferences = await panelPreferencesService.GetAsync(cancellationToken);
         await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
         var externalIp = preferences.ServerAddress?.Trim() ?? string.Empty;
-        var externalIpLine = System.Net.IPAddress.TryParse(externalIp, out var parsedIp)
+        var defaultExternalIp = System.Net.IPAddress.TryParse(externalIp, out var parsedIp)
                 && parsedIp.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
-            ? $"Set-ItemProperty \"IIS:\\Sites\\$siteName\" -Name ftpServer.firewallSupport.externalIp4Address -Value '{EscapePowerShellLiteral(externalIp)}'"
-            : "# sunucu IPv4 adresi panelde tanimli degil; pasif mod sunucunun kendi IP'sini kullanir";
+            ? externalIp
+            : string.Empty;
 
         // M5 (profesyonel paneller gibi opsiyonel): FTPS zorunlu mu? 0=SslAllow (düz+FTPS, varsayılan), 1=SslRequire (yalnız FTPS).
         var requireSsl = requestedPolicy ?? await GetRequireSslAsync(cancellationToken);
@@ -1258,9 +1278,10 @@ public sealed partial class FtpService(
             # certificate with a generated self-signed certificate during account/policy setup.
             # The FTPS certificate endpoint validates the DNS name, store/key/chain and AUTH TLS.
             # Pasif port araligi SUNUCU seviyesinde (location'siz) -> Set-WebConfigurationProperty dogru calisir.
-            Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.ftpServer/firewallSupport' -Name lowDataChannelPort -Value {{PassivePortStart}}
-            Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.ftpServer/firewallSupport' -Name highDataChannelPort -Value {{PassivePortEnd}}
-            {{externalIpLine}}
+            $defaultPassiveLow = {{PassivePortStart}}
+            $defaultPassiveHigh = {{PassivePortEnd}}
+            $defaultExternalIp = '{{EscapePowerShellLiteral(defaultExternalIp)}}'
+            {{FtpNetworkSettingsScript}}
             # Restart failure must not be reported as a verified TLS application.
             Restart-Service FTPSVC -Force -ErrorAction Stop
             $ftpService = Get-Service FTPSVC -ErrorAction Stop
@@ -1279,8 +1300,13 @@ public sealed partial class FtpService(
             if (-not (Get-NetFirewallRule -DisplayName 'AdaPanel FTP Control' -ErrorAction SilentlyContinue)) {
               New-NetFirewallRule -DisplayName 'AdaPanel FTP Control' -Direction Inbound -Action Allow -Protocol TCP -LocalPort {{FtpPort}} -Profile Any | Out-Null
             }
-            if (-not (Get-NetFirewallRule -DisplayName 'AdaPanel FTP Passive' -ErrorAction SilentlyContinue)) {
-              New-NetFirewallRule -DisplayName 'AdaPanel FTP Passive' -Direction Inbound -Action Allow -Protocol TCP -LocalPort {{PassivePortStart}}-{{PassivePortEnd}} -Profile Any | Out-Null
+            $passiveRules = @(Get-NetFirewallRule -DisplayName 'AdaPanel FTP Passive' -ErrorAction SilentlyContinue)
+            if ($passiveRules.Count -eq 0) {
+              New-NetFirewallRule -DisplayName 'AdaPanel FTP Passive' -Direction Inbound -Action Allow -Protocol TCP -LocalPort "$passiveLow-$passiveHigh" -Profile Any | Out-Null
+            } else {
+              # Only the panel-managed rule follows its effective range. Other firewall
+              # rules are administrator-owned and are never rewritten or removed here.
+              $passiveRules | Get-NetFirewallPortFilter -ErrorAction Stop | Set-NetFirewallPortFilter -Protocol TCP -LocalPort "$passiveLow-$passiveHigh" -ErrorAction Stop | Out-Null
             }
             # SESSIZ BASARISIZLIK BIR DAHA OLMASIN: ayarin gercekten uygulandigini geri-okuyup dogrula.
             # NOT: bu geri-okuma yalnız OLCER, ASLA throw etmez. Bazı IIS sürümlerinde Get-ItemProperty
