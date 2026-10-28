@@ -94,9 +94,7 @@ public sealed partial class MailService
         var (domain, host) = ValidateServerIdentity(request);
         using var operation = await MailCertificateLifecycle.EnterAsync(fileStore.ResolvePath(CertificateStatePath), cancellationToken);
         var sites = await iisSiteService.GetSitesAsync(cancellationToken);
-        var site = sites.SingleOrDefault(s => s.Name.Equals(domain, StringComparison.OrdinalIgnoreCase))
-            ?? sites.SingleOrDefault(s => s.Bindings.Any(b => b.HostName.Equals(domain, StringComparison.OrdinalIgnoreCase)))
-            ?? throw new AppException("mail.invalid_domain", 400, 400);
+        var site = ResolveManagedIdentitySite(sites, domain);
         var preferences = await panelPreferencesService.GetAsync(cancellationToken);
         var address = preferences.ServerAddress?.Trim() ?? string.Empty;
         if (!IsPublicIdentityAddress(address)) throw new AppException("mail.server_address_required", 400, 400);
@@ -205,8 +203,12 @@ public sealed partial class MailService
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception error)
         {
-            logger.LogWarning("Mail identity operation failed at {Stage}: {ErrorType}", stage, error.GetType().Name);
-            Step(stage, "fail", "İşlem doğrulanamadı. Önceki kalıcı tercih korundu; DNS ve sertifika hazırlıkları yapılmış olabilir.");
+            var diagnostic = error is AppException rule
+                ? rule.MessageKey + (string.IsNullOrWhiteSpace(rule.Details) ? "" : ": " + SecretRedactor.SanitizeDetails(rule.Details))
+                : string.Empty;
+            logger.LogWarning("Mail identity operation failed at {Stage}: {ErrorType} {Diagnostic}", stage, error.GetType().Name, diagnostic);
+            Step(stage, "fail", (diagnostic.Length == 0 ? "" : diagnostic + Environment.NewLine)
+                + "İşlem doğrulanamadı. Önceki kalıcı tercih korundu; DNS ve sertifika hazırlıkları yapılmış olabilir.");
             // Report the provider's actual configured value, including an incomplete rollback.
             try
             {
@@ -224,6 +226,32 @@ public sealed partial class MailService
         _ = ReadCertificateSettings(query, "mail.server_identity_read_failed");
         return query.Items[0];
     }
+
+    internal static Core.Dtos.Sites.SiteDto ResolveManagedIdentitySite(IReadOnlyCollection<Core.Dtos.Sites.SiteDto> sites,
+        string domain, string? httpHost = null)
+    {
+        var bound = sites.Where(s => s.Bindings.Any(b => b.HostName.Equals(domain, StringComparison.OrdinalIgnoreCase)
+            && (b.Protocol.Equals("http", StringComparison.OrdinalIgnoreCase) || b.Protocol.Equals("https", StringComparison.OrdinalIgnoreCase)))).ToArray();
+        var named = sites.Where(s => s.Name.Equals(domain, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (bound.Length > 1 || named.Length > 1)
+            throw new AppException("mail.invalid_domain", 409, 409, "Managed IIS domain association is ambiguous.");
+        var owner = bound.SingleOrDefault() ?? named.SingleOrDefault();
+        if (bound.Length == 1 && named.Length == 1 && !bound[0].Name.Equals(named[0].Name, StringComparison.OrdinalIgnoreCase))
+            throw new AppException("mail.invalid_domain", 409, 409, "Managed IIS site name and hostname binding refer to different sites.");
+        if (httpHost is not null)
+        {
+            var httpOwners = sites.Where(s => HasMailHttpBinding(s, httpHost)).ToArray();
+            var bindingCount = sites.Sum(s => s.Bindings.Count(b => b.Protocol.Equals("http", StringComparison.OrdinalIgnoreCase)
+                && b.Port == 80 && b.HostName.Equals(httpHost, StringComparison.OrdinalIgnoreCase)));
+            if (bindingCount > 1 || httpOwners.Length == 1 && owner is not null && !httpOwners[0].Name.Equals(owner.Name, StringComparison.OrdinalIgnoreCase))
+                throw new AppException("mail.invalid_domain", 409, 409, "The requested HTTP-01 hostname is bound to another or multiple IIS sites.");
+            owner ??= httpOwners.SingleOrDefault();
+        }
+        return owner ?? throw new AppException("mail.invalid_domain", 400, 400, "No managed IIS site matches the domain or requested HTTP hostname.");
+    }
+
+    private static bool HasMailHttpBinding(Core.Dtos.Sites.SiteDto site, string host) => site.Bindings.Any(b =>
+        b.Protocol.Equals("http", StringComparison.OrdinalIgnoreCase) && b.Port == 80 && b.HostName.Equals(host, StringComparison.OrdinalIgnoreCase));
 
     private async Task WriteIdentitySettingsAsync(string cli, IReadOnlyDictionary<string, string> env, string host, string certificate, CancellationToken token)
     {

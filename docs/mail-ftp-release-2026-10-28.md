@@ -45,3 +45,21 @@ across twelve relevant files, vue-tsc and an isolated production frontend build.
 Regression mutations for primary identity, pinned domain repair, contact
 persistence and passive-range reset were detected. Independent read-only review
 approved both mail and FTP changes.
+
+Live deployment of 0.8.135 exposed an imported-site association defect: the
+managed domain adapanel.host is bound to the technical IIS site web-adapanel.host.
+The identity flow resolved that binding, but its ACME helper repeated a lookup
+by site name and failed before starting win-acme. The working identity was kept.
+
+The 0.8.136 follow-up uses the same unambiguous domain-to-IIS association for
+identity validation and certificate issuance, passes the measured native site ID
+to win-acme, and verifies the exact HTTP-01 binding after adding it. Duplicate or
+conflicting associations stop before issuance. Cancellation propagates. Failure
+details preserve known application error keys and bounded, redacted ACME output;
+private keys, credentials and challenge tokens are masked before truncation.
+Independent read-only review approved the follow-up source and test coverage.
+
+The final 0.8.136 focused identity, ACME diagnostics and certificate lifecycle
+group passed 87/87. Two deliberate regressions (site-name lookup and swallowed
+issuer error) were both caught; original production sources were restored before
+the final passing run. The isolated production frontend build also passed.

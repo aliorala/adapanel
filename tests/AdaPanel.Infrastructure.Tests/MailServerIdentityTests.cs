@@ -22,6 +22,20 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class MailServerIdentityTests
 {
+    [Fact]
+    public async Task CertificateRuleFailureKeepsSanitizedCauseInIdentityStepAndPreservesNativeIdentity()
+    {
+        using var f = new Fixture { Failure = "issuer-rule" };
+        var result = await f.Service.SetServerIdentityAsync(Request(contact: "contact@example.test"));
+        var step = Assert.Single(result.Steps, s => s.Key == "certificate" && s.Status == "fail");
+        Assert.Contains("mail.certificate_acme_failed", step.Message);
+        Assert.Contains("HTTP-01 returned 404", step.Message);
+        Assert.DoesNotContain("fixture-password-secret", step.Message);
+        Assert.DoesNotContain("fixture-token-secret", step.Message);
+        Assert.False(result.Applied);
+        Assert.Equal(Fixture.Previous, f.CurrentHost);
+        Assert.False(File.Exists(f.Store.ResolvePath(MailService.ServerIdentityPath)));
+    }
     [Theory]
     [InlineData("mail.other.test")]
     [InlineData("-mail.example.test")]
@@ -320,6 +334,8 @@ public sealed class MailServerIdentityTests
                 CertificateIssuer = (_, host, _, _, directory, _) =>
                 {
                     IssuerCalls++;
+                    if (Failure == "issuer-rule") throw new AppException("mail.certificate_acme_failed", 502, 502,
+                        "HTTP-01 returned 404; password=fixture-password-secret token=fixture-token-secret");
                     if (Failure == "issuer") return Task.FromResult(false);
                     using var key = RSA.Create(2048);
                     var request = new CertificateRequest("CN=" + host, key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);

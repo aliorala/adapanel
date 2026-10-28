@@ -1,4 +1,4 @@
-﻿using System.Runtime.Versioning;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using AdaPanel.Core.Common;
@@ -3032,6 +3032,8 @@ public sealed partial class MailService(
         }
     }
 
+    internal Func<string, string, CancellationToken, Task<CommandResult>>? AcmeProcessRunner { get; init; }
+
     internal async Task<bool> TryIssueWithWinAcmeAsync(
         string domain,
         string hostName,
@@ -3042,7 +3044,7 @@ public sealed partial class MailService(
     {
         if (string.IsNullOrWhiteSpace(contactEmail))
         {
-            return false;
+            throw new AppException("mail.certificate_acme_failed", 502, 502, "win-acme was not started: an ACME contact email is required.");
         }
 
         // İkisi de wacs.exe'nin KOMUT SATIRINA giriyor. Kabuk yok (UseShellExecute=false), ama
@@ -3052,41 +3054,48 @@ public sealed partial class MailService(
         if (!Ssl.AcmeArgumentRules.IsCommandSafeHost(hostName)
             || !Ssl.AcmeArgumentRules.IsCommandSafeEmail(contactEmail))
         {
-            return false;
+            throw new AppException("mail.certificate_acme_failed", 502, 502, "win-acme was not started: the hostname or contact email is invalid.");
         }
 
         var wacs = await ResolveComponentExecutableAsync("win-acme", "wacs.exe", cancellationToken);
         if (wacs is null)
         {
-            return false;
+            throw new AppException("mail.certificate_acme_failed", 502, 502, "win-acme was not started: the installed wacs.exe executable could not be found.");
         }
 
         Core.Dtos.Sites.SiteDto site;
         try
         {
-            site = await iisSiteService.GetSiteAsync(domain, cancellationToken);
+            site = ResolveManagedIdentitySite(await iisSiteService.GetSitesAsync(cancellationToken), domain, hostName);
+            if (site.Id <= 0) throw new AppException("mail.invalid_domain", 409, 409, "The managed IIS site has no valid native site ID.");
         }
-        catch
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception error)
         {
             // Domain panelde site olarak yönetilmiyorsa HTTP-01 doğrulaması yapılamaz.
-            return false;
+            var reason = error is AppException rule ? rule.MessageKey + ": " + rule.Details : error.GetType().Name;
+            throw new AppException("mail.certificate_acme_failed", 502, 502,
+                SecretRedactor.SanitizeDetails($"win-acme was not started: IIS site '{domain}' could not be resolved for HTTP-01. {reason}"));
         }
 
-        // HTTP-01 doğrulamasının mail hostname'ine ulaşabilmesi için sitede 80 portuna
-        // hostname bağlaması bulunmalı; yoksa eklenir (varsa AddBinding sessizce çakışma döner).
-        try
+        // Resolve the technical IIS site once, then verify the exact HTTP-01 binding before wacs.
+        if (!HasMailHttpBinding(site, hostName))
         {
-            await iisSiteService.AddBindingAsync(site.Name, new Core.Dtos.Sites.SiteBindingRequest
+            try
             {
-                Protocol = "http",
-                HostName = hostName,
-                IpAddress = "*",
-                Port = 80
-            }, cancellationToken);
-        }
-        catch
-        {
-            // Bağlama zaten varsa ya da eklenemediyse win-acme yine de denenir.
+                await iisSiteService.AddBindingAsync(site.Name, new Core.Dtos.Sites.SiteBindingRequest
+                { Protocol = "http", HostName = hostName, IpAddress = "*", Port = 80 }, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception error)
+            {
+                throw new AppException("mail.certificate_acme_failed", 502, 502,
+                    $"win-acme was not started: HTTP-01 binding preparation failed for IIS site '{site.Name}' ({error.GetType().Name}).");
+            }
+            var confirmed = ResolveManagedIdentitySite(await iisSiteService.GetSitesAsync(cancellationToken), domain, hostName);
+            if (confirmed.Id != site.Id || !HasMailHttpBinding(confirmed, hostName))
+                throw new AppException("mail.certificate_acme_failed", 502, 502, "win-acme was not started: the exact HTTP-01 binding could not be verified.");
+            site = confirmed;
         }
 
         var baseUri = useStaging
@@ -3096,9 +3105,30 @@ public sealed partial class MailService(
             $"--target iis --siteid {site.Id} --host \"{hostName.Trim()}\" --installation none " +
             $"--store pemfiles --pemfilespath \"{pemDirectory}\" " +
             $"--emailaddress \"{contactEmail.Trim()}\" --accepttos --baseuri {baseUri}";
-        var result = await ProcessRunner.RunAsync(wacs, args, cancellationToken: cancellationToken);
+        var result = await (AcmeProcessRunner is { } runner ? runner(wacs, args, cancellationToken)
+            : ProcessRunner.RunAsync(wacs, args, cancellationToken: cancellationToken));
+        if (!result.Success || !Directory.EnumerateFiles(pemDirectory, "*-key.pem").Any())
+            throw new AppException("mail.certificate_acme_failed", 502, 502, WinAcmeFailureDetails(result));
+        return true;
+    }
 
-        return result.Success && Directory.EnumerateFiles(pemDirectory, "*-key.pem").Any();
+    internal static string WinAcmeFailureDetails(CommandResult result)
+    {
+        static string Output(string value)
+        {
+            // Redact BEFORE taking a tail: cutting a PEM block first could expose its remainder.
+            var safe = SecretRedactor.Redact(value);
+            safe = System.Text.RegularExpressions.Regex.Replace(safe,
+                @"(?i)(/\.well-known/acme-challenge/)[A-Za-z0-9_-]+", "$1" + SecretRedactor.Mask,
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+            return safe.Length <= 800 ? safe : "[earlier output omitted] " + safe[^800..];
+        }
+        var stdout = Output(result.StandardOutput);
+        var stderr = Output(result.StandardError);
+        return SecretRedactor.SanitizeDetails($"win-acme exit code: {result.ExitCode}. "
+            + (result.Success ? "The expected PEM private-key file was not produced." : "Certificate issuance did not complete.")
+            + (stderr.Length == 0 ? "" : Environment.NewLine + "stderr: " + stderr)
+            + (stdout.Length == 0 ? "" : Environment.NewLine + "stdout: " + stdout));
     }
 
     private static void WriteSelfSignedPem(string hostName, string pemDirectory)
