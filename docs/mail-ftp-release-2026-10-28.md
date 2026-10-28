@@ -63,3 +63,43 @@ The final 0.8.136 focused identity, ACME diagnostics and certificate lifecycle
 group passed 87/87. Two deliberate regressions (site-name lookup and swallowed
 issuer error) were both caught; original production sources were restored before
 the final passing run. The isolated production frontend build also passed.
+
+Live verification completed with 0.8.136 on the home server:
+
+- GitHub release 0.8.136 installer was downloaded again and matched SHA-256
+  CEEBC044EE1505DAA382690839DFFEAA98E7999279F6AC943940DF13BF037090
+  (91,237,958 bytes). The updater confirmed the running version; installation
+  history records 2026-10-28 23:15:06 +03:00.
+- Applied managed domain adapanel.host, hostname mail.adapanel.host and contact
+  info@adapanel.host. Reloaded form readback retained all three selections.
+- mail.adapanel.host now presents the trusted Let's Encrypt certificate with SAN
+  mail.adapanel.host, thumbprint CA539340BC18DDE6B625EEEDA1310D09B1CF3112,
+  expiry 2027-01-26 19:21:25 UTC. Real 220 greeting and post-TLS EHLO name are
+  mail.adapanel.host.
+- Strict external TLS tests passed on both 587 STARTTLS and 465 implicit TLS for
+  mail.adapanel.host, mail.travianpanel.com and mail.videotools.com.tr. SAN, time,
+  online chain verification and SMTP/EHLO were required, with no validation bypass.
+  The two pre-existing domains retained their baseline certificate thumbprints.
+- The panel's automatic domain repair completed (four domains already current).
+  All six strict TLS/SMTP tests passed again afterward. Stalwart was then restarted
+  through Server Health; all six passed afterward and the stored identity/contact
+  remained selected. No other services were restarted for this check.
+- Initial rapid connection bursts produced isolated SMTP closes after a valid TLS
+  handshake. Pacing the diagnostic connections one second apart produced 6/6 passes
+  before repair, after repair and after restart; server protection settings were
+  not weakened. Initial raw reports were retained alongside final reports.
+- Existing mailbox-row Webmail sign-in opened info@travianpanel.com on
+  webmail.travianpanel.com and info@adapanel.host on webmail.adapanel.host, without
+  password entry/reset. Account headers and mailbox listings loaded after restart;
+  no message bodies were opened or modified by these checks.
+- After installing 0.8.136, public and LAN FTPS paths both passed trusted TLS,
+  directory listing, an owned UUID probe-file upload/download SHA-256 round trip
+  and deletion of that probe file. Existing site files were not replaced.
+- Live menu totals: sites 4, mailboxes 4, FTP accounts 2, databases 5,
+  customers/resellers 0 (only the administrator account currently exists).
+
+No new PTR instructions UI was added. Mailbox passwords, MX/DKIM values and
+pre-existing domain certificates were not intentionally changed. This verifies
+SMTP TLS and greeting, not end-to-end delivery to an external recipient. Optional
+Outlook autodiscovery publishing remains a separate unconfigured feature on the
+two inspected domains; manual client settings and the tested Webmail login work.
