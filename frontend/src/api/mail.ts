@@ -353,11 +353,12 @@ export async function issueMailCertificate(domain: string, hostName: string, con
 
 export type WebmailOpen = {
   url: string;
+  handoffToken?: string;
 };
 
 /// Roundcube webmail'i (gerekirse kurup) açacak URL'i döndürür.
-export async function openWebmail() {
-  const response = await apiClient.post<ApiEnvelope<WebmailOpen>>("/mail/webmail/open", {});
+export async function openWebmail(options?: { domain?: string; address?: string }) {
+  const response = await apiClient.post<ApiEnvelope<WebmailOpen>>("/mail/webmail/open", options ?? {});
   return response.data.data;
 }
 

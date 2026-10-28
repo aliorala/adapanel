@@ -306,6 +306,8 @@
 
     <SiteBuilderView v-else-if="activeSection === 'sitebuilder'" />
 
+    <FtpView v-else-if="activeSection === 'ftp' && (isAdmin || isReseller)" />
+
     <DatabasesView v-else-if="activeSection === 'database' && isAdmin" />
 
     <MyDatabasesView v-else-if="activeSection === 'database' && (isReseller || isCustomer)" />
@@ -712,6 +714,7 @@ const AdvisorView = lazyView(() => import("./AdvisorView.vue"));
 const SeoView = lazyView(() => import("./SeoView.vue"));
 const FilesView = lazyView(() => import("./FilesView.vue"));
 const MailView = lazyView(() => import("./MailView.vue"));
+const FtpView = lazyView(() => import("./FtpView.vue"));
 const MonitoringView = lazyView(() => import("./MonitoringView.vue"));
 const NotificationsView = lazyView(() => import("./NotificationsView.vue"));
 const SecurityView = lazyView(() => import("./SecurityView.vue"));
@@ -1008,6 +1011,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
     { id: "accounts", label: isReseller.value ? t("panel.navigation.customers") : t("panel.navigation.accounts"), description: t("panel.navigation.accountsDesc"), glyph: "MU" },
     { id: "sitebuilder", label: t("panel.navigation.siteBuilder"), description: t("panel.siteBuilder.subtitle"), glyph: "SK" },
     { id: "mail", label: t("panel.navigation.mail"), description: t("panel.mail.subtitle"), glyph: "ML" },
+    { id: "ftp", label: t("panel.ftp.title"), description: t("panel.ftp.subtitle"), glyph: "FP" },
     { id: "files", label: t("panel.navigation.files"), description: t("panel.files.subtitle"), glyph: "FL" },
     { id: "database", label: t("panel.navigation.database"), description: t("panel.database.subtitle"), glyph: "DB" },
     { id: "monitor", label: t("panel.navigation.monitor"), description: t("panel.monitor.subtitle"), glyph: "MN", badgeTitle: attentionBadgeTitle("monitor"), badge: attentionBadge("monitor") },
@@ -1048,6 +1052,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "sitebuilder" ||
       section.id === "accounts" ||
       section.id === "mail" ||
+      section.id === "ftp" ||
       section.id === "files" ||
       section.id === "database" ||
       section.id === "tasks" ||
@@ -1121,7 +1126,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "exit");
   }
 
-  // Tam panel: domaine özel araçlar (SSL/DNS/FTP/PHP/Dosyalar) üst menüde DEĞİL, yalnızca
+  // Tam panel: domaine özel araçlar (SSL/DNS/PHP/Dosyalar) üst menüde DEĞİL, yalnızca
   // Web Siteleri > domain > araçlar altında. "Dosyalar" admin üst menüsünden çıkarılır
   // (hub'da "Dosyalar" aracı var). Müşteride üst menüde kalır (onların site hub'ı yok).
   const adminSections = sections.filter((section) => section.id !== "files");

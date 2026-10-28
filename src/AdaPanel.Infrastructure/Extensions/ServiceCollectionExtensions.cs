@@ -133,6 +133,13 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWebDbClientService, WebDbClient.WebDbClientService>();
         services.AddScoped<IRemoteDbAccessService, Database.RemoteDbAccessService>();
         services.AddScoped<IWebmailService, Mail.WebmailService>();
+        services.AddSingleton<Mail.WebmailSsoTickets>();
+        services.AddScoped<Mail.StalwartWebmailCredentials>();
+        services.AddScoped<Mail.WebmailSsoService>();
+        services.AddScoped<Mail.WebmailSsoDeployment>();
+        services.AddHostedService<Mail.WebmailSsoCleanup>();
+        services.AddHttpClient(Mail.StalwartWebmailCredentials.ClientName, client => client.Timeout = TimeSpan.FromSeconds(15))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false, UseProxy = false });
         services.AddScoped<ICacheService, Cache.CacheService>();
         services.AddScoped<IFileService, Files.FileService>();
         services.AddScoped<ISslService, Ssl.WinAcmeSslService>();

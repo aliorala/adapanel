@@ -31,12 +31,57 @@ public sealed class MailController(
     /// Tüm posta rolleri erişebilir; kurulum idempotenttir.
     /// </summary>
     [HttpPost("webmail/open")]
-    public async Task<ActionResult<ApiResponse<WebmailOpenDto>>> OpenWebmailAsync(CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<WebmailOpenDto>>> OpenWebmailAsync(
+        [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] WebmailOpenRequest? request,
+        CancellationToken cancellationToken)
     {
         // "Aç" masum görünür ama gerekirse Roundcube'u KURAR/yapılandırır — yani sunucuda durum
         // değiştirir. Bu yüzden kayda geçer.
-        var result = await webmailService.OpenAsync(Request.Host.Host, cancellationToken);
-        await auditService.AuditAsync(HttpContext, "mail.webmail.opened", "webmail", "Webmail was opened (installed/configured if needed).");
+        request ??= new();
+        WebmailOpenDto result;
+        if (string.IsNullOrWhiteSpace(request.Domain) && string.IsNullOrWhiteSpace(request.Address))
+            result = await webmailService.OpenAsync(Request.Host.Host, cancellationToken);
+        else
+        {
+            var domain = WebmailRequestValidation.Domain(request.Domain);
+            request.Domain = domain;
+            await CustomerAccess.EnsureSectionAsync(customerScopes, User, "mail", cancellationToken);
+            await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, domain, cancellationToken);
+            if (PanelAuthentication.IsTokenAuthenticated(User))
+            {
+                // Store only the validated API token's digest so consumption can detect revocation.
+                var rawToken = PanelAuthentication.ExtractToken(Request) ?? throw new AdaPanel.Core.Common.AppException("auth.unauthorized", 401, 401);
+                var identity = new System.Security.Claims.ClaimsIdentity(User.Identity as System.Security.Claims.ClaimsIdentity);
+                identity.AddClaim(new("adapanel_webmail_token_hash", Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(rawToken)))));
+                HttpContext.User = new System.Security.Claims.ClaimsPrincipal(identity);
+            }
+            var db = HttpContext.RequestServices.GetRequiredService<AdaPanel.Data.Persistence.AdaPanelDbContext>();
+            var sessions = HttpContext.RequestServices.GetRequiredService<AdaPanel.Infrastructure.Security.SessionRevocationStore>();
+            var actor = await WebmailActorAuthority.CaptureAsync(db, customerScopes, sessions, User, domain, cancellationToken);
+            string? accountId = null;
+            if (!string.IsNullOrWhiteSpace(request.Address))
+            {
+                HttpContext.RequestServices.GetRequiredService<WebmailSsoTickets>().Reserve(User);
+                request.Address = request.Address.Trim().ToLowerInvariant();
+                accountId = await HttpContext.RequestServices.GetRequiredService<WebmailSsoService>()
+                    .ResolveAsync(domain, request.Address, cancellationToken);
+            }
+            result = await webmailService.OpenAsync(Request.Host.Host, request, cancellationToken);
+            if (accountId is not null)
+            {
+                await HttpContext.RequestServices.GetRequiredService<WebmailSsoDeployment>().PrepareAsync(cancellationToken);
+                if (await WebmailActorAuthority.CaptureAsync(db, customerScopes, sessions, User, domain, cancellationToken) != actor)
+                    throw new AdaPanel.Core.Common.AppException("auth.unauthorized", 401, 401);
+                var origin = Request.Scheme + "://" + Request.Host.ToUriComponent();
+                var host = "webmail." + domain;
+                if (result.Url != "https://" + host + "/")
+                    throw new AdaPanel.Core.Common.AppException("mail.webmail_sso_unavailable", 503, 503);
+                result.HandoffToken = HttpContext.RequestServices.GetRequiredService<WebmailSsoTickets>()
+                    .Issue(User, actor, domain, request.Address!, accountId, host, origin, rateAlreadyChecked: true);
+            }
+        }
+        Response.Headers.CacheControl = "no-store";
+        await auditService.AuditAsync(HttpContext, "mail.webmail.opened", request.Address ?? "webmail", "Webmail was opened (installed/configured if needed).");
         return Ok(ApiResponse<WebmailOpenDto>.Ok(result));
     }
 

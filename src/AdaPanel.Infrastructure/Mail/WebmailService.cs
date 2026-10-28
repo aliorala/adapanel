@@ -17,7 +17,7 @@ namespace AdaPanel.Infrastructure.Mail;
 /// Submission 587, STARTTLS) bağlar. phpMyAdmin/Adminer ile aynı dağıtım kalıbını izler.
 /// SQLite kullanır (ayrı DB sunucusu gerekmez; Roundcube ilk bağlantıda şemayı kurar).
 /// </summary>
-public sealed class WebmailService(
+public sealed partial class WebmailService(
     AdaPanelDbContext dbContext,
     IComponentBootstrapper componentBootstrapper,
     IIisSiteService iisSiteService,
@@ -27,7 +27,8 @@ public sealed class WebmailService(
     ISslService sslService,
     ILogger<WebmailService> logger,
     MailProviderSelection? providerSelection = null,
-    MailEnableWebmail? mailEnableWebmail = null) : IWebmailService
+    MailEnableWebmail? mailEnableWebmail = null,
+    IDnsService? dnsService = null) : IWebmailService
 {
     private const string StatePath = "config/webmail.json";
     private const string ComponentId = "roundcube";
@@ -102,8 +103,7 @@ public sealed class WebmailService(
         var state = await fileStore.ReadAsync<WebmailState?>(StatePath, null, cancellationToken);
         var requestedPort = state?.Port is > 0 ? state.Port : DefaultPort;
 
-        await DeleteManagedSiteIfPresentAsync(cancellationToken);
-        var createdSite = await CreateSiteAsync(documentRoot, requestedPort, cancellationToken);
+        var createdSite = await EnsureManagedSiteAsync(documentRoot, requestedPort, cancellationToken);
 
         // Webmail'i profesyonel paneller gibi HER ZAMAN sıcak tut (app pool AlwaysRunning + idle timeout kapalı) ki
         // "her tıkta uzun bekletiyor" / soğuk başlangıç sağlık-kontrol timeout'u olmasın.
@@ -126,13 +126,12 @@ public sealed class WebmailService(
         // Webmail portunu Windows Güvenlik Duvarı'nda aç (uzak tarayıcıdan erişilebilsin). Best-effort.
         OpenFirewallPort(port);
 
-        await fileStore.WriteAsync(StatePath, new WebmailState
-        {
-            SiteName = SiteName,
-            Port = port,
-            EntryRoot = documentRoot,
-            PhpComponentId = phpComponentId
-        }, cancellationToken);
+        state ??= new WebmailState();
+        state.SiteName = SiteName;
+        state.Port = port;
+        state.EntryRoot = documentRoot;
+        state.PhpComponentId = phpComponentId;
+        await fileStore.WriteAsync(StatePath, state, cancellationToken);
 
         await VerifyHealthyAsync(port, documentRoot, cancellationToken);
 
@@ -488,7 +487,7 @@ public sealed class WebmailService(
             return;
         }
 
-        // IIS app pool kimliği (IIS_IUSRS) tüm Roundcube ağacını OKUYUP çalıştırabilmeli
+        // Yalnız webmail'in ayrılmış IIS havuzu Roundcube ağacını okuyup çalıştırabilmeli.
         // (program/, vendor/, config/, skins/ ...). %ProgramData% altındaki tool dizini varsayılan
         // olarak okunabilir olmayabilir; bu yüzden köke özyinelemeli okuma+çalıştırma izni veriyoruz.
         GrantAppPool(installRoot, "RX");
@@ -506,6 +505,16 @@ public sealed class WebmailService(
         GrantAppPool(logDir, "M");
 
         var dbPath = Path.Combine(dataDir, "roundcube.db").Replace('\\', '/');
+        if (File.Exists(configPath))
+        {
+            // Repair transport settings without rotating the session encryption key,
+            // removing managed plugins, or discarding the operator's other options.
+            var previous = File.ReadAllText(configPath);
+            var hardened = WebmailTlsConfiguration.Harden(previous, tlsOptions);
+            if (hardened != previous) File.WriteAllText(configPath, hardened,
+                new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            return;
+        }
         var desKey = GenerateDesKey();
 
         // Loopback transport with the configured certificate hostname and Windows trust anchors.
@@ -544,13 +553,13 @@ public sealed class WebmailService(
         File.WriteAllText(configPath, config, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
-    // IIS app pool kimliği (IIS_IUSRS üyesi) için bir dizine özyinelemeli izin verir.
+    // Webmail'in ayrılmış IIS havuzu için bir dizine özyinelemeli izin verir.
     // permission: "RX" (okuma+çalıştırma) ya da "M" (değiştirme/yazma).
     private void GrantAppPool(string directory, string permission)
     {
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo("icacls.exe", $"\"{directory}\" /grant \"IIS_IUSRS:(OI)(CI){permission}\" /T /C /Q")
+            var psi = new System.Diagnostics.ProcessStartInfo("icacls.exe", $"\"{directory}\" /grant \"IIS APPPOOL\\AdaPanel.{SiteName}:(OI)(CI){permission}\" /T /C /Q")
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
@@ -562,7 +571,7 @@ public sealed class WebmailService(
         }
         catch (Exception exception)
         {
-            logger.LogWarning(exception, "Could not grant IIS_IUSRS {Permission} on {Directory} for webmail.", permission, directory);
+            logger.LogWarning(exception, "Could not grant the webmail pool {Permission} on {Directory}.", permission, directory);
         }
     }
 
@@ -756,15 +765,25 @@ public sealed class WebmailService(
         }
     }
 
-    private async Task DeleteManagedSiteIfPresentAsync(CancellationToken cancellationToken)
+    private async Task<SiteDto> EnsureManagedSiteAsync(string documentRoot, int port, CancellationToken cancellationToken)
     {
         try
         {
-            await iisSiteService.DeleteSiteAsync(SiteName, cancellationToken);
+            var site = await iisSiteService.GetSiteAsync(SiteName, cancellationToken);
+            if (!Path.GetFullPath(site.PhysicalPath).TrimEnd('\\', '/').Equals(
+                    Path.GetFullPath(documentRoot).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                throw new AppException("mail.webmail_sso_unavailable", 409, 409);
+            if (!site.Bindings.Any(binding => binding.Protocol.Equals("http", StringComparison.OrdinalIgnoreCase)
+                    && string.IsNullOrEmpty(binding.HostName) && binding.Port == port))
+                site = await iisSiteService.AddBindingAsync(SiteName,
+                    new SiteBindingRequest { Protocol = "http", Port = port, IpAddress = "*" }, cancellationToken);
+            if (!site.State.Equals("Started", StringComparison.OrdinalIgnoreCase))
+                site = await iisSiteService.StartSiteAsync(SiteName, cancellationToken);
+            return site;
         }
         catch (AppException exception) when (exception.MessageKey == "sites.site_not_found")
         {
-            // İlk dağıtımda site yok.
+            return await CreateSiteAsync(documentRoot, port, cancellationToken);
         }
     }
 
@@ -812,5 +831,8 @@ public sealed class WebmailService(
 
         // Webmail'in HTTPS yapıldığı host'lar (webmail.<domain>). Doluysa OpenAsync https döner.
         public List<string> SecuredHosts { get; set; } = new();
+
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public Dictionary<string, System.Text.Json.JsonElement>? Extra { get; set; }
     }
 }

@@ -267,6 +267,7 @@ const NAV_ICONS: Record<string, string> = {
   home: '<path d="M3 11l9-7 9 7M5 10v9h5v-5h4v5h5v-9"/>',
   sites: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.3 2.5 14.7 0 17M12 3.5c-2.5 2.3-2.5 14.7 0 17"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 6.5 12 12.5l8.5-6"/>',
+  ftp: '<path d="M7 3v14m-4-4 4 4 4-4M17 21V7m-4 4 4-4 4 4"/>',
   files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   database: '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/>',
   monitor: '<path d="M3 12h4l2.5-7 4 14 2.5-7H21"/>',
@@ -343,7 +344,7 @@ const NAV_GROUPS: { id: string; labelKey: string; hideTitle?: boolean; ids: stri
   // Tek maddelik "Genel" grubunun başlığı EKRANDA yok ama ekran okuyucuda VAR: bir satır için
   // 20px başlık harcamak yersiz, gruba adsız bırakmak ise `aria-labelledby`yi boşa düşürürdü.
   { id: "overview", labelKey: "panel.navigation.group.overview", hideTitle: true, ids: ["home"] },
-  { id: "hosting", labelKey: "panel.navigation.group.hosting", ids: ["sites", "sitebuilder", "mail", "files", "backup", "database"] },
+  { id: "hosting", labelKey: "panel.navigation.group.hosting", ids: ["sites", "sitebuilder", "mail", "ftp", "files", "backup", "database"] },
   { id: "business", labelKey: "panel.navigation.group.business", ids: ["accounts", "subusers", "billing"] },
   { id: "insight", labelKey: "panel.navigation.group.insight", ids: ["monitor", "advisor", "seo", "audit", "tasks"] },
   { id: "server", labelKey: "panel.navigation.group.server", ids: ["software", "security", "tools", "migration", "cluster"] },

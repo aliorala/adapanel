@@ -1,4 +1,10 @@
 {
+  "mail.webmail_domain_invalid": "The selected mail domain or mailbox address is invalid.",
+  "mail.webmail_https_required": "The HTTPS webmail endpoint for this domain could not be verified. Check its DNS and SSL settings.",
+  "mail.webmail_sso_unsupported": "Passwordless webmail sign-in is not available for this mail provider.",
+  "mail.webmail_sso_unavailable": "Secure mailbox sign-in could not be prepared. Check the webmail and mail service logs.",
+  "mail.webmail_sso_invalid": "The sign-in link is invalid, expired, or already used. Click Open webmail on the mailbox again.",
+  "mail.webmail_sso_rate_limited": "Too many webmail sign-in requests. Try again shortly.",
   "ftp.certificate_invalid_host": "Enter the valid server name used by FTPS clients, without a protocol or port.",
   "ftp.certificate_not_found": "No trusted, unexpired certificate with a private key matches this server name. Obtain an SSL certificate for this name first.",
   "ftp.certificate_probe_failed": "The local FTP service TLS connection could not be verified. Certificate application was not successful.",

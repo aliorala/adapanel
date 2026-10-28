@@ -12,6 +12,11 @@ public interface IWebmailService
     /// <param name="publicHost">Tarayıcıdan erişilecek genel host (panel isteğinin host'u).</param>
     Task<WebmailOpenDto> OpenAsync(string publicHost, CancellationToken cancellationToken = default);
 
+    Task<WebmailOpenDto> OpenAsync(string publicHost, WebmailOpenRequest request, CancellationToken cancellationToken = default)
+        => string.IsNullOrWhiteSpace(request.Domain) && string.IsNullOrWhiteSpace(request.Address)
+            ? OpenAsync(publicHost, cancellationToken)
+            : throw new AdaPanel.Core.Common.AppException("mail.webmail_sso_unavailable", 503, 503);
+
     /// <summary>
     /// Webmail'i denetler ve "neden açılmıyor"u tek bir okunur rapora derler: IIS site/binding durumu, FastCGI
     /// sürecinde GERÇEKTEN yüklü PHP eklentileri (Roundcube'un patlama #1 sebebi eksik eklenti), Roundcube kök

@@ -1,4 +1,10 @@
 {
+  "mail.webmail_domain_invalid": "Seçilen posta alan adı veya posta kutusu adresi geçersiz.",
+  "mail.webmail_https_required": "Bu alan adının Webmail HTTPS bağlantısı doğrulanamadı. DNS ve SSL ayarlarını kontrol edin.",
+  "mail.webmail_sso_unsupported": "Bu posta sağlayıcısında parolasız Webmail girişi henüz kullanılamıyor.",
+  "mail.webmail_sso_unavailable": "Posta kutusuna güvenli giriş hazırlanamadı. Webmail ve posta günlüklerini kontrol edin.",
+  "mail.webmail_sso_invalid": "Giriş bağlantısı geçersiz, süresi dolmuş veya kullanılmış. Posta kutusundaki Webmail aç düğmesine yeniden basın.",
+  "mail.webmail_sso_rate_limited": "Çok fazla Webmail giriş isteği gönderildi. Kısa süre sonra yeniden deneyin.",
   "ftp.certificate_invalid_host": "FTPS bağlantılarında kullanılacak geçerli sunucu adını girin; protokol veya port eklemeyin.",
   "ftp.certificate_not_found": "Bu sunucu adına uygun, güvenilir, süresi geçmemiş ve özel anahtarlı sertifika bulunamadı. Önce bu ad için SSL sertifikası alın.",
   "ftp.certificate_probe_failed": "Yerel FTP hizmetinin TLS bağlantısı doğrulanamadı. Sertifika işlemi başarılı sayılmadı.",

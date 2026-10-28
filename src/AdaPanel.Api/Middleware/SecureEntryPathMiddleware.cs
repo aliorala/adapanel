@@ -9,7 +9,7 @@ public sealed class SecureEntryPathMiddleware(RequestDelegate next)
     public async Task InvokeAsync(HttpContext context, ISetupService setupService, IPanelSecurityService securityService)
     {
         var path = context.Request.Path;
-        if (IsAlwaysPublicPath(path))
+        if (IsAlwaysPublicPath(path) || IsDirectWebmailBrokerRequest(context))
         {
             await next(context);
             return;
@@ -76,6 +76,19 @@ public sealed class SecureEntryPathMiddleware(RequestDelegate next)
 
         context.Response.StatusCode = StatusCodes.Status404NotFound;
     }
+
+    // The private webmail broker uses a dedicated pool-only key instead of the browser's
+    // entry header. Do not turn its entire route prefix, forwarded requests or remote
+    // localhost Host headers into a public exemption. The controller checks the key again.
+    internal static bool IsDirectWebmailBrokerRequest(HttpContext context) =>
+        HttpMethods.IsPost(context.Request.Method)
+        && (string.Equals(context.Request.Path.Value, "/api/internal/webmail-sso/consume", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(context.Request.Path.Value, "/api/internal/webmail-sso/revoke", StringComparison.OrdinalIgnoreCase))
+        && context.Connection.RemoteIpAddress is { } remote && System.Net.IPAddress.IsLoopback(remote)
+        && context.Connection.LocalIpAddress is { } local && System.Net.IPAddress.IsLoopback(local)
+        && context.Request.Host.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+        && !context.Request.Headers.Keys.Any(name => name.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Forwarded", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Gizli giriş yolu (ve IP) denetiminden tamamen muaf yollar.
@@ -185,6 +198,10 @@ public sealed class SecureEntryPathMiddleware(RequestDelegate next)
     /// </summary>
     internal static bool RequiresSecureEntryHeader(PathString path)
     {
+        // A native browser form cannot add the entry header. This exact authenticated
+        // endpoint instead requires the current origin plus an actor-bound 60-second grant.
+        // The ordinary panel IP policy above remains in force.
+        if (path.Equals(new PathString("/api/v1/mail/webmail/handoff"))) return false;
         // TARAYICININ KENDİSİNİN GEZDİĞİ yollar başlık isteyemez.
         //
         // /api/v1/dbtools, phpMyAdmin'in TAMAMINI panelin HTTPS'i arkasından sunan bir ters

@@ -216,7 +216,7 @@
               {{ account.active ? t("panel.status.enabled") : t("panel.status.disabled") }}
             </span>
             <div class="row-actions">
-              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="openWebmail()">
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="openWebmail(account.address)">
                 {{ t("panel.mail.webmailOpen") }}
               </button>
               <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="changeAccountQuota(account.address, account.maxSizeMB)">
@@ -1031,7 +1031,6 @@ import {
   type MailAutodiscoverPublication
 } from "../api/autodiscover";
 import { webmailPage } from "../utils/webmailPage";
-import { toReachableUrl } from "../utils/url";
 import { UserFacingError } from "../utils/apiError";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import MailQueueCard from "../components/MailQueueCard.vue";
@@ -1091,6 +1090,9 @@ watch(() => [selectedDomain.value, authStore.session?.isAuthenticated, authStore
 }, { flush: "sync" });
 onBeforeUnmount(() => { certificateDisposed = true; ++certificateRequest; });
 const webmailOpening = ref(false);
+let webmailContext = 0;
+watch(selectedDomain, () => { ++webmailContext; }, { flush: "sync" });
+onBeforeUnmount(() => { ++webmailContext; });
 const webmailDiagnosing = ref(false);
 const webmailReport = ref("");
 
@@ -1590,10 +1592,17 @@ async function issueCert(reuseExistingOnly = false) {
   }
 }
 
-// Tek tık webmail (profesyonel paneller gibi): Roundcube kurulu/yayında değilse panel otomatik kurar,
-// sonra yeni sekmede açar. Kullanıcı tam e-posta adresi + şifresiyle giriş yapar.
-async function openWebmail() {
+// Genel düğme alan adının giriş ekranını; kutu düğmesi tek kullanımlık POST teslimini açar.
+async function openWebmail(address?: string) {
   if (busy.value || webmailOpening.value || subscriptionLocked.value) return;
+  const domain = selectedDomain.value.trim().toLowerCase();
+  const context = webmailContext;
+  const mailbox = address?.trim().toLowerCase();
+  if (!domain || (address !== undefined && (!mailbox || mailbox.split("@").length !== 2 || mailbox.split("@")[1] !== domain ||
+    !workspace.value?.accounts.some(account => account.address.trim().toLowerCase() === mailbox)))) {
+    showNotice(t("panel.common.invalidLink"), true);
+    return;
+  }
   // Pop-up engelleyiciye takılmamak için sekmeyi tıklama anında aç, URL gelince yönlendir.
   const tab = window.open("", "_blank");
   if (!tab) {
@@ -1613,17 +1622,32 @@ async function openWebmail() {
   webmailOpening.value = true;
   await run(async () => {
     try {
-      const result = await openWebmailApi();
-      const url = toReachableUrl(result.url);
-      // `toReachableUrl` http(s) DIŞINDAKİ her şeye boş dizge döner. Boşu atamak sessizce
-      // YANLIŞ olurdu: `location.href = ""` gezinmez, bulunduğu sayfayı YENİDEN YÜKLER —
-      // yani `window.location` dalında yönetici panelin kendisini tazeler ve "açılmadı"
-      // sanır. Boş adres bir adres değildir; aşağıdaki catch'e düşsün, sekmede neden yazılsın.
-      if (!url) {
+      const result = await openWebmailApi({ domain, ...(mailbox ? { address: mailbox } : {}) });
+      let url: URL;
+      try { url = new URL(result.url); } catch { throw new UserFacingError("panel.common.invalidLink"); }
+      if (context !== webmailContext || selectedDomain.value.trim().toLowerCase() !== domain || url.protocol !== "https:" ||
+        url.hostname !== `webmail.${domain}` || url.port || url.username || url.password || url.search || url.hash) {
         throw new UserFacingError("panel.common.invalidLink");
       }
       if (tab.closed) throw new UserFacingError("panel.common.popupClosed");
-      tab.location.replace(url);
+      if (mailbox) {
+        if (!result.handoffToken || !/^[A-Za-z0-9_-]{64}$/.test(result.handoffToken)) {
+          throw new UserFacingError("panel.common.invalidLink");
+        }
+        const form = tab.document.createElement("form");
+        form.method = "POST";
+        // Boş sekme panel CSP'sini miras alır. Aynı kökenli köprü, tokenı webmail'e kendi dar CSP'siyle iletir.
+        form.action = new URL("/api/v1/mail/webmail/handoff", window.location.origin).href;
+        const token = tab.document.createElement("input");
+        token.type = "hidden";
+        token.name = "adapanel_sso";
+        token.value = result.handoffToken;
+        form.appendChild(token);
+        tab.document.body.appendChild(form);
+        form.submit();
+      } else {
+        tab.location.replace(url.href);
+      }
     } catch (error) {
       // Sekmeyi sessizce kapatma → kullanıcı ne olduğunu anlamaz. Nedeni sekmede göster.
       if (!tab.closed && tab.document?.body) {

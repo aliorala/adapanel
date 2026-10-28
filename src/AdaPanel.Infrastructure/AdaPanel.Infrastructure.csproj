@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="AdaPanel.Infrastructure.Tests" />
+    <EmbeddedResource Include="Mail\Managed\adapanel_sso.php" />
   </ItemGroup>
 
   <ItemGroup>

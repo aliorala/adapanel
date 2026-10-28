@@ -92,7 +92,7 @@
           <small>{{ sitesCount === null ? t('panel.dashboard.countUnmeasured') : t("panel.sites.bindings") + ': ' + (totalBindingCount ?? '—') }}</small>
         </button>
 
-        <button v-if="canReadFtpCount && can('sites')" type="button" class="summary-card clickable" @click="go('sites')">
+        <button v-if="canReadFtpCount && can('ftp')" type="button" class="summary-card clickable" @click="go('ftp')">
           <span class="tile-label">{{ t("panel.ftp.title") }}</span>
           <strong>{{ ftpUserCount ?? '—' }}</strong>
           <small>{{ t(ftpUserCount === null ? 'panel.dashboard.countUnmeasured' : 'panel.ftp.cardHint') }}</small>

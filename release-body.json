@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.133",
-  "name": "0.8.133 — Posta kutusundan Webmail aç",
-  "body": "## 0.8.133\n\nPosta kutuları tablosunun İşlem sütununa Webmail aç düğmesi eklendi. Hem site içindeki E-posta ekranından hem genel posta yönetiminden webmail giriş ekranı yeni sekmede açılabilir.\n\n- Mevcut webmail hazırlama ve açma akışı kullanılır; posta kutusu parolaları URL ile aktarılmaz.\n- İşlem sürerken tekrarlanan tıklamalar engellenir; açılma hataları görünür kalır.\n- Önceki sürümlerin çoklu posta sertifikası, posta kutusu sayımı, FTPS ve veritabanı geri yükleme düzeltmeleri dahildir.\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
+  "tag_name": "0.8.134",
+  "name": "0.8.134 — Alan adına bağlı Webmail girişi ve toplu FTP yönetimi",
+  "body": "## 0.8.134\n\nPosta kutusunun Webmail aç düğmesi artık seçilen alan adındaki webmail adresini kullanır. Stalwart ve AdaPanel tarafından yönetilen Roundcube kurulumlarında seçilen posta kutusuna tek kullanımlık, kısa süreli giriş aktarımı eklenmiştir. Başka bir alan adının açık oturumu seçilmiş posta kutusu yerine gösterilmez.\n\n- Parolalar URL ile aktarılmaz; ana posta parolası değiştirilmez. Alan adı, yetki, TLS ve gerçek posta kimlik doğrulaması denetlenir.\n- Yönetilen webmail kurulumu mevcut alan adlarını, HTTPS bağlantılarını ve yapılandırma anahtarlarını korur.\n- Ana sayfadaki FTP kartı artık tüm yetkili FTP hesaplarını birlikte gösteren ayrı yönetim ekranını açar. Site, kullanıcı ve klasör bilgileri, arama ve hesap işlemleri aynı ekrandadır.\n- Önceki posta sertifikası, FTPS ve veritabanı geri yükleme düzeltmeleri dahildir.\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
 }
