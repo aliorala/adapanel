@@ -51,7 +51,15 @@ The fixture does not substitute for live IIS/Stalwart mailbox authentication.
 
 Independent review found the inherited CSP/referrer obstacles before release;
 those changes were returned to the developer for correction and reviewed again.
-Live deployment and exact-account verification are recorded separately when run.
+Release 0.8.134 was published and its downloaded installer hash matched the local
+verified artifact. The home server subsequently reported 0.8.134. The real dashboard
+FTP card opened the global workspace and displayed its one registered account.
+The user's mailbox action produced a new `webmail.travianpanel.com` inbox showing
+`info@travianpanel.com`. The panel audit recorded `mail.webmail.opened` at 21:58:46
+and the loopback broker's `mail.webmail.sso` grant at 21:58:47 (Europe/Istanbul).
+Thus the live IIS/NTFS, PHP backchannel, Stalwart credential creation and actual
+mailbox login path completed. No message was sent or deleted for this check.
+The user's concurrent FTP certificate selection was left untouched.
 
 Primary version contracts:
 
