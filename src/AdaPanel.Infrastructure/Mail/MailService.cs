@@ -388,8 +388,10 @@ public sealed partial class MailService(
         if (type.ValueKind != JsonValueKind.String) return null;
         return type.GetString() switch
         {
-            "Account/User" => true,
-            "Account/Group" => false,
+            // JSON uses the short variant; Account/User is the CLI create
+            // object path, retained here for older integration payloads.
+            "User" or "Account/User" => true,
+            "Group" or "Account/Group" => false,
             _ => null
         };
     }

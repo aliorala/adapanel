@@ -73,6 +73,12 @@ public sealed class MailServerAuditTests
 
     [Theory]
     [InlineData("Account/User", "Account/User", true, 1)]
+    [InlineData("User", "User", true, 1)]
+    [InlineData(null, "User", true, 1)]
+    [InlineData("Group", "Group", true, 0)]
+    [InlineData(null, "Group", true, 0)]
+    [InlineData("Future", "User", false, 0)]
+    [InlineData(null, "Future", false, 0)]
     [InlineData("Account/Group", "Account/Group", true, 0)]
     [InlineData(null, "Account/Group", true, 0)]
     [InlineData("Account/Future", "Account/User", false, 0)]
