@@ -194,6 +194,8 @@ public sealed class AuditCoverageTests
         ["AutomationController.cs#\"automation.ssl.run\"#\"automation\""] = "Sunucudaki HER sertifikayı yenilemeye çalışan tur.",
         ["AutomationController.cs#\"automation.backup.remote_tested\"#$\"backup-target:{request.TargetType}\""] = "Uzak yedek HEDEFİ panel genelinde tanımlıdır; bir aboneliğe ait değil.",
         ["BackupController.cs#\"backup.encryption_changed\"#\"backup\""] = "Şifreleme ayarı panel genelidir; bundan sonraki HER aboneliğin yedeğine uygulanır.",
+        ["BackupNetworkTrustController.cs#\"backup.network_trust.changed\"#\"backup\""] = "FTP hedefi iç ağ izni sunucu genelidir; yalnız gerçek sunucu sahibi değiştirebilir, kimliğe bürünmüş yönetici değiştiremez. Bir kiracıya ait kaynak değildir.",
+        ["BackupNetworkTrustController.cs#\"backup.network_trust.denied\"#\"backup\""] = "Sunucu geneli FTP hedefi iznine yetkisiz veya kimliğe bürünmüş erişim denemesidir; tek kiracıya ait işlem değildir.",
         ["BillingController.cs#action#\"billing\""] = "Bu sarmalayıcının İKİ çağıranı ölçüldü ve ikisi de panel genelidir: entegrasyon anahtarı (açılınca BÜTÜN abonelikler dışa aktarılır olur) ve toplu kullanım raporu (tanım gereği her aboneliği kapsar). Hesap hedefli tek kayıt (billing.terminate_checked) konusunu AYRICA yazar.",
         ["CronController.cs#action#\"cron:server\""] = "Makine PATH'ine Python eklemek sunucu genelidir (yalnız yönetici çağırabilir); bütün kiracıların görevlerini aynı anda etkiler. Göreve ait kayıtlar ayrı sarmalayıcıdan yazılır ve sahibini görev adından ölçer.",
         ["BackupController.cs#\"backup.verified\"#\"backup\""] = "Doğrulama sunucudaki bütün yedekleri tarar.",

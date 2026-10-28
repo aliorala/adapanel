@@ -22,7 +22,7 @@ public sealed class InstallationReportingController(InstallationReportingService
     {
         var result = await reporting.UpdateAsync(request, ct);
         await auditService.AuditAsync(HttpContext, "installation.reporting.changed", "panel",
-            $"Installation reporting enabled: {result.Enabled}.");
+            $"Detailed installation sharing enabled: {result.Enabled}. Daily version reporting continues.");
         return Ok(ApiResponse<InstallationReportingDto>.Ok(result));
     }
 }

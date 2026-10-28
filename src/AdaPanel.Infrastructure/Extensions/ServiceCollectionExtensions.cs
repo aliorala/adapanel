@@ -145,6 +145,7 @@ public static class ServiceCollectionExtensions
         // Yedek şifreleme parolasının DPAPI korumalı kasası (zamanlanmış yedekler için şart).
         services.AddScoped<Backup.BackupEncryptionStore>();
         services.AddScoped<IBackupService, Backup.BackupService>();
+        services.AddScoped<Backup.BackupNetworkTrustService>();
         services.AddScoped<IFileMigrationService, Migration.FileMigrationService>();
         services.AddScoped<ISiteMigrationService, Migration.SiteMigrationService>();
         services.AddScoped<IAppStoreService, AppStore.AppStoreService>();

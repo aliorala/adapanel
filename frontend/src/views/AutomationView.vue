@@ -120,8 +120,18 @@
         </label>
       </div>
 
+      <div v-if="form.backupTargetType === 'ftp' && networkTrust !== null" class="notice">
+        <label class="checkbox-field">
+          <input type="checkbox" :checked="networkTrust.allowed" :disabled="trustBusy || busy || testingRemote" @change="changeNetworkTrust" />
+          {{ t("panel.automation.nasTrust") }}
+        </label>
+        <p class="field-hint">{{ t("panel.automation.nasTrustHint", { target: networkTrust.target }) }}</p>
+      </div>
+      <p v-if="networkTrustError" role="alert" class="notice error">{{ t("panel.automation.nasTrustLoadFailed") }}
+        <button class="secondary compact" type="button" :disabled="trustBusy" @click="loadNetworkTrust">{{ t("panel.common.refresh") }}</button>
+      </p>
       <div v-if="form.backupTargetType !== 'local'" class="row-actions remote-test">
-        <button class="secondary compact" type="button" :disabled="testingRemote || busy" @click="testRemote">
+        <button class="secondary compact" type="button" :disabled="testingRemote || busy || trustBusy" @click="testRemote">
           {{ testingRemote ? t("panel.automation.remoteTesting") : t("panel.automation.remoteTest") }}
         </button>
         <span v-if="remoteTestResult" :class="['status-pill', remoteTestResult.success ? 'ok' : 'warn']">
@@ -302,12 +312,15 @@ import {
   type AutomationStatus,
   type BackupRemoteTestResult
 } from "../api/automation";
-import { extractApiMessage } from "../stores/auth";
+import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { formatDateTime } from "../utils/datetime";
 import { automationDetails } from "../utils/automationDetails";
 import { getSessionEpoch } from "../api/client";
+import { ftpTrustTarget, getBackupNetworkTrust, setBackupNetworkTrust, type BackupNetworkTrust } from "../api/backupNetworkTrust";
 
 const { t, locale } = useI18n();
+const auth = useAuthStore();
+const mayManageTrust = computed(() => auth.session?.isServerOwner === true && auth.session?.isImpersonating !== true);
 const session = getSessionEpoch();
 let disposed = false;
 let statusRequest = 0;
@@ -341,7 +354,10 @@ let refreshErrorNotice: number | undefined;
 const remotePassword = ref("");
 const testingRemote = ref(false);
 const remoteTestResult = ref<BackupRemoteTestResult | null>(null);
-const mayStart = () => isActive() && settingsLoaded.value && !busy.value && !testingRemote.value;
+const networkTrust = ref<BackupNetworkTrust | null>(null);
+const networkTrustError = ref(false);
+const trustBusy = ref(false);
+const mayStart = () => isActive() && settingsLoaded.value && !busy.value && !testingRemote.value && !trustBusy.value;
 /**
  * Program alanları ORTAK biçimde tutulur (bkz. api/schedule.ts): alan bileşeni iki ekranda da
  * aynı nesneyle çalışsın diye. Yükleme ve kaydetme sırasında `form` ile eşlenir.
@@ -398,6 +414,46 @@ watch(() => [form.backupTargetType, form.backupRemoteUrl, form.backupRemoteUserN
   remoteRevision++;
   remoteTestResult.value = null;
 }, { flush: "sync" });
+
+let trustRevision = 0;
+watch(() => [form.backupTargetType, form.backupRemoteUrl, mayManageTrust.value], loadNetworkTrust, { flush: "sync" });
+async function loadNetworkTrust() {
+  const revision = ++trustRevision;
+  networkTrust.value = null;
+  networkTrustError.value = false;
+  if (!mayManageTrust.value || !isActive()) return;
+  const target = form.backupTargetType === "ftp" ? ftpTrustTarget(form.backupRemoteUrl) : null;
+  if (!target) return;
+  try {
+    const result = await getBackupNetworkTrust(target);
+    if (isActive() && revision === trustRevision) networkTrust.value = result;
+  } catch {
+    if (isActive() && revision === trustRevision) networkTrustError.value = true;
+  }
+}
+
+async function changeNetworkTrust(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const allowed = input.checked;
+  // Keep the visible state at the last confirmed value until the server responds.
+  input.checked = networkTrust.value?.allowed ?? false;
+  if (!mayManageTrust.value || !mayStart() || !networkTrust.value) return;
+  const revision = trustRevision;
+  const target = ftpTrustTarget(form.backupRemoteUrl);
+  if (!target) return;
+  trustBusy.value = true;
+  remoteRevision++;
+  remoteTestResult.value = null;
+  try {
+    const result = await setBackupNetworkTrust(target, allowed);
+    if (isActive() && revision === trustRevision) {
+      networkTrust.value = result;
+      showNotice(t("panel.automation.nasTrustSaved"), false);
+    }
+  } catch (error) {
+    if (isActive() && revision === trustRevision) showNotice(resolveApiMessage(error), true);
+  } finally { if (isActive()) trustBusy.value = false; }
+}
 
 const remoteUrlPlaceholder = computed(() => {
   switch (form.backupTargetType) {

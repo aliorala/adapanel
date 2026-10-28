@@ -72,7 +72,8 @@ public sealed partial class BackupService(
     Microsoft.AspNetCore.Http.IHttpContextAccessor? httpContextAccessor = null,
     TimeProvider? timeProvider = null,
     IMailBackupRuntime? mailBackupRuntime = null,
-    IConcurrencyLock? concurrencyLock = null) : IBackupService
+    IConcurrencyLock? concurrencyLock = null,
+    BackupNetworkTrustService? networkTrust = null) : IBackupService
 {
     private readonly IConcurrencyLock siteGates = concurrencyLock ?? new AdaPanel.Infrastructure.Services.ConcurrencyLock();
 
@@ -140,7 +141,12 @@ public sealed partial class BackupService(
 
         // DnsSafeHost: IPv6 literalinde köşeli parantezleri atar, IDN adı punycode'a çevirir ve
         // ondalık/sekizlik/onaltılık IPv4 yazımlarını noktalı dörtlüye normalleştirir (ölçüldü).
-        var engellenen = await OutboundAddressGuard.FindBlockedHostAsync(
+        var trustedFtp = target.Type == "ftp" && networkTrust is not null
+            && await networkTrust.IsTrustedAsync(target.Uri, cancellationToken);
+        var engellenen = trustedFtp
+            ? await BackupNetworkTrustService.FindBlockedTrustedHostAsync(target.Uri,
+                outboundResolver ?? OutboundAddressGuard.SystemResolver, cancellationToken)
+            : await OutboundAddressGuard.FindBlockedHostAsync(
             target.Uri.DnsSafeHost,
             outboundResolver ?? OutboundAddressGuard.SystemResolver,
             OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false),
@@ -4580,6 +4586,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
 
     private async Task DeleteFtpAsync(Uri uri, BackupPruneRemoteOptions remote, CancellationToken cancellationToken)
     {
+        await EnsureRemoteTargetAllowedAsync(new BackupTarget("ftp", uri, "", "", ""), cancellationToken);
         var credential = new NetworkCredential(remote.UserName, remote.Password);
         var adres = SanitizeUri(uri);
 
@@ -4650,6 +4657,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         NetworkCredential credential,
         CancellationToken cancellationToken)
     {
+        await EnsureRemoteTargetAllowedAsync(new BackupTarget("ftp", uri, "", "", ""), cancellationToken);
         var (dizin, ad) = SplitFtpTarget(uri);
         if (ad.Length == 0)
         {
@@ -5376,7 +5384,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     }
 
 #pragma warning disable SYSLIB0014
-    private static async Task UploadFtpAsync(
+    private async Task UploadFtpAsync(
         string localPath,
         Uri uri,
         BackupTarget target,
@@ -5392,6 +5400,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
 
         await BackupFtpRetry.RunAsync(async token =>
         {
+          await EnsureRemoteTargetAllowedAsync(new BackupTarget("ftp", uri, "", "", ""), token);
           var dizinSorunu = await EnsureFtpDirectoriesAsync(uri, credential, token);
           try
           {

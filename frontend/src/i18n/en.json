@@ -3645,7 +3645,7 @@
   "backup.not_found": "Backup not found.",
   "backup.remote_target_invalid": "Remote backup target is invalid.",
   "backup.remote_target_unsupported": "This remote backup target is not supported. Google Drive does not speak WebDAV; choose FTP, S3 (compatible), WebDAV, Dropbox, OneDrive or Azure Blob instead.",
-  "backup.remote_target_forbidden": "The remote backup target resolves to an internal network address, so backups cannot be sent there. If you intentionally use an internal target (for example a local NAS), set Panel:AllowInternalOutboundTargets to true in appsettings.json on the server.",
+  "backup.remote_target_forbidden": "The remote backup address is blocked by the network policy. For a private FTP NAS, the server owner can allow this endpoint on the Automation page.",
   "backup.remote_upload_failed": "Backup upload to the remote target failed.",
   "backup.remote_auth_failed": "Authentication with the remote target failed. The Dropbox/OneDrive token may be expired or invalid; if you use a refresh token, make sure the application (client) id is filled in as well.",
   "backup.remote_delete_failed": "The remote copy of the backup could not be deleted. The local file was removed but the copy on the target is still there; the record was deliberately kept, otherwise the panel could never see or delete that file again. Fix access and try deleting again.",
@@ -5929,5 +5929,11 @@
   "ssl.repair.apply_failed": "The certificate could not be safely applied. Check the IIS binding and operation logs. Success is unverified.",
   "ssl.repair.readback_failed": "The IIS binding could not be verified after the operation. Inspect it again.",
   "ssl.repair.tls_failed": "The IIS binding was updated, but the actual server TLS connection could not be verified. The operation is not fully successful; check site access.",
-  "ssl.repair.verified": "Certificate applied. The IIS binding and actual server TLS connection passed hostname, chain, validity and thumbprint checks."
+  "ssl.repair.verified": "Certificate applied. The IIS binding and actual server TLS connection passed hostname, chain, validity and thumbprint checks.",
+  "panel.automation.nasTrust": "Allow access to a private NAS at this FTP endpoint",
+  "panel.automation.nasTrustHint": "Applies only to {target}. Other endpoints and services stay protected. Loopback and cloud metadata addresses remain blocked.",
+  "panel.automation.nasTrustSaved": "FTP network permission saved. Test the connection again.",
+  "backup.network_trust_invalid": "Enter a valid FTP endpoint without credentials, query or fragment.",
+  "backup.network_trust_owner_only": "Only the server owner can manage private FTP access.",
+  "panel.automation.nasTrustLoadFailed": "Could not read the FTP network permission. Check your connection and try again."
 }
