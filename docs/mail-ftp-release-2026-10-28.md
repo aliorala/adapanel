@@ -38,3 +38,10 @@ hostnames both passed certificate SAN, validity and trust checks on 587/465.
 The current common FTPS hostname adapanel.host passed AUTH TLS, certificate name,
 validity and trust checks without credentials. These are baseline observations;
 post-deployment results are recorded after the live checks complete.
+
+Pre-release checks passed: 346 mail/certificate/identity/Webmail regressions plus
+two activation/rollback cases, 112 focused FTP backend cases, 228 frontend cases
+across twelve relevant files, vue-tsc and an isolated production frontend build.
+Regression mutations for primary identity, pinned domain repair, contact
+persistence and passive-range reset were detected. Independent read-only review
+approved both mail and FTP changes.
