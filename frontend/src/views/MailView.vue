@@ -216,6 +216,9 @@
               {{ account.active ? t("panel.status.enabled") : t("panel.status.disabled") }}
             </span>
             <div class="row-actions">
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="openWebmail()">
+                {{ t("panel.mail.webmailOpen") }}
+              </button>
               <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="changeAccountQuota(account.address, account.maxSizeMB)">
                 {{ t("panel.mail.quota") }}
               </button>
@@ -550,7 +553,7 @@
               <p class="meta">{{ t("panel.mail.webmailHint") }}</p>
             </div>
             <span class="row-actions">
-              <button class="compact" v-bind="writeGate(busy)" @click="openWebmail">
+              <button class="compact" v-bind="writeGate(busy)" @click="openWebmail()">
                 {{ busy && webmailOpening ? t("panel.mail.webmailOpening") : t("panel.mail.webmailOpen") }}
               </button>
               <!-- TANILA: uç ve çevirisi vardı ama çağıran yoktu. "Webmail açılmıyor" durumunda
@@ -1054,7 +1057,7 @@ const { confirm } = useConfirm();
 const { prompt } = usePrompt();
 // Askıdaki abonelikte YAZMA düğmeleri baştan devre dışı + sebebi title/aria ile söylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma düğmeleri (yenile, tanıla, göster) kapıya girmez.
-const { writeGate } = useSubscriptionGate();
+const { writeGate, locked: subscriptionLocked } = useSubscriptionGate();
 const sitesStore = useSitesStore();
 const authStore = useAuthStore();
 // Sunucu seviyesi mail araçları (dinleyiciler, rDNS, sertifika, spam) yalnız admin'e gösterilir;
@@ -1590,7 +1593,7 @@ async function issueCert(reuseExistingOnly = false) {
 // Tek tık webmail (profesyonel paneller gibi): Roundcube kurulu/yayında değilse panel otomatik kurar,
 // sonra yeni sekmede açar. Kullanıcı tam e-posta adresi + şifresiyle giriş yapar.
 async function openWebmail() {
-  if (webmailOpening.value) return;
+  if (busy.value || webmailOpening.value || subscriptionLocked.value) return;
   // Pop-up engelleyiciye takılmamak için sekmeyi tıklama anında aç, URL gelince yönlendir.
   const tab = window.open("", "_blank");
   if (!tab) {
