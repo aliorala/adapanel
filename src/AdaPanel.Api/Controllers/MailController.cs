@@ -742,9 +742,12 @@ public sealed class MailController(
 
     [HttpGet("certificate")]
     [Authorize(Roles = "Administrator")]
-    public async Task<ActionResult<ApiResponse<MailCertificateDto>>> GetCertificateAsync(CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<MailCertificateDto>>> GetCertificateAsync(CancellationToken cancellationToken,
+        [FromQuery] string? domain = null)
     {
-        var status = await mailService.GetCertificateStatusAsync(cancellationToken);
+        var status = string.IsNullOrWhiteSpace(domain)
+            ? await mailService.GetCertificateStatusAsync(cancellationToken)
+            : await mailService.GetCertificateStatusForDomainAsync(domain, cancellationToken);
         return Ok(ApiResponse<MailCertificateDto>.Ok(status));
     }
 

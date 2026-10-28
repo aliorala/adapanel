@@ -222,6 +222,7 @@ export async function deleteDatabaseUser(engine: string, userName: string, host:
 
 export type DatabaseTransferPayload = {
   engine: string;
+  adaptDefiners?: boolean;
   sourceHost: string;
   sourcePort: number;
   sourceUserName: string;

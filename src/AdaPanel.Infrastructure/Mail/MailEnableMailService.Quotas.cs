@@ -60,6 +60,7 @@ public sealed partial class MailEnableMailService
             if (workspace.AccountsMeasured && domain.Name.Equals(workspace.SelectedDomain, StringComparison.OrdinalIgnoreCase))
             {
                 domain.AccountCount = workspace.Accounts.Count;
+                domain.AccountCountMeasured = true;
                 domain.AllocatedMB = (int)Math.Min(int.MaxValue, workspace.Accounts.Sum(a => (long)Math.Max(0, a.MaxSizeMB)));
             }
         }

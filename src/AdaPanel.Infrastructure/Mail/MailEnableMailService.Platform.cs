@@ -51,19 +51,27 @@ public sealed partial class MailEnableMailService
 
     internal Func<string, int, string?, CancellationToken, Task<MailTlsEndpointDto>> EndpointProbe { get; init; } = MailTlsProbe.ProbeAsync;
 
-    internal async Task<MailCertificateDto> InspectCertificateAsync(CancellationToken token)
+    public Task<MailCertificateDto> GetCertificateStatusForDomainAsync(string domain, CancellationToken cancellationToken = default)
+        => InspectCertificateAsync(cancellationToken, ValidateDomain(domain));
+
+    internal async Task<MailCertificateDto> InspectCertificateAsync(CancellationToken token, string? selectedDomain = null)
     {
         var settings = await ReadPlatformAsync(["smtpLocalDomainName", "smtpHostName", "sysDefaultCertificate", "sysSNI"], token);
         var host = ResolveGreeting(settings.GetValueOrDefault("smtpHostName", ""), settings.GetValueOrDefault("smtpLocalDomainName", ""));
         var managed = fileStore is null ? [] : await fileStore.ReadAsync<ManagedCertificate[]>(MailEnableCertificateStatePath, [], token);
-        var tracked = managed.LastOrDefault(item => item.HostName.Equals(host, StringComparison.OrdinalIgnoreCase)) ?? managed.LastOrDefault();
-        if (tracked is not null) host = tracked.HostName;
+        var tracked = selectedDomain is null
+            ? managed.LastOrDefault(item => item.HostName.Equals(host, StringComparison.OrdinalIgnoreCase)) ?? managed.LastOrDefault()
+            : managed.FirstOrDefault(item => item.Domain.Equals(selectedDomain, StringComparison.OrdinalIgnoreCase)
+                && item.HostName.Equals("mail." + selectedDomain, StringComparison.OrdinalIgnoreCase))
+                ?? managed.FirstOrDefault(item => item.Domain.Equals(selectedDomain, StringComparison.OrdinalIgnoreCase));
+        if (selectedDomain is not null) host = tracked?.HostName ?? "mail." + selectedDomain;
+        else if (tracked is not null) host = tracked.HostName;
         if (host is null) throw new AppException("mail.settings_unmeasured", 502, 502);
         var probes = await Task.WhenAll(new[] { 587, 465, 443 }.Select(port => EndpointProbe(host, port, port == 443 ? null : tracked?.Thumbprint, token)));
         var smtp = probes.Where(p => p.Port != 443).ToArray();
         return new()
         {
-            HostName = host, Domain = tracked?.Domain ?? "", CertificateId = tracked?.Thumbprint ?? "",
+            HostName = host, Domain = tracked?.Domain ?? selectedDomain ?? "", CertificateId = tracked?.Thumbprint ?? "",
             Source = "mailenable-windows-store", Active = smtp.Length == 2 && smtp.All(p => p.Status == "ok"),
             DefaultCertificateId = settings.GetValueOrDefault("sysDefaultCertificate", ""),
             ConfigurationStatus = "measured", Endpoints = smtp, WebCertificate = probes.Single(p => p.Port == 443),

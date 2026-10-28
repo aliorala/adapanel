@@ -77,6 +77,25 @@ it.each(["other.test", "", "  EXAMPLE.TEST  "])("scopes saved hostname selection
   vi.mocked(getMailCertificate).mockResolvedValueOnce({ ...cert(true, "smtp.example.test"), domain });
   await state.loadCertificate();
   expect(state.certForm.hostName).toBe(domain.trim().toLowerCase() === "example.test" ? "smtp.example.test" : "mail.example.test");
+  expect(getMailCertificate).toHaveBeenLastCalledWith("example.test");
+  if (domain.trim().toLowerCase() !== "example.test") {
+    expect(state.certificate).toBeNull();
+    expect(state.certificateLoad.message.value).toContain("panel.mail.certWrongDomain");
+  }
+});
+it("clears the previous hostname when switching mail domains", async () => {
+  const { state } = await mount();
+  state.certForm.hostName = "smtp.example.test";
+  state.selectedDomain = "other.test";
+  expect(state.certForm.hostName).toBe("");
+});
+it("rejects a successful issuance response for another hostname", async () => {
+  const { state } = await mount();
+  vi.mocked(issueMailCertificate).mockResolvedValueOnce(cert(true, "mail.other.test"));
+  await state.issueCert();
+  expect(state.certificate).toBeNull();
+  expect(state.noticeError).toBe(true);
+  expect(state.notice).toBe("panel.mail.certWrongDomain");
 });
 it("does not overwrite a hostname typed while the saved certificate is loading", async () => {
   const { state } = await mount(), pending = deferred<MailCertificate>();

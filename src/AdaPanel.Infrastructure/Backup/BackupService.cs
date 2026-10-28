@@ -601,7 +601,8 @@ public sealed partial class BackupService(
         int itemCount = 0,
         IReadOnlyCollection<BackupRestoreWarningDto>? contentWarnings = null,
         IReadOnlyCollection<BackupDatabaseRef>? includedDatabases = null,
-        IReadOnlyCollection<BackupComponentRef>? includedComponents = null)
+        IReadOnlyCollection<BackupComponentRef>? includedComponents = null,
+        bool portableDefiners = false)
     {
         // SIRA KİLİTLİ: ÖNCE SIKIŞTIR, SONRA ŞİFRELE.
         //
@@ -694,6 +695,7 @@ public sealed partial class BackupService(
             RemoteUri = remoteUri,
             Encrypted = encrypted,
             Compressed = compressed,
+            PortableDefiners = portableDefiners,
             ChainId = chain?.ChainId ?? string.Empty,
             ChainIndex = chain?.ChainIndex ?? 0,
             BackupMode = chain?.Mode ?? BackupChainPlanner.ModeFull,
@@ -1983,7 +1985,8 @@ public sealed partial class BackupService(
         {
             Engine = request.Engine,
             DatabaseName = request.DatabaseName,
-            FilePath = targetPath
+            FilePath = targetPath,
+            PortableDefiners = request.PortableDefiners
         }, cancellationToken);
 
         // A whole-engine dump does not identify the individual included databases.
@@ -2009,7 +2012,8 @@ public sealed partial class BackupService(
             skipped: null,
             cancellationToken,
             includedDatabases: includedDatabases,
-            includedComponents: []);
+            includedComponents: [],
+            portableDefiners: request.PortableDefiners);
     }
 
     /// <summary>
@@ -3363,6 +3367,11 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             throw new AppException("backup.file_missing", 410, 410, $"{record.Name} -> {record.Path}");
         }
 
+        // A blocked retry must retain the original SQL error and failed object, rather than
+        // replacing the only durable diagnosis with the generic replay guard message.
+        var previousSqlFailures = (record.Warnings ?? []).Where(warning => warning is not null &&
+            (warning.MessageKey == "database.restore_failed" ||
+             warning.Detail?.StartsWith("database.restore_failed:", StringComparison.Ordinal) == true)).ToArray();
         // Önceki bir geri yüklemeden kalan uyarılar bu çalışmanın sonucu sanılmasın.
         record.Warnings = [];
         record.PreservedPath = string.Empty;
@@ -3420,6 +3429,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                     chain,
                     backups,
                     request.EncryptionPassword,
+                    request.AdaptDefiners,
                     durum,
                     cancellationToken);
             }
@@ -3429,6 +3439,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                 throw;
             }
 
+            PreserveSqlFailureOnBlockedReplay(durum.Warnings, previousSqlFailures);
             record.Warnings = durum.Warnings;
             record.PreservedPath = durum.PreservedPath;
             record.Status = durum.Warnings.Count == 0 ? "restored" : "restored_with_errors";
@@ -3452,6 +3463,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                     backups,
                     request.TargetPath,
                     request.EncryptionPassword,
+                    request.AdaptDefiners,
                     durum,
                     cancellationToken);
             }
@@ -3461,6 +3473,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                 throw;
             }
 
+            PreserveSqlFailureOnBlockedReplay(durum.Warnings, previousSqlFailures);
             record.Warnings = durum.Warnings;
             record.PreservedPath = durum.PreservedPath;
 
@@ -3515,17 +3528,36 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         else if (string.Equals(record.Format, "sql", StringComparison.OrdinalIgnoreCase))
         {
             var sourceParts = record.Source.Split(':', 2);
-            await databaseService.ImportDumpAsync(new AdaPanel.Core.Dtos.Databases.DatabaseDumpRequest
+            try
             {
-                Engine = sourceParts[0],
-                DatabaseName = sourceParts.Length > 1 ? sourceParts[1] : string.Empty,
-                FilePath = content.FilePath
-            }, cancellationToken);
+                await databaseService.ImportDumpAsync(new AdaPanel.Core.Dtos.Databases.DatabaseDumpRequest
+                {
+                    Engine = sourceParts[0],
+                    DatabaseName = sourceParts.Length > 1 ? sourceParts[1] : string.Empty,
+                    FilePath = content.FilePath,
+                    AdaptDefiners = request.AdaptDefiners
+                }, cancellationToken);
+            }
+            catch (Exception error)
+            {
+                var progress = new RestoreProgress();
+                if (error is AppException { MessageKey: "database.restore_partial_retry_blocked" })
+                    progress.Warnings.AddRange(previousSqlFailures);
+                await KaydiYarimIsaretleAsync(record, progress, error);
+                throw;
+            }
             record.Status = "restored";
         }
 
         await UpsertRecordAsync(record, cancellationToken);
         return record;
+    }
+
+    private static void PreserveSqlFailureOnBlockedReplay(List<BackupRestoreWarningDto> warnings,
+        IReadOnlyCollection<BackupRestoreWarningDto> previous)
+    {
+        if (warnings.Any(warning => warning.MessageKey == "database.restore_partial_retry_blocked"))
+            warnings.AddRange(previous);
     }
 
     /// <summary>
@@ -6010,6 +6042,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         IReadOnlyCollection<BackupRecordDto> allRecords,
         string? targetPath,
         string? password,
+        bool adaptDefiners,
         RestoreProgress durum,
         CancellationToken cancellationToken)
     {
@@ -6068,7 +6101,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                 // içe aktarmak aynı veritabanını n kez yazmak (ve n kat beklemek) olurdu.
                 if (sonHalka)
                 {
-                    await ImportDatabasesFromArchiveAsync(archive, "databases/", warnings, cancellationToken);
+                    await ImportDatabasesFromArchiveAsync(archive, "databases/", warnings, adaptDefiners, cancellationToken);
 
                     // POSTA da YALNIZ SON HALKADAN: hesap arşivleri her halkada TAM'dır (artımsal
                     // değildir), sırayla uygulamak aynı kutuyu n kez yazmak olurdu.
@@ -6221,6 +6254,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         BackupChainDto chain,
         IReadOnlyCollection<BackupRecordDto> allRecords,
         string? password,
+        bool adaptDefiners,
         RestoreProgress durum,
         CancellationToken cancellationToken)
     {
@@ -6269,7 +6303,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
 
                 if (sonHalka)
                 {
-                    await ImportDatabasesFromArchiveAsync(archive, "databases/", warnings, cancellationToken);
+                    await ImportDatabasesFromArchiveAsync(archive, "databases/", warnings, adaptDefiners, cancellationToken);
                     await RestoreSubscriptionMailAsync(archive, warnings, cancellationToken);
                     await RestoreSubscriptionFtpAsync(archive, warnings, cancellationToken);
                 }
@@ -7033,6 +7067,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         ZipArchive archive,
         string prefix,
         List<BackupRestoreWarningDto> warnings,
+        bool adaptDefiners,
         CancellationToken cancellationToken)
     {
         foreach (var entry in archive.Entries)
@@ -7067,7 +7102,8 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                 {
                     Engine = split[0],
                     DatabaseName = split[1],
-                    FilePath = tempDump
+                    FilePath = tempDump,
+                    AdaptDefiners = adaptDefiners
                 }, cancellationToken);
             }
             catch (OperationCanceledException)

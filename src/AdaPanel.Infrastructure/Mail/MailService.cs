@@ -179,6 +179,49 @@ public sealed partial class MailService(
         // bayrak false kalir, yani kota "0 kutu var" varsayimina DUSMEZ.
         var accountsMeasured = false;
 
+        // The sidebar displays every domain, not only the selected one. Query the
+        // mailbox inventory once and count real addresses instead of leaving all
+        // unselected domains at their DTO default (zero).
+        var accountQuery = await QueryAsync(cli, "account", env, cancellationToken);
+        var accountDetails = new Dictionary<string, JsonElement?>();
+        var domainsByName = domains.ToLookup(item => DomainNames.Normalize(item.Name), StringComparer.OrdinalIgnoreCase);
+        var inventoryMeasured = accountQuery.Measured;
+        var countedIds = new HashSet<string>(StringComparer.Ordinal);
+        var countedAddresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var brief in accountQuery.Items)
+        {
+            var kind = IsMailboxRecord(brief);
+            if (kind == false) continue;
+            if (kind is null) { inventoryMeasured = false; continue; }
+            var id = GetField(brief, "id");
+            if (!string.IsNullOrWhiteSpace(id) && !countedIds.Add(id)) continue;
+            var address = GetField(brief, "emailAddress", "name");
+            // Older query summaries omit the variant. The detail can identify
+            // Account/Group even when the summary looks like a mailbox address.
+            if (!IsValidEmailAddress(address) || !brief.TryGetProperty("@type", out _))
+            {
+                if (!string.IsNullOrWhiteSpace(id))
+                {
+                    var detail = await GetObjectAsync(cli, "account", id, env, cancellationToken);
+                    accountDetails[id] = detail;
+                    if (detail is null) { inventoryMeasured = false; continue; }
+                    kind = IsMailboxRecord(brief, detail);
+                    if (kind == false) continue;
+                    if (kind is null) { inventoryMeasured = false; continue; }
+                    address = GetField(detail.Value, "emailAddress", "name");
+                }
+            }
+            if (!IsValidEmailAddress(address))
+            {
+                inventoryMeasured = false;
+                continue;
+            }
+            if (!countedAddresses.Add(address.Trim())) continue;
+            var addressDomain = DomainNames.Normalize(address[(address.LastIndexOf('@') + 1)..]);
+            foreach (var owner in domainsByName[addressDomain]) owner.AccountCount++;
+        }
+        foreach (var item in domains) item.AccountCountMeasured = inventoryMeasured;
+
         if (!string.IsNullOrWhiteSpace(domain))
         {
             var normalized = domain.Trim().ToLowerInvariant();
@@ -195,26 +238,37 @@ public sealed partial class MailService(
             // OLCULDU MU, isaretiyle birlikte tasinir: bos hesap listesi "bu alanda kutu yok"
             // demek olabilecegi gibi "soramadim" da demek olabilir ve KOTA bu ikisini ayirt
             // etmek ZORUNDADIR (bkz. MailQueryResult).
-            var accountQuery = await QueryAsync(cli, "account", env, cancellationToken);
             accountsMeasured = accountQuery.Measured;
+            var selectedIds = new HashSet<string>(StringComparer.Ordinal);
+            var selectedAddresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var brief in accountQuery.Items)
             {
+                var kind = IsMailboxRecord(brief);
+                if (kind == false) continue;
+                if (kind is null) { accountsMeasured = false; continue; }
                 var id = GetField(brief, "id");
                 if (string.IsNullOrWhiteSpace(id))
                 {
                     accountsMeasured = false;
                     continue;
                 }
+                if (!selectedIds.Add(id)) continue;
 
-                var detail = await GetObjectAsync(cli, "account", id, env, cancellationToken);
+                var detail = accountDetails.TryGetValue(id, out var cached)
+                    ? cached
+                    : await GetObjectAsync(cli, "account", id, env, cancellationToken);
                 if (detail is null)
                 {
                     accountsMeasured = false;
                     continue;
                 }
 
+                kind = IsMailboxRecord(brief, detail);
+                if (kind == false) continue;
+                if (kind is null) { accountsMeasured = false; continue; }
                 var address = GetField(detail.Value, "emailAddress", "name");
                 if (!IsValidEmailAddress(address)) accountsMeasured = false;
+                if (!selectedAddresses.Add(address.Trim())) continue;
                 if (BelongsToDomain(address, normalized))
                 {
                     accounts.Add(new MailAccountDto
@@ -315,10 +369,29 @@ public sealed partial class MailService(
             {
                 selected.AllocatedMB = accounts.Sum(account => Math.Max(0, account.MaxSizeMB));
                 selected.AccountCount = accounts.Count;
+                selected.AccountCountMeasured = accountsMeasured;
             }
         }
 
+        if (workspace.Domains.Any(item => !item.AccountCountMeasured))
+            workspace.StatusMessage = "Bazı alan adlarının posta kutusu sayısı okunamadı. Ölçülemeyen sayılar sıfır değildir; yeniden yenileyin.";
         return workspace;
+    }
+
+    // Missing variants are supported for legacy CLI output; an explicit unknown
+    // variant is never silently treated as a user mailbox. Query account also
+    // returns Account/Group, which has an address but is not a mailbox.
+    private static bool? IsMailboxRecord(JsonElement summary, JsonElement? detail = null)
+    {
+        var source = detail is { } value && value.TryGetProperty("@type", out _) ? value : summary;
+        if (!source.TryGetProperty("@type", out var type)) return true;
+        if (type.ValueKind != JsonValueKind.String) return null;
+        return type.GetString() switch
+        {
+            "Account/User" => true,
+            "Account/Group" => false,
+            _ => null
+        };
     }
 
     public async Task<MailWorkspaceDto> ConfigureAsync(ConfigureMailRequest request, CancellationToken cancellationToken = default)
@@ -2529,17 +2602,34 @@ public sealed partial class MailService(
     public async Task<MailDiagnosticsDto> GetDiagnosticsAsync(string domain, CancellationToken cancellationToken = default)
         => await MailDiagnosticsRunner.RunAsync(await GetDnsRecordsAsync(domain, cancellationToken), cancellationToken);
 
-    public async Task<MailCertificateDto> GetCertificateStatusAsync(CancellationToken cancellationToken = default)
+    public Task<MailCertificateDto> GetCertificateStatusAsync(CancellationToken cancellationToken = default) =>
+        GetCertificateStatusCoreAsync(null, cancellationToken);
+
+    public Task<MailCertificateDto> GetCertificateStatusForDomainAsync(string domain, CancellationToken cancellationToken = default) =>
+        GetCertificateStatusCoreAsync(domain, cancellationToken);
+
+    private async Task<MailCertificateDto> GetCertificateStatusCoreAsync(string? selectedDomain, CancellationToken cancellationToken)
     {
         // Keep the saved certificate, listener probes and provider registry in one panel
         // lifecycle. A concurrent renewal must finish before this snapshot is inspected.
         using var operation = await MailCertificateLifecycle.EnterAsync(
             fileStore.ResolvePath(CertificateStatePath), cancellationToken);
         var state = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(selectedDomain))
+        {
+            selectedDomain = selectedDomain.Trim().ToLowerInvariant();
+            if (Uri.CheckHostName(selectedDomain) != UriHostNameType.Dns || selectedDomain.Contains('*'))
+                throw new AppException("mail.invalid_domain", 400, 400);
+            var states = await ReadCertificateStatesAsync(cancellationToken);
+            state = states.FirstOrDefault(item => item.Domain.Equals(selectedDomain, StringComparison.OrdinalIgnoreCase)
+                && item.HostName.Equals($"mail.{selectedDomain}", StringComparison.OrdinalIgnoreCase))
+                ?? states.FirstOrDefault(item => item.Domain.Equals(selectedDomain, StringComparison.OrdinalIgnoreCase));
+        }
         var savedContact = await fileStore.ReadAsync<Support.AcmeContactSettings?>(Support.AcmeContactSettings.Path, null, cancellationToken);
         var suggestedEmail = savedContact?.Email?.Trim() ?? string.Empty;
         var dto = state is null
-            ? new MailCertificateDto { Active = false, SuggestedContactEmail = suggestedEmail }
+            ? new MailCertificateDto { Active = false, Domain = selectedDomain ?? "",
+                HostName = selectedDomain is null ? "" : $"mail.{selectedDomain}", SuggestedContactEmail = suggestedEmail }
             : new MailCertificateDto
             {
                 Active = false,
@@ -2549,9 +2639,9 @@ public sealed partial class MailService(
                 NotAfterUtc = state.NotAfterUtc,
                 SuggestedContactEmail = suggestedEmail
             };
-        if (state is not null)
+        if (!string.IsNullOrWhiteSpace(dto.HostName))
         {
-            await InspectMailCertificateAsync(dto, state.Thumbprint, cancellationToken);
+            await InspectMailCertificateAsync(dto, state?.Thumbprint, cancellationToken);
         }
         return dto;
     }
@@ -2627,7 +2717,7 @@ public sealed partial class MailService(
             NotAfterUtc = notAfter,
             Thumbprint = endpoints[0].Thumbprint
         };
-        await fileStore.WriteAsync(CertificateStatePath, state, cancellationToken);
+        await MailCertificateRegistry.UpsertAsync(fileStore, state, cancellationToken);
 
         var published = new MailCertificateDto
         {
@@ -2654,13 +2744,37 @@ public sealed partial class MailService(
     {
         using var operation = await MailCertificateLifecycle.EnterAsync(
             fileStore.ResolvePath(CertificateStatePath), cancellationToken);
-        var state = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
+        var states = await ReadCertificateStatesAsync(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (beforeMutation is not null)
         {
             await beforeMutation(cancellationToken);
         }
 
+        List<Exception> failures = [];
+        MailCertificateDto? lastChanged = null;
+        foreach (var state in states)
+        {
+            try
+            {
+                var changed = await SyncCertificateStateAsync(state, beforeMutation, cancellationToken);
+                if (changed is not null) lastChanged = changed;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (AppException error) when (error.HttpStatusCode == 403) { throw; }
+            catch (Exception error)
+            {
+                failures.Add(error);
+                logger.LogWarning("Mail certificate synchronization failed for {MailHost}: {ErrorType}", state.HostName, error.GetType().Name);
+            }
+        }
+        ThrowCertificateFailures(failures);
+        return lastChanged;
+    }
+
+    private async Task<MailCertificateDto?> SyncCertificateStateAsync(MailCertificateState state,
+        Func<CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
+    {
         if (state is null
             || (state.Source != "windows-store" &&
                 !string.Equals(state.Source, "letsencrypt", StringComparison.OrdinalIgnoreCase)))
@@ -2690,7 +2804,7 @@ public sealed partial class MailService(
                 if (beforeMutation is not null) await beforeMutation(cancellationToken);
                 state.Thumbprint = leaf.Thumbprint;
                 state.NotAfterUtc = leaf.NotAfter.ToUniversalTime();
-                await fileStore.WriteAsync(CertificateStatePath, state, cancellationToken);
+                await MailCertificateRegistry.UpsertAsync(fileStore, state, cancellationToken);
             }
             return null;
         }
@@ -2700,7 +2814,7 @@ public sealed partial class MailService(
         state.ContentHash = hash;
         state.Thumbprint = leaf.Thumbprint;
         state.NotAfterUtc = TryGetNotAfterUtc(certificatePem);
-        await fileStore.WriteAsync(CertificateStatePath, state, cancellationToken);
+        await MailCertificateRegistry.UpsertAsync(fileStore, state, cancellationToken);
 
         return new MailCertificateDto
         {
@@ -2715,7 +2829,7 @@ public sealed partial class MailService(
 
     public async Task<bool> EnsureServerHostnameAsync(bool applyChanges = true, CancellationToken cancellationToken = default)
     {
-        var state = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
+        var registry = await MailCertificateRegistry.ReadAsync(fileStore, cancellationToken);
         // ONCE TERS DNS (PTR): karsilama adi sertifikayla degil, PTR ILE tutmali.
         //
         // Teslim edilebilirligin aradigi sey "ileri-dogrulanmis ters DNS"tir: sunucunun kendini
@@ -2728,7 +2842,7 @@ public sealed partial class MailService(
         // ve panel, kullaniciyi PTR'sini degistirmeye zorlamis oluyordu. Oysa dogrusu, zaten
         // dogrulanmis olan adi kullanmak.
         var hostName = await ResolveVerifiedReverseNameAsync(cancellationToken)
-                       ?? state?.HostName?.Trim().ToLowerInvariant();
+                       ?? registry.PrimaryHostName.Trim().ToLowerInvariant();
 
         var (cli, env) = await RequireCliAsync(cancellationToken);
         var settings = await GetObjectAsync(cli, "SystemSettings", "singleton", env, cancellationToken);
@@ -4782,11 +4896,16 @@ public sealed partial class MailService(
         string domain,
         CancellationToken cancellationToken)
     {
-        var sertifika = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
-        if (!string.IsNullOrWhiteSpace(sertifika?.HostName))
+        var registry = await MailCertificateRegistry.ReadAsync(fileStore, cancellationToken);
+        var sertifika = registry.Records.FirstOrDefault(record =>
+            MailCertificateRegistry.Field(record, "domain").Equals(domain, StringComparison.OrdinalIgnoreCase));
+        if (sertifika is not null)
         {
-            return sertifika!.HostName.Trim().ToLowerInvariant();
+            return MailCertificateRegistry.Field(sertifika, "hostName").Trim().ToLowerInvariant();
         }
+
+        // Keep previously working shared-host client settings for domains without their own certificate.
+        if (!string.IsNullOrWhiteSpace(registry.PrimaryHostName)) return registry.PrimaryHostName.Trim().ToLowerInvariant();
 
         var ayarlar = await GetObjectAsync(cli, "SystemSettings", "singleton", env, cancellationToken);
         var karsilama = ayarlar is null ? string.Empty : GetField(ayarlar.Value, "defaultHostname");

@@ -7,7 +7,7 @@ type ApiEnvelope<T> = {
   code: number;
 };
 
-export type MailDomain = { name: string; active: boolean; accountCount: number; maxSizeMB: number; allocatedMB: number };
+export type MailDomain = { name: string; active: boolean; accountCount: number; accountCountMeasured?: boolean; maxSizeMB: number; allocatedMB: number };
 // `active` UC DEGERLI: true/false sunucunun cevabi, null/undefined ise "olculemedi".
 // Backend (MailAccountDto.Active) artik hesabin durumunu SORUYOR; sabit true dondurmuyor.
 export type MailAccount = { address: string; active: boolean | null; maxSizeMB: number; currentSizeMB: number };
@@ -58,6 +58,7 @@ export type MailWorkspace = {
   selectedDomain: string;
   domains: MailDomain[];
   accounts: MailAccount[];
+  accountsMeasured?: boolean;
   aliases: MailAlias[];
   lists: MailList[];
   listsMeasured?: boolean;
@@ -327,10 +328,15 @@ export type MailCertificate = {
 export type MailTlsEndpoint = {
   port: number; protocol: string; status: string; subject: string; issuer: string;
   thumbprint: string; notAfterUtc: string | null; detail: string; checkedAtUtc: string;
+  subjectAlternativeNames?: string[];
+  notBeforeUtc?: string | null;
+  chainStatus?: string[];
 };
 
-export async function getMailCertificate() {
-  const response = await apiClient.get<ApiEnvelope<MailCertificate>>("/mail/certificate");
+export async function getMailCertificate(domain?: string) {
+  const response = await apiClient.get<ApiEnvelope<MailCertificate>>("/mail/certificate", {
+    params: domain ? { domain } : {}
+  });
   return response.data.data;
 }
 

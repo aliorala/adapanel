@@ -216,6 +216,7 @@ public sealed class MailEnableCommandContractTests
         Assert.True(result.Configured);
         Assert.True(result.AccountsMeasured);
         Assert.Equal(2, result.Domains.Count);
+        Assert.All(result.Domains, domain => { Assert.True(domain.AccountCountMeasured); Assert.Equal(1, domain.AccountCount); });
         Assert.Equal(100, Assert.Single(result.Accounts).MaxSizeMB);
         Assert.Equal("sales@example.test", Assert.Single(result.Aliases).Address);
     }

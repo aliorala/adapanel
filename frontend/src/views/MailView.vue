@@ -56,7 +56,7 @@
           </div>
           <div v-for="item in domainPager.items.value" :key="item.name" class="data-row maildomain-row">
             <strong>{{ item.name }}</strong>
-            <span>{{ item.active ? item.accountCount : "—" }}</span>
+            <span>{{ item.active ? (item.countMeasured ? item.accountCount : t("panel.mail.mailboxCountUnmeasured")) : "—" }}</span>
             <span :class="['status-pill', item.active ? 'ok' : 'warn']">
               {{ item.active ? t("panel.status.enabled") : t("panel.mail.mailOff") }}
             </span>
@@ -230,7 +230,7 @@
               </button>
             </div>
           </div>
-          <p v-if="workspace.accounts.length === 0" class="empty-state">{{ t("panel.mail.noMailboxes") }}</p>
+          <p v-if="workspace.accounts.length === 0" class="empty-state">{{ t(workspace.accountsMeasured === false ? "panel.mail.mailboxesUnmeasured" : "panel.mail.noMailboxes") }}</p>
         </div>
         <TablePager :state="accountPager" :disabled="busy || bulk.busy.value" />
 
@@ -849,7 +849,7 @@
         <div class="form-surface">
           <p v-if="certificate?.active" class="meta">
             <span :class="['status-pill', certificate.active && certificate.source !== 'self-signed' ? 'ok' : 'warn']">
-              {{ certificate.source === "windows-store" ? t("panel.mail.certWindowsStore") : certificate.source === "letsencrypt" ? "Let's Encrypt" : t("panel.mail.certSelfSigned") }}
+              {{ certificate.source === "windows-store" ? t("panel.mail.certWindowsStore") : certificate.source === "letsencrypt" ? "Let's Encrypt" : certificate.source === "self-signed" ? t("panel.mail.certSelfSigned") : t("panel.mail.certSourceUnknown") }}
             </span>
             {{ certificate.hostName }}
             <template v-if="certificate.notAfterUtc">
@@ -870,6 +870,9 @@
               <span :class="['status-pill', endpoint.status === 'ok' ? 'ok' : 'warn']">{{ endpoint.port }} {{ endpoint.protocol }}: {{ endpoint.status === 'ok' ? t('panel.mail.certVerified') : t('panel.mail.certUnverified') }}</span>
               {{ endpoint.subject }} · {{ endpoint.issuer }} · {{ endpoint.notAfterUtc }}
               {{ endpoint.thumbprint }} {{ endpoint.detail }}
+              <span v-if="endpoint.subjectAlternativeNames?.length"> · SAN: {{ endpoint.subjectAlternativeNames.join(", ") }}</span>
+              <span v-if="endpoint.notBeforeUtc"> · {{ t("panel.mail.certValidFrom") }}: {{ endpoint.notBeforeUtc }}</span>
+              <span v-if="endpoint.chainStatus?.length"> · {{ t("panel.mail.certChain") }}: {{ endpoint.chainStatus.join(", ") }}</span>
             </p>
             <p class="meta">{{ t('panel.mail.certRegistry') }}: {{ certificate.configurationStatus || 'unknown' }} · {{ certificate.certificateId || '-' }} · {{ t('panel.mail.certDefault') }}: {{ certificate.defaultCertificateId || '-' }}</p>
           </template>
@@ -1081,6 +1084,7 @@ watch(() => [selectedDomain.value, authStore.session?.isAuthenticated, authStore
   ++certificateRequest;
   certificate.value = null;
   certificateLoad.clear();
+  certForm.hostName = "";
 }, { flush: "sync" });
 onBeforeUnmount(() => { certificateDisposed = true; ++certificateRequest; });
 const webmailOpening = ref(false);
@@ -1321,13 +1325,14 @@ const noticeDetails = ref("");
 // web sitesi alan adlari birlesimi. Boylece kullanici ayri bir "olustur" adimi gormeden
 // listeden secip yonetir; postasi yoksa secince otomatik etkinlesir (openDomain).
 const mailDomains = computed(() => {
-  const map = new Map<string, { name: string; accountCount: number; active: boolean }>();
+  const map = new Map<string, { name: string; accountCount: number; countMeasured: boolean; active: boolean }>();
   for (const domain of workspace.value?.domains ?? []) {
-    map.set(domain.name.toLowerCase(), { name: domain.name, accountCount: domain.accountCount, active: true });
+    map.set(domain.name.toLowerCase(), { name: domain.name, accountCount: domain.accountCount,
+      countMeasured: domain.accountCountMeasured === true && Number.isSafeInteger(domain.accountCount) && domain.accountCount >= 0, active: true });
   }
   for (const site of sitesStore.sites) {
     const domain = siteWebDomain(site);
-    if (domain && !map.has(domain)) map.set(domain, { name: domain, accountCount: 0, active: false });
+    if (domain && !map.has(domain)) map.set(domain, { name: domain, accountCount: 0, countMeasured: false, active: false });
   }
 
   // Servis alt alanlarını GİZLE: mail./webmail./autodiscover. gibi host'lar posta sunucusunun KENDİ adresleridir
@@ -1520,8 +1525,12 @@ async function loadCertificate() {
   certificate.value = null;
   certificateLoad.clear();
   try {
-    const result = await getMailCertificate();
+    const result = await getMailCertificate(domain || undefined);
     if (!current()) return;
+    if (domain && result.domain.trim().toLowerCase() !== domain.trim().toLowerCase()) {
+      if (!certForm.hostName) certForm.hostName = `mail.${domain}`;
+      throw new UserFacingError("panel.mail.certWrongDomain");
+    }
     certificate.value = result;
     certificateLoad.clear();
     // Formu otomatik doldur ki kullanıcı mail sunucu adını/e-postayı elle yazmasın.
@@ -1560,6 +1569,9 @@ async function issueCert(reuseExistingOnly = false) {
   try {
     const result = await issueMailCertificate(domain, host, email, reuseExistingOnly);
     if (!current()) return;
+    if (result.domain.trim().toLowerCase() !== domain.trim().toLowerCase() ||
+      result.hostName.trim().toLowerCase() !== host.trim().toLowerCase())
+      throw new UserFacingError("panel.mail.certWrongDomain");
     certificate.value = result;
     certificateLoad.clear();
     showNotice(

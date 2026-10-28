@@ -1,4 +1,8 @@
 {
+  "database.transfer_account_failed": "SQL verileri aktarıldı ancak hedef veritabanı hesabı/yetkileri hazırlanamadı. Tam aktarımı yeniden başlatmayın; yalnız hesap erişimini düzeltin.",
+  "database.definer_conversion_failed": "DEFINER uyarlaması güvenle tamamlanamadı. SQL çalıştırılmadı; ayrıntıları inceleyin.",
+  "database.definer_mysql_only": "Taşınabilir DEFINER dışa aktarımı yalnız MySQL ve MariaDB için kullanılabilir.",
+  "database.restore_partial_retry_blocked": "Önceki SQL aktarımı yarım kaldı veya sonucu doğrulanamadı. Tabloları silmemek ve verileri tekrar eklememek için tam aktarım engellendi. Yalnız hatalı nesneyi elle onarın. Genel SQL yedekleri birden fazla veritabanına geçebildiğinden motor genelinde yeni tam aktarım da kurtarma durumu incelenene kadar engellenir.",
   "files.archive_target_invalid": "ZIP hedefi kaynak dosyanın kendisi veya sıkıştırılan klasörün içi olamaz. Farklı bir hedef seçin.",
   "common.unexpected_error": "Beklenmeyen bir hata oluştu.",
   "backup.selection_download_required": "Seçilen dosyaları almak için Seçilenleri indir işlemini kullanın. Sunucudaki dosyalar değiştirilmedi.",

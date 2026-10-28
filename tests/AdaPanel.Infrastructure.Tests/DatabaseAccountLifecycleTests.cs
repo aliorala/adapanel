@@ -290,16 +290,19 @@ public sealed class DatabaseAccountLifecycleTests
         var error = await Assert.ThrowsAsync<AppException>(() => fixture.Service().ProvisionTransferUserAsync(
             parent, profile, fixture.Provider, "db_b", "shared", "localhost", "generated", true, default));
         Assert.Equal("database.user_create_cleanup_incomplete", error.MessageKey);
-        Assert.False(DatabaseService.CanIgnoreTransferAccountFailure(error));
         Assert.True(fixture.Provider.UserExists);
     }
 
     [Fact]
-    public void TransferCancellationIsNeverAnOptionalFailure()
+    public async Task TransferProvisioningDoesNotSwallowGrantFailures()
     {
-        Assert.False(DatabaseService.CanIgnoreTransferAccountFailure(new OperationCanceledException()));
-        Assert.False(DatabaseService.CanIgnoreTransferAccountFailure(new TaskCanceledException()));
-        Assert.True(DatabaseService.CanIgnoreTransferAccountFailure(new AppException("database.user_not_found", 404, 404)));
+        using var fixture = new Fixture(DbEngine.MySql);
+        fixture.Provider.Failure = "grant";
+        using var parent = await DatabaseLifecycle.EnterResourceAsync("mysql", "db_b");
+        var profile = await fixture.Profile();
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Service().ProvisionTransferUserAsync(
+            parent, profile, fixture.Provider, "db_b", "shared", "localhost", "generated", true, default));
+        Assert.Equal("fixture-grant", error.Message);
     }
 
     [Fact]

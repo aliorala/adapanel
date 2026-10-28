@@ -36,6 +36,9 @@ public sealed class MailTlsEndpointDto
     public string Status { get; set; } = "unknown";
     public string Subject { get; set; } = string.Empty;
     public string Issuer { get; set; } = string.Empty;
+    public string[] SubjectAlternativeNames { get; set; } = [];
+    public DateTime? NotBeforeUtc { get; set; }
+    public string[] ChainStatus { get; set; } = [];
     public string Thumbprint { get; set; } = string.Empty;
     public DateTime? NotAfterUtc { get; set; }
     public string Detail { get; set; } = string.Empty;

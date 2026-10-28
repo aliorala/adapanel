@@ -1,4 +1,8 @@
 {
+  "database.transfer_account_failed": "SQL data was imported, but the target account/access setup failed. Do not replay the dump; repair account access only.",
+  "database.definer_conversion_failed": "DEFINER adaptation could not be completed safely. No SQL was executed; review the details.",
+  "database.definer_mysql_only": "Portable DEFINER export is supported only for MySQL and MariaDB.",
+  "database.restore_partial_retry_blocked": "An earlier SQL import is partial or unconfirmed. Full replay was blocked to avoid dropping tables or inserting duplicate data. Manually recover only the failed object. Arbitrary dumps can switch databases, so new full imports for that engine remain blocked until recovery state is reviewed.",
   "files.archive_target_invalid": "The ZIP target cannot be the source file itself or a location inside the folder being compressed. Choose a different target.",
   "common.unexpected_error": "An unexpected error occurred.",
   "backup.selection_download_required": "Use Download selected to retrieve the selected files. Server files were not changed.",

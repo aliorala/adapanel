@@ -122,6 +122,7 @@ public sealed class BackupController(
             RemoteUri = SafeRemoteLocation(record.RemoteUri),
             Encrypted = record.Encrypted,
             Compressed = record.Compressed,
+            PortableDefiners = record.PortableDefiners,
             Warnings = record.Warnings.Select(warning => new BackupRestoreWarningDto
             {
                 MessageKey = warning.MessageKey,

@@ -21,6 +21,14 @@
 
         <p :id="messageId" class="confirm-message">{{ state.options.message }}</p>
 
+        <div v-if="state.options.checkbox" class="confirm-choice">
+          <label class="checkbox-field">
+            <input ref="choiceEl" v-model="state.options.checkbox.value" type="checkbox" :disabled="state.busy" />
+            <span>{{ state.options.checkbox.label }}</span>
+          </label>
+          <p class="confirm-message">{{ state.options.checkbox.hint }}</p>
+        </div>
+
         <section v-if="impact.length" class="confirm-impact">
           <span class="field-label">{{ t("panel.confirm.impactTitle") }}</span>
           <ul>
@@ -72,6 +80,8 @@ export interface ConfirmOptions {
   title: string;
   /** Ne olacağını anlatan tek paragraf. */
   message: string;
+  /** An explicit opt-in captured with the final confirmation (off unless the caller says otherwise). */
+  checkbox?: { label: string; hint: string; value: boolean };
   /** Etkilenecekler listesi — ÇAĞIRAN ekran doldurur (ör. "3 site", "2 veritabanı", "480 MB dosya"). */
   impact?: string[];
   /** Yüksek riskli mod: kullanıcı devam etmek için bu metni (site/kullanıcı adı) birebir yazmalı. */
@@ -149,6 +159,7 @@ useScrollLock(() => state.open);
 
 const dialogEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLInputElement | null>(null);
+const choiceEl = ref<HTMLInputElement | null>(null);
 const cancelEl = ref<HTMLButtonElement | null>(null);
 const alternativeEl = ref<HTMLButtonElement | null>(null);
 const confirmEl = ref<HTMLButtonElement | null>(null);
@@ -236,7 +247,7 @@ async function accept() {
 }
 
 function focusables(): HTMLElement[] {
-  const candidates: (HTMLInputElement | HTMLButtonElement | null)[] = [inputEl.value, cancelEl.value, alternativeEl.value, confirmEl.value];
+  const candidates: (HTMLInputElement | HTMLButtonElement | null)[] = [choiceEl.value, inputEl.value, cancelEl.value, alternativeEl.value, confirmEl.value];
   const result: HTMLElement[] = [];
   for (const element of candidates) {
     if (element && !element.disabled) {

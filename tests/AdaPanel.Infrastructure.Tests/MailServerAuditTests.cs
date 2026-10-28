@@ -13,6 +13,119 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class MailServerAuditTests
 {
+    [Fact]
+    public async Task Overview_counts_every_domain_without_selecting_a_domain()
+    {
+        using var f = new Fixture();
+        f.Replies["query domain --json"] = Ok("""[{"id":"d","name":"travianpanel.com"},{"id":"other","name":"other.test"},{"id":"empty","name":"empty.test"}]""");
+        f.Replies["query account --json"] = Ok("""[{"@type":"Account/User","id":"a","emailAddress":"info@TRAVIANPANEL.COM"},{"@type":"Account/User","id":"b","emailAddress":"a@other.test"},{"@type":"Account/User","id":"c","emailAddress":"b@other.test"},{"@type":"Account/User","id":"d","emailAddress":"outside@travianpanel.com.evil"}]""");
+
+        var workspace = await f.Service.GetWorkspaceAsync(null);
+
+        Assert.Equal(new[] { 1, 2, 0 }, workspace.Domains.Select(domain => domain.AccountCount));
+        Assert.All(workspace.Domains, domain => Assert.True(domain.AccountCountMeasured));
+        Assert.False(workspace.AccountsMeasured); // Overview counts are not a selected-domain quota inventory.
+        Assert.Empty(workspace.Accounts);
+        Assert.Equal(1, f.Commands.Count(command => command == "query account --json"));
+        Assert.DoesNotContain(f.Commands, command => command.StartsWith("get account "));
+    }
+
+    [Fact]
+    public async Task Selecting_one_domain_preserves_counts_for_other_domains_and_reuses_details()
+    {
+        using var f = new Fixture();
+        f.Replies["query domain --json"] = Ok("""[{"id":"d","name":"example.test"},{"id":"e","name":"other.test"}]""");
+        f.Replies["query account --json"] = Ok("""[{"id":"a"},{"id":"b"}]""");
+        f.Replies["get account a --json"] = Ok("""{"emailAddress":"info@example.test"}""");
+        f.Replies["get account b --json"] = Ok("""{"emailAddress":"info@other.test"}""");
+
+        var workspace = await f.Service.GetWorkspaceAsync("example.test");
+
+        Assert.All(workspace.Domains, domain => { Assert.Equal(1, domain.AccountCount); Assert.True(domain.AccountCountMeasured); });
+        Assert.Equal("info@example.test", Assert.Single(workspace.Accounts).Address);
+        Assert.Equal(1, f.Commands.Count(command => command == "get account a --json"));
+        Assert.Equal(1, f.Commands.Count(command => command == "get account b --json"));
+    }
+
+    [Theory]
+    [InlineData("not json")]
+    [InlineData("[{\"id\":\"unreadable\"}]")]
+    public async Task Unreadable_overview_count_is_not_measured_zero(string inventory)
+    {
+        using var f = new Fixture();
+        f.Replies["query account --json"] = Ok(inventory);
+        f.Replies["get account unreadable --json"] = new() { ExitCode = 1 };
+        var workspace = await f.Service.GetWorkspaceAsync(null);
+        Assert.True(workspace.Configured);
+        Assert.False(Assert.Single(workspace.Domains).AccountCountMeasured);
+        Assert.NotEmpty(workspace.StatusMessage);
+    }
+
+    [Fact]
+    public async Task Measured_empty_overview_remains_zero()
+    {
+        using var f = new Fixture();
+        var workspace = await f.Service.GetWorkspaceAsync(null);
+        Assert.True(Assert.Single(workspace.Domains).AccountCountMeasured);
+        Assert.Equal(0, workspace.Domains.Single().AccountCount);
+        Assert.Empty(workspace.StatusMessage);
+    }
+
+    [Theory]
+    [InlineData("Account/User", "Account/User", true, 1)]
+    [InlineData("Account/Group", "Account/Group", true, 0)]
+    [InlineData(null, "Account/Group", true, 0)]
+    [InlineData("Account/Future", "Account/User", false, 0)]
+    [InlineData(null, "Account/Future", false, 0)]
+    [InlineData(null, null, true, 1)]
+    public async Task Overview_and_selected_inventory_share_mailbox_variant_rules(string? summaryType, string? detailType, bool measured, int count)
+    {
+        using var f = new Fixture();
+        var summaryPrefix = summaryType is null ? "" : $"\"@type\":\"{summaryType}\",";
+        var detailPrefix = detailType is null ? "" : $"\"@type\":\"{detailType}\",";
+        f.Replies["query account --json"] = Ok($$"""[{ {{summaryPrefix}} "id":"a","emailAddress":"info@example.test"}]""");
+        f.Replies["get account a --json"] = Ok("{" + detailPrefix + "\"emailAddress\":\"info@example.test\",\"aliases\":{\"0\":{\"name\":\"alias\",\"domainId\":\"d\"}}}");
+
+        var overview = await f.Service.GetWorkspaceAsync(null);
+        Assert.Equal(count, Assert.Single(overview.Domains).AccountCount);
+        Assert.Equal(measured, overview.Domains.Single().AccountCountMeasured);
+
+        var selected = await f.Service.GetWorkspaceAsync("example.test");
+        Assert.Equal(count, Assert.Single(selected.Domains).AccountCount);
+        Assert.Equal(measured, selected.AccountsMeasured);
+        Assert.Equal(measured, selected.Domains.Single().AccountCountMeasured);
+        Assert.Equal(count, selected.Accounts.Count);
+        Assert.Equal(count, selected.Aliases.Count); // Alias records never add mailboxes.
+    }
+
+    [Fact]
+    public async Task Repeated_identity_or_address_does_not_inflate_counts_or_allocation_inventory()
+    {
+        using var f = new Fixture();
+        f.Replies["query account --json"] = Ok("""[{"id":"a","emailAddress":"info@example.test"},{"id":"a","emailAddress":"info@example.test"},{"id":"b","emailAddress":"INFO@example.test"}]""");
+        f.Replies["get account a --json"] = Ok("""{"emailAddress":"info@example.test"}""");
+        f.Replies["get account b --json"] = Ok("""{"emailAddress":"INFO@example.test"}""");
+        var overview = await f.Service.GetWorkspaceAsync(null);
+        Assert.Equal(1, Assert.Single(overview.Domains).AccountCount);
+        Assert.True(overview.Domains.Single().AccountCountMeasured);
+        Assert.Equal(1, f.Commands.Count(command => command == "get account a --json"));
+        var selected = await f.Service.GetWorkspaceAsync("example.test");
+        Assert.Single(selected.Accounts);
+        Assert.Equal(1, Assert.Single(selected.Domains).AccountCount);
+        Assert.True(selected.AccountsMeasured);
+    }
+
+    [Fact]
+    public async Task Legacy_summary_with_unreadable_variant_detail_is_not_measured_zero()
+    {
+        using var f = new Fixture();
+        f.Replies["query account --json"] = Ok("""[{"id":"a","emailAddress":"info@example.test"}]""");
+        f.Replies["get account a --json"] = new() { ExitCode = 1 };
+        var overview = await f.Service.GetWorkspaceAsync(null);
+        Assert.False(Assert.Single(overview.Domains).AccountCountMeasured);
+        Assert.NotEmpty(overview.StatusMessage);
+    }
+
     [Theory]
     [InlineData("[]", null, true)]
     [InlineData("[{\"id\":\"a\"}]", "{\"emailAddress\":\"a@example.test\"}", true)]
@@ -26,6 +139,7 @@ public sealed class MailServerAuditTests
         f.Replies["get account a --json"] = detail is null ? new() { ExitCode = 1 } : Ok(detail);
         var workspace = await f.Service.GetWorkspaceAsync("example.test");
         Assert.Equal(measured, workspace.AccountsMeasured);
+        Assert.Equal(measured, Assert.Single(workspace.Domains).AccountCountMeasured);
     }
 
     [Theory]

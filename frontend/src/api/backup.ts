@@ -36,6 +36,7 @@ export type BackupRecord = {
   contentHash?: string;
   /** AES-256-GCM ile şifreli mi (dosya adı `.zip.enc`). Geri yükleme parola ister. */
   encrypted: boolean;
+  portableDefiners?: boolean;
   warnings: BackupRestoreWarning[];
   /** Databases actually included; absent/null means no measurement on older records. */
   includedDatabases?: { engine: string; databaseName: string }[] | null;
@@ -392,7 +393,7 @@ export async function backupPanel(target?: Partial<BackupTargetPayload>) {
   return response.data.data;
 }
 
-export async function backupDatabase(engine: string, databaseName = "", target?: Partial<BackupTargetPayload> & { useConfiguredFtpTarget?: boolean }) {
+export async function backupDatabase(engine: string, databaseName = "", target?: Partial<BackupTargetPayload> & { useConfiguredFtpTarget?: boolean; portableDefiners?: boolean }) {
   const response = await apiClient.post<ApiEnvelope<BackupRecord>>("/backup/db", {
     engine,
     databaseName,
@@ -594,11 +595,12 @@ export async function runBackupScheduleNow(userId: string) {
   return measuredSchedule(response.data, userId);
 }
 
-export async function restoreBackup(backupId: string, targetPath: string, encryptionPassword = "") {
+export async function restoreBackup(backupId: string, targetPath: string, encryptionPassword = "", options?: { adaptDefiners?: boolean }) {
   const response = await apiClient.post<ApiEnvelope<BackupRecord>>("/backup/restore", {
     backupId,
     targetPath,
-    encryptionPassword
+    encryptionPassword,
+    ...(options?.adaptDefiners ? { adaptDefiners: true } : {})
   });
 
   const record = response.data?.data;

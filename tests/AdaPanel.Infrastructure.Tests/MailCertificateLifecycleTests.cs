@@ -19,6 +19,68 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class MailCertificateLifecycleTests
 {
+    [Fact]
+    public async Task AddingAnotherHostPreservesLegacyRenewalAndSynchronizesBothHosts()
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        await f.First.IssueCertificateAsync(Request("mail.new.example.test"), f.Token);
+        var saved = await MailCertificateRegistry.ReadAsync(f.Store, f.Token);
+        Assert.Equal(Fixture.OldHost, saved.PrimaryHostName);
+        Assert.Equal(2, saved.Records.Count);
+        Assert.Contains(saved.Records, r => MailCertificateRegistry.Field(r, "pemDirectory") == f.InitialPemDirectory);
+        var secondDirectory = MailCertificateRegistry.Field(saved.Records.Single(r =>
+            MailCertificateRegistry.Field(r, "hostName") == "mail.new.example.test"), "pemDirectory");
+        f.WritePem(Fixture.OldHost, f.InitialPemDirectory);
+        f.WritePem("mail.new.example.test", secondDirectory);
+        f.Commands.Clear();
+        Assert.NotNull(await f.Second.SyncCertificateAsync(f.Token));
+        var after = await MailCertificateRegistry.ReadAsync(f.Store, f.Token);
+        Assert.Equal(2, after.Records.Count);
+        Assert.Equal(Fixture.OldHost, after.PrimaryHostName);
+        foreach (var entry in after.Records)
+            Assert.Equal(f.PemHash(MailCertificateRegistry.Field(entry, "pemDirectory")), MailCertificateRegistry.Field(entry, "contentHash"));
+        Assert.Equal(2, f.Commands.Count(command => command.Stage == "write"));
+    }
+
+    [Fact]
+    public async Task BrokenFirstHostStillAllowsAnotherHostsRenewalAndIsReportedAsFailure()
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        await f.First.IssueCertificateAsync(Request("mail.new.example.test"), f.Token);
+        var before = await MailCertificateRegistry.ReadAsync(f.Store, f.Token);
+        var original = before.Records.Single(r => MailCertificateRegistry.Field(r, "hostName") == Fixture.OldHost).ToJsonString();
+        var nextDirectory = MailCertificateRegistry.Field(before.Records.Single(r =>
+            MailCertificateRegistry.Field(r, "hostName") == "mail.new.example.test"), "pemDirectory");
+        await File.WriteAllTextAsync(Directory.GetFiles(f.InitialPemDirectory, "*-key.pem").Single(), "incomplete", f.Token);
+        f.WritePem("mail.new.example.test", nextDirectory);
+        f.Commands.Clear();
+        await Assert.ThrowsAsync<AppException>(() => f.Second.SyncCertificateAsync(f.Token));
+        var after = await MailCertificateRegistry.ReadAsync(f.Store, f.Token);
+        Assert.Equal(original, after.Records.Single(r => MailCertificateRegistry.Field(r, "hostName") == Fixture.OldHost).ToJsonString());
+        Assert.Equal(f.PemHash(nextDirectory), MailCertificateRegistry.Field(after.Records.Single(r =>
+            MailCertificateRegistry.Field(r, "hostName") == "mail.new.example.test"), "contentHash"));
+        Assert.Single(f.Commands.Where(command => command.Stage == "write"));
+    }
+
+    [Fact]
+    public async Task SelectedDomainStatusInspectsItsHostInsteadOfTheLastRecordedOtherDomain()
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        await f.First.IssueCertificateAsync(new IssueMailCertificateRequest
+            { Domain = "second.test", HostName = "mail.second.test" }, f.Token);
+        var selected = await f.First.GetCertificateStatusForDomainAsync("example.test", f.Token);
+        Assert.Equal(Fixture.OldHost, selected.HostName);
+        Assert.Equal("example.test", selected.Domain);
+        var missing = await f.First.GetCertificateStatusForDomainAsync("untracked.test", f.Token);
+        Assert.Equal("mail.untracked.test", missing.HostName);
+        Assert.Equal("untracked.test", missing.Domain);
+        Assert.Empty(missing.Source);
+        Assert.Equal("missing", missing.ConfigurationStatus);
+    }
+
     [Theory]
     [InlineData("query")]
     [InlineData("write")]

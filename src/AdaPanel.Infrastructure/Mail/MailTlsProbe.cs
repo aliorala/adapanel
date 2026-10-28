@@ -22,7 +22,10 @@ internal static class MailTlsProbe
         result.Subject = leaf.Subject;
         result.Issuer = leaf.Issuer;
         result.Thumbprint = leaf.Thumbprint;
+        result.NotBeforeUtc = leaf.NotBefore.ToUniversalTime();
         result.NotAfterUtc = leaf.NotAfter.ToUniversalTime();
+        result.ChainStatus = chain?.ChainStatus.Where(s => s.Status != X509ChainStatusFlags.NoError)
+            .Select(s => s.Status.ToString()).Distinct().ToArray() ?? [];
         var failures = new List<string>();
         if (errors != SslPolicyErrors.None)
         {
@@ -33,6 +36,8 @@ internal static class MailTlsProbe
         }
         try
         {
+            result.SubjectAlternativeNames = leaf.Extensions.OfType<X509SubjectAlternativeNameExtension>()
+                .SelectMany(extension => extension.EnumerateDnsNames()).ToArray();
             if (!leaf.MatchesHostname(host, true, false)) failures.Add("Certificate SAN does not match the requested host.");
         }
         catch (CryptographicException) { failures.Add("Certificate SAN could not be read."); }

@@ -9,6 +9,25 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class MailEnableIntegrationTests
 {
     [Theory]
+    [InlineData("1", true, 1)]
+    [InlineData("0", true, 0)]
+    [InlineData("null", false, 0)]
+    [InlineData("-1", false, 0)]
+    public async Task Overview_uses_measured_domain_counts_and_preserves_unknown(string count, bool measured, int expected)
+    {
+        var service = new MailEnableMailService(NullLogger<MailEnableMailService>.Instance)
+        {
+            KomutKosucusu = (_, _) => Task.FromResult($$"""{"domains":[{"name":"travianpanel.com","status":1,"accountCount":{{count}}}],"accounts":[],"aliases":[]}""")
+        };
+        var workspace = await service.GetWorkspaceAsync(null);
+        var domain = Assert.Single(workspace.Domains);
+        Assert.Equal(expected, domain.AccountCount);
+        Assert.Equal(measured, domain.AccountCountMeasured);
+        Assert.Equal(!measured, !string.IsNullOrWhiteSpace(workspace.StatusMessage));
+        Assert.False(workspace.AccountsMeasured);
+    }
+
+    [Theory]
     [InlineData("*")]
     [InlineData("info?")]
     [InlineData("../info")]

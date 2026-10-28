@@ -47,6 +47,9 @@ public sealed class BackupRecordDto
     /// </summary>
     public bool Compressed { get; set; }
 
+    /// <summary>This opt-in export already replaced explicit owners with CURRENT_USER; originals cannot be reconstructed from it.</summary>
+    public bool PortableDefiners { get; set; }
+
     /// <summary>
     /// Son geri yüklemenin YARIM KALAN adımları. Boş değilse <see cref="Status"/> da
     /// <c>restored_with_errors</c> olur — "restored" yazıp sorunu yutmak yasaktır.

@@ -6,6 +6,8 @@ public sealed class RestoreBackupRequest
 
     public string TargetPath { get; set; } = string.Empty;
 
+    public bool AdaptDefiners { get; set; }
+
     /// <summary>
     /// Şifreli yedeğin parolası. Boş bırakılırsa panelde KAYITLI parola denenir.
     /// <para>

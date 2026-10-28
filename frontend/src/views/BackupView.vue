@@ -801,6 +801,13 @@
             <span class="field-label">{{ t("panel.database.databaseName") }}</span>
             <input v-model="databaseName" :placeholder="t('panel.backup.allDatabases')" />
           </label>
+          <div v-if="['mariadb', 'mysql'].includes(databaseEngine)">
+            <label class="checkbox-field">
+              <input v-model="portableDefiners" type="checkbox" :disabled="busy" />
+              <span>{{ t("panel.database.definers.portable") }}</span>
+            </label>
+            <p class="hint">{{ t("panel.database.definers.portableHint") }}</p>
+          </div>
         </template>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.backup.targetType") }}</span>
@@ -1484,6 +1491,7 @@ const showCreateForm = computed(() => activeView.value === "create");
 const siteName = ref(sitesStore.selectedSiteName);
 const databaseEngine = ref("mariadb");
 const databaseName = ref("");
+const portableDefiners = ref(false);
 const loading = ref(false);
 const busy = ref(false);
 
@@ -2222,13 +2230,16 @@ async function createSubscriptionBackup() {
 
 async function createDatabaseBackup() {
   if (!canAdminWrite()) return;
-  await runBackup(() => backupDatabase(databaseEngine.value, databaseName.value, buildTargetPayload()));
+  await runBackup(() => backupDatabase(databaseEngine.value, databaseName.value, {
+    ...buildTargetPayload(), portableDefiners: ['mariadb', 'mysql'].includes(databaseEngine.value) && portableDefiners.value
+  }));
 }
 
 async function createDatabaseToConfiguredFtp() {
   if (!canAdminWrite()) return;
   const engine = databaseEngine.value;
   const name = databaseName.value;
+  const portable = ['mariadb', 'mysql'].includes(engine) && portableDefiners.value;
   const encryptionPassword = targetForm.encryptionPassword;
   const label = runningLabel();
   await withOperation(async () => {
@@ -2248,7 +2259,7 @@ async function createDatabaseToConfiguredFtp() {
       action: async () => {
         if (!canAdminWrite()) return;
         await performBackup(() => backupDatabase(engine, name, {
-          useConfiguredFtpTarget: true, remoteUrl: target, encryptionPassword
+          useConfiguredFtpTarget: true, remoteUrl: target, encryptionPassword, portableDefiners: portable
         }), label, encryptionPassword);
       }
     });

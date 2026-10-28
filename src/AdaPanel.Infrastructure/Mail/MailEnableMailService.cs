@@ -83,6 +83,25 @@ public sealed partial class MailEnableMailService(
         var selected = string.IsNullOrWhiteSpace(domain) ? string.Empty : ValidateDomain(domain);
         var script = $$"""
             $ErrorActionPreference = 'Stop'
+            function Measure-MailboxCount($postoffice) {
+              try {
+                $counter = New-Object -ComObject 'MEAOPO.Mailbox'
+                $counter.Postoffice = $postoffice
+                $counter.Mailbox = ''; $counter.Status = -1; $counter.Limit = -1; $counter.RedirectStatus = -1; $counter.RedirectAddress = ''
+                $count = 0; $seenCount = @{}
+                if ($counter.FindFirstMailbox() -eq 1) {
+                  do {
+                    $name = "$($counter.Mailbox)"
+                    if (-not $name -or $seenCount.ContainsKey($name)) { throw 'Mailbox count enumeration is incomplete.' }
+                    $seenCount[$name] = $true; $count++
+                    if ($count -ge 5000) { throw 'Mailbox count enumeration exceeded safety limit.' }
+                    $counter.Postoffice = $postoffice
+                    $counter.Mailbox = ''; $counter.Status = -1; $counter.Limit = -1; $counter.RedirectStatus = -1; $counter.RedirectAddress = ''
+                  } while ($counter.FindNextMailbox() -eq 1)
+                }
+                return $count
+              } catch { return $null }
+            }
             $domains = @()
             $po = New-Object -ComObject 'MEAOPO.PostOffice'
             $seen = @{}
@@ -95,7 +114,7 @@ public sealed partial class MailEnableMailService(
                 # döngü/timeout). Tekrar eden ad gelirse enumerasyonu sonlandır.
                 if ($seen.ContainsKey($nm)) { throw 'Postoffice enumeration repeated a record.' }
                 $seen[$nm] = $true
-                $domains += [pscustomobject]@{ name = $nm; status = [int]$po.Status }
+                $domains += [pscustomobject]@{ name = $nm; status = [int]$po.Status; accountCount = (Measure-MailboxCount $nm) }
                 $n++
                 $po.Name = ''; $po.Account = ''; $po.Status = -1
               } while ($po.FindNextPostoffice() -eq 1 -and $n -lt 500)
@@ -199,7 +218,11 @@ public sealed partial class MailEnableMailService(
             .Select(item => new MailDomainDto
             {
                 Name = GetStr(item, "name"),
-                Active = GetInt(item, "status") == 1
+                Active = GetInt(item, "status") == 1,
+                AccountCount = item.TryGetProperty("accountCount", out var count) && count.ValueKind == JsonValueKind.Number
+                    && count.TryGetInt32(out var value) ? Math.Max(0, value) : 0,
+                AccountCountMeasured = item.TryGetProperty("accountCount", out var measuredCount) && measuredCount.ValueKind == JsonValueKind.Number
+                    && measuredCount.TryGetInt32(out var measuredValue) && measuredValue >= 0
             })
             .Where(item => !string.IsNullOrWhiteSpace(item.Name))
             .ToArray();
@@ -238,6 +261,8 @@ public sealed partial class MailEnableMailService(
         }
 
         await ApplyDomainAllocationsAsync(workspace, cancellationToken);
+        if (workspace.Domains.Any(item => !item.AccountCountMeasured))
+            workspace.StatusMessage = "Bazı alan adlarının posta kutusu sayısı okunamadı. Ölçülemeyen sayılar sıfır değildir; yeniden yenileyin.";
         return (workspace, olculdu);
     }
 

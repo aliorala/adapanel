@@ -22,6 +22,88 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </summary>
 public sealed class BackupCombinedRestoreSafetyTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CombinedArchiveForwardsDefinerChoiceWithoutRewritingTheArchive(bool adapt)
+    {
+        using var alan = new GeciciAlan();
+        var root = alan.KlasorAc("wwwroot");
+        const string sql = "CREATE DEFINER=`source`@`%` VIEW v AS SELECT 1;";
+        var zip = alan.BirlesikYedekUret(new Dictionary<string, string>(),
+            new Dictionary<string, string> { ["databases/mariadb-shop.sql"] = sql });
+        var original = await File.ReadAllBytesAsync(zip);
+        DatabaseDumpRequest? captured = null;
+        var service = alan.ServisKur(zip, root, new SahteVeritabaniServisi(request =>
+        {
+            captured = request;
+            Assert.Equal(sql, File.ReadAllText(request.FilePath));
+        }));
+        var record = await service.RestoreAsync(new RestoreBackupRequest { BackupId = "b1", AdaptDefiners = adapt });
+        Assert.Equal("restored", record.Status);
+        Assert.NotNull(captured);
+        Assert.Equal(adapt, captured.AdaptDefiners);
+        Assert.Equal("mariadb", captured.Engine);
+        Assert.Equal(original, await File.ReadAllBytesAsync(zip));
+        Assert.False(File.Exists(captured.FilePath));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirectSqlRestorePersistsRealFailureAndChosenOwnership(bool cancelled)
+    {
+        using var alan = new GeciciAlan();
+        var sql = Path.Combine(alan.Kok, "backup.sql");
+        await File.WriteAllTextAsync(sql, "-- SQL backup");
+        var service = alan.ServisKur(sql, alan.Kok, new SahteVeritabaniServisi(request =>
+        {
+            Assert.True(request.AdaptDefiners);
+            if (cancelled) throw new OperationCanceledException();
+            throw new AppException("database.restore_failed", 500, 500, "ERROR 1227 at line 3; CREATE VIEW v_incidents_full; SET USER");
+        }));
+        await alan.DosyaDeposu.WriteAsync("config/backups.json", new[]
+        {
+            new BackupRecordDto { Id = "b1", Name = "backup.sql", Type = "database", Source = "mariadb:shop", Format = "sql", Path = sql }
+        });
+        var error = await Record.ExceptionAsync(() => service.RestoreAsync(new RestoreBackupRequest { BackupId = "b1", AdaptDefiners = true }));
+        Assert.NotNull(error);
+        var persisted = Assert.Single(await service.GetBackupsAsync());
+        Assert.Equal("restored_with_errors", persisted.Status);
+        var warning = Assert.Single(persisted.Warnings);
+        if (!cancelled)
+        {
+            Assert.Contains("1227", warning.Detail);
+            Assert.Contains("v_incidents_full", warning.Detail);
+        }
+        Assert.Equal("-- SQL backup", await File.ReadAllTextAsync(sql));
+    }
+
+    [Fact]
+    public async Task BlockedReplayRetainsTheOriginalSqlFailureForRecovery()
+    {
+        using var alan = new GeciciAlan();
+        var sql = Path.Combine(alan.Kok, "backup.sql");
+        await File.WriteAllTextAsync(sql, "-- SQL backup");
+        var calls = 0;
+        var service = alan.ServisKur(sql, alan.Kok, new SahteVeritabaniServisi(_ =>
+        {
+            if (++calls == 1) throw new AppException("database.restore_failed", 500, 500, "ERROR 1227; CREATE VIEW v_incidents_full");
+            throw new AppException("database.restore_partial_retry_blocked", 409, 409, "No SQL replayed");
+        }));
+        await alan.DosyaDeposu.WriteAsync("config/backups.json", new[]
+        {
+            new BackupRecordDto { Id = "b1", Name = "backup.sql", Type = "database", Source = "mariadb:shop", Format = "sql", Path = sql }
+        });
+        for (var i = 0; i < 3; i++)
+            await Assert.ThrowsAsync<AppException>(() => service.RestoreAsync(new RestoreBackupRequest { BackupId = "b1" }));
+        var record = Assert.Single(await service.GetBackupsAsync());
+        Assert.Equal("restored_with_errors", record.Status);
+        Assert.Equal(2, record.Warnings.Count);
+        Assert.Contains(record.Warnings, warning => warning.Detail.Contains("1227; CREATE VIEW v_incidents_full"));
+        Assert.Contains(record.Warnings, warning => warning.Detail.Contains("No SQL replayed"));
+    }
+
     [Fact]
     public async Task Restore_WhenDatabaseImportFails_ReportsWarningAndRefusesToSayRestored()
     {

@@ -25,6 +25,9 @@ public sealed class MailServiceRouter(
     public Task<MailCertificateDto> GetCertificateStatusAsync(CancellationToken cancellationToken = default)
         => Active.GetCertificateStatusAsync(cancellationToken);
 
+    public Task<MailCertificateDto> GetCertificateStatusForDomainAsync(string domain, CancellationToken cancellationToken = default)
+        => Active.GetCertificateStatusForDomainAsync(domain, cancellationToken);
+
     public Task<MailCertificateDto> IssueCertificateAsync(IssueMailCertificateRequest request, CancellationToken cancellationToken = default)
         => Active.IssueCertificateAsync(request, cancellationToken);
 

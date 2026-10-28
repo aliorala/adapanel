@@ -44,4 +44,6 @@ public sealed class DatabaseTransferRequest
 
     /// <summary>Hedef kullanıcının parolası. Boşsa güçlü bir parola üretilir ve sonuçta gösterilir.</summary>
     public string TargetPassword { get; set; } = string.Empty;
+
+    public bool AdaptDefiners { get; set; }
 }

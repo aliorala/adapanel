@@ -20,6 +20,10 @@ public interface IMailService
     /// <summary>Mail sunucusundaki TLS sertifikası durumunu döner.</summary>
     Task<MailCertificateDto> GetCertificateStatusAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Inspect the selected domain, without substituting another domain's saved certificate.</summary>
+    Task<MailCertificateDto> GetCertificateStatusForDomainAsync(string domain, CancellationToken cancellationToken = default)
+        => GetCertificateStatusAsync(cancellationToken);
+
     Task SyncWebCertificateAsync(string hostName, Func<CancellationToken, Task>? beforeMutation = null,
         CancellationToken cancellationToken = default) => Task.CompletedTask;
 
