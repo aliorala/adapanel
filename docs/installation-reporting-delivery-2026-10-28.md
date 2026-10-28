@@ -21,4 +21,16 @@ Site taşımasından kalan merkezi toplayıcı eski şema sürümündeydi. 28 Ek
 
 Teslimat değişikliği: 26 backend ve 9 frontend testi, Vue TypeScript kontrolü ve üretim derlemesi geçti. Bağımsız denetçi aynı dar testleri tekrar çalıştırıp ONAY verdi. Toplayıcı PHP testleri ve toplayıcı/yönetim HTTP senaryoları gerçek kayıt deposundan ayrı geçici dizinlerde geçti.
 
-0.8.126 kurulum paketinin son kontrolleri ve canlı sunucudan ilk gerçek bildirimin kabul doğrulaması sürüyor. Bu belge tek başına canlı teslimatın başarılı olduğu anlamına gelmez.
+Son tamponlanmış gönderim testiyle backend dar teslimat kümesi 27/27 oldu; bağımsız denetçi aynı Release testlerini doğruladı. Arayüzün geniş kümesi 2.775 testi geçti. Geniş backend kümesindeki iki audit kapsam sınıflandırması düzeltildikten sonra ilgili 62 test geçti; geniş backend kümesi tekrar koşulmadı.
+
+0.8.126 son paketi ev sunucusuna kuruldu ve yayımlandı. Önceki başarısız denemenin yalnız `nextAttemptAtUtc` zamanı bir kez öne alındı; kimlik, paylaşım tercihi, hata geçmişi ve başarılı kabul zamanı değiştirilmedi. Panelden aynı tercih kaydedilerek gerçek bildirim denendi. 28 Ekim 2026 12:30:46'da kabul edildi; hata boş, sonraki bildirim 29 Ekim 12:30:46 oldu. Özel yönetimde 1 kayıtlı / 1 aktif kurulum ve sürüm 0.8.126 görüldü. Yayımlanan kurulum dosyası tekrar indirilip SHA-256 eşleşmesi doğrulandı.
+
+Ek canlı bulgu: merkezi toplayıcı bu bağlantıyı 127.0.0.1 olarak görüyor. Bu nedenle ülke/şehir bilinmiyor kaldı. İstemci başlıklarına koşulsuz güvenerek sahte IP kabul edilmedi.
+
+## 0.8.127: yerel bağlantıda otomatik çıkış IP'si
+
+Yalnız ayrıntı paylaşımı açık ve günlük bildirim zamanı gelmişse istemci sabit HTTPS ipwho.is adresinden kendi çıkış IP'sini öğrenir. Sorgu iki saniye ve 4096 baytla sınırlıdır; sertifika doğrulaması açıktır, yönlendirme izlenmez. Sağlayıcı hatasında günlük bildirim devam eder. Kapalı paylaşımda sağlayıcı sorgusu ve `publicIp` alanı yoktur.
+
+Merkezi toplayıcı genel bağlantı IP'sini tercih eder. Bağlantı yerelse otomatik bildirilen genel IP'yi görüntüleme ve konum sorgusunda kullanır; kaynak `reported_egress` olarak ayrılır. Bağlantı adresi kendi tarihiyle ayrıca tutulur. İstemci bildirimi kimlik doğrulama veya hız sınırında kullanılmaz. Eski IP/konum, paylaşım kapatma veya başarısız yeni IP sorgusunda korunur. Ülke/şehir IP'nin yaklaşık konumudur; fiziksel sunucu adresi veya datacenter garantisi değildir.
+
+42 backend, 67 PHP ve 9 arayüz testi, iki izole HTTP test grubu, TypeScript ve üretim derlemesi geçti. Bağımsız denetçinin bulduğu 6to4 adres doğrulama farkı iki tarafta reddedilerek düzeltildi. Publish 174 dosya ve sıfır bulgu; kurulum paketi sürüm/içerik denetimi geçti. 0.8.127 paketi hazırdır; bu bölüm yazılırken canlı toplayıcı güncellemesi ve kurulum, uzak masaüstü bağlantısının yeniden açılmasını beklemektedir. Mevcut başarılı günlük kabul zamanı sıfırlanmadı.

@@ -40,7 +40,7 @@ try {
         $data = with_store($private, function(array &$state): array {
             $now = time(); prune_records($state, $now);
             $result = summary($state, $now);
-            $fields = array_flip(['id','version','firstSeen','lastSeen','shareDetails','ip','country','city','location','datacenter','lastDetailsAt','geoIp','geoUpdatedAt']);
+            $fields = array_flip(['id','version','firstSeen','lastSeen','shareDetails','ip','ipSource','connectionIp','connectionIpAt','country','city','location','datacenter','lastDetailsAt','geoIp','geoUpdatedAt']);
             $result['installations'] = array_values(array_map(
                 fn($record) => array_intersect_key($record, $fields), $state['records']));
             usort($result['installations'], fn($a,$b) => $b['lastSeen'] <=> $a['lastSeen']);

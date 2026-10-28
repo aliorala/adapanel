@@ -26,7 +26,8 @@ function renderRows(){
     const historic=item.shareDetails!==true;
     const detail=value=>value?String(value)+(historic?' · Geçmiş kayıt':''):(historic?'Paylaşılmadı':'Belirlenemedi');
     const geo=value=>value?String(value)+' · '+stamp(item.geoUpdatedAt)+(item.geoIp?' · IP: '+item.geoIp:'')+(historic?' · Geçmiş kayıt':''):(historic?'Paylaşılmadı':'Belirlenemedi');
-    for(const value of [item.id.slice(0,12),item.version,detail(item.ip),geo(item.country),geo(item.city),detail(item.location),detail(item.datacenter),item.lastDetailsAt?stamp(item.lastDetailsAt)+(historic?' · Ayrıntılar kapalı, geçmiş kayıt':''):'Paylaşılmadı',stamp(item.lastSeen)]){const td=document.createElement('td');td.textContent=value;tr.append(td);}
+    const source=item.ipSource==='reported_egress'?' · Otomatik çıkış IP’si (istemci bildirimi; güvenlik doğrulaması değildir)':item.ipSource==='connection'?' · Bağlantı IP’si':' · Önceki kayıt';
+    for(const value of [item.id.slice(0,12),item.version,detail(item.ip)+(item.ip?source:'')+(item.connectionIp?' · Son bağlantı: '+item.connectionIp+' · '+stamp(item.connectionIpAt):''),geo(item.country),geo(item.city),detail(item.location),detail(item.datacenter),item.lastDetailsAt?stamp(item.lastDetailsAt)+(historic?' · Ayrıntılar kapalı, geçmiş kayıt':''):'Paylaşılmadı',stamp(item.lastSeen)]){const td=document.createElement('td');td.textContent=value;tr.append(td);}
     const active=item.lastSeen*1000>measured-48*3600000&&item.lastSeen*1000<=measured;
     const td=document.createElement('td'),badge=document.createElement('span');badge.textContent=active?'Aktif':'Aktif değil';if(!active)badge.className='inactive';td.append(badge);tr.append(td);$('rows').append(tr);
   }

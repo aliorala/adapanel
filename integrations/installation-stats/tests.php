@@ -11,43 +11,43 @@ check(array_keys($legacyValidated)===['schemaVersion','installationToken','panel
 foreach([1,2,3] as $schema){$bad=$schema===1?$legacyReport:$report;$bad['schemaVersion']=$schema;$bad['email']='forbidden';try{validate_report($bad);check(false,'unknown schema or fields rejected');}catch(InvalidArgumentException $e){check(true,'unknown schema or fields rejected');}}
 $unknown=$report;$unknown['schemaVersion']=3;try{validate_report($unknown);check(false,'unsupported schema rejected');}catch(InvalidArgumentException $e){check(true,'unsupported schema rejected');}
 $missing=$report;unset($missing['panelVersion']);try{validate_report($missing);check(false,'missing fields rejected');}catch(InvalidArgumentException $e){check(true,'missing fields rejected');}
-accept_report($state,$report,'203.0.113.4',$now,'test-rate-secret');
-accept_report($state,$report,'203.0.113.4',$now+86400,'test-rate-secret');
+accept_report($state,$report,'8.8.4.4',$now,'test-rate-secret');
+accept_report($state,$report,'8.8.4.4',$now+86400,'test-rate-secret');
 check(count($state['records'])===1 && summary($state,$now+86400)['activeInstallations']===1,'daily deduplication');
 check(summary($state,$now+86400+ACTIVE_SECONDS-1)['activeInstallations']===1,'active before 48h boundary');
 check(summary($state,$now+86400+ACTIVE_SECONDS)['activeInstallations']===0,'inactive at 48h boundary');
 check(!str_contains(json_encode($state),$token),'raw token is not stored');
-check(!str_contains(json_encode($state),'203.0.113.4'),'raw connection IP is not stored');
-$legacyState=empty_state();accept_report($legacyState,$legacyReport,'203.0.113.4',$now,'test-rate-secret');
-check(current($legacyState['records'])['shareDetails']===true && current($legacyState['records'])['ip']==='203.0.113.4' && !isset(current($legacyState['records'])['location']),'legacy opted-in report includes peer IP but discards client metadata');
-$details=$report;$details['shareDetails']=true;$detailState=empty_state();accept_report($detailState,$details,'203.0.113.4',$now,'test');
-check(current($detailState['records'])['ip']==='203.0.113.4','details enabled stores validated peer IP');
+check(!str_contains(json_encode($state),'8.8.4.4'),'raw connection IP is not stored');
+$legacyState=empty_state();accept_report($legacyState,$legacyReport,'8.8.4.4',$now,'test-rate-secret');
+check(current($legacyState['records'])['shareDetails']===true && current($legacyState['records'])['ip']==='8.8.4.4' && !isset(current($legacyState['records'])['location']),'legacy opted-in report includes peer IP but discards client metadata');
+$details=$report;$details['shareDetails']=true;$detailState=empty_state();accept_report($detailState,$details,'8.8.4.4',$now,'test');
+check(current($detailState['records'])['ip']==='8.8.4.4','details enabled stores validated peer IP');
 $id=array_key_first($detailState['records']);$detailState['records'][$id]['country']='OldCountry';$detailState['records'][$id]['city']='OldCity';
-accept_report($detailState,$report,'203.0.113.4',$now+1,'test');
-check($detailState['records'][$id]['ip']==='203.0.113.4' && $detailState['records'][$id]['country']==='OldCountry' && !$detailState['records'][$id]['shareDetails'] && $detailState['records'][$id]['lastSeen']===$now,'rapid off preserves details without extending activity');
+accept_report($detailState,$report,'8.8.4.4',$now+1,'test');
+check($detailState['records'][$id]['ip']==='8.8.4.4' && $detailState['records'][$id]['country']==='OldCountry' && !$detailState['records'][$id]['shareDetails'] && $detailState['records'][$id]['lastSeen']===$now,'rapid off preserves details without extending activity');
 $history=$detailState['records'][$id];$off=$report;$off['panelVersion']='0.8.999';accept_report($detailState,$off,'198.51.100.5',$now+86400,'test');
 check(count($detailState['records'])===1 && $detailState['records'][$id]['version']==='0.8.999' && $detailState['records'][$id]['lastSeen']===$now+86400 && $detailState['records'][$id]['ip']===$history['ip'] && $detailState['records'][$id]['lastDetailsAt']===$history['lastDetailsAt'],'daily off updates version and activity with stable identity and historical details');
 try{$bad=$report;$bad['shareDetails']='true';validate_report($bad);check(false,'nonboolean details rejected');}catch(InvalidArgumentException $e){check(true,'nonboolean details rejected');}
-check(!str_contains(json_encode(summary($state,$now+86400)),'203.0.113.4'),'public summary excludes IP');
+check(!str_contains(json_encode(summary($state,$now+86400)),'8.8.4.4'),'public summary excludes IP');
 $other=$report; $other['installationToken']=str_repeat('b',64);
-accept_report($state,$other,'203.0.113.4',$now+86400,'test-rate-secret');
+accept_report($state,$other,'8.8.4.4',$now+86400,'test-rate-secret');
 check(count($state['records'])===2,'two installations behind one NAT');
-$before=$state; accept_report($state,$other,'203.0.113.4',$now+86401,'test-rate-secret');
+$before=$state; accept_report($state,$other,'8.8.4.4',$now+86401,'test-rate-secret');
 check($state===$before,'rapid replay does not extend activity');
 prune_records($state,$now+86400+RETENTION_SECONDS); check(count($state['records'])===0,'30-day retention');
 try { validate_report($report+['email'=>'not-allowed']); check(false,'unknown fields rejected'); } catch(InvalidArgumentException $e) { check(true,'unknown fields rejected'); }
 $state=empty_state();
-for($i=0;$i<20;$i++){ $report['installationToken']=hash('sha256',(string)$i);accept_report($state,$report,'203.0.113.4',$now,'test-rate-secret'); }
-try { $report['installationToken']=hash('sha256','extra');accept_report($state,$report,'203.0.113.4',$now,'test-rate-secret');check(false,'registration cap'); }
+for($i=0;$i<20;$i++){ $report['installationToken']=hash('sha256',(string)$i);accept_report($state,$report,'8.8.4.4',$now,'test-rate-secret'); }
+try { $report['installationToken']=hash('sha256','extra');accept_report($state,$report,'8.8.4.4',$now,'test-rate-secret');check(false,'registration cap'); }
 catch(OverflowException $e){check(count($state['records'])===20,'registration cap');}
 $dir=sys_get_temp_dir().'/adapanel-registry-'.bin2hex(random_bytes(8));mkdir($dir);
 try {
  file_put_contents($dir.'/registry.json',json_encode(empty_state()));
- with_store($dir,function(array &$s)use($report,$now){accept_report($s,$report,'203.0.113.9',$now,'test');});
+ with_store($dir,function(array &$s)use($report,$now){accept_report($s,$report,'8.8.4.9',$now,'test');});
  $result=with_store($dir,fn(array &$s)=>summary($s,$now));check($result['activeInstallations']===1,'atomic persisted store');
  $legacy=json_decode(file_get_contents($dir.'/registry.json'),true);
  $legacyId=array_key_first($legacy['records']);
- unset($legacy['records'][$legacyId]['shareDetails']);$legacy['records'][$legacyId]['ip']='203.0.113.9';
+ unset($legacy['records'][$legacyId]['shareDetails']);$legacy['records'][$legacyId]['ip']='8.8.4.9';
  $legacy['records'][$legacyId]['location']='LegacyCity';$legacy['records'][$legacyId]['datacenter']='LegacyDC';
  file_put_contents($dir.'/registry.json',json_encode($legacy));
  $migrated=with_store($dir,fn(array &$s)=>$s);
@@ -78,3 +78,25 @@ $history=$geoState['records'][$id];accept_report($geoState,$details,'1.1.1.1',$n
 check($geoState['records'][$id]['ip']==='1.1.1.1' && $geoState['records'][$id]['geoIp']==='8.8.8.8' && $geoState['records'][$id]['city']==='Ankara' && $geoState['records'][$id]['geoUpdatedAt']===$history['geoUpdatedAt'],'new IP with failed lookup preserves separately timestamped historical geo');
 $quota=empty_state();accept_report($quota,$details,'8.8.8.8',$now,'test');$quota['geoDaily'][gmdate('Y-m-d',$now)]=900;
 check(reserve_geolocation($quota,array_key_first($quota['records']),$now)===null,'daily provider quota capped at 900');
+
+check(count(validate_report($details))===4,'schema2 legacy four fields remain accepted');
+foreach(['127.0.0.1','192.168.1.2','100.64.1.1','224.0.0.1','2001:db8::1','2002:7f00:1::','2002:a9fe:a9fe::','::ffff:8.8.8.8','8.8.8.8/path',null] as $invalid){
+ try{validate_report($details+['publicIp'=>$invalid]);check(false,'invalid public IP rejected');}catch(InvalidArgumentException $e){check(true,'invalid public IP rejected');}
+}
+foreach([$report+['publicIp'=>'8.8.8.8'],$legacyReport+['publicIp'=>'8.8.8.8']] as $forbidden){
+ try{validate_report($forbidden);check(false,'publicIp forbidden when details off or schema1');}catch(InvalidArgumentException $e){check(true,'publicIp forbidden when details off or schema1');}
+}
+$fallback=$details+['publicIp'=>'8.8.8.8'];$proxyState=empty_state();
+accept_report($proxyState,$fallback,'127.0.0.1',$now,'test');$proxyId=array_key_first($proxyState['records']);
+check($proxyState['records'][$proxyId]['ip']==='8.8.8.8' && $proxyState['records'][$proxyId]['connectionIp']==='127.0.0.1' && $proxyState['records'][$proxyId]['ipSource']==='reported_egress','loopback uses reported egress display metadata');
+$ticket=reserve_geolocation($proxyState,$proxyId,$now);check($ticket['ip']==='8.8.8.8','geolocation uses selected egress IP');
+apply_geolocation($proxyState,$ticket,['country'=>'Türkiye','city'=>'Istanbul']);$history=$proxyState['records'][$proxyId];
+accept_report($proxyState,$details,'127.0.0.1',$now+86400,'test');
+check($proxyState['records'][$proxyId]['ip']===$history['ip'] && $proxyState['records'][$proxyId]['geoUpdatedAt']===$history['geoUpdatedAt'] && $proxyState['records'][$proxyId]['lastDetailsAt']===$history['lastDetailsAt'],'missing public IP cannot overwrite successful historic IP or geo');
+check(reserve_geolocation($proxyState,$proxyId,$now+86400)===null,'missing current public IP does not refresh historic geo');
+$proxyOff=$details;$proxyOff['shareDetails']=false;accept_report($proxyState,$proxyOff,'127.0.0.2',$now+172800,'test');check(!$proxyState['records'][$proxyId]['shareDetails'],'off retains identity and disables details');
+foreach(['ip','ipSource','connectionIp','connectionIpAt','lastDetailsAt','geoIp','geoUpdatedAt','country','city'] as $field)check($proxyState['records'][$proxyId][$field]===($field==='connectionIpAt'?$now+86400:$history[$field]),'off preserves history '.$field);
+$direct=empty_state();accept_report($direct,$fallback,'1.1.1.1',$now,'test');$row=current($direct['records']);
+check($row['ip']==='1.1.1.1' && $row['ipSource']==='connection','public peer always preferred over reported IP');
+$rate=empty_state();for($i=0;$i<20;$i++){$r=$fallback;$r['installationToken']=hash('sha256','fallback'.$i);$r['publicIp']='8.8.4.'.($i+1);accept_report($rate,$r,'127.0.0.1',$now,'test');}
+try{$r['installationToken']=hash('sha256','fallback-extra');$r['publicIp']='1.1.1.1';accept_report($rate,$r,'127.0.0.1',$now,'test');check(false,'reported IP never bypasses real peer registration cap');}catch(OverflowException $e){check(true,'reported IP never bypasses real peer registration cap');}

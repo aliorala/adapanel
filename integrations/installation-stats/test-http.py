@@ -44,16 +44,16 @@ with tempfile.TemporaryDirectory(prefix='adapanel-stats-http-') as folder:
         assert request(base,'/installation-stats/admin-api.php',headers={'Authorization':'Bearer '+key})[0]==410
         stored=json.loads((private/'registry.json').read_text())
         assert len(stored['records'])==1
-        assert set(next(iter(stored['records'].values())))=={'id','version','firstSeen','lastSeen','shareDetails','ip','lastDetailsAt'}
+        assert set(next(iter(stored['records'].values())))=={'id','version','firstSeen','lastSeen','shareDetails','connectionIp','connectionIpAt'}
         assert '8.8.8.8' not in json.dumps(stored)  # Forwarded header is never trusted.
         assert report['installationToken'] not in json.dumps(stored)
         modern['installationToken']='c'*64;modern['shareDetails']=True
         assert request(base,'/installation-stats/heartbeat.php','POST',modern,{'Content-Type':'application/json'})==(200,{'schemaVersion':2,'accepted':True})
         stored=json.loads((private/'registry.json').read_text()); detail=stored['records'][hashlib.sha256(('c'*64).encode()).hexdigest()]
-        assert detail['ip']=='127.0.0.1' and detail['shareDetails'] is True
+        assert 'ip' not in detail and detail['connectionIp']=='127.0.0.1' and detail['shareDetails'] is True
         modern['shareDetails']=False
         assert request(base,'/installation-stats/heartbeat.php','POST',modern,{'Content-Type':'application/json'})[0]==200
-        stored=json.loads((private/'registry.json').read_text());assert stored['records'][detail['id']]['ip']=='127.0.0.1' and stored['records'][detail['id']]['shareDetails'] is False
+        stored=json.loads((private/'registry.json').read_text());assert 'ip' not in stored['records'][detail['id']] and stored['records'][detail['id']]['connectionIp']=='127.0.0.1' and stored['records'][detail['id']]['shareDetails'] is False
         (private/'registry.json').write_text('corrupt')
         assert request(base,'/installation-stats/heartbeat.php','POST',report,{'Content-Type':'application/json'})==(503,{'error':'temporarily_unavailable'})
         print('PASS: HTTP auth, methods, content type, validation, deduplication, summary isolation, untrusted forwarding headers, corruption failure')

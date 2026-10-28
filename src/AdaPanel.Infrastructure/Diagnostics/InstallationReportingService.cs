@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
 using AdaPanel.Core.Common;
@@ -12,6 +13,8 @@ public sealed class InstallationReportingService(JsonFileStore store, IHttpClien
 {
     public const string ClientName = "AdaPanel.InstallationReporting";
     public const string Endpoint = "https://adapanel.host/installation-stats/heartbeat.php";
+    public const string PublicIpClientName = "AdaPanel.InstallationPublicIp";
+    public const string PublicIpEndpoint = "https://ipwho.is/?fields=success,ip";
     internal const string StatePath = "config/installation-reporting.json";
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim gate = Gates.GetOrAdd(store.ResolvePath(StatePath), _ => new(1, 1));
@@ -83,11 +86,13 @@ public sealed class InstallationReportingService(JsonFileStore store, IHttpClien
                 using var client = clients.CreateClient(ClientName);
                 client.MaxResponseContentBufferSize = 4096;
                 var version = VersionInfo.Current.Split('+')[0];
-                var payload = JsonSerializer.SerializeToUtf8Bytes(new
+                var report = new Dictionary<string, object>
                 {
-                    schemaVersion = 2, installationToken = state.Token, panelVersion = version,
-                    shareDetails = state.Enabled
-                });
+                    ["schemaVersion"] = 2, ["installationToken"] = state.Token,
+                    ["panelVersion"] = version, ["shareDetails"] = state.Enabled
+                };
+                if (state.Enabled && await FindPublicIpAsync(ct) is { } publicIp) report["publicIp"] = publicIp;
+                var payload = JsonSerializer.SerializeToUtf8Bytes(report);
                 // IIS/PHP paths may stall on streaming JSON with chunked framing.
                 // Buffer this small, bounded report so Content-Length is known before sending.
                 using var content = new ByteArrayContent(payload);
@@ -118,6 +123,37 @@ public sealed class InstallationReportingService(JsonFileStore store, IHttpClien
             catch (JsonException) { state.LastError = "invalid_response"; }
             // No response body, token, IP or user-entered fields go to logs.
             await store.WriteAsync(StatePath, state, ct);
+    }
+
+    private async Task<string?> FindPublicIpAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(2));
+            using var client = clients.CreateClient(PublicIpClientName);
+            client.MaxResponseContentBufferSize = 4096;
+            using var response = await client.GetAsync(PublicIpEndpoint, timeout.Token);
+            if (!response.IsSuccessStatusCode) return null;
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+            if (body.RootElement.ValueKind != JsonValueKind.Object
+                || !body.RootElement.TryGetProperty("success", out var success) || success.ValueKind != JsonValueKind.True
+                || !body.RootElement.TryGetProperty("ip", out var field) || field.ValueKind != JsonValueKind.String) return null;
+            var value = field.GetString();
+            if (value is null || value.Length > 45 || value.Contains('%') || value.Contains('[')
+                || !IPAddress.TryParse(value, out var ip) || OutboundAddressGuard.IsBlockedAddress(ip)) return null;
+            // Only canonical literals; exclude documentation ranges and non-global IPv6.
+            if (ip.ToString() != value.ToLowerInvariant()) return null;
+            var bytes = ip.GetAddressBytes();
+            if (bytes.Length == 16 && ((bytes[0] & 0xe0) != 0x20 || (bytes[0] == 0x20 && bytes[1] == 0x02)
+                || (bytes[0] == 0x20 && bytes[1] == 0x01 && bytes[2] == 0x0d && bytes[3] == 0xb8))) return null;
+            if (bytes.Length == 4 && ((bytes[0] == 192 && bytes[1] == 0 && bytes[2] == 2)
+                || (bytes[0] == 198 && bytes[1] == 51 && bytes[2] == 100)
+                || (bytes[0] == 203 && bytes[1] == 0 && bytes[2] == 113))) return null;
+            return ip.ToString();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception e) when (e is HttpRequestException or OperationCanceledException or JsonException) { return null; }
     }
 
     private static DateTimeOffset? NextAttempt(State state)

@@ -6,9 +6,23 @@ const RETENTION_SECONDS = 30 * 86400;
 
 function utc_date(int $timestamp): string { return gmdate('Y-m-d\TH:i:s\Z', $timestamp); }
 
+function is_public_ip(mixed $ip): bool {
+    if (!is_string($ip) || strlen($ip) > 45 || str_contains($ip, '%')
+        || !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) return false;
+    $bytes = inet_pton($ip);
+    if ($bytes === false) return false;
+    if (strlen($bytes) === 16) return (ord($bytes[0]) & 0xe0) === 0x20
+        && substr($bytes, 0, 2) !== "\x20\x02" && substr($bytes, 0, 4) !== "\x20\x01\x0d\xb8";
+    $b = array_values(unpack('C4', $bytes));
+    return !($b[0] >= 224 || ($b[0] === 100 && $b[1] >= 64 && $b[1] <= 127)
+        || ($b[0] === 192 && $b[1] === 0 && ($b[2] === 0 || $b[2] === 2))
+        || ($b[0] === 198 && ($b[1] === 18 || $b[1] === 19 || ($b[1] === 51 && $b[2] === 100)))
+        || ($b[0] === 203 && $b[1] === 0 && $b[2] === 113));
+}
+
 function migrate_record_metadata(array &$state): void {
     foreach ($state['records'] as &$record) {
-        $allowed = ['id', 'version', 'firstSeen', 'lastSeen', 'shareDetails', 'ip', 'country', 'city', 'location', 'datacenter', 'lastDetailsAt', 'geoIp', 'geoUpdatedAt', 'geoAttemptAt'];
+        $allowed = ['id', 'version', 'firstSeen', 'lastSeen', 'shareDetails', 'ip', 'ipSource', 'connectionIp', 'connectionIpAt', 'country', 'city', 'location', 'datacenter', 'lastDetailsAt', 'geoIp', 'geoUpdatedAt', 'geoAttemptAt'];
         $record = array_intersect_key($record, array_flip($allowed));
         $record['shareDetails'] = ($record['shareDetails'] ?? false) === true;
         foreach (['ip', 'country', 'city', 'location', 'datacenter'] as $field) {
@@ -28,7 +42,8 @@ function validate_report(array $input): array {
     $keys = ['schemaVersion', 'installationToken', 'panelVersion'];
     if ($schema === 1) $keys = array_merge($keys, ['location', 'datacenter']);
     else $keys[] = 'shareDetails';
-    if (array_diff(array_keys($input), $keys) || array_diff($keys, array_keys($input)))
+    $optional = $schema === 2 && ($input['shareDetails'] ?? null) === true ? ['publicIp'] : [];
+    if (array_diff(array_keys($input), array_merge($keys, $optional)) || array_diff($keys, array_keys($input)))
         throw new InvalidArgumentException('invalid_schema');
     if (!is_string($input['installationToken']) || !preg_match('/\A[a-f0-9]{64}\z/D', $input['installationToken']))
         throw new InvalidArgumentException('invalid_token');
@@ -39,13 +54,14 @@ function validate_report(array $input): array {
             throw new InvalidArgumentException('invalid_metadata');
     }
     if ($schema === 2 && !is_bool($input['shareDetails'])) throw new InvalidArgumentException('invalid_details');
+    if (array_key_exists('publicIp', $input) && !is_public_ip($input['publicIp'])) throw new InvalidArgumentException('invalid_public_ip');
     // Legacy clients remain compatible, but their optional metadata is discarded.
-    return array_intersect_key($input, array_flip(['schemaVersion', 'installationToken', 'panelVersion']))
+    return array_intersect_key($input, array_flip(['schemaVersion', 'installationToken', 'panelVersion', 'publicIp']))
         + ['shareDetails' => $schema === 1 || $input['shareDetails']];
 }
 
 function lookup_geolocation(string $ip, ?callable $fetch = null): array {
-    if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) return [];
+    if (!is_public_ip($ip)) return [];
     try {
         $url = 'https://ipwho.is/' . rawurlencode($ip) . '?fields=success,country,city,country_code';
         if ($fetch === null) $fetch = static function (string $url): string|false {
@@ -83,7 +99,7 @@ function lookup_geolocation(string $ip, ?callable $fetch = null): array {
 function reserve_geolocation(array &$state, string $id, int $now): ?array {
     $record = $state['records'][$id] ?? null;
     if (!is_array($record) || ($record['shareDetails'] ?? false) !== true
-        || !filter_var($record['ip'] ?? '', FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)
+        || !is_public_ip($record['ip'] ?? '') || ($record['lastDetailsAt'] ?? null) !== $record['lastSeen']
         || ($record['geoAttemptAt'] ?? 0) > $now - 86400) return null;
     $day = gmdate('Y-m-d', $now);
     if (($state['geoDaily'][$day] ?? 0) >= 900) return null;
@@ -146,8 +162,16 @@ function accept_report(array &$state, array $input, string $peerIp, int $now, st
         'shareDetails' => $input['shareDetails']
     ]);
     if ($input['shareDetails']) {
-        $state['records'][$id]['ip'] = $peerIp;
-        $state['records'][$id]['lastDetailsAt'] = $now;
+        $state['records'][$id]['connectionIp'] = $peerIp;
+        $state['records'][$id]['connectionIpAt'] = $now;
+        // Reported egress is display metadata only. Registration rate keys above
+        // always use the real peer; no forwarding header or reported IP is trusted.
+        $selected = is_public_ip($peerIp) ? $peerIp : ($input['publicIp'] ?? null);
+        if ($selected !== null) {
+            $state['records'][$id]['ip'] = $selected;
+            $state['records'][$id]['ipSource'] = is_public_ip($peerIp) ? 'connection' : 'reported_egress';
+            $state['records'][$id]['lastDetailsAt'] = $now;
+        }
     }
     return true;
 }

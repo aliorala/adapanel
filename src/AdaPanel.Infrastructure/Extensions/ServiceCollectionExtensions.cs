@@ -26,6 +26,11 @@ public static class ServiceCollectionExtensions
                 AllowAutoRedirect = false, UseCookies = false
             });
         services.AddSingleton<Diagnostics.InstallationReportingService>();
+        services.AddHttpClient(Diagnostics.InstallationReportingService.PublicIpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AllowAutoRedirect = false, UseCookies = false
+            });
         services.AddHostedService<Diagnostics.InstallationReportingWorker>();
         services.AddHttpClient("AdaPanel.LocalHealth")
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler

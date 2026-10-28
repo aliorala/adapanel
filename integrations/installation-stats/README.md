@@ -53,6 +53,9 @@ Yayın sonrası özel JSON dosyalarının 403/404, oturumsuz yeni admin stats is
 401, eski summary/admin-api isteklerinin 410 döndürdüğünü kontrol edin.
 Üretim sayısını test kayıtlarıyla artırmayın; testler izole geçici depoda çalışır.
 
-Protokol 2 yalnız `schemaVersion`, `installationToken`, `panelVersion`, boolean `shareDetails` kabul eder. Protokol 1 eski açık paylaşım tercihiyle uyumludur; ayrıntı açık kabul edilir ve bağlantı IP'si kullanılabilir, eski istemciden yeni konum/datacenter alanları atılır; önceden depolanmış gerçek geçmiş alanlar korunur. Yanıt şema sürümü isteğin sürümüyle eşleşir. Bilinmeyen alanlar reddedilir.
+Protokol 2 `schemaVersion`, `installationToken`, `panelVersion`, boolean `shareDetails` kabul eder; yalnız ayrıntılar açıkken opsiyonel geçerli genel IP literal `publicIp` alanı eklenebilir. Protokol 1 eski açık paylaşım tercihiyle uyumludur; ayrıntı açık kabul edilir ve bağlantı IP'si kullanılabilir, eski istemciden yeni konum/datacenter alanları atılır; önceden depolanmış gerçek geçmiş alanlar korunur. Yanıt şema sürümü isteğin sürümüyle eşleşir. Bilinmeyen alanlar reddedilir.
 
 Yayın sırası: önce bu collector ve admin güncellemesini yayımlayın, sonra schema2 istemci paketini dağıtın. Eski collector schema2 raporu reddeder. Registry/config/auth dosyalarını koruyun.
+
+
+Ayrıntılı paylaşım açık ve günlük bildirim zamanı gelmişse istemci https://ipwho.is/?fields=success,ip adresinden kendi çıkış IP adresini otomatik öğrenir (2 saniye, 4096 bayt, TLS doğrulaması açık, yönlendirme kapalı). Hata bildirimi engellemez. Genel bağlantı IP adresi önceliklidir; bağlantı yerelse geçerli genel istemci IP bildirimi yalnız görüntüleme/konum için kullanılır. ipSource kaynağı connection veya reported_egress olarak tutulur; connectionIp ve tarihi ayrıca gösterilir. İstemci bildirimi güvenlik doğrulaması değildir; hız sınırı gerçek REMOTE_ADDR ile hesaplanır, X-Forwarded-For kullanılmaz. Ayrıntılar kapalıyken bu sorgu ve publicIp alanı yoktur; geçmiş gerçek bilgiler tarihleriyle korunur.

@@ -301,26 +301,100 @@ public sealed class InstallationReportingTests
         Assert.Equal(64, report.RootElement.GetProperty("installationToken").GetString()!.Length);
     }
 
+    [Fact]
+    public async Task DetailsOffSkipsProviderAndOmitsPublicIp()
+    {
+        using var f = new Fixture();
+        await f.Store.WriteAsync(InstallationReportingService.StatePath, new { enabled = false, token = new string('a',64), revision = "old" });
+        await f.Service.ReportIfDueAsync(default);
+        Assert.Equal(0, f.Provider.Calls);
+        using var body = JsonDocument.Parse(f.Handler.Body!);
+        Assert.Equal(4, body.RootElement.EnumerateObject().Count());
+        Assert.False(body.RootElement.TryGetProperty("publicIp", out _));
+    }
+
+    [Fact]
+    public async Task PublicIpIsAutomaticOptionalAndStillUsesExactBufferedLength()
+    {
+        using var f = new Fixture(); f.Provider.Response = "{\"success\":true,\"ip\":\"8.8.8.8\"}";
+        await f.Service.ReportIfDueAsync(default);
+        using var body = JsonDocument.Parse(f.Handler.Body!);
+        Assert.Equal("8.8.8.8", body.RootElement.GetProperty("publicIp").GetString());
+        Assert.Equal(InstallationReportingService.PublicIpEndpoint, f.Provider.Url);
+        Assert.Equal((long)Encoding.UTF8.GetByteCount(f.Handler.Body!), f.Handler.ContentLength);
+        Assert.Equal(f.Now, (await f.Service.GetAsync(default)).LastAcceptedAtUtc);
+        await f.Enable(); await f.Service.ReportIfDueAsync(default);
+        Assert.Equal(1, f.Provider.Calls);
+    }
+
+    [Theory]
+    [InlineData("127.0.0.1")]
+    [InlineData("192.168.1.10")]
+    [InlineData("100.64.0.1")]
+    [InlineData("2001:db8::1")]
+    [InlineData("2002:7f00:1::")]
+    [InlineData("2002:a9fe:a9fe::")]
+    [InlineData("::ffff:8.8.8.8")]
+    [InlineData("8.8.8.8/path")]
+    [InlineData("8.8.8.8%1")]
+    public async Task InvalidOrPrivateProviderIpIsOmittedWithoutBlockingHeartbeat(string ip)
+    {
+        using var f = new Fixture(); f.Provider.Response = JsonSerializer.Serialize(new { success=true, ip });
+        await f.Service.ReportIfDueAsync(default);
+        using var body = JsonDocument.Parse(f.Handler.Body!);
+        Assert.False(body.RootElement.TryGetProperty("publicIp",out _));
+        Assert.Equal(f.Now,(await f.Service.GetAsync(default)).LastAcceptedAtUtc);
+    }
+
+    [Theory]
+    [InlineData("network")]
+    [InlineData("invalid")]
+    [InlineData("oversized")]
+    [InlineData("timeout")]
+    public async Task ProviderFailureNeverBlocksHeartbeat(string mode)
+    {
+        using var f = new Fixture(); f.Provider.Mode = mode;
+        await f.Service.ReportIfDueAsync(default);
+        Assert.Equal(1,f.Handler.Calls);
+        Assert.Equal(f.Now,(await f.Service.GetAsync(default)).LastAcceptedAtUtc);
+    }
+
     private sealed class Fixture : IDisposable
     {
         public readonly string Root = Path.Combine(Path.GetTempPath(), "adapanel-reporting-" + Guid.NewGuid().ToString("N"));
         public JsonFileStore Store { get; }
         public Handler Handler { get; } = new();
+        public ProviderHandler Provider { get; } = new();
         public Factory Factory { get; }
         public InstallationReportingService Service;
         public DateTimeOffset Now = new(2026, 10, 21, 12, 0, 0, TimeSpan.Zero);
         public Fixture()
         {
             Store = new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = Root }));
-            Factory = new Factory(Handler); Service = new(Store, Factory) { Clock = () => Now };
+            Factory = new Factory(Handler, Provider); Service = new(Store, Factory) { Clock = () => Now };
         }
         public async Task Enable() => await Service.UpdateAsync(new() { Enabled = true, Revision = (await Service.GetAsync(default)).Revision }, default);
         public void Restart() => Service = new(Store, Factory) { Clock = () => Now };
         public void Dispose() { if (Directory.Exists(Root)) Directory.Delete(Root, true); }
     }
-    private sealed class Factory(Handler handler) : IHttpClientFactory
+    private sealed class Factory(Handler handler, ProviderHandler provider) : IHttpClientFactory
     {
-        public HttpClient CreateClient(string name) { Assert.Equal(InstallationReportingService.ClientName, name); return new HttpClient(handler, false); }
+        public HttpClient CreateClient(string name) {
+            if (name == InstallationReportingService.PublicIpClientName) return new HttpClient(provider, false);
+            Assert.Equal(InstallationReportingService.ClientName, name); return new HttpClient(handler, false);
+        }
+    }
+    private sealed class ProviderHandler : HttpMessageHandler
+    {
+        public int Calls; public string? Url; public string Mode="";
+        public string Response="{\"success\":false}";
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Calls++; Url=request.RequestUri!.ToString();
+            if (Mode=="network") throw new HttpRequestException("provider unavailable");
+            if (Mode=="timeout") throw new TaskCanceledException("provider timeout");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content=new StringContent(Mode=="invalid"?"{":Mode=="oversized"?new string('x',4097):Response) });
+        }
     }
     private sealed class Handler : HttpMessageHandler
     {
