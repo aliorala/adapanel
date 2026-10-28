@@ -100,13 +100,13 @@
       @retry="loadTls" />
 
     <!-- FTPS anahtarı sunucudan okunmadan kapalı görünüyordu; TLS zorunluyken kapalı sanılıyordu. -->
-    <section v-if="isAdmin && !siteName && tlsLoaded" class="form-surface ftp-tls-section" aria-labelledby="ftp-tls-heading" :aria-busy="tlsSaving">
+    <section v-if="isAdmin && !siteName && tlsLoaded" class="form-surface ftp-tls-section" aria-labelledby="ftp-tls-heading" :aria-busy="certificateBusy">
       <div class="section-head">
         <h3 id="ftp-tls-heading">{{ t('panel.ftp.tlsTitle') }}</h3>
         <span :class="['status-pill', tlsVerification === true && !tlsSaving ? 'ok' : 'warn']" role="status">{{ tlsVerificationLabel }}</span>
       </div>
       <label class="ftp-tls-bar">
-        <input type="checkbox" :checked="requireSsl" :disabled="tlsSaving" @change="requestTlsChange" />
+        <input type="checkbox" :checked="requireSsl" :disabled="certificateBusy || locked" @change="requestTlsChange" />
         <span class="ftp-tls-text">
           <strong>{{ t("panel.ftp.requireTls") }}</strong>
           <small>{{ t("panel.ftp.requireTlsHint") }}</small>
@@ -115,6 +115,20 @@
       <div class="ftp-tls-summary">
         <div><span>{{ t('panel.ftp.tlsSavedPolicy') }}</span><strong>{{ t(requireSsl ? 'panel.ftp.tlsPolicyRequired' : 'panel.ftp.tlsPolicyOptional') }}</strong></div>
         <p :class="{ 'ftp-tls-warning': tlsAttempted && tlsVerification !== true }" :role="tlsAttempted && tlsVerification !== true ? 'alert' : undefined">{{ tlsVerificationHint }}</p>
+      </div>
+      <div class="ftp-certificate">
+        <div class="section-head"><h4>{{ t('panel.ftp.certTitle') }}</h4><span :class="['status-pill', certificate?.certificateVerified === true && !certificateSaving ? 'ok' : 'warn']" role="status">{{ certificateLabel }}</span></div>
+        <p class="meta">{{ t('panel.ftp.certHint') }}</p>
+        <label><span>{{ t('panel.ftp.certHost') }}</span><input v-model="certificateHost" :disabled="certificateBusy || locked" autocomplete="off" autocapitalize="none" spellcheck="false" /></label>
+        <div class="row-actions"><button class="compact" v-bind="writeGate(certificateBusy || !certificateHost.trim())" @click="saveCertificate">{{ t(certificateSaving ? 'panel.ftp.certApplying' : 'panel.ftp.certApply') }}</button></div>
+        <dl v-if="certificate?.certificateThumbprint" class="ftp-account-identity">
+          <div><dt>{{ t('panel.ftp.certHost') }}</dt><dd>{{ certificate.hostName }}</dd></div>
+          <div><dt>{{ t('panel.ftp.certSubject') }}</dt><dd>{{ certificate.certificateSubject || '—' }}</dd></div>
+          <div><dt>{{ t('panel.ftp.certThumbprint') }}</dt><dd>{{ certificate.certificateThumbprint }}</dd></div>
+          <div><dt>{{ t('panel.ftp.certExpiry') }}</dt><dd>{{ formatCreatedAt(certificate.certificateNotAfterUtc || '') }}</dd></div>
+        </dl>
+        <p v-if="certificate?.certificateDetail" class="hint">{{ certificate.certificateDetail }}</p>
+        <p class="hint">{{ t('panel.ftp.certProbeScope') }}</p>
       </div>
       <details v-if="tlsDetails" class="technical-details">
         <summary>{{ t('panel.common.technicalDetails') }}</summary><pre>{{ tlsDetails }}</pre>
@@ -259,7 +273,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
-import { createFtpUser, deleteFtpUser, ensureFtpServer, getFtpStatus, getFtpTls, getFtpUsers, setFtpPassword, setFtpTls, type FtpServerStatus, type FtpUser } from "../api/ftp";
+import { applyFtpCertificate, createFtpUser, deleteFtpUser, ensureFtpServer, getFtpStatus, getFtpTls, getFtpUsers, setFtpPassword, setFtpTls, type FtpCertificate, type FtpServerStatus, type FtpUser } from "../api/ftp";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
@@ -326,6 +340,12 @@ const tlsSaving = ref(false);
 const tlsVerification = ref<boolean | null>(null);
 const tlsAttempted = ref(false);
 const tlsDetails = ref('');
+const certificate = ref<FtpCertificate | null>(null);
+const certificateHost = ref('');
+const certificateSaving = ref(false);
+const certificateBusy = computed(() => certificateSaving.value || tlsSaving.value);
+const certificateLabel = computed(() => t(certificateSaving.value ? 'panel.ftp.certApplying'
+  : certificate.value?.certificateVerified === true ? 'panel.ftp.certVerified' : 'panel.ftp.certUnverified'));
 const tlsVerificationLabel = computed(() => t(tlsSaving.value ? 'panel.ftp.tlsApplying'
   : tlsVerification.value === true ? 'panel.ftp.tlsVerifiedLabel'
   : tlsVerification.value === false ? 'panel.ftp.tlsFailedLabel' : 'panel.ftp.tlsUnverifiedLabel'));
@@ -487,6 +507,9 @@ watch(
     tlsVerification.value = null;
     tlsAttempted.value = false;
     tlsDetails.value = '';
+    certificate.value = null;
+    certificateHost.value = '';
+    certificateSaving.value = false;
     requireSsl.value = false;
     tlsLoad.clear();
     serverStatus.value = null;
@@ -516,7 +539,7 @@ onMounted(async () => {
 });
 
 async function loadTls() {
-  if (!isAdmin.value || props.siteName || disposed || tlsSaving.value) {
+  if (!isAdmin.value || props.siteName || disposed || certificateBusy.value) {
     return;
   }
   const context = ftpContext(), request = ++tlsRequest;
@@ -524,9 +547,11 @@ async function loadTls() {
     const result = await getFtpTls();
     if (!context.current() || request !== tlsRequest) return;
     requireSsl.value = result.requireSsl;
-    tlsVerification.value = null;
-    tlsAttempted.value = false;
-    tlsDetails.value = '';
+    tlsVerification.value = result.verified ?? null;
+    tlsAttempted.value = result.verified != null;
+    tlsDetails.value = result.detail ?? '';
+    certificate.value = result;
+    certificateHost.value = result.hostName ?? '';
     tlsLoaded.value = true;
     tlsLoad.clear();
   } catch (error) {
@@ -546,7 +571,7 @@ async function requestTlsChange(event: Event) {
 }
 
 async function toggleTls(value: boolean) {
-  if (disposed || !isAdmin.value || props.siteName || !tlsLoaded.value || tlsSaving.value) return;
+  if (disposed || !isAdmin.value || props.siteName || !tlsLoaded.value || certificateBusy.value || locked.value) return;
   const context = ftpContext();
   tlsRequest++;
   tlsSaving.value = true;
@@ -559,6 +584,7 @@ async function toggleTls(value: boolean) {
     requireSsl.value = sonuc.requireSsl;
     tlsVerification.value = sonuc.verified ?? null;
     tlsDetails.value = sonuc.detail ?? '';
+    certificate.value = sonuc;
 
     // "FTPS artık zorunlu; düz FTP bağlantıları reddedilecek" bir GÜVENLİK İDDİASIDIR ve eskiden
     // ISTENEN bayraktan yazılıyordu — IIS'e hiç bakmadan. Artık üç durum ayrı gösterilir; uyarı
@@ -574,6 +600,29 @@ async function toggleTls(value: boolean) {
     if (context.current()) { tlsDetails.value = extractApiDetails(error); showApiError(error); }
   } finally {
     if (context.current()) tlsSaving.value = false;
+  }
+}
+
+async function saveCertificate() {
+  if (disposed || !isAdmin.value || props.siteName || locked.value || !tlsLoaded.value || certificateBusy.value || !certificateHost.value.trim()) return;
+  const context = ftpContext(), hostName = certificateHost.value.trim();
+  tlsRequest++;
+  certificateSaving.value = true;
+  showNotice('', false);
+  try {
+    const result = await applyFtpCertificate(hostName);
+    if (!context.current()) return;
+    certificate.value = result;
+    showNotice(t(result.certificateVerified === true ? 'panel.ftp.certApplied' : 'panel.ftp.certNotVerified'), result.certificateVerified !== true);
+    if (result.certificateVerified !== true) noticeDetails.value = result.certificateDetail ?? '';
+  } catch (error) {
+    if (context.current()) { certificate.value = null; showApiError(error); }
+  } finally {
+    if (context.current()) {
+      certificateSaving.value = false;
+      // Re-read IIS policy without changing it. Keep any failed operation notice.
+      await loadTls();
+    }
   }
 }
 
@@ -616,7 +665,7 @@ async function refresh() {
 
 /** Yenileme dugmesi: kullanici listesi + sunucu durumu birlikte tazelenir (ikisi de salt okunur). */
 async function refreshAll() {
-  await Promise.allSettled([refresh(), loadStatus()]);
+  await Promise.allSettled([refresh(), loadStatus(), loadTls()]);
 }
 
 /**
@@ -923,6 +972,10 @@ function readErrorMessage(prefix: string, error: string) {
 
 .ftp-tls-section { display: grid; gap: var(--sp-12); min-width: 0; }
 .ftp-tls-section h3 { margin: 0; }
+.ftp-certificate { display: grid; gap: var(--sp-12); min-width: 0; border-top: 1px solid var(--panel-border); padding-top: var(--sp-12); }
+.ftp-certificate h4, .ftp-certificate p { margin: 0; }
+.ftp-certificate label { min-width: 0; }
+.ftp-certificate input { width: 100%; box-sizing: border-box; }
 .ftp-tls-summary { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(0, 1.3fr); gap: var(--sp-12); padding-top: var(--sp-12); border-top: 1px solid var(--panel-border); }
 .ftp-tls-summary > div { display: grid; gap: var(--sp-4); align-content: start; }
 .ftp-tls-summary > div > span { color: var(--text-muted); font-size: var(--fs-xs); }

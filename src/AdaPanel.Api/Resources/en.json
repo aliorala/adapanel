@@ -1,4 +1,12 @@
 {
+  "ftp.certificate_invalid_host": "Enter the valid server name used by FTPS clients, without a protocol or port.",
+  "ftp.certificate_not_found": "No trusted, unexpired certificate with a private key matches this server name. Obtain an SSL certificate for this name first.",
+  "ftp.certificate_probe_failed": "The local FTP service TLS connection could not be verified. Certificate application was not successful.",
+  "ftp.certificate_binding_failed": "The FTP certificate binding could not be safely applied and read back. The operation was not successful.",
+  "ftp.certificate_service_unverified": "AdaPanel's IIS FTP service could not be verified on port 21. No certificate was applied to another service.",
+  "ftp.certificate_rollback_failed": "Certificate verification failed and the previous FTP binding could not be restored. Check FTP SSL settings and logs.",
+  "ftp.certificate_policy_blocked": "The current FTP channel policy does not allow a secure connection. The operation stopped before applying a certificate.",
+  "ftp.certificate_binding_unreadable": "The existing FTP certificate binding could not be read. Existing settings were not overwritten.",
   "database.transfer_account_failed": "SQL data was imported, but the target account/access setup failed. Do not replay the dump; repair account access only.",
   "database.definer_conversion_failed": "DEFINER adaptation could not be completed safely. No SQL was executed; review the details.",
   "database.definer_mysql_only": "Portable DEFINER export is supported only for MySQL and MariaDB.",

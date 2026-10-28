@@ -249,7 +249,7 @@ public sealed class FtpServerMutationLifecycleTests
         // Execute the actual generated script, with every native cmdlet replaced by memory-only
         // functions. No IIS module, certificate store, firewall, Windows service or filesystem is used.
         var fakeNative = $$"""
-            $script:ftpValues = @{}
+            $script:ftpValues = @{'ftpServer.security.ssl.serverCertHash' = 'AABBCC'}
             $script:restarted = $false
             function Import-Module { [CmdletBinding()]param($Name) }
             function Test-Path { [CmdletBinding()]param($Path) return $true }

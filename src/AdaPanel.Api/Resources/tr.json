@@ -1,4 +1,12 @@
 {
+  "ftp.certificate_invalid_host": "FTPS bağlantılarında kullanılacak geçerli sunucu adını girin; protokol veya port eklemeyin.",
+  "ftp.certificate_not_found": "Bu sunucu adına uygun, güvenilir, süresi geçmemiş ve özel anahtarlı sertifika bulunamadı. Önce bu ad için SSL sertifikası alın.",
+  "ftp.certificate_probe_failed": "Yerel FTP hizmetinin TLS bağlantısı doğrulanamadı. Sertifika işlemi başarılı sayılmadı.",
+  "ftp.certificate_binding_failed": "FTP sertifikası güvenli biçimde uygulanıp geri okunamadı. İşlem başarılı sayılmadı.",
+  "ftp.certificate_service_unverified": "21 numaralı portta AdaPanel'in IIS FTP hizmeti doğrulanamadı. Başka bir hizmete sertifika uygulanmadı.",
+  "ftp.certificate_rollback_failed": "Sertifika doğrulanamadı ve önceki FTP bağlaması geri yüklenemedi. FTP SSL ayarlarını ve günlükleri kontrol edin.",
+  "ftp.certificate_policy_blocked": "Mevcut FTP kanal politikası güvenli bağlantıya izin vermiyor. Sertifika uygulanmadan işlem durduruldu.",
+  "ftp.certificate_binding_unreadable": "Mevcut FTP sertifika bağlaması okunamadı. Çalışan ayarların üzerine yazılmadı.",
   "database.transfer_account_failed": "SQL verileri aktarıldı ancak hedef veritabanı hesabı/yetkileri hazırlanamadı. Tam aktarımı yeniden başlatmayın; yalnız hesap erişimini düzeltin.",
   "database.definer_conversion_failed": "DEFINER uyarlaması güvenle tamamlanamadı. SQL çalıştırılmadı; ayrıntıları inceleyin.",
   "database.definer_mysql_only": "Taşınabilir DEFINER dışa aktarımı yalnız MySQL ve MariaDB için kullanılabilir.",

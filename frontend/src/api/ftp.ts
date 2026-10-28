@@ -105,10 +105,31 @@ export async function setFtpPassword(userName: string, password: string) {
   measured(response.data, (value): value is {userName: string} => record(value) && sameIdentity(value.userName, userName));
 }
 
-export type FtpTlsStatus = {
+export type FtpCertificate = {
+  hostName?: string;
+  certificateThumbprint?: string;
+  certificateSubject?: string;
+  certificateNotAfterUtc?: string | null;
+  certificateStoreName?: string;
+  certificateVerified?: boolean | null;
+  certificateDetail?: string;
+};
+
+function isCertificate(value: unknown): value is FtpCertificate {
+  return record(value) && ['hostName', 'certificateThumbprint', 'certificateSubject', 'certificateNotAfterUtc', 'certificateStoreName', 'certificateDetail'].every(key => value[key] == null || typeof value[key] === 'string')
+    && (value.certificateVerified == null || typeof value.certificateVerified === 'boolean');
+}
+
+export async function applyFtpCertificate(hostName: string): Promise<FtpCertificate> {
+  const response = await apiClient.post<ApiEnvelope<FtpCertificate>>("/ftp/certificate", { hostName });
+  return measured(response.data, (value): value is FtpCertificate => isCertificate(value)
+    && (value.certificateVerified !== true || (sameIdentity(value.hostName, hostName) && Boolean(value.certificateThumbprint?.trim()))));
+}
+
+export type FtpTlsStatus = FtpCertificate & {
   requireSsl: boolean;
   // IIS'ten ÖLÇÜLEN sonuç: true = yürürlükte, false = uygulanmadı, null = ölçülemedi.
-  // Okuma ucunda (GET /ftp/tls) her zaman null'dır: orası yalnız panelin kendi kaydını okur.
+  // Eski sunucularda null olabilir; bilinmeyen durum doğrulanmış sayılmaz.
   verified?: boolean | null;
   detail?: string;
 };
@@ -116,7 +137,9 @@ export type FtpTlsStatus = {
 // M5 (panel "yalnız güvenli FTP"): admin-only server-level FTPS zorunluluğu.
 export async function getFtpTls() {
   const response = await apiClient.get<ApiEnvelope<FtpTlsStatus>>("/ftp/tls");
-  return measured(response.data, (value): value is FtpTlsStatus => record(value) && typeof value.requireSsl === 'boolean');
+  return measured(response.data, (value): value is FtpTlsStatus => record(value) && typeof value.requireSsl === 'boolean'
+    && (value.verified == null || typeof value.verified === 'boolean')
+    && (value.detail == null || typeof value.detail === 'string') && isCertificate(value));
 }
 
 export async function setFtpTls(requireSsl: boolean) {
@@ -124,7 +147,7 @@ export async function setFtpTls(requireSsl: boolean) {
   return measured(response.data, (value): value is FtpTlsStatus => record(value) && typeof value.requireSsl === 'boolean'
     && (value.verified == null || typeof value.verified === 'boolean')
     && (value.verified !== true || value.requireSsl === requireSsl)
-    && (value.detail == null || typeof value.detail === 'string'));
+    && (value.detail == null || typeof value.detail === 'string') && isCertificate(value));
 }
 
 export async function deleteFtpUser(userName: string) {

@@ -5,6 +5,15 @@ namespace AdaPanel.Core.Interfaces;
 
 public interface IFtpService
 {
+    Task<FtpCertificateDto> GetCertificateAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new FtpCertificateDto());
+
+    Task<FtpCertificateDto> ApplyCertificateAsync(ApplyFtpCertificateRequest request,
+        Func<CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+    Task<FtpCertificateDto?> SyncCertificateAsync(Func<CancellationToken, Task>? beforeMutation,
+        CancellationToken cancellationToken = default) => Task.FromResult<FtpCertificateDto?>(null);
+
     Task<FtpServerStatusDto> EnsureServerAsync(CancellationToken cancellationToken = default);
 
     Task<FtpServerStatusDto> EnsureServerAsync(Func<CancellationToken, Task> beforeMutation,

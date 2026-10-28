@@ -122,7 +122,7 @@ public sealed partial class FtpService(
         cancellationToken.ThrowIfCancellationRequested();
         var durum = new FtpServerStatusDto
         {
-            ServerAddress = preferences.ServerAddress,
+            ServerAddress = await GetFtpClientHostAsync(preferences.ServerAddress, cancellationToken),
             ControlPort = FtpPort,
             PassivePortStart = PassivePortStart,
             PassivePortEnd = PassivePortEnd
@@ -441,7 +441,7 @@ public sealed partial class FtpService(
             if (measurement.Verified == true)
             {
                 await fileStore.UpdateAsync(TlsStatePath, new FtpTlsState(),
-                    _ => new FtpTlsState { RequireSsl = requireSsl },
+                    current => { current.RequireSsl = requireSsl; return current; },
                     token => ApproveInfrastructureAsync(beforeMutation, token), cancellationToken);
                 saved = requireSsl;
                 await PublishInfrastructureReadyAsync(beforeMutation, cancellationToken);
@@ -453,6 +453,11 @@ public sealed partial class FtpService(
     private sealed class FtpTlsState
     {
         public bool RequireSsl { get; set; }
+        public string? HostName { get; set; }
+        public string? CertificateThumbprint { get; set; }
+        public string? CertificateStoreName { get; set; }
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public Dictionary<string, JsonElement>? ExtensionData { get; set; }
     }
 
     // FTP altyapısı (IIS FTP sitesi + SSL + firewall) bir kez tam kurulduğunda işaretlenir → sonraki kullanıcı
@@ -467,6 +472,7 @@ public sealed partial class FtpService(
         cancellationToken.ThrowIfCancellationRequested();
         var records = await fileStore.ReadAsync(StatePath, Array.Empty<FtpUserState>(), cancellationToken);
         var list = new List<FtpUserDto>(records.Length);
+        var ftpClientHost = await GetFtpClientHostAsync(Environment.MachineName, cancellationToken);
 
         foreach (var record in records.OrderBy(item => item.UserName, StringComparer.OrdinalIgnoreCase))
         {
@@ -486,7 +492,7 @@ public sealed partial class FtpService(
                 HomeLinkPath = ev.LinkPath,
                 HomeLinkExists = ev.LinkExists,
                 HomeTargetExists = ev.TargetExists,
-                ServerAddress = Environment.MachineName,
+                ServerAddress = ftpClientHost,
                 Port = FtpPort
             });
         }
@@ -514,6 +520,7 @@ public sealed partial class FtpService(
         }
 
         EnsureCommandSafePassword(request.Password);
+        var ftpClientHost = await GetFtpClientHostAsync(Environment.MachineName, cancellationToken);
 
         // Interactive callers pin the site generation through native effects/publication.
         // Trusted provisioning already owns its exclusive site intent and uses the old overload;
@@ -670,7 +677,7 @@ public sealed partial class FtpService(
                 IsEnabled = true,
                 ExistsOnSystem = true,
                 PasswordNeverExpires = parolaSuresiz,
-                ServerAddress = Environment.MachineName,
+                ServerAddress = ftpClientHost,
                 Port = FtpPort
             };
         }
@@ -1247,18 +1254,9 @@ public sealed partial class FtpService(
             Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.userIsolation.mode -Value 3
             Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.ssl.controlChannelPolicy -Value {{policy}}
             Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.ssl.dataChannelPolicy -Value {{policy}}
-            # FTPS sertifikasi: yoksa self-signed olustur ve bagla. serverCertHash bos olursa IIS "AUTH TLS"i
-            # reddeder; bagliyken FTPS calisir. controlChannelPolicy=0 ile duz baglanti da kabul -> kimse kilitlenmez.
-            $ftpsCert = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -eq 'AdaPanel FTPS' } | Select-Object -First 1
-            if (-not $ftpsCert) {
-              try { $ftpsCert = New-SelfSignedCertificate -DnsName $env:COMPUTERNAME -FriendlyName 'AdaPanel FTPS' -CertStoreLocation 'Cert:\LocalMachine\My' -KeyExportPolicy Exportable -NotAfter (Get-Date).AddYears(5) } catch { $ftpsCert = $null }
-            }
-            if ($ftpsCert) {
-              try {
-                Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.ssl.serverCertHash -Value $ftpsCert.Thumbprint
-                Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.ssl.ssl128 -Value $true
-              } catch { }
-            }
+            # Certificate lifecycle is explicit: never overwrite an administrator's existing
+            # certificate with a generated self-signed certificate during account/policy setup.
+            # The FTPS certificate endpoint validates the DNS name, store/key/chain and AUTH TLS.
             # Pasif port araligi SUNUCU seviyesinde (location'siz) -> Set-WebConfigurationProperty dogru calisir.
             Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.ftpServer/firewallSupport' -Name lowDataChannelPort -Value {{PassivePortStart}}
             Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.ftpServer/firewallSupport' -Name highDataChannelPort -Value {{PassivePortEnd}}

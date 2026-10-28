@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -36,7 +36,8 @@ public sealed class WinAcmeSslService(
     Func<CancellationToken, Task<IReadOnlyCollection<IisHttpsBinding>?>>? bindingReader = null,
     IConcurrencyLock? concurrencyLock = null,
     IMailService? mailService = null,
-    MailEnableWebmail? mailEnableWebmail = null) : ISslService
+    MailEnableWebmail? mailEnableWebmail = null,
+    IFtpService? ftpService = null) : ISslService
 {
     private const string StatePath = "config/ssl.json";
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
@@ -464,7 +465,8 @@ public sealed class WinAcmeSslService(
             var bagYok = await MeasureBindingsAndPersistAsync(cancellationToken);
             var mailSync = await SyncMailForRenewalAsync(beforeMutation, cancellationToken);
             var mailResult = mailSync.Certificate;
-            webmailErrors = webmailErrors.Concat(mailSync.Errors).ToArray();
+            webmailErrors = webmailErrors.Concat(mailSync.Errors)
+                .Concat(await SyncFtpForRenewalAsync(beforeMutation, cancellationToken)).ToArray();
             return new RenewAllResultDto
             {
                 RenewedCount = 0,
@@ -531,7 +533,8 @@ public sealed class WinAcmeSslService(
 
         var synchronizedMail = await SyncMailForRenewalAsync(beforeMutation, cancellationToken);
         var syncedMail = synchronizedMail.Certificate;
-        webmailFailures = webmailFailures.Concat(synchronizedMail.Errors).ToArray();
+        webmailFailures = webmailFailures.Concat(synchronizedMail.Errors)
+            .Concat(await SyncFtpForRenewalAsync(beforeMutation, cancellationToken)).ToArray();
 
         return new RenewAllResultDto
         {
@@ -547,6 +550,26 @@ public sealed class WinAcmeSslService(
             MailSynchronizationPerformed = mailService is not null,
             MailCertificate = syncedMail
         };
+    }
+
+    private async Task<IReadOnlyList<string>> SyncFtpForRenewalAsync(Func<CancellationToken, Task>? beforeMutation, CancellationToken token)
+    {
+        if (ftpService is null) return [];
+        var rejected = false;
+        async Task Approve(CancellationToken ct)
+        {
+            if (beforeMutation is null) return;
+            try { await beforeMutation(ct); }
+            catch { rejected = true; throw; }
+        }
+        try
+        {
+            var certificate = await ftpService.SyncCertificateAsync(beforeMutation is null ? null : Approve, token);
+            return certificate is null || certificate.CertificateVerified == true ? []
+                : ["FTPS certificate synchronization failed: " + certificate.CertificateDetail];
+        }
+        catch (Exception error) when (!rejected && error is not OperationCanceledException)
+        { return ["FTPS certificate synchronization failed: " + (error is AppException app ? app.MessageKey : error.GetType().Name)]; }
     }
 
     private async Task<IReadOnlyList<string>> SyncManagedWebmailAsync(Func<CancellationToken, Task>? beforeMutation, CancellationToken token)
@@ -2140,6 +2163,16 @@ public sealed class WinAcmeSslService(
             # The managed inventory may predate process startup. Recheck ALL sites here;
             # a recreated target binding is a current user too.
             foreach ($site in @(Get-Website -ErrorAction Stop)) {
+              if (@($site.Bindings.Collection | Where-Object { $_.protocol -eq 'ftp' }).Count -gt 0) {
+                try {
+                  $ftpSsl = $site.ftpServer.security.ssl
+                  if ($null -eq $ftpSsl) { throw 'FTP SSL configuration unreadable' }
+                  $ftpHash = $ftpSsl.serverCertHash
+                  if ($ftpHash -is [byte[]]) { $ftpHash = [BitConverter]::ToString($ftpHash).Replace('-', '') }
+                  elseif ($ftpHash -isnot [string] -and $null -ne $ftpHash) { throw 'Unsupported FTP certificate hash type' }
+                  if ([string]$ftpHash -ieq $thumb) { $users += ([string]$site.Name + ' (FTPS)') }
+                } catch { $users += ([string]$site.Name + ' (FTPS status unknown)'); $bindingsMeasured = $false }
+              }
               foreach ($binding in @($site.Bindings.Collection)) {
                 if ($binding.protocol -ne 'https') { continue }
                 $used = $false

@@ -95,7 +95,11 @@ türler ölçülemedi kalır. İlgili 39 backend testi başarılı; bağımsız 
 testini tekrar çalıştırarak ONAY verdi. Düzeltme kaldırıldığında gerçek JSON biçimini
 ölçen dört testin başarısız olmasıyla testlerin hatayı yakaladığı doğrulandı.
 
-0.8.129 paketinin canlı kurulumu ve son kutu sayımı henüz doğrulanmadı.
+0.8.129 ev sunucusuna kuruldu; çalışan sürüm doğrulandı. Genel listede
+travianpanel.com 1, travianpanel.xyz 1 ve videotools.com.tr 1 kutu gösteriyor.
+Seçili Travian alanında info@travianpanel.com yeniden listeleniyor. Posta istemci
+ayarları da artık mail.travianpanel.com gösteriyor. Kutu kullanım/durum ölçümü
+hesabın varlığından ayrı tutuluyor; okunamayan durum başarı olarak gösterilmiyor.
 
 ## Kaynaklar
 

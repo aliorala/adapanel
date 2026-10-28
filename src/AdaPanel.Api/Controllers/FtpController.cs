@@ -82,7 +82,36 @@ public sealed class FtpController(
         await ValidateActorAsync(actor, cancellationToken);
         var requireSsl = await ftpService.GetRequireSslAsync(cancellationToken);
         await ValidateActorAsync(actor, cancellationToken);
-        return Ok(ApiResponse<FtpTlsStatusDto>.Ok(new FtpTlsStatusDto { RequireSsl = requireSsl }));
+        var certificate = await ftpService.GetCertificateAsync(cancellationToken);
+        await ValidateActorAsync(actor, cancellationToken);
+        return Ok(ApiResponse<FtpTlsStatusDto>.Ok(new FtpTlsStatusDto
+        {
+            RequireSsl = requireSsl,
+            HostName = certificate.HostName,
+            CertificateThumbprint = certificate.CertificateThumbprint,
+            CertificateSubject = certificate.CertificateSubject,
+            CertificateNotAfterUtc = certificate.CertificateNotAfterUtc,
+            CertificateStoreName = certificate.CertificateStoreName,
+            CertificateVerified = certificate.CertificateVerified,
+            CertificateDetail = certificate.CertificateDetail
+        }));
+    }
+
+    [HttpPost("certificate")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<FtpCertificateDto>>> ApplyCertificateAsync(
+        [FromBody] ApplyFtpCertificateRequest request, CancellationToken cancellationToken)
+    {
+        var actor = new FtpActorAuthority(User);
+        if (!actor.Principal.IsInRole("Administrator")) throw new AppException("auth.forbidden", 403, 403);
+        await ValidateActorAsync(actor, cancellationToken);
+        var result = await ftpService.ApplyCertificateAsync(new ApplyFtpCertificateRequest { HostName = request.HostName },
+            token => ValidateActorAsync(actor, token), cancellationToken);
+        await ValidateActorAsync(actor, cancellationToken);
+        if (result.CertificateVerified != true) throw new AppException("ftp.certificate_probe_failed", 502, 502, result.CertificateDetail ?? string.Empty);
+        await auditService.AuditAsync(HttpContext, "ftp.certificate.applied", "ftp-server",
+            $"FTPS certificate verified: host={result.HostName}; thumbprint={result.CertificateThumbprint}. Authenticated data transfers not tested.");
+        return Ok(ApiResponse<FtpCertificateDto>.Ok(result));
     }
 
     [HttpPut("tls")]
@@ -375,6 +404,14 @@ public sealed class FtpTlsRequest
 /// <summary>FTPS zorunluluğu durumu.</summary>
 public sealed class FtpTlsStatusDto
 {
+    public string? HostName { get; set; }
+    public string? CertificateThumbprint { get; set; }
+    public string? CertificateSubject { get; set; }
+    public DateTime? CertificateNotAfterUtc { get; set; }
+    public string? CertificateStoreName { get; set; }
+    public bool? CertificateVerified { get; set; }
+    public string? CertificateDetail { get; set; }
+
     public bool RequireSsl { get; set; }
 
     /// <summary>
