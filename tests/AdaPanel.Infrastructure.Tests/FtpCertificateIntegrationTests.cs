@@ -73,11 +73,11 @@ public sealed class FtpCertificateIntegrationTests
     public async Task CertificateApplicationDoesNotSilentlyChangeAnExplicitTlsDenyPolicy()
     {
         using var f = new Fixture();
-        f.Binding.ControlPolicy = 2;
+        f.Binding.DataPolicy = 2;
         var error = await Assert.ThrowsAsync<AppException>(() => f.Apply());
         Assert.Equal("ftp.certificate_policy_blocked", error.MessageKey);
         Assert.Equal(0, f.Writes);
-        Assert.Equal(2, f.Binding.ControlPolicy);
+        Assert.Equal(2, f.Binding.DataPolicy);
     }
 
     [Fact]
@@ -170,6 +170,74 @@ public sealed class FtpCertificateIntegrationTests
         Assert.Contains("no credentials", error.Message);
     }
 
+    [Theory]
+    [InlineData("SslAllow", "SslAllow", 0, 0)]
+    [InlineData("SslRequire", "SslRequire", 1, 1)]
+    [InlineData("SslRequireCredentialsOnly", "SslAllow", 2, 0)]
+    [InlineData("0", "1", 0, 1)]
+    [InlineData("2", "0", 2, 0)]
+    public async Task ActualPowerShellReadAndCompareAndSetAcceptIisPolicyEnumNames(
+        string control, string data, int expectedControl, int expectedData)
+    {
+        using var f = new Fixture();
+        f.Binding.ControlPolicy = expectedControl;
+        f.Binding.DataPolicy = expectedData;
+        await f.Apply();
+        var read = f.Scripts.First(script => !script.Contains("Set-ItemProperty $path", StringComparison.Ordinal));
+        var write = Assert.Single(f.Scripts, script => script.Contains("Set-ItemProperty $path", StringComparison.Ordinal));
+        var fake = $$"""
+            $script:values = @{ controlChannelPolicy = '{{control}}'; dataChannelPolicy = '{{data}}'; serverCertHash = 'OLD'; serverCertStoreName = 'My' }
+            $script:ssl = [pscustomobject]@{ Values = $script:values }
+            $script:ssl | Add-Member ScriptMethod GetAttributeValue { param($name) return $this.Values[$name] }
+            foreach ($name in @('controlChannelPolicy','dataChannelPolicy','serverCertHash','serverCertStoreName')) {
+              $script:ssl | Add-Member ScriptProperty $name ([scriptblock]::Create('$this.GetAttributeValue("' + $name + '")'))
+            }
+            function Import-Module { [CmdletBinding()]param($Name) }
+            function Get-Item { [CmdletBinding()]param($Path,$LiteralPath)
+              if ($LiteralPath -like 'Cert:*') { return [pscustomobject]@{ HasPrivateKey = $true } }
+              return [pscustomobject]@{ ftpServer = [pscustomobject]@{ security = [pscustomobject]@{ ssl = $script:ssl } } }
+            }
+            function Set-ItemProperty { [CmdletBinding()]param($Path,$Name,$Value)
+              $property = ($Name -split '\.')[ -1 ]
+              if ($property -in @('controlChannelPolicy','dataChannelPolicy')) { throw 'Certificate activation must preserve the SSL policies.' }
+              $script:values[$property] = $Value
+            }
+            function Restart-Service { [CmdletBinding()]param($Name,[switch]$Force) }
+            function Get-Service { [CmdletBinding()]param($Name)
+              $service = [pscustomobject]@{}
+              $service | Add-Member ScriptMethod WaitForStatus { param($state,$timeout) }
+              return $service
+            }
+            """;
+        var result = await ProcessRunner.RunPowerShellAsync(fake + "\n" + read + "\n" + write + "\n" + read, default);
+        Assert.True(result.Success, result.StandardError);
+        var lines = result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.Equal(2, lines.Length);
+        foreach (var line in lines)
+        {
+            using var json = JsonDocument.Parse(line);
+            Assert.Equal(expectedControl, json.RootElement.GetProperty("controlPolicy").GetInt32());
+            Assert.Equal(expectedData, json.RootElement.GetProperty("dataPolicy").GetInt32());
+        }
+        using var after = JsonDocument.Parse(lines[1]);
+        Assert.Equal("NEW", after.RootElement.GetProperty("thumbprint").GetString());
+        Assert.Equal("WebHosting", after.RootElement.GetProperty("storeName").GetString());
+    }
+
+    [Theory]
+    [InlineData("SslDeny", "control")]
+    [InlineData("SslRequireCredentialsOnly", "data")]
+    [InlineData("unrecognized", "control")]
+    [InlineData("3", "data")]
+    [InlineData("", "control")]
+    public async Task ActualPowerShellRejectsUnknownOrWrongChannelEnumNames(string policy, string channel)
+    {
+        var result = await ProcessRunner.RunPowerShellAsync(FtpService.FtpSslPolicyScript
+            + $"\nConvertTo-AdaFtpSslPolicy '{policy}' '{channel}'", default);
+        Assert.False(result.Success);
+        Assert.Contains("Unsupported FTP", result.StandardError);
+    }
+
     private sealed class Fixture : IDisposable
     {
         private readonly string root = Path.Combine(Path.GetTempPath(), "ada-ftp-cert-" + Guid.NewGuid().ToString("N"));
@@ -178,6 +246,7 @@ public sealed class FtpCertificateIntegrationTests
         internal FtpService.FtpCertificateBinding Binding = new() { Thumbprint = "OLD", StoreName = "My", ControlPolicy = 1, DataPolicy = 0 };
         internal FtpService.FtpCertificateCandidate Selected = new("NEW", "WebHosting", "CN=ftp.example.test", DateTime.UtcNow.AddDays(80));
         internal int Writes, Probes;
+        internal List<string> Scripts { get; } = [];
         internal bool ProbeWorks = true;
         internal string? SelectedHost;
         internal Fixture()
@@ -193,6 +262,7 @@ public sealed class FtpCertificateIntegrationTests
                 NativeScript = (script, strict, _) =>
                 {
                     Assert.True(strict);
+                    Scripts.Add(script);
                     if (script.Contains("Set-ItemProperty $path", StringComparison.Ordinal))
                     {
                         Assert.DoesNotContain("controlChannelPolicy -Value", script);

@@ -7,6 +7,21 @@ namespace AdaPanel.Infrastructure.Ftp;
 
 public sealed partial class FtpService
 {
+    // IIS control value 2 means credentials-only, while data value 2 means deny.
+    // https://learn.microsoft.com/iis/configuration/system.applicationhost/sites/site/ftpserver/security/ssl
+    internal const string FtpSslPolicyScript = """
+        function ConvertTo-AdaFtpSslPolicy($value, [string]$channel) {
+          if ($null -eq $value) { throw "FTP $channel SSL policy could not be measured." }
+          $text = ([string]$value).Trim()
+          if ($text -match '^[012]$') { return [int]$text }
+          if ($text -ieq 'SslAllow') { return 0 }
+          if ($text -ieq 'SslRequire') { return 1 }
+          if ($channel -eq 'control' -and $text -ieq 'SslRequireCredentialsOnly') { return 2 }
+          if ($channel -eq 'data' -and $text -ieq 'SslDeny') { return 2 }
+          throw "Unsupported FTP $channel SSL policy."
+        }
+        """;
+
     internal sealed record FtpCertificateCandidate(string Thumbprint, string StoreName, string Subject, DateTime NotAfterUtc);
     internal sealed class FtpCertificateBinding
     {
@@ -112,7 +127,7 @@ public sealed partial class FtpService
         await ApproveInfrastructureAsync(beforeMutation, token);
         var previous = await ReadCertificateBindingAsync(token);
         await ApproveInfrastructureAsync(beforeMutation, token);
-        if (previous.ControlPolicy is not (0 or 1) || previous.DataPolicy is not (0 or 1))
+        if (previous.ControlPolicy is not (0 or 1 or 2) || previous.DataPolicy is not (0 or 1))
             throw new AppException("ftp.certificate_policy_blocked", 409, 409, "IIS currently forbids TLS on a control/data channel. Existing policies were preserved; enable an appropriate FTPS policy explicitly.");
         var changed = !string.Equals(previous.Thumbprint, selected.Thumbprint, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(previous.StoreName, selected.StoreName, StringComparison.OrdinalIgnoreCase);
@@ -174,12 +189,13 @@ public sealed partial class FtpService
         var result = await RunStrictScriptAsync($$"""
             $ErrorActionPreference = 'Stop'
             Import-Module WebAdministration -ErrorAction Stop
+            {{FtpSslPolicyScript}}
             $site = Get-Item 'IIS:\Sites\{{FtpSiteName}}' -ErrorAction Stop
             $ssl = $site.ftpServer.security.ssl
             if ($null -eq $ssl -or $null -eq $ssl.controlChannelPolicy -or $null -eq $ssl.dataChannelPolicy) { throw 'FTP SSL configuration could not be measured.' }
             $hash = $ssl.serverCertHash
             if ($hash -is [byte[]]) { $hash = [BitConverter]::ToString($hash).Replace('-', '') }
-            [pscustomobject]@{ thumbprint = [string]$hash; storeName = [string]$ssl.serverCertStoreName; controlPolicy = [int]$ssl.controlChannelPolicy; dataPolicy = [int]$ssl.dataChannelPolicy } | ConvertTo-Json -Compress
+            [pscustomobject]@{ thumbprint = [string]$hash; storeName = [string]$ssl.serverCertStoreName; controlPolicy = (ConvertTo-AdaFtpSslPolicy $ssl.controlChannelPolicy 'control'); dataPolicy = (ConvertTo-AdaFtpSslPolicy $ssl.dataChannelPolicy 'data') } | ConvertTo-Json -Compress
             """, token);
         if (!result.Success) throw new AppException("ftp.certificate_binding_unreadable", 500, 500, BuildCommandDetails(result));
         return JsonSerializer.Deserialize<FtpCertificateBinding>(result.StandardOutput, new JsonSerializerOptions(JsonSerializerDefaults.Web))
@@ -195,12 +211,13 @@ public sealed partial class FtpService
             return await RunStrictScriptAsync($$"""
             $ErrorActionPreference = 'Stop'
             Import-Module WebAdministration -ErrorAction Stop
+            {{FtpSslPolicyScript}}
             $path = 'IIS:\Sites\{{FtpSiteName}}'
             $ssl = (Get-Item $path -ErrorAction Stop).ftpServer.security.ssl
             if ($null -eq $ssl -or $null -eq $ssl.controlChannelPolicy -or $null -eq $ssl.dataChannelPolicy) { throw 'FTP SSL configuration could not be measured.' }
             $hash = $ssl.serverCertHash
             if ($hash -is [byte[]]) { $hash = [BitConverter]::ToString($hash).Replace('-', '') }
-            if ([string]$hash -ine '{{EscapePowerShellLiteral(expected.Thumbprint)}}' -or [string]$ssl.serverCertStoreName -ine '{{EscapePowerShellLiteral(expected.StoreName)}}' -or [int]$ssl.controlChannelPolicy -ne {{expected.ControlPolicy}} -or [int]$ssl.dataChannelPolicy -ne {{expected.DataPolicy}}) { throw 'FTP certificate/policies changed concurrently; no overwrite performed.' }
+            if ([string]$hash -ine '{{EscapePowerShellLiteral(expected.Thumbprint)}}' -or [string]$ssl.serverCertStoreName -ine '{{EscapePowerShellLiteral(expected.StoreName)}}' -or (ConvertTo-AdaFtpSslPolicy $ssl.controlChannelPolicy 'control') -ne {{expected.ControlPolicy}} -or (ConvertTo-AdaFtpSslPolicy $ssl.dataChannelPolicy 'data') -ne {{expected.DataPolicy}}) { throw 'FTP certificate/policies changed concurrently; no overwrite performed.' }
             if ('{{EscapePowerShellLiteral(thumbprint)}}') {
               $certificate = Get-Item -LiteralPath 'Cert:\LocalMachine\{{EscapePowerShellLiteral(storeName)}}\{{EscapePowerShellLiteral(thumbprint)}}' -ErrorAction Stop
               if (-not $certificate.HasPrivateKey) { throw 'FTP certificate private key unavailable.' }

@@ -51,7 +51,20 @@ bağlantı adresini aktarma tamamlandı.
 - İki rues-gelistirici backend/arayüzü ayrı dosyalarda uyguladı; farklı
   rues-denetci bağımsız kontrol etti. Canlı kontroller ana oturumda yürütüldü.
 
-0.8.131'un canlı uygulaması ve son veri kanalı ölçümü henüz tamamlanmadı.
+## Gerçek IIS politika uyumluluğu
+
+0.8.131 canlıda mevcut bağlamayı okurken SslAllow değerini sayıya çeviremedi.
+İşlem değişiklik yapmadan açık hata verdi; mevcut sertifika ve ayarlar korundu.
+0.8.132 kontrol/veri kanalı politika değerlerini sayısal veya enum adı olarak okur.
+Kontrol kanalında 2, SslRequireCredentialsOnly; veri kanalında 2, SslDeny anlamındadır.
+Bu ayrım korunur, bilinmeyen/yanlış kanala ait adlar reddedilir. Normalizer hem
+okuma hem karşılaştırmalı yazım öncesi kontrolde kullanılır.
+
+Üretimde oluşturulan read→CAS→read betiklerini gerçek Windows PowerShell ile
+çalıştıran regresyonlar dahil 29/29 test başarılı. Ayrı denetçi aynı 29 testi
+tekrar çalıştırarak ONAY verdi.
+
+0.8.132'nin canlı uygulaması ve son veri kanalı ölçümü henüz tamamlanmadı.
 
 ## Resmî kaynaklar
 
