@@ -41,8 +41,9 @@ workspace without a site filter. Administrators and resellers see all accounts
 returned within their API scope, with site, folder, status, search and account
 actions. Customer/operator navigation remains closed consistently with the API.
 
-Validation before packaging: 81 targeted backend tests, PHP lint and six plugin
-sandbox scenarios; 100 targeted frontend tests and vue-tsc. Replay mutation caused
+Validation before packaging: 163 targeted backend and existing webmail/security
+regression tests, PHP lint and six plugin sandbox scenarios; 103 frontend tests
+on the isolated release source, vue-tsc and a production build. Replay mutation caused
 40 consumptions instead of one and failed; restoring the atomic removal passed.
 Routing/form-action mutations also failed. A real Chrome two-origin fixture passed
 the fresh-document CSP/origin transfer, retaining only the panel origin as Referer.
