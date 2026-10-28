@@ -21,6 +21,10 @@
         <span>NX</span>
         <strong>{{ t("panel.nginx.title") }}</strong>
       </button>
+      <button :class="{ active: activeTool === 'ftp' }" @click="activeTool = 'ftp'">
+        <span>FTP</span>
+        <strong>{{ t("panel.ftp.title") }}</strong>
+      </button>
       <button :class="{ active: activeTool === 'logs' }" @click="activeTool = 'logs'">
         <span>LG</span>
         <strong>{{ t("panel.logs.title") }}</strong>
@@ -54,6 +58,7 @@
     <BackupView v-else-if="activeTool === 'backup'" />
     <AutomationView v-else-if="activeTool === 'automation'" />
     <NginxView v-else-if="activeTool === 'nginx'" />
+    <FtpView v-else-if="activeTool === 'ftp'" />
     <LogsView v-else-if="activeTool === 'logs'" />
     <TerminalView v-else-if="activeTool === 'terminal' && sunucuSahibi" />
     <DnsTemplateView v-else-if="activeTool === 'dnstemplate'" />
@@ -75,6 +80,7 @@ const DockerView = lazyView(() => import("./DockerView.vue"));
 const FirewallView = lazyView(() => import("./FirewallView.vue"));
 const LogsView = lazyView(() => import("./LogsView.vue"));
 const NginxView = lazyView(() => import("./NginxView.vue"));
+const FtpView = lazyView(() => import("./FtpView.vue"));
 const TerminalView = lazyView(() => import("./TerminalView.vue"));
 const ServerHealthView = lazyView(() => import("./ServerHealthView.vue"));
 const DnsTemplateView = lazyView(() => import("./DnsTemplateView.vue"));
@@ -86,7 +92,7 @@ const { t } = useI18n();
 const authStore = useAuthStore();
 const sunucuSahibi = computed(() => authStore.session?.isServerOwner === true);
 
-const activeTool = ref<"health" | "firewall" | "backup" | "automation" | "nginx" | "logs" | "terminal" | "docker" | "dnstemplate">("health");
+const activeTool = ref<"health" | "firewall" | "backup" | "automation" | "nginx" | "ftp" | "logs" | "terminal" | "docker" | "dnstemplate">("health");
 </script>
 
 <style scoped>

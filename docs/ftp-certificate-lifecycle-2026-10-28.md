@@ -34,6 +34,8 @@ bağlantı adresini aktarma tamamlandı.
   eşitlenir. Kullanılan FTP sertifikası Windows deposu temizliğinde korunur.
 - FTP API/arayüzüne gerçek durum, ortak bağlantı adı ve Türkçe/İngilizce hata
   açıklamaları eklendi. Eski oturum veya site bağlamına ait sonuçlar atılır.
+- Sunucu Araçları → FTP düğmesi sunucu genelindeki sertifika ayarlarını açar;
+  site bazındaki FTP hesabı görünümünden ayrı, yöneticiye açık bir araçtır.
 
 ## Testler ve denetim
 
@@ -49,7 +51,7 @@ bağlantı adresini aktarma tamamlandı.
 - İki rues-gelistirici backend/arayüzü ayrı dosyalarda uyguladı; farklı
   rues-denetci bağımsız kontrol etti. Canlı kontroller ana oturumda yürütüldü.
 
-0.8.130'un canlı uygulaması ve son veri kanalı ölçümü henüz tamamlanmadı.
+0.8.131'un canlı uygulaması ve son veri kanalı ölçümü henüz tamamlanmadı.
 
 ## Resmî kaynaklar
 
