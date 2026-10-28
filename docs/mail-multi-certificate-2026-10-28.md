@@ -42,7 +42,7 @@ TLS doğrulaması kapatılmaz; özel anahtarlar loglara veya rapora yazılmaz.
 
 ## Canlı başlangıç ölçümü
 
-28.10.2026 18:04 (+03), dış ağdan SNI ve normal zincir/ad doğrulaması ile:
+28.10.2026 18:04 (+03), dış DNS adları üzerinden SNI ve normal zincir/ad doğrulaması ile:
 
 | Sunucu adı | 587 STARTTLS | 465 TLS |
 |---|---|---|
@@ -66,7 +66,7 @@ ACME ile yeni Let's Encrypt sertifikası alındı, zincir/özel anahtar Stalwart
 uygulandı ve TLS haritası yeniden yüklendi. Yeni kayıt jlxuyeemagqa;
 eski global varsayılan jjpqdqkqabqa olarak korundu.
 
-Bağımsız dış bağlantı testi sonuçları (.tmp/mail-sni-probe/after.json):
+Bağımsız dış DNS adı bağlantı testi sonuçları (.tmp/mail-sni-probe/after.json):
 
 | Sunucu adı | 587 STARTTLS | 465 TLS | Bitiş (UTC) |
 |---|---|---|---|
@@ -100,6 +100,14 @@ travianpanel.com 1, travianpanel.xyz 1 ve videotools.com.tr 1 kutu gösteriyor.
 Seçili Travian alanında info@travianpanel.com yeniden listeleniyor. Posta istemci
 ayarları da artık mail.travianpanel.com gösteriyor. Kutu kullanım/durum ölçümü
 hesabın varlığından ayrı tutuluyor; okunamayan durum başarı olarak gösterilmiyor.
+
+## Son paket doğrulaması
+
+0.8.132 ev sunucusuna kurulduktan sonra dört TLS bağlantısı tekrar doğrulandı
+(.tmp/mail-sni-probe/after-final-update.json, 28.10.2026 19:18 +03).
+İki alan adının 587 STARTTLS ve 465 TLS bağlantılarında SAN, süre ve güven zinciri
+geçerli; iki sertifikanın yukarıdaki parmak izleri değişmedi. Bu ölçüm genel DNS
+adreslerine bu bilgisayardan yapıldı; ayrı bir dış ağdan erişim ölçümü değildir.
 
 ## Kaynaklar
 

@@ -64,7 +64,21 @@ okuma hem karşılaştırmalı yazım öncesi kontrolde kullanılır.
 çalıştıran regresyonlar dahil 29/29 test başarılı. Ayrı denetçi aynı 29 testi
 tekrar çalıştırarak ONAY verdi.
 
-0.8.132'nin canlı uygulaması ve son veri kanalı ölçümü henüz tamamlanmadı.
+0.8.132 ev sunucusuna kuruldu ve mevcut geçerli travianpanel.com sertifikası
+FTP hizmetine uygulandı. Sertifika parmak izi
+F01101D7DAE5DCCEC831B8F10226E59660C46288; son geçerlilik 2027-01-25 21:54:35 UTC.
+Dış DNS adıyla AUTH TLS, ad, süre ve güven zinciri doğrulaması geçti.
+
+Modemde mevcut FTP kuralının TCP 21 → 192.168.1.80 eşlemesi korundu;
+aynı hedefe TCP 50000–51000 pasif veri portları eklendi ve kayıt yeniden okundu.
+Diğer yönlendirmeler değiştirilmedi. Yerel ağ ve dış DNS adresi üzerinden
+kimlik doğrulamalı FTPS LIST, benzersiz geçici dosya yükleme, indirme ve içerik
+karşılaştırma başarılı; yalnız testin oluşturduğu dosya silindi.
+Curl Schannel doğrulaması ve --ssl-reqd kullanıldı; insecure seçeneği kullanılmadı.
+Kanıt: .tmp/ftps-probe/curl-public-result.json, curl-lan-result.json ve after.json.
+Mevcut RequireSsl=false politikası korundu; testin geçmesi düz FTP kapatıldığı
+anlamına gelmez. Test dosyası temizliği ayrıca başarılı doğrulandı.
+
 
 ## Resmî kaynaklar
 
