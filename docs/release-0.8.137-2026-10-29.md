@@ -53,19 +53,24 @@ Web dışı kanıtlar: `artifacts/website-publish-20261029.json`,
 
 ## Ev sunucusu kurulumu ve posta durumu
 
-Ev sunucusunda 0.8.137 kurulumu henüz doğrulanmadı. Bu oturumda tarayıcı/uzak
-masaüstü kontrol aracı bulunmadığından kullanıcıdan açık panelde güncellemeyi
-başlatması istendi. Yayımlanmış paket veya çalışan web sitesi, sunucuya yeni
-panel sürümü kurulduğunun kanıtı olarak sayılmadı.
+Kullanıcı ev sunucusunda güncellemeyi tamamladığını ve panelde 0.8.137 sürümünü
+gördüğünü bildirdi. Kurulum durumu bu açık kullanıcı teyidine dayanır; bu
+oturumda tarayıcı/uzak masaüstü kontrol aracı bulunmadığından kurulu ikilinin
+sürümü bağımsız olarak okunmadı.
 
 Yayın sonrası mevcut çalışan sunucuda üç posta adı için 587 STARTTLS ve 465 TLS
 üzerinden altı gerçek sertifika doğrulaması geçti. Karşılama adı
 `mail.adapanel.host`; alan adı, süre ve güven zinciri geçerli. Bu kontrol mevcut
-sunucuya aittir; yeni sürüm kurulumu sonrası kontrol diye gösterilmez.
+sunucuya aittir. Kullanıcının kurulum teyidinden sonra aynı altı test yeniden
+çalıştırıldı: tamamı geçti, karşılama adı yine `mail.adapanel.host` kaldı.
+Türkçe/İngilizce ana sayfa, robots.txt ve sitemap.xml canlı içerikleri yerel
+çıktıyla eşleşti; yönetim giriş ekranı da HTTP 200 verdi. Kanıtlar
+`.tmp/mail-sni-probe/release137-after-install.json` ve
+`.tmp/release137-after-install-web.json` dosyalarındadır.
 
 Önceki dış teslimat testinin uzak MX kaynaklı Spamhaus reddi devam eden ayrı
-engeldir; posta DNS düzeltmesi bunu giderdi diye raporlanmadı. Kurulum ve gerçek
-dış teslimat için tamamlandı iddiası yoktur.
+engeldir; posta DNS düzeltmesi bunu giderdi diye raporlanmadı. Bu son kontrolde
+yeni bir dış teslimat denemesi yapılmadı.
 
 ## Çalışan gerçek ajanlar
 

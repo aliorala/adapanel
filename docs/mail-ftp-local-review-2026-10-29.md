@@ -60,6 +60,7 @@ parolalar, MX/DKIM ve genel posta ayarları test için zayıflatılmadı.
 ## Sonraki yayın adımı
 
 Kullanıcının yayın talebiyle DNS kod düzeltmesi 0.8.137 olarak yayımlandı.
-Paketin GitHub'dan indirilen kopyası SHA-256 ile doğrulandı; ev sunucusuna
-kurulum henüz doğrulanmadı. Önceki "yayımlanmadı" açıklaması yerel inceleme
+Paketin GitHub'dan indirilen kopyası SHA-256 ile doğrulandı; kullanıcı ev sunucusunda
+0.8.137 kurulumunu tamamladığını bildirdi. Sonrasında altı posta TLS kontrolü tekrar
+geçti. Kurulu ikili sürümü bu oturumda bağımsız okunmadı. Önceki "yayımlanmadı" açıklaması yerel inceleme
 aşamasına aittir. Güncel durum `release-0.8.137-2026-10-29.md` belgesindedir.
