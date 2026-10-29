@@ -1,4 +1,25 @@
 User-agent: *
 Allow: /
+Disallow: /admin$
+Disallow: /admin?
+Disallow: /admin/
+
+User-agent: OAI-SearchBot
+Allow: /
+Disallow: /admin$
+Disallow: /admin?
+Disallow: /admin/
+
+User-agent: PerplexityBot
+Allow: /
+Disallow: /admin$
+Disallow: /admin?
+Disallow: /admin/
+
+User-agent: GPTBot
+Allow: /
+Disallow: /admin$
+Disallow: /admin?
+Disallow: /admin/
 
 Sitemap: https://adapanel.host/sitemap.xml

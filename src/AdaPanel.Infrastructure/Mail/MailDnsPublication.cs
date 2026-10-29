@@ -34,6 +34,13 @@ namespace AdaPanel.Infrastructure.Mail;
 /// </remarks>
 public static class MailDnsPublication
 {
+    public static void EnsureDomainZone(SiteDnsZoneDto zone, string domain)
+    {
+        if (!string.Equals(zone.ZoneName.Trim().TrimEnd('.'), domain.Trim().TrimEnd('.'), StringComparison.OrdinalIgnoreCase))
+            throw new AdaPanel.Core.Common.AppException("mail.dns_zone_missing", 409, 409,
+                "The managed site's DNS zone does not match the requested mail domain.");
+    }
+
     // Delete only the record we can identify, never all MX/A records sharing its owner name.
     public static bool MatchesRecord(MailDnsRecordDto expected, SiteDnsRecordDto actual)
     {

@@ -227,7 +227,7 @@ public sealed partial class MailService
         return query.Items[0];
     }
 
-    internal static Core.Dtos.Sites.SiteDto ResolveManagedIdentitySite(IReadOnlyCollection<Core.Dtos.Sites.SiteDto> sites,
+    public static Core.Dtos.Sites.SiteDto ResolveManagedIdentitySite(IReadOnlyCollection<Core.Dtos.Sites.SiteDto> sites,
         string domain, string? httpHost = null)
     {
         var bound = sites.Where(s => s.Bindings.Any(b => b.HostName.Equals(domain, StringComparison.OrdinalIgnoreCase)

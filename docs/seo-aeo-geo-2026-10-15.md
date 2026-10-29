@@ -71,3 +71,8 @@ talebi nedeniyle masaüstü giriş otomasyonu kullanılmaz.
 - [Google: Optimizing for generative AI features](https://developers.google.com/search/docs/fundamentals/ai-optimization-guide)
 - [OpenAI: Overview of crawlers](https://developers.openai.com/api/docs/bots)
 - [Bing: AI Performance](https://www.bing.com/webmasters/help/ai-performance-9f8e7d6c)
+
+
+## Yayın tamamlandı — 15 Ekim 2026
+
+0.8.95 GitHub Releases üzerinde yayınlandı: https://github.com/aliorala/adapanel/releases/tag/0.8.95 . releases/latest sürümü doğrulandı. Yayından indirilen 91.186.988 baytlık AdaPanelSetup.exe yerel paketle aynı SHA256 değerine sahip: F2385EC29D40D6650F391442F05D3B61141F22668EFD09218847449274EB0D6C. Önceki bağlantı engeli GitHub kimlik doğrulaması tamamlandıktan sonra giderildi. Kaynak kod gönderilmedi.

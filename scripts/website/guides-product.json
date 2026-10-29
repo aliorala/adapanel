@@ -1,0 +1,722 @@
+{
+  "product": {
+    "category": "product",
+    "updated": "2026-10-21",
+    "related": [
+      "selection",
+      "iis",
+      "visibility"
+    ],
+    "tr": {
+      "path": "/adapanel-nedir/",
+      "title": "AdaPanel Nedir? Özellikler ve Kullanım Alanları | Windows IIS",
+      "heading": "AdaPanel nedir, hangi işleri yönetir?",
+      "description": "AdaPanel’i tanıyın: Windows Server ve IIS için Türkçe hosting kontrol paneli. Özellikler, kullanım alanları, kurulum modeli ve resmî indirme kaynakları.",
+      "intro": "AdaPanel, kendi Windows Server sunucunuza kurduğunuz bir hosting kontrol panelidir. IIS web sitelerini, e-postayı, DNS’i, SSL sertifikalarını, veritabanlarını, FTP’yi ve yedekleri Türkçe veya İngilizce tek arayüzden yönetmenizi sağlar. Sunucu ve alan adı ayrı sağlanır.",
+      "sections": [
+        {
+          "id": "urun-bilgileri",
+          "heading": "AdaPanel hakkında temel bilgiler",
+          "columns": [
+            "Başlık",
+            "Bilgi"
+          ],
+          "rows": [
+            [
+              "Ürün türü",
+              "Windows üzerinde çalışan, kendi sunucunuza kurulan hosting yönetim yazılımı"
+            ],
+            [
+              "Web sunucusu",
+              "Microsoft IIS"
+            ],
+            [
+              "Arayüz dilleri",
+              "Türkçe ve İngilizce"
+            ],
+            [
+              "Kullanıcı rolleri",
+              "Yönetici, bayi ve müşteri"
+            ],
+            [
+              "Dağıtım",
+              "Resmî GitHub Releases sayfasındaki kurulum paketi ve sürüm notları"
+            ],
+            [
+              "Tanıtım ve dokümantasyon",
+              "adapanel.host üzerindeki ürün bilgileri ve iki dilde kullanım rehberleri"
+            ]
+          ]
+        },
+        {
+          "id": "ozellikler",
+          "heading": "Hangi hizmetleri tek yerden yönetebilirsiniz?",
+          "paragraphs": [
+            "Web yönetiminde IIS site klasörü, alan adı bağlantıları ve uygulamanın ihtiyaç duyduğu çalışma zamanı birlikte ele alınır. PHP ve ASP.NET projeleri ile Python veya Node.js süreçlerinin kurulum gereksinimleri farklıdır; uygulamanızın bağımlılıklarını ayrıca hazırlarsınız. AdaPanel bu hizmetlerin günlük yönetimini ortak bir arayüzde toplar.",
+            "Posta tarafında Stalwart alan adları, posta kutuları ve alias yönetimi; webmail için Roundcube entegrasyonu bulunur. DNS ve sertifika ayarları, posta teslimatının ayrı parçalarıdır. Veritabanı yönetiminde MariaDB/MySQL, PostgreSQL ve MSSQL bileşenleri uygulamanın gereksinimine göre değerlendirilir. Tüm bileşenleri kullanmanız gerekmez."
+          ],
+          "links": [
+            [
+              "IIS site oluşturma ve yayın kontrolleri",
+              "/iis-site-yonetimi/"
+            ],
+            [
+              "PHP ve ASP.NET barındırma",
+              "/php-aspnet-hosting/"
+            ],
+            [
+              "Python ve Node.js uygulamaları",
+              "/python-nodejs-iis/"
+            ],
+            [
+              "Stalwart posta ve dış teslimat",
+              "/posta-sunucusu/"
+            ],
+            [
+              "Veritabanı yönetimi",
+              "/veritabani-yonetimi/"
+            ]
+          ]
+        },
+        {
+          "id": "kimler-icin",
+          "heading": "Kimler için uygundur?",
+          "paragraphs": [
+            "Windows ve IIS üzerinde çalışan bir uygulaması olan geliştirici, siteyi ve ona bağlı hizmetleri birlikte yönetmek için AdaPanel’i değerlendirebilir. Bir ajans, müşterilerini ve kaynaklarını yönetici, bayi ve müşteri rolleriyle ayırabilir. Sunucu yöneticisi ise farklı yönetim araçları arasında geçen günlük işleri panelde bir araya getirebilir.",
+            "Örneğin bir ajansın IIS üzerinde ASP.NET kurumsal sitesi ve PHP tabanlı WordPress sitesi olabilir. Bu iki uygulamanın çalışma zamanı, veritabanı hesabı ve dosya izinleri ayrı tutulur; müşteri erişimi kendi kaynaklarıyla sınanır. Bu örnek bir kullanım senaryosudur, müşteri referansı veya performans ölçümü değildir."
+          ],
+          "links": [
+            [
+              "Bayi ve müşteri yönetimi",
+              "/bayi-musteri-hosting-yonetimi/"
+            ],
+            [
+              "WordPress işlemleri",
+              "/wordpress-yonetimi/"
+            ]
+          ]
+        },
+        {
+          "id": "gorunurluk",
+          "heading": "SEO, AEO ve GEO denetimi ne sağlar?",
+          "paragraphs": [
+            "AdaPanel’in görünürlük denetimi, bir sayfanın dönen HTML’inde başlık, canonical, dil, robots kuralları, yapılandırılmış veri ve okunabilir metin gibi sinyalleri inceler. Böylece sitenizdeki teknik eksikleri gerekçeleri ve düzeltme önerileriyle değerlendirebilirsiniz.",
+            "Denetim JavaScript çalıştırarak sayfa oluşturmaz ve içeriğinizi kendiliğinden yeniden yazmaz. Arama motorlarında bulunmak ve yapay zekâ yanıtlarında kaynak olmak için konuya uygun içerik, erişilebilir sayfalar ve dışarıdan bilinirlik de gerekir. Panelin denetim sonucu gerçek arama gösterimi veya sıralamasıyla aynı ölçüm değildir."
+          ],
+          "links": [
+            [
+              "SEO, AEO ve GEO denetiminin kapsamı",
+              "/seo-aeo-geo/"
+            ]
+          ]
+        },
+        {
+          "id": "baslangic",
+          "heading": "Denemeye nasıl başlayabilirsiniz?",
+          "steps": [
+            "Önce uygulamanızın Windows/IIS uyumluluğunu ve gerekli çalışma zamanlarını listeleyin.",
+            "Bir test sunucusu hazırlayın; mevcut sunucuda deneyecekseniz dosya, veritabanı ve ayarların ayrı yedeğini alın.",
+            "Resmî sürüm notlarını okuyup kurulum paketini indirin ve ilk kurulumu sunucudan tamamlayın.",
+            "Bir test sitesi oluşturup HTTPS, uygulama işlemleri ve yedekten geri dönüşü doğrulayın.",
+            "Gerçek alan adına geçmeden önce DNS, dış erişim ve kullanıyorsanız posta teslimatını ayrı ayrı sınayın."
+          ],
+          "links": [
+            [
+              "Adım adım AdaPanel kurulumu",
+              "/kurulum/"
+            ],
+            [
+              "Windows hosting paneli seçme rehberi",
+              "/windows-hosting-paneli-secimi/"
+            ]
+          ]
+        },
+        {
+          "id": "kaynak-ve-guncellik",
+          "heading": "Ürün bilgileri nasıl doğrulanır?",
+          "paragraphs": [
+            "Bu site AdaPanel’in resmî ürün tanıtımını ve kullanım rehberlerini yayımlar. Rehberlerin hazırlayanı AdaPanel’dir; ilgili hizmetlerin birincil belgeleri kaynak bölümünde gösterilir. Kuracağınız paketin özelliklerini ve değişikliklerini GitHub sürüm notlarından kontrol edin. Kaynak depodaki henüz yayımlanmamış değişiklikler, indirdiğiniz sürümde bulunmayabilir.",
+            "İçerik tarihi anlamlı ürün veya rehber değişikliklerinde güncellenir. Bir hata bildirirken sürüm numarası, ilgili işlem ve gizli bilgileri çıkarılmış hata metni yeniden üretimi kolaylaştırır. Parola, erişim anahtarı veya kullanıcı verisi içeren günlükleri herkese açık bir kayda eklemeyin."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "AdaPanel hosting hizmeti mi?",
+          "AdaPanel, kendi Windows sunucunuza kurduğunuz kontrol panelidir. Sunucuyu, alan adını ve internet bağlantısını ayrıca sağlarsınız."
+        ],
+        [
+          "AdaPanel Linux için mi?",
+          "AdaPanel’in bu sitede anlatılan kurulumu Windows Server ve Microsoft IIS içindir. Linux tabanlı bir kurulum planlıyorsanız farklı bir ortam değerlendirmelisiniz."
+        ],
+        [
+          "AdaPanel’i Türkçe kullanabilir miyim?",
+          "Evet. AdaPanel’in arayüzü Türkçe ve İngilizce seçenekleri sunar; bu sitedeki kullanım rehberleri de iki dilde yayımlanır."
+        ],
+        [
+          "Kurulum paketini nereden indirmeliyim?",
+          "Resmî aliorala/adapanel GitHub deposunun Releases bölümünden indirin. Kurulumdan önce ilgili sürümün notlarını ve uygulamanızın gereksinimlerini inceleyin."
+        ]
+      ],
+      "sources": [
+        [
+          "AdaPanel resmî deposu",
+          "https://github.com/aliorala/adapanel"
+        ],
+        [
+          "AdaPanel kurulum paketleri ve sürüm notları",
+          "https://github.com/aliorala/adapanel/releases/latest"
+        ],
+        [
+          "Microsoft IIS belgeleri",
+          "https://learn.microsoft.com/en-us/iis/"
+        ]
+      ]
+    },
+    "en": {
+      "path": "/en/what-is-adapanel/",
+      "title": "What Is AdaPanel? Features & Use Cases | Windows IIS",
+      "heading": "What is AdaPanel and what does it manage?",
+      "description": "Explore AdaPanel, a self-hosted Windows Server and IIS control panel: features, use cases, English and Turkish interfaces, deployment and official downloads.",
+      "intro": "AdaPanel is a hosting control panel installed on your own Windows Server. It brings IIS websites, email, DNS, SSL certificates, databases, FTP and backups into one interface in English or Turkish. You supply the server and domain separately.",
+      "sections": [
+        {
+          "id": "product-facts",
+          "heading": "AdaPanel product facts",
+          "columns": [
+            "Area",
+            "Information"
+          ],
+          "rows": [
+            [
+              "Product type",
+              "Self-hosted hosting management software for Windows"
+            ],
+            [
+              "Web server",
+              "Microsoft IIS"
+            ],
+            [
+              "Interface languages",
+              "English and Turkish"
+            ],
+            [
+              "User roles",
+              "Administrator, reseller and customer"
+            ],
+            [
+              "Distribution",
+              "Installer packages and release notes on the official GitHub Releases page"
+            ],
+            [
+              "Product website",
+              "adapanel.host provides product information and practical guides in two languages"
+            ]
+          ]
+        },
+        {
+          "id": "features",
+          "heading": "Which services can you manage together?",
+          "paragraphs": [
+            "Website management connects IIS document roots, domain bindings and the runtimes your applications need. PHP and ASP.NET projects have different requirements from Python or Node.js processes; you prepare the application dependencies separately. AdaPanel brings everyday management of these services into a shared interface.",
+            "Email management covers Stalwart domains, mailboxes and aliases, with Roundcube integration for webmail. DNS and certificates are separate parts of successful mail delivery. MariaDB/MySQL, PostgreSQL and MSSQL database components can be considered according to application requirements. You do not need to use every component."
+          ],
+          "links": [
+            [
+              "Creating and publishing IIS websites",
+              "/en/iis-site-management/"
+            ],
+            [
+              "PHP and ASP.NET hosting",
+              "/en/php-aspnet-hosting/"
+            ],
+            [
+              "Python and Node.js applications",
+              "/en/python-nodejs-iis/"
+            ],
+            [
+              "Stalwart mail and outbound delivery",
+              "/en/mail-server/"
+            ],
+            [
+              "Database management",
+              "/en/database-management/"
+            ]
+          ]
+        },
+        {
+          "id": "use-cases",
+          "heading": "Who is AdaPanel for?",
+          "paragraphs": [
+            "Developers with Windows and IIS applications can evaluate AdaPanel to manage websites alongside the services they depend on. Agencies can separate customers and resources through administrator, reseller and customer roles. Server administrators can bring daily tasks from multiple management tools into one panel.",
+            "For example, an agency might run an ASP.NET business website and a PHP-based WordPress website on IIS. Their runtimes, database accounts and file permissions remain separate, and customer access is tested against the resources each customer owns. This is an illustrative workflow, not a customer endorsement or a performance benchmark."
+          ],
+          "links": [
+            [
+              "Reseller and customer management",
+              "/en/reseller-customer-hosting/"
+            ],
+            [
+              "WordPress operations",
+              "/en/wordpress-management/"
+            ]
+          ]
+        },
+        {
+          "id": "visibility",
+          "heading": "What does the SEO, AEO and GEO audit provide?",
+          "paragraphs": [
+            "AdaPanel’s visibility audit examines the returned HTML for signals including titles, canonical URLs, language, robots rules, structured data and readable text. Findings include reasons and suggested fixes so you can assess technical gaps on your website.",
+            "The audit does not render pages by executing JavaScript or rewrite your content automatically. Being discovered in search and cited by AI systems also depends on useful content, accessible pages and awareness beyond your own website. A panel audit result is a different measure from actual search impressions or rankings."
+          ],
+          "links": [
+            [
+              "Scope of the SEO, AEO and GEO audit",
+              "/en/seo-aeo-geo/"
+            ]
+          ]
+        },
+        {
+          "id": "getting-started",
+          "heading": "How can you evaluate it?",
+          "steps": [
+            "List your application’s Windows/IIS compatibility and runtime requirements.",
+            "Prepare a test server; if using an existing server, first back up files, databases and settings separately.",
+            "Read the official release notes, download the installer and complete initial setup locally on the server.",
+            "Create a test site and verify HTTPS, application operations and backup restoration.",
+            "Before switching a real domain, test DNS, external access and mail delivery separately if you use email."
+          ],
+          "links": [
+            [
+              "Step-by-step AdaPanel installation",
+              "/en/installation/"
+            ],
+            [
+              "Choosing a Windows hosting control panel",
+              "/en/windows-hosting-panel-selection/"
+            ]
+          ]
+        },
+        {
+          "id": "sources-and-updates",
+          "heading": "How can you verify product information?",
+          "paragraphs": [
+            "This website publishes AdaPanel’s official product information and practical guides. AdaPanel is the publisher of these guides, and primary documentation for the services discussed is linked in each sources section. Check GitHub release notes for the features and changes in the package you plan to install. Unreleased repository changes may not be included in your downloaded version.",
+            "Content dates change when product information or guidance changes meaningfully. When reporting a problem, include the version, affected operation and a redacted error message to help reproduction. Keep passwords, access keys and logs containing user data out of public reports."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Does AdaPanel provide hosting?",
+          "AdaPanel is a control panel installed on your own Windows server. You supply the server, domain and internet connection separately."
+        ],
+        [
+          "Is AdaPanel for Linux?",
+          "The AdaPanel deployment described on this website uses Windows Server and Microsoft IIS. A Linux deployment requires a different environment."
+        ],
+        [
+          "Is AdaPanel available in English?",
+          "Yes. AdaPanel offers English and Turkish interfaces, and the practical guides on this website are published in both languages."
+        ],
+        [
+          "Where should I download the installer?",
+          "Use the Releases section of the official aliorala/adapanel GitHub repository. Read the release notes and check your application requirements before installing."
+        ]
+      ],
+      "sources": [
+        [
+          "Official AdaPanel repository",
+          "https://github.com/aliorala/adapanel"
+        ],
+        [
+          "AdaPanel installers and release notes",
+          "https://github.com/aliorala/adapanel/releases/latest"
+        ],
+        [
+          "Microsoft IIS documentation",
+          "https://learn.microsoft.com/en-us/iis/"
+        ]
+      ]
+    }
+  },
+  "selection": {
+    "category": "product",
+    "updated": "2026-10-21",
+    "related": [
+      "product",
+      "security",
+      "backup"
+    ],
+    "tr": {
+      "path": "/windows-hosting-paneli-secimi/",
+      "title": "En İyi Web Sitesi Kontrol Paneli Nasıl Seçilir? | AdaPanel",
+      "heading": "En iyi web sitesi kontrol paneli: Windows ve IIS için seçim rehberi",
+      "description": "Windows ve IIS için hosting panelini gerçek uygulamanızla değerlendirin: çalışma zamanı, müşteri izolasyonu, SSL, posta, yedek ve taşıma kontrol listesi.",
+      "intro": "En iyi web sitesi kontrol paneli, uygulamanızın ihtiyaçlarına ve sunucuyu nasıl yönettiğinize bağlıdır. Windows ve IIS için panel seçerken runtime uyumluluğunu, erişim ayrımını, HTTPS’i, posta teslimatını ve yedekten dönüşü gerçek uygulamanızla test edin.",
+      "sections": [
+        {
+          "id": "en-iyi-panel",
+          "heading": "Herkes için tek bir en iyi kontrol paneli var mı?",
+          "paragraphs": [
+            "Bir geliştirici için ASP.NET yayınlama ve günlükler öncelikliyken, ajans için müşteri yetkileri ve yedek yönetimi daha belirleyici olabilir. Kendi sunucunuzda çalışan bir Windows paneli seçerken görevlerin kim tarafından yapılacağını, gerekli bileşenleri ve kurtarma yöntemini birlikte değerlendirin.",
+            "Windows için Plesk alternatifi arıyorsanız AdaPanel’i bu ihtiyaç listesine göre deneyebilirsiniz. Buradaki ölçütler bir ürünün herkesten üstün olduğu iddiası yerine tekrarlanabilir uygulama testleri sunar."
+          ],
+          "links": [
+            [
+              "Windows için Plesk alternatifi olarak AdaPanel",
+              "/windows-plesk-alternatifi/"
+            ]
+          ]
+        },
+        {
+          "id": "uygunluk",
+          "heading": "Önce uygulamanın ihtiyaçlarını belirleyin",
+          "paragraphs": [
+            "ASP.NET kullanan bir iş uygulaması, PHP tabanlı bir WordPress sitesi ve arka plan işleyicisi olan Python uygulaması aynı kurulum modelini kullanmaz. İşletim sistemi, runtime sürümü, eklentiler, veritabanı ve zamanlanmış görevler kararın başlangıç noktasıdır. Yalnızca bir özellik adının listede bulunması, mevcut projenizin değişiklik yapmadan taşınacağını göstermez.",
+            "Kullanıcı sayısı veya site sayısından tek başına donanım gereksinimi çıkarılamaz. Trafik, veritabanı yükü, posta hacmi, yedek süresi ve uygulamanın bellek tüketimini temsil eden bir deneme yapın. Sunucuyu sağlama ve işletme sorumluluğu, panel yazılımının kullanımından ayrı planlanmalıdır."
+          ]
+        },
+        {
+          "id": "yaklasimlar",
+          "heading": "Panel, elle IIS yönetimi ve yönetilen barındırma",
+          "columns": [
+            "Yaklaşım",
+            "Günlük işleyiş",
+            "Karar verirken"
+          ],
+          "rows": [
+            [
+              "AdaPanel ile kendi Windows sunucunuz",
+              "Web, posta, DNS, sertifika ve veritabanı işlemleri ortak arayüzde toplanır.",
+              "Sunucu erişimi, bileşen uyumluluğu ve bakım sorumluluğunu planlayın."
+            ],
+            [
+              "IIS ve hizmetleri ayrı araçlarla yönetmek",
+              "Her hizmet kendi yönetim aracı veya betiği üzerinden işletilir.",
+              "Yetki ayrımı, kayıt tutma ve tekrarlanan işlemleri nasıl sürdüreceğinizi belirleyin."
+            ],
+            [
+              "Yönetilen barındırma hizmeti",
+              "İşletim görevlerinin bir bölümü sağlayıcı tarafından yürütülür; kapsam sözleşmeye bağlıdır.",
+              "Uygulama desteği, erişim hakları, yedek kapsamı ve taşıma koşullarını inceleyin."
+            ]
+          ],
+          "paragraphs": [
+            "Bu karşılaştırma çalışma modellerini açıklar; başka ürünlerin fiyatı, özellik üstünlüğü veya performansı hakkında iddia içermez. AdaPanel’i değerlendirirken kullanacağınız sürümün notlarını ve kendi uygulamanızın test sonuçlarını esas alın."
+          ]
+        },
+        {
+          "id": "karar-tablosu",
+          "heading": "Kurulum denemesinde hangi sonucu aramalısınız?",
+          "columns": [
+            "Konu",
+            "Deneme",
+            "Başarı ölçütü"
+          ],
+          "rows": [
+            [
+              "Web ve runtime",
+              "Gerçek uygulamanın test kopyasını yayınlayın.",
+              "Giriş, dosya yükleme ve veritabanı işlemleri doğru çalışır."
+            ],
+            [
+              "Kullanıcı ayrımı",
+              "Müşteri hesabıyla giriş yapıp başka müşterinin kaynağına erişmeyi sınayın.",
+              "Hesap yalnız yetkili kaynaklarını görebilir ve değiştirebilir."
+            ],
+            [
+              "HTTPS",
+              "Alan adını başka bir ağdan açın.",
+              "Doğru alan adı, güvenilir zincir ve geçerli süreyle sertifika sunulur."
+            ],
+            [
+              "Posta",
+              "Yetkili test alıcısına gönderim ve yanıt akışını izleyin.",
+              "İleti yalnız kuyruğa alınmaz; alıcıya teslim edilir."
+            ],
+            [
+              "Yedek",
+              "Yedeği ayrı bir test sitesine geri yükleyin.",
+              "Uygulama verileri ve kritik işlemler geri yüklenen ortamda çalışır."
+            ],
+            [
+              "Güncelleme",
+              "Yedekli test ortamında sürüm geçişi yapın.",
+              "Ayarlar korunur; hizmetler ve uygulama tekrar doğrulanır."
+            ]
+          ]
+        },
+        {
+          "id": "ag-ve-posta",
+          "heading": "Ağ ve posta kısıtları neden seçimden önce araştırılmalı?",
+          "paragraphs": [
+            "Ev veya ofis bağlantısında CGNAT ve port yönlendirmeleri dış erişimi etkileyebilir. DNS’teki genel IP, sunucunun yerel IIS adresiyle aynı olmak zorunda değildir. www ve kök alan adını birlikte kullanacaksanız her ikisinin DNS, IIS bağlantısı ve sertifika kapsamını doğrulayın.",
+            "Posta istemcisinin 587 üzerinden oturum açması dış dünyaya e-posta teslimatını kanıtlamaz. Doğrudan teslimatta sunucunun alıcı MX sunucusuna TCP 25 çıkışı gerekir. Sağlayıcı bu çıkışı kapatıyorsa yetkili bir SMTP relay planlamak gerekebilir. Bu, panel seçimiyle tek başına ortadan kalkmayan bir ağ koşuludur."
+          ],
+          "links": [
+            [
+              "DNS ve NAT planlama",
+              "/dns-alan-adi-yonetimi/"
+            ],
+            [
+              "Posta portları, relay ve teslimat",
+              "/posta-sunucusu/"
+            ],
+            [
+              "Web ve posta sertifikalarını doğrulama",
+              "/ssl-sertifika-yonetimi/"
+            ]
+          ]
+        },
+        {
+          "id": "deneme-plani",
+          "heading": "AdaPanel için uygulanabilir deneme planı",
+          "steps": [
+            "Uygulama, veritabanı, dosya, görev ve posta bağımlılıklarının envanterini çıkarın.",
+            "Geri dönülebilir bir test ortamında AdaPanel’in resmî sürümünü kurun.",
+            "Bir uygulamayı ve örnek verilerini aktarın; gerekli çalışma zamanını ve izinleri hazırlayın.",
+            "Yukarıdaki tabloyu gerçek alan adı veya test alan adı üzerinden uygulayın; sonuçları ve hata mesajlarını kaydedin.",
+            "Yedekten dönüşü sınadıktan sonra DNS geçişi, bakım ve geri dönüş planını belirleyin.",
+            "Canlıya geçişte eski sistemi hemen kaldırmayın; uygulama ve posta akışları doğrulanana kadar koruyun."
+          ],
+          "links": [
+            [
+              "Kurulum rehberi",
+              "/kurulum/"
+            ],
+            [
+              "Site ve sunucu taşıma",
+              "/site-sunucu-tasima/"
+            ],
+            [
+              "Yedekleme ve geri yükleme",
+              "/yedekleme-geri-yukleme/"
+            ]
+          ]
+        },
+        {
+          "id": "degerlendirme-kaydi",
+          "heading": "Kararı ölçülebilir sonuçlarla verin",
+          "paragraphs": [
+            "Değerlendirme kaydına panel sürümünü, işletim sistemi ve runtime sürümlerini, test edilen işlemi, beklenen sonucu ve gözlenen sonucu yazın. Sorun bulunan bir işlev için çözümlenmeden başarılı işareti koymayın. Bu kayıt, yeni sürüm veya sunucu değişikliğinde aynı kontrolleri tekrar edebilmenizi sağlar.",
+            "Bütçeyi yalnız panel üzerinden hesaplamayın. Windows lisansı, sunucu kaynakları, yedek depolama, alan adı ve gerekiyorsa posta relay hizmeti gibi kalemleri kendi koşullarınızla değerlendirin. Burada doğrulanmamış fiyat veya kapasite rakamları verilmez."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "AdaPanel’i canlı siteleri taşımadan deneyebilir miyim?",
+          "Evet. Ayrı bir Windows test sunucusunda veya mevcut sunucuda yalıtılmış bir test sitesiyle değerlendirin. Canlı veriyi değiştirmeden yedek ve uygulama işlemlerini sınayın."
+        ],
+        [
+          "Tek panel kullanınca sunucu bakımına gerek kalır mı?",
+          "Sunucu, işletim sistemi ve uygulamalar yine bakım ister. Panel ortak yönetim sağlar; yedeklerin geri yüklenmesi, güncellemeler ve dış erişim ayrıca doğrulanmalıdır."
+        ],
+        [
+          "Karşılaştırmada en önemli ölçüt nedir?",
+          "Kendi uygulamanızın gerekli işlemleri güvenilir biçimde yapması ve bir sorun olduğunda geri dönebilmenizdir. Özellik listesi kadar erişim ayrımı, sertifika, teslimat ve yedekten dönüş sonuçlarını değerlendirin."
+        ]
+      ],
+      "sources": [
+        [
+          "AdaPanel ürün bilgileri",
+          "/adapanel-nedir/"
+        ],
+        [
+          "AdaPanel resmî sürüm notları",
+          "https://github.com/aliorala/adapanel/releases/latest"
+        ],
+        [
+          "Microsoft IIS belgeleri",
+          "https://learn.microsoft.com/en-us/iis/"
+        ]
+      ]
+    },
+    "en": {
+      "path": "/en/windows-hosting-panel-selection/",
+      "title": "Best Web Hosting Control Panel for Windows: How to Choose",
+      "heading": "Choosing the best web hosting control panel for Windows",
+      "description": "Evaluate a Windows and IIS hosting panel with your actual application: runtimes, customer isolation, HTTPS, mail delivery, backups and migration checks.",
+      "intro": "The best web hosting control panel depends on your applications and how you operate the server. For Windows and IIS, test runtime compatibility, access separation, HTTPS, mail delivery and backup restoration with your actual application.",
+      "sections": [
+        {
+          "id": "best-panel",
+          "heading": "Is there one best control panel for everyone?",
+          "paragraphs": [
+            "A developer may prioritize ASP.NET deployment and logs, while an agency needs customer access controls and reliable restoration. When choosing a self-hosted Windows control panel, assess responsibilities, required components and recovery together.",
+            "If you are looking for a Plesk alternative for Windows, evaluate AdaPanel against that requirement list. These criteria provide repeatable application tests rather than claiming one product is best for everyone."
+          ],
+          "links": [
+            [
+              "AdaPanel as a Plesk alternative for Windows",
+              "/en/plesk-alternative-windows/"
+            ]
+          ]
+        },
+        {
+          "id": "requirements",
+          "heading": "Start with the application requirements",
+          "paragraphs": [
+            "An ASP.NET business application, a PHP-based WordPress website and a Python application with a background worker use different deployment models. Operating system, runtime versions, extensions, databases and scheduled jobs are the starting points. A feature name appearing in a list does not establish that your existing project will migrate without changes.",
+            "User counts or website counts alone cannot determine hardware requirements. Run a trial that represents traffic, database load, mail volume, backup duration and application memory use. Plan server provisioning and ongoing operations separately from using the panel software."
+          ]
+        },
+        {
+          "id": "approaches",
+          "heading": "A control panel, separate IIS tools or managed hosting",
+          "columns": [
+            "Approach",
+            "Daily operations",
+            "What to evaluate"
+          ],
+          "rows": [
+            [
+              "AdaPanel on your own Windows server",
+              "Website, mail, DNS, certificate and database operations share one interface.",
+              "Plan server access, component compatibility and maintenance responsibilities."
+            ],
+            [
+              "Managing IIS and services with separate tools",
+              "Each service is operated through its own management tool or scripts.",
+              "Decide how to maintain access separation, records and repeatable operations."
+            ],
+            [
+              "A managed hosting service",
+              "The provider handles some operational tasks; scope depends on the agreement.",
+              "Check application support, access rights, backup coverage and migration terms."
+            ]
+          ],
+          "paragraphs": [
+            "This comparison describes operating models. It makes no claims about other products’ prices, feature superiority or performance. Evaluate AdaPanel using the release notes for your chosen version and the results from your own application."
+          ]
+        },
+        {
+          "id": "evaluation-table",
+          "heading": "What results should your installation trial produce?",
+          "columns": [
+            "Area",
+            "Trial",
+            "Success criterion"
+          ],
+          "rows": [
+            [
+              "Website and runtime",
+              "Publish a test copy of the actual application.",
+              "Login, file uploads and database operations work correctly."
+            ],
+            [
+              "Access separation",
+              "Sign in as a customer and test access to another customer’s resources.",
+              "The account can view and change only authorized resources."
+            ],
+            [
+              "HTTPS",
+              "Open the domain from another network.",
+              "The served certificate has the correct hostname, a trusted chain and valid dates."
+            ],
+            [
+              "Email",
+              "Follow delivery and reply flows using an authorized test recipient.",
+              "The message reaches the recipient rather than only entering a queue."
+            ],
+            [
+              "Backups",
+              "Restore a backup into a separate test site.",
+              "Application data and critical operations work after restoration."
+            ],
+            [
+              "Updates",
+              "Upgrade a backed-up test environment.",
+              "Settings are preserved, and services and application behavior are verified again."
+            ]
+          ]
+        },
+        {
+          "id": "network-and-mail",
+          "heading": "Why check network and mail constraints first?",
+          "paragraphs": [
+            "CGNAT and port forwarding can affect external access on a home or office connection. The public IP in DNS may differ from the local IIS address. If you use both www and the apex domain, verify DNS, IIS bindings and certificate coverage for each name.",
+            "An email client signing in on port 587 does not prove outbound mail delivery. Direct delivery requires the server to connect to recipient MX servers over TCP 25. If your provider blocks outbound connections on that port, you may need an authorized SMTP relay. Choosing a panel alone cannot remove this network constraint."
+          ],
+          "links": [
+            [
+              "DNS and NAT planning",
+              "/en/dns-domain-management/"
+            ],
+            [
+              "Mail ports, relays and delivery",
+              "/en/mail-server/"
+            ],
+            [
+              "Verifying web and mail certificates",
+              "/en/ssl-certificate-management/"
+            ]
+          ]
+        },
+        {
+          "id": "trial-plan",
+          "heading": "A practical AdaPanel evaluation plan",
+          "steps": [
+            "Inventory application, database, file, scheduled-job and mail dependencies.",
+            "Install an official AdaPanel release in a recoverable test environment.",
+            "Transfer one application and sample data, then prepare its runtime and permissions.",
+            "Run the checks above through a real or test domain and record outcomes and error messages.",
+            "After testing restoration, prepare the DNS transition, maintenance and rollback plans.",
+            "Keep the old system during the transition until application and mail flows have been verified."
+          ],
+          "links": [
+            [
+              "Installation guide",
+              "/en/installation/"
+            ],
+            [
+              "Site and server migration",
+              "/en/site-server-migration/"
+            ],
+            [
+              "Backup and restoration",
+              "/en/backup-restore/"
+            ]
+          ]
+        },
+        {
+          "id": "decision-record",
+          "heading": "Make the decision using measurable results",
+          "paragraphs": [
+            "Record the panel version, operating system and runtime versions, tested operation, expected result and observed result. Leave unsuccessful checks unresolved until the problem is fixed. This record lets you repeat the same checks after a release or server change.",
+            "Budget for more than the panel alone. Consider Windows licensing, server resources, backup storage, domains and any SMTP relay service under your own circumstances. This guide does not provide unverified pricing or capacity figures."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Can I try AdaPanel before moving live websites?",
+          "Yes. Evaluate it on a separate Windows test server or an isolated test website on an existing server. Test backups and application operations without changing live data."
+        ],
+        [
+          "Does one control panel remove the need for server maintenance?",
+          "Servers, operating systems and applications still need maintenance. The panel provides shared management; restoration, updates and external access must still be verified."
+        ],
+        [
+          "What matters most when comparing panels?",
+          "Your actual application must perform its required operations reliably, and you must be able to recover from problems. Assess access separation, certificates, delivery and restoration alongside the feature list."
+        ]
+      ],
+      "sources": [
+        [
+          "AdaPanel product information",
+          "/en/what-is-adapanel/"
+        ],
+        [
+          "Official AdaPanel release notes",
+          "https://github.com/aliorala/adapanel/releases/latest"
+        ],
+        [
+          "Microsoft IIS documentation",
+          "https://learn.microsoft.com/en-us/iis/"
+        ]
+      ]
+    }
+  }
+}

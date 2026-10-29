@@ -176,6 +176,8 @@ public sealed class PostaDnsYayinDurustlugTests
         Assert.Equal(0, dns.TekTekYazmaSayisi);
         Assert.Equal(1, dns.TopluYazmaSayisi);
         Assert.Equal(3, dns.SonToplu.Count);
+        Assert.Equal("web-ornek.com", dns.SonSite);
+        Assert.Contains(dns.SonToplu, r => r.Type == "MX" && r.Value == "mail.ornek.com");
     }
 
     [Fact]
@@ -209,7 +211,52 @@ public sealed class PostaDnsYayinDurustlugTests
         Assert.Equal(MailDnsPublication.AppliedKey, zarf.Message);
     }
 
-    private static MailController Denetleyici(IDnsService dns)
+    [Fact]
+    public async Task Belirsiz_site_eslesmesi_DNS_yazmadan_durur()
+    {
+        var dns = new SayanDnsServisi(Bolge());
+        var sites = new[]
+        {
+            new SiteDto { Name = "first", Bindings = [new() { Protocol = "http", Port = 80, HostName = "ornek.com" }] },
+            new SiteDto { Name = "second", Bindings = [new() { Protocol = "https", Port = 443, HostName = "ornek.com" }] }
+        };
+        await Assert.ThrowsAsync<Core.Common.AppException>(() => Denetleyici(dns, sites).ApplyDnsAsync("ornek.com", dns, CancellationToken.None));
+        Assert.Equal(0, dns.TopluYazmaSayisi);
+    }
+
+    [Fact]
+    public async Task Farkli_DNS_bolgesinde_posta_kaydi_yazilmaz_ve_silinmez()
+    {
+        var zone = Bolge();
+        zone.ZoneName = "baska.com";
+        var dns = new SayanDnsServisi(zone);
+        var controller = Denetleyici(dns);
+        await Assert.ThrowsAsync<Core.Common.AppException>(() => controller.ApplyDnsAsync("ornek.com", dns, CancellationToken.None));
+        var helper = typeof(MailController).GetMethod("RemoveDnsRecordsAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        await Assert.ThrowsAsync<Core.Common.AppException>(() => (Task)helper.Invoke(controller, ["ornek.com", new MailDnsDto(), dns, CancellationToken.None])!);
+        Assert.Equal(0, dns.TopluYazmaSayisi);
+        Assert.Empty(dns.Silinenler);
+    }
+
+    [Fact]
+    public async Task Silme_yardimcisi_teknik_siteyi_kullanir_ve_yalniz_eslesen_posta_kaydini_siler()
+    {
+        var zone = Bolge();
+        zone.Records =
+        [
+            new() { Id = "owned-mx", Type = "MX", Host = "@", Value = "mail.ornek.com", Priority = 10 },
+            new() { Id = "other-mx", Type = "MX", Host = "@", Value = "backup.ornek.com", Priority = 20 },
+            new() { Id = "web-a", Type = "A", Host = "@", Value = "192.0.2.30" }
+        ];
+        var dns = new SayanDnsServisi(zone);
+        var controller = Denetleyici(dns);
+        var helper = typeof(MailController).GetMethod("RemoveDnsRecordsAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        await (Task)helper.Invoke(controller, ["ornek.com", new MailDnsDto { Domain = "ornek.com", Records = [new() { Type = "MX", Host = "@", Value = "mail.ornek.com", Priority = 10 }] }, dns, CancellationToken.None])!;
+        Assert.Equal("web-ornek.com", dns.OkunanSite);
+        Assert.Equal(("web-ornek.com", "owned-mx"), Assert.Single(dns.Silinenler));
+    }
+
+    private static MailController Denetleyici(IDnsService dns, IReadOnlyCollection<SiteDto>? sites = null)
     {
         var httpContext = new DefaultHttpContext
         {
@@ -230,7 +277,7 @@ public sealed class PostaDnsYayinDurustlugTests
             },
             new KullanilmayanWebmail(),
             new AuditTenantLinkClosureTests.SahteKapsam(),
-            new AuditTenantLinkClosureTests.SayanSiteler([]),
+            new AuditTenantLinkClosureTests.SayanSiteler(sites ?? [new SiteDto { Name = "web-ornek.com", Bindings = [new() { Protocol = "http", Port = 80, HostName = "ornek.com" }] }]),
             new AuditTenantLinkClosureTests.KayitDefteri())
         {
             ControllerContext = new ControllerContext { HttpContext = httpContext }
@@ -245,6 +292,9 @@ public sealed class PostaDnsYayinDurustlugTests
         public int TopluYazmaSayisi { get; private set; }
 
         public IReadOnlyList<UpsertDnsRecordRequest> SonToplu { get; private set; } = [];
+        public string? SonSite { get; private set; }
+        public string? OkunanSite { get; private set; }
+        public List<(string Site, string Id)> Silinenler { get; } = [];
 
         public Task<SiteDnsZoneDto> UpsertRecordAsync(string siteName, UpsertDnsRecordRequest request, CancellationToken cancellationToken = default)
         {
@@ -255,11 +305,13 @@ public sealed class PostaDnsYayinDurustlugTests
         public Task<SiteDnsZoneDto> UpsertRecordsAsync(string siteName, IReadOnlyList<UpsertDnsRecordRequest> requests, CancellationToken cancellationToken = default)
         {
             TopluYazmaSayisi++;
+            SonSite = siteName;
             SonToplu = requests;
             return Task.FromResult(bolge);
         }
 
-        public Task<SiteDnsZoneDto> GetZoneAsync(string siteName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<SiteDnsZoneDto> GetZoneAsync(string siteName, CancellationToken cancellationToken = default)
+        { OkunanSite = siteName; return Task.FromResult(bolge); }
         public Task<SiteDnsZoneDto> InstallWindowsDnsAsync(string siteName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<SiteDnsZoneDto> UpdateZoneAsync(string siteName, UpdateDnsZoneRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<SiteDnsZoneDto> ResetDefaultsAsync(string siteName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
@@ -268,7 +320,8 @@ public sealed class PostaDnsYayinDurustlugTests
         public Task<IReadOnlyList<string>> RepairDefaultsAsync(string siteName, bool applyChanges = true, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyCollection<string>?> GetPublishedRecordKeysAsync(string siteName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<SubdomainRecordResult> EnsureSubdomainRecordAsync(string parentSiteName, string label, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<SiteDnsZoneDto> DeleteRecordAsync(string siteName, string recordId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<SiteDnsZoneDto> DeleteRecordAsync(string siteName, string recordId, CancellationToken cancellationToken = default)
+        { Silinenler.Add((siteName, recordId)); return Task.FromResult(bolge); }
         public Task DeleteZoneAsync(string siteName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task EnsureZonePublishedAsync(string siteName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<DnsServerHealthDto> GetServerHealthAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();

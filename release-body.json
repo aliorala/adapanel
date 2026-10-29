@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.136",
-  "name": "0.8.136 — İçe aktarılan sitelerde posta sertifikası ve hata teşhisi",
-  "body": "## 0.8.136\n\nIIS site adı ile alan adı farklı olduğunda posta sertifikası hazırlığı doğru alan adı bağlantısının bulunduğu siteyi kullanır. Belirsiz bağlantılar yanlış siteye atanmaz. Sertifika hazırlama hatalarının güvenli ayrıntıları ilgili adımda gösterilir; başarısız işlem çalışan posta kimliğini başarılı saymaz.\n\n0.8.135 kapsamı dahildir: kalıcı posta sunucusu adı ve sertifika bildirim adresi, alan adına bağlı Webmail girişi, mevcut FTP pasif port/NAT ayarlarının korunması, toplu FTP yönetimi ve E-posta/FTP/Veritabanları/Müşteriler-Bayiler menü sayaçları. Diğer alanların SNI sertifikaları ve mevcut posta kutuları korunur.\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
+  "tag_name": "0.8.137",
+  "name": "0.8.137 — Posta alan adı ve DNS bölgesi eşleştirme düzeltmesi",
+  "body": "## 0.8.137\n\nTeknik IIS site adı alan adından farklı olduğunda posta DNS işlemleri doğru siteyi bulur. Yazma ve temizleme öncesinde DNS bölgesinin ilgili posta alan adıyla eşleştiği doğrulanır; farklı bir bölgeye işlem yapılmaz. Güncellemenin kurulması tek başına mevcut MX, SPF veya DKIM kayıtlarını değiştirmez.\n\nÖnceki sürümlerin posta sunucusu kimliği, alan adına bağlı Webmail, çoklu posta sertifikası, FTP yönetimi ve menü sayaçları dahildir. Mevcut posta kutuları ve diğer alanların sertifikaları korunur.\n\nTanıtım sitesinin GEO/AEO üretim ve doğrulama araçları kaynak depoda güncellenmiştir; statik site ayrı yayımlanır ve kurulum paketine eklenmez.\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
 }

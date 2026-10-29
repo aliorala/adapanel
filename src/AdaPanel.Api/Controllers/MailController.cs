@@ -226,14 +226,16 @@ public sealed class MailController(
 
     private async Task RemoveDnsRecordsAsync(string domain, Core.Dtos.Mail.MailDnsDto mailDns, IDnsService dnsService, CancellationToken cancellationToken)
     {
-        var zone = await dnsService.GetZoneAsync(domain, cancellationToken);
+        var site = MailService.ResolveManagedIdentitySite(await iisSiteService.GetSitesAsync(cancellationToken), domain);
+        var zone = await dnsService.GetZoneAsync(site.Name, cancellationToken);
+        MailDnsPublication.EnsureDomainZone(zone, domain);
         foreach (var record in zone.Records)
         {
             var matchesMailRecord = mailDns.Records.Any(mail => MailDnsPublication.MatchesRecord(mail, record));
 
             if (matchesMailRecord && !string.IsNullOrWhiteSpace(record.Id))
             {
-                await dnsService.DeleteRecordAsync(domain, record.Id, cancellationToken);
+                await dnsService.DeleteRecordAsync(site.Name, record.Id, cancellationToken);
             }
         }
     }
@@ -744,7 +746,7 @@ public sealed class MailController(
         }
     }
 
-    /// <summary>Mail DNS kayıtlarını aynı adlı sitenin panel DNS bölgesine yazar.</summary>
+    /// <summary>Mail DNS kayıtlarını alan adını barındıran sitenin panel DNS bölgesine yazar.</summary>
     /// <remarks>
     /// <para>
     /// <b>İKİ ÖLÇÜLEN HATA burada kapandı.</b>
@@ -772,7 +774,9 @@ public sealed class MailController(
         Core.Dtos.Sites.SiteDnsZoneDto? zone = null;
         if (requests.Count > 0)
         {
-            zone = await dnsService.UpsertRecordsAsync(dns.Domain, requests, cancellationToken);
+            var site = MailService.ResolveManagedIdentitySite(await iisSiteService.GetSitesAsync(cancellationToken), dns.Domain);
+            MailDnsPublication.EnsureDomainZone(await dnsService.GetZoneAsync(site.Name, cancellationToken), dns.Domain);
+            zone = await dnsService.UpsertRecordsAsync(site.Name, requests, cancellationToken);
         }
 
         var result = MailDnsPublication.Evaluate(zone, requests.Count);

@@ -510,7 +510,11 @@ public sealed partial class MailService(
             SiteDnsZoneDto? bolge = null;
             if (yazilacak.Count > 0)
             {
-                bolge = await dnsService.UpsertRecordsAsync(dns.Domain, yazilacak, cancellationToken);
+                // DNS operations accept the technical IIS name, which can differ from the
+                // mail domain for imported sites. Resolve the owner before publishing.
+                var site = ResolveManagedIdentitySite(await iisSiteService.GetSitesAsync(cancellationToken), dns.Domain);
+                MailDnsPublication.EnsureDomainZone(await dnsService.GetZoneAsync(site.Name, cancellationToken), dns.Domain);
+                bolge = await dnsService.UpsertRecordsAsync(site.Name, yazilacak, cancellationToken);
             }
 
             // "Yayinlandi" HUKMU OLCULUR, VARSAYILMAZ. Eski hal cagri patlamadigi surece
