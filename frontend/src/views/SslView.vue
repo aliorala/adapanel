@@ -386,6 +386,9 @@ function kurulumBildirimi(sertifika: SslCertificate | null | undefined, target: 
     return [t("panel.ssl.certificateUnverifiedNotice"), true];
   }
 
+  if (!target.issue && sertifika.fallbackReason?.trim())
+    return [t(sertifika.fallbackReason.trim()), true];
+
   return [t(target.issue ? "panel.ssl.issued" : "panel.ssl.imported"), false];
 }
 

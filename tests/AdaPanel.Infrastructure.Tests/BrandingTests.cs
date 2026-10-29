@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text;
+using System.Text.Json;
 using AdaPanel.Api.Controllers;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Settings;
@@ -368,12 +369,19 @@ public sealed class BrandingTests : IDisposable
     public async Task Logo_degistiginde_ESKI_dosya_diskte_birakilmaz()
     {
         await servis.SetImageAsync(BrandingScope.Server, BrandingImageKind.Logo, Png());
-        await servis.SetImageAsync(BrandingScope.Server, BrandingImageKind.Logo, Jpeg());
+        var kayit = await servis.SetImageAsync(BrandingScope.Server, BrandingImageKind.Logo, Jpeg());
 
         var klasor = Path.Combine(veriKoku, "branding", "server");
         var dosyalar = Directory.GetFiles(klasor).Select(yol => Path.GetFileName(yol) ?? string.Empty).ToArray();
 
-        Assert.Equal(new[] { "logo.jpg" }, dosyalar);
+        using var state = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(veriKoku, "config", "branding.json")));
+        var entry = state.RootElement.GetProperty("server");
+        var activeName = entry.GetProperty("logoFileName").GetString()!;
+        Assert.Equal(activeName, Assert.Single(dosyalar));
+        Assert.Equal(".jpg", Path.GetExtension(activeName));
+        Assert.Equal("image/jpeg", entry.GetProperty("logoMediaType").GetString());
+        Assert.Equal(Jpeg(), await File.ReadAllBytesAsync(Path.Combine(klasor, activeName)));
+        Assert.Equal($"data:image/jpeg;base64,{Convert.ToBase64String(Jpeg())}", kayit.LogoDataUrl);
     }
 
     [Fact]
@@ -396,10 +404,20 @@ public sealed class BrandingTests : IDisposable
     public async Task Yuklenen_dosya_veri_kokunun_disina_yazilmaz()
     {
         // Yüklenen içerik panelin SUNULAN hiçbir yoluna (wwwroot, site kökleri) düşmemeli.
-        await servis.SetImageAsync(new BrandingScope(BayiA), BrandingImageKind.Logo, Png());
+        var kayit = await servis.SetImageAsync(new BrandingScope(BayiA), BrandingImageKind.Logo, Png());
 
-        var beklenen = Path.Combine(veriKoku, "branding", BayiA.ToString("N"), "logo.png");
+        using var state = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(veriKoku, "config", "branding.json")));
+        var entry = state.RootElement.GetProperty(BayiA.ToString("N"));
+        var activeName = entry.GetProperty("logoFileName").GetString()!;
+        Assert.Equal(Path.GetFileName(activeName), activeName);
+        Assert.Equal(".png", Path.GetExtension(activeName));
+        var directory = Path.Combine(veriKoku, "branding", BayiA.ToString("N"));
+        var beklenen = Path.Combine(directory, activeName);
         Assert.True(File.Exists(beklenen), $"Logo beklenen yolda değil: {beklenen}");
+        Assert.Equal(Path.GetFullPath(beklenen), Assert.Single(Directory.GetFiles(directory)));
+        Assert.Equal(Png(), await File.ReadAllBytesAsync(beklenen));
+        Assert.Equal("image/png", entry.GetProperty("logoMediaType").GetString());
+        Assert.Equal($"data:image/png;base64,{Convert.ToBase64String(Png())}", kayit.LogoDataUrl);
     }
 
     [Fact]

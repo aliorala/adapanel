@@ -14,10 +14,11 @@
     </div>
 
     <p v-if="notice" class="notice page-notice error" role="alert">{{ notice }}</p>
+    <p v-if="stats?.scanLimitReached" class="notice page-notice" role="status">{{ t("panel.hosting.statsPartial") }}</p>
     <p v-if="!siteName" class="empty-state">{{ t("panel.hosting.selectSiteHint") }}</p>
     <!-- İstatistikler gelmeden ekran bomboş kalıyordu; "henüz bilmiyorum" görünür olmalı. -->
-    <p v-else-if="!stats" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
-    <p v-else-if="!stats.hasData" class="empty-state">{{ t("panel.hosting.statsEmpty") }}</p>
+    <p v-else-if="!stats && loading" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+    <p v-else-if="stats && !stats.hasData" class="empty-state">{{ t("panel.hosting.statsEmpty") }}</p>
 
     <template v-if="stats && stats.hasData">
       <div class="summary-strip">
@@ -71,15 +72,18 @@
 
 <script setup lang="ts">
 import { getFormattingLocale } from '../utils/locale';
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useSitesStore } from "../stores/sites";
+import { useAuthStore } from "../stores/auth";
+import { getSessionEpoch } from "../api/client";
 import { getSiteStatistics, type WebStatistics } from "../api/statistics";
 import { useNotice } from "../composables/useNotice";
 import { formatBytes as sharedFormatBytes } from "../utils/bytes";
 
 const { t } = useI18n();
 const sitesStore = useSitesStore();
+const auth = useAuthStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 
 const stats = ref<WebStatistics | null>(null);
@@ -89,23 +93,30 @@ const loading = ref(false);
 // istatistik okunamadığında kullanıcı ham anahtar görüyordu.
 const { notice, showError, clearNotice } = useNotice();
 
-onMounted(load);
-watch(siteName, load);
+let request = 0;
+let disposed = false;
+onBeforeUnmount(() => { disposed = true; ++request; });
+watch(() => [siteName.value, auth.session, auth.session?.isAuthenticated, auth.session?.user?.id, auth.session?.user?.role],
+  () => { void load(); }, { immediate: true, flush: "sync" });
 
 async function load() {
-  if (!siteName.value) {
-    stats.value = null;
-    return;
-  }
-  loading.value = true;
+  const id = ++request, site = siteName.value, days = statsDays.value;
+  const session = auth.session, actor = session?.user?.id, role = session?.user?.role, epoch = getSessionEpoch();
+  const current = () => !disposed && request === id && siteName.value === site && statsDays.value === days &&
+    auth.session === session && session?.isAuthenticated === true && session.user?.id === actor &&
+    session.user?.role === role && getSessionEpoch() === epoch;
+  stats.value = null;
+  loading.value = false;
   clearNotice();
+  if (!site || !session?.isAuthenticated || disposed) return;
+  loading.value = true;
   try {
-    stats.value = await getSiteStatistics(siteName.value, statsDays.value);
+    const result = await getSiteStatistics(site, days);
+    if (current()) stats.value = result;
   } catch (error) {
-    showError(error);
-    stats.value = null;
+    if (current()) showError(error);
   } finally {
-    loading.value = false;
+    if (current()) loading.value = false;
   }
 }
 

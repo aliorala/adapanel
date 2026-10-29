@@ -3492,8 +3492,10 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                     request.AdaptDefiners,
                     durum,
                     cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            catch (OperationCanceledException) when (!durum.MutationStarted) { throw; }
+            catch (Exception exception)
             {
                 await KaydiYarimIsaretleAsync(record, durum, exception);
                 throw;
@@ -3503,7 +3505,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             record.Warnings = durum.Warnings;
             record.PreservedPath = durum.PreservedPath;
             record.Status = durum.Warnings.Count == 0 ? "restored" : "restored_with_errors";
-            await UpsertRecordAsync(record, cancellationToken);
+            await UpsertRecordAsync(record, CancellationToken.None);
             return record;
         }
 
@@ -3526,8 +3528,10 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                     request.AdaptDefiners,
                     durum,
                     cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            catch (OperationCanceledException) when (!durum.MutationStarted) { throw; }
+            catch (Exception exception)
             {
                 await KaydiYarimIsaretleAsync(record, durum, exception);
                 throw;
@@ -3541,7 +3545,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             // bu durumda kullanıcının elinde ne eski hâl ne de dönmüş bir veritabanı vardır;
             // farkında olmadan devam etmesi en pahalı sonuçtur.
             record.Status = durum.Warnings.Count == 0 ? "restored" : "restored_with_errors";
-            await UpsertRecordAsync(record, cancellationToken);
+            await UpsertRecordAsync(record, CancellationToken.None);
             return record;
         }
 
@@ -3631,10 +3635,9 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     /// kalıyor, <c>PreservedPath</c> boş görünüyor ve kullanıcı sitesinin neden boşaldığını ve
     /// eski içeriğin nerede olduğunu panelde HİÇBİR YERDE göremiyordu.
     /// <para>
-    /// İptal (<see cref="OperationCanceledException"/>) buraya GELMEZ: orada kullanıcı işi kendisi
-    /// durdurmuştur ve <c>CancellationToken.None</c> ile yazmak, iptali yok saymak olurdu — kaydın
-    /// yazımı da bilerek <c>None</c> ile yapılır, çünkü token ZATEN iptal edilmiş olabilir ve o
-    /// durumda dürüstlük notunu yazamamak en kötü sonuçtur.
+    /// Canlı değişiklik başladıktan sonraki iptal de burada kaydedilir. Kayıt yazımı bilerek
+    /// <c>CancellationToken.None</c> kullanır; iptal edilen asıl işlem tekrar fırlatılır,
+    /// yalnız kurtarma konumu ve yarım sonuç iptalden bağımsız olarak korunur.
     /// </para>
     /// </remarks>
     private async Task KaydiYarimIsaretleAsync(BackupRecordDto record, RestoreProgress durum, Exception exception)
@@ -6072,6 +6075,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     /// </remarks>
     private sealed class RestoreProgress
     {
+        public bool MutationStarted { get; set; }
         public List<BackupRestoreWarningDto> Warnings { get; } = [];
 
         public List<string> Preserved { get; } = [];
@@ -6151,6 +6155,8 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                     // Sonradan atanan bir yerel değişken, çıkarma yarıda patladığında kayboluyordu
                     // ve kullanıcının sitesi BOŞ kalıp eski içeriğin nerede olduğu hiçbir yerde
                     // yazmıyordu (ölçüldü). Artık çağıran, istisna hâlinde de bunu okuyabilir.
+                    cancellationToken.ThrowIfCancellationRequested();
+                    durum.MutationStarted = true;
                     durum.Preserved.Add(SidelineIfArchiveReplacesFiles(archive, "files/", siteRoot));
                 }
 
@@ -6342,6 +6348,8 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                 if (ilkHalka)
                 {
                     ilkHalka = false;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    durum.MutationStarted = true;
                     await ResolveSubscriptionSiteRootsAsync(archive, siteKokleri, warnings, cancellationToken);
 
                     foreach (var (siteAdi, kok) in siteKokleri)

@@ -4,6 +4,7 @@ namespace AdaPanel.Core.Dtos.Settings;
 
 public sealed class UpdatePanelPreferencesRequest
 {
+    public bool ReconcileServerAddress { get; set; }
     [Required]
     [StringLength(64, MinimumLength = 2)]
     public string PanelName { get; init; } = "AdaPanel";

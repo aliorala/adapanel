@@ -15,7 +15,8 @@ public sealed partial class DnsService(
     IIisSiteService iisSiteService,
     IPanelPreferencesService panelPreferencesService,
     JsonFileStore fileStore,
-    ILogger<DnsService> logger) : IDnsService
+    ILogger<DnsService> logger,
+    IFtpService? ftpService = null) : IDnsService
 {
     private readonly DnsAvailabilityProbe dnsAvailability = new();
     internal Func<string, CancellationToken, Task<CommandResult>> NativeCommand { get; set; }

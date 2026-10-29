@@ -432,6 +432,7 @@ import {
   type MigrationCheck
 } from "../api/migration";
 import { extractApiMessage, extractApiDetails } from "../stores/auth";
+import { getSessionEpoch } from "../api/client";
 import RunningTaskBanner from "../components/RunningTaskBanner.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import RemoteTrustPrompt from "../components/RemoteTrustPrompt.vue";
@@ -554,6 +555,8 @@ const canDiscover = computed(() => {
 const selectedDomains = ref<string[]>([]);
 const bulkBusy = ref(false);
 let disposed = false;
+const mountedEpoch = getSessionEpoch();
+const isActive = () => !disposed && mountedEpoch === getSessionEpoch();
 let streamController: AbortController | undefined;
 onBeforeUnmount(() => { disposed = true; streamController?.abort(); });
 const bulkPathTemplate = ref("/var/www/vhosts/{domain}/httpdocs");
@@ -562,6 +565,31 @@ const bulkLog = ref<{ domain: string; overallSuccess: boolean; steps: MigrationS
 // Göç öncesi doğrulama
 const checks = ref<MigrationCheck[]>([]);
 const validating = ref(false);
+let discoveryRevision = 0;
+let validationRevision = 0;
+let discoveryNotice = "";
+let validationNotice = "";
+
+// A result belongs to the exact source/form which produced it, including credentials.
+watch(() => [source.value, ...Object.values(source.value === "cpanel" ? cpanel : plesk)], () => {
+  discoveryRevision++;
+  discovering.value = false;
+  discoveredDomains.value = [];
+  selectedDomains.value = [];
+  discoverRan.value = false;
+  discoverTrust.value = null;
+  discoverAcceptFingerprint.value = "";
+  discoverError.clear();
+  if (discoveryNotice && notice.value === discoveryNotice) notice.value = "";
+  discoveryNotice = "";
+}, { flush: "sync" });
+watch(form, () => {
+  validationRevision++;
+  validating.value = false;
+  checks.value = [];
+  if (validationNotice && notice.value === validationNotice) notice.value = "";
+  validationNotice = "";
+}, { flush: "sync" });
 
 // Kaynak değişince uzak-yol şablonunu o panelin tipik düzenine ayarla.
 watch(source, () => {
@@ -600,7 +628,9 @@ function syncFilePort() {
 
 // Plesk'e bağlan → domain listesi çek (best-effort; hata → uyarı, manuel form çalışır).
 async function discover() {
-  if (!discoverHost.value) return;
+  if (!isActive() || discovering.value || !discoverHost.value) return;
+  const revision = ++discoveryRevision;
+  const current = () => isActive() && revision === discoveryRevision;
   discovering.value = true;
   notice.value = "";
   discoveredDomains.value = [];
@@ -625,11 +655,13 @@ async function discover() {
           password: plesk.password,
           acceptCertificateFingerprint: discoverAcceptFingerprint.value
         });
+    if (!current()) return;
     discoveredDomains.value = result.domains;
     // "Tarandı ve hiçbir şey çıkmadı" ile "hiç taranmadı" ayrı: boş liste artık kendi
     // metniyle görünür, şeritteki geçici uyarıya bağlı değil.
     discoverRan.value = true;
   } catch (error) {
+    if (!current() || axios.isCancel(error)) return;
     /*
      * GÜVEN REDDİ, SIRADAN HATADAN AYRILIR.
      *
@@ -642,17 +674,18 @@ async function discover() {
       // Hata hem şeritte hem listenin yerinde: boş alan "kaynakta alan adı yok" sanılmasın.
       discoverError.capture(error);
       notice.value = apiErrorText(error);
+      discoveryNotice = notice.value;
       noticeError.value = true;
     }
   } finally {
-    discovering.value = false;
+    if (current()) discovering.value = false;
   }
 }
 
 // Yönetici parmak izini teyit etti → SABİTLE ve keşfi tekrarla. Kabul yalnız bu parmak izine
 // yazılır; başka bir sertifika (aynı sunucunun yenisi dahil) yine reddedilir.
 function acceptDiscoverTrust() {
-  if (!discoverTrust.value) {
+  if (!isActive() || !discoverTrust.value) {
     return;
   }
 
@@ -706,8 +739,10 @@ function apiErrorText(error: unknown): string {
 
 // Keşfedilen domain'i seç → sihirbazı doldur (parolalar yine elle girilir). Uzak yol = kaynağın tipik şablonu.
 function pickDomain(name: string) {
-  form.siteName = name;
+  if (!isActive()) return;
   const domain = discoveredDomains.value.find((item) => item.name === name);
+  if (!domain) return;
+  form.siteName = name;
   // `{user}` YALNIZ cPanel'de anlamlı; oradaki hesap kullanıcı adından gelir. Eskiden bu değer
   // `hostingType`ten okunuyordu ve Plesk'te o alan "virtual" taşıyor — `{user}` yazan bir Plesk
   // şablonu `/home/virtual/...` üretirdi. Alan ayrıldı (bkz. api/migration.ts).
@@ -720,20 +755,26 @@ function pickDomain(name: string) {
 
 // Göç ÖNCESİ doğrulama: site adı uygunluğu + dosya/DB kaynağı erişilebilirliği (göç başlatmadan).
 async function validate() {
-  if (!form.siteName.trim()) return;
+  if (!isActive() || validating.value || !form.siteName.trim()) return;
+  const revision = ++validationRevision;
+  const current = () => isActive() && revision === validationRevision;
   validating.value = true;
   notice.value = "";
   checks.value = [];
   try {
     const result = await validateMigration({ ...form, siteName: form.siteName.trim() });
+    if (!current()) return;
     checks.value = result.checks;
     notice.value = t(result.allPassed ? "panel.migration.allChecksOk" : "panel.migration.someChecksFailed");
+    validationNotice = notice.value;
     noticeError.value = !result.allPassed;
   } catch (error) {
+    if (!current() || axios.isCancel(error)) return;
     notice.value = apiErrorText(error);
+    validationNotice = notice.value;
     noticeError.value = true;
   } finally {
-    validating.value = false;
+    if (current()) validating.value = false;
   }
 }
 
@@ -741,7 +782,7 @@ async function validate() {
 // DB toplu modda atlanır (hesap başına kimlik farklı → DB'yi tek tek sihirbazdan yap). Dosya kaynağı
 // kimlik bilgileri (protokol/kullanıcı/parola) aşağıdaki "Dosya kaynağı" alanından alınır.
 async function runBulk() {
-  if (busy.value || bulkBusy.value || serverMigration.running.value || selectedDomains.value.length === 0 || !discoverHost.value) return;
+  if (!isActive() || busy.value || bulkBusy.value || serverMigration.running.value || selectedDomains.value.length === 0 || !discoverHost.value) return;
   bulkBusy.value = true;
   notice.value = "";
   bulkLog.value = [];
@@ -750,7 +791,7 @@ async function runBulk() {
   const pathTemplate = bulkPathTemplate.value;
   const domains = selectedDomains.value.map(name => ({ name, accountUser: discoveredDomains.value.find(item => item.name === name)?.accountUser ?? "" }));
   for (const { name, accountUser } of domains) {
-    if (disposed) break;
+    if (!isActive()) return;
     try {
       const result = await migrateSite({
         ...source,
@@ -761,8 +802,10 @@ async function runBulk() {
         remotePath: expandTemplate(pathTemplate, name, accountUser),
         transferDatabase: false
       });
+      if (!isActive()) return;
       bulkLog.value = [...bulkLog.value, { domain: name, overallSuccess: result.overallSuccess, steps: result.steps }];
     } catch (error) {
+      if (!isActive()) return;
       if (axios.isCancel(error)) break;
       bulkLog.value = [
         ...bulkLog.value,
@@ -795,7 +838,7 @@ async function runBulk() {
 // Canlı göç: her aşama (plan/başla/sonuç/bitti) SSE ile gelir → checklist anlık güncellenir, kullanıcı
 // "hangi adımda ne yapılıyor"u görür. Başarısız adımda gerçek teknik neden (detail) satırın altında çıkar.
 async function run() {
-  if (busy.value || bulkBusy.value || serverMigration.running.value || !form.siteName.trim()) return;
+  if (!isActive() || busy.value || bulkBusy.value || serverMigration.running.value || !form.siteName.trim()) return;
   busy.value = true;
   notice.value = "";
   liveSteps.value = [];
@@ -805,6 +848,7 @@ async function run() {
   streamController = new AbortController();
   try {
     await migrateSiteStream({ ...form, siteName: form.siteName.trim() }, (event) => {
+      if (!isActive()) return;
       if (event.phase === "plan") {
         liveSteps.value = (event.steps ?? []).map((step): LiveStep => ({ step, status: "pending" }));
       } else if (event.phase === "start" && event.step) {
@@ -822,7 +866,7 @@ async function run() {
       }
     }, streamController.signal);
   } catch (error) {
-    if (disposed || axios.isCancel(error)) return;
+    if (!isActive() || axios.isCancel(error)) return;
     for (const step of liveSteps.value) {
       if (step.status === "pending" || step.status === "running") step.status = "unknown";
     }

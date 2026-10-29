@@ -26,19 +26,25 @@ public sealed class LicenseService(
 
     private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
 
-    public async Task<LicenseStatusDto> GetStatusAsync(CancellationToken cancellationToken = default)
+    public Task<LicenseStatusDto> GetStatusAsync(CancellationToken cancellationToken = default) =>
+        store.RunExclusiveAsync(() => GetStatusCoreAsync(cancellationToken), cancellationToken);
+
+    private async Task<LicenseStatusDto> GetStatusCoreAsync(CancellationToken cancellationToken)
     {
         var record = await LoadAsync(cancellationToken);
 
         if (ShouldAttemptVerification(record, Now))
         {
-            record = await VerifyAsync(record, licenseKeyOverride: null, cancellationToken);
+            record = (await VerifyAsync(record, licenseKeyOverride: null, cancellationToken)).Record;
         }
 
         return BuildStatus(record);
     }
 
-    public async Task<LicenseStatusDto> ActivateAsync(string licenseKey, CancellationToken cancellationToken = default)
+    public Task<LicenseStatusDto> ActivateAsync(string licenseKey, CancellationToken cancellationToken = default) =>
+        store.RunExclusiveAsync(() => ActivateCoreAsync(licenseKey, cancellationToken), cancellationToken);
+
+    private async Task<LicenseStatusDto> ActivateCoreAsync(string licenseKey, CancellationToken cancellationToken)
     {
         var trimmed = (licenseKey ?? string.Empty).Trim();
         if (string.IsNullOrWhiteSpace(trimmed))
@@ -57,7 +63,7 @@ public sealed class LicenseService(
 
         // Sunucu anahtarı AÇIKÇA reddettiyse saklamayız: yanlış yazılmış bir anahtarın panelde
         // kalıp her açılışta "geçersiz" demesi kullanıcıyı yanıltır.
-        if (string.Equals(probed.LastVerdict, LicenseVerdicts.Invalid, StringComparison.OrdinalIgnoreCase))
+        if (probed.InvalidResponse)
         {
             await store.UpdateAsync(existing =>
             {
@@ -73,10 +79,13 @@ public sealed class LicenseService(
             throw new AppException("license.invalid", 402, 402);
         }
 
-        return BuildStatus(probed);
+        return BuildStatus(probed.Record);
     }
 
-    public async Task<LicenseStatusDto> DeactivateAsync(CancellationToken cancellationToken = default)
+    public Task<LicenseStatusDto> DeactivateAsync(CancellationToken cancellationToken = default) =>
+        store.RunExclusiveAsync(() => DeactivateCoreAsync(cancellationToken), cancellationToken);
+
+    private async Task<LicenseStatusDto> DeactivateCoreAsync(CancellationToken cancellationToken)
     {
         // Kayıt SİLİNMEZ, SIFIRLANIR: dosyanın var olması "lisans daha önce girilmişti" bilgisini
         // korur ve bir sonraki okuma taze bir kayıt oluşturmak zorunda kalmaz.
@@ -99,7 +108,10 @@ public sealed class LicenseService(
         return BuildStatus(record);
     }
 
-    public async Task<LicenseStatusDto> RefreshAsync(CancellationToken cancellationToken = default)
+    public Task<LicenseStatusDto> RefreshAsync(CancellationToken cancellationToken = default) =>
+        store.RunExclusiveAsync(() => RefreshCoreAsync(cancellationToken), cancellationToken);
+
+    private async Task<LicenseStatusDto> RefreshCoreAsync(CancellationToken cancellationToken)
     {
         var record = await LoadAsync(cancellationToken);
         if (!IsConfigured || string.IsNullOrWhiteSpace(record.ProtectedKey))
@@ -107,7 +119,7 @@ public sealed class LicenseService(
             return BuildStatus(record);
         }
 
-        record = await VerifyAsync(record, licenseKeyOverride: null, cancellationToken);
+        record = (await VerifyAsync(record, licenseKeyOverride: null, cancellationToken)).Record;
         return BuildStatus(record);
     }
 
@@ -187,7 +199,7 @@ public sealed class LicenseService(
     /// Sunucuya sorar ve sonucu diske işler. HİÇBİR koşulda istisna fırlatmaz (iptal hariç):
     /// doğrulama başarısız olmak, panelin çalışmasını durdurmamalı.
     /// </summary>
-    private async Task<LicenseRecord> VerifyAsync(
+    private async Task<(LicenseRecord Record, bool InvalidResponse)> VerifyAsync(
         LicenseRecord record,
         string? licenseKeyOverride,
         CancellationToken cancellationToken)
@@ -195,8 +207,11 @@ public sealed class LicenseService(
         var key = licenseKeyOverride ?? store.UnprotectKey(record.ProtectedKey);
         if (string.IsNullOrWhiteSpace(key))
         {
-            return record;
+            return (record, false);
         }
+
+        var differentKey = licenseKeyOverride is not null &&
+            !string.Equals(licenseKeyOverride, store.UnprotectKey(record.ProtectedKey), StringComparison.Ordinal);
 
         var attemptedAt = Now;
         var outcome = await verificationClient.VerifyAsync(
@@ -215,11 +230,18 @@ public sealed class LicenseService(
 
             // Yeni anahtar deneniyorsa ULAŞILAMASA BİLE saklanır: kurulum anında ağ yoksa
             // müşteri lisansını girip çevrimdışı toleransla çalışmaya başlayabilmeli.
-            if (licenseKeyOverride is not null)
+            if (differentKey)
             {
-                existing.ProtectedKey = store.ProtectKey(licenseKeyOverride);
-                existing.KeySuffix = LicenseStateStore.Suffix(licenseKeyOverride);
+                existing.ProtectedKey = store.ProtectKey(key);
+                existing.KeySuffix = LicenseStateStore.Suffix(key);
                 existing.KeyStoredAtUtc = attemptedAt;
+                // A verdict belongs to the key it verified. A new offline key starts its own
+                // grace period; re-entering the same key must not renew that period.
+                existing.LastVerdict = string.Empty;
+                existing.LastVerifiedAtUtc = null;
+                existing.Sku = string.Empty;
+                existing.MaxSubscriptions = 0;
+                existing.ExpiresAtUtc = null;
             }
 
             if (outcome.Response is null)
@@ -240,7 +262,7 @@ public sealed class LicenseService(
         }, cancellationToken);
 
         updated.IsConfigured = IsConfigured;
-        return updated;
+        return (updated, string.Equals(outcome.Response?.Status?.Trim(), LicenseVerdicts.Invalid, StringComparison.OrdinalIgnoreCase));
     }
 
     private LicenseStatusDto BuildStatus(LicenseRecord record)

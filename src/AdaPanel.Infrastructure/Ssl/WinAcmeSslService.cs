@@ -390,11 +390,21 @@ public sealed class WinAcmeSslService(
             }, token);
             return result;
         }
-        // Dependency installation must not retain the global IIS gate. The site pin stays live.
-        await ApplyHttpsRedirectCoreAsync(site.Name, true, cancellationToken, ReapproveAsync, RunRedirectAsync);
+        // A certificate for one host/port does not make that port a valid target
+        // for every other HTTP host of this site. Preserve the existing rule if
+        // there is no single common measured TLS endpoint.
+        int? redirectPort = null;
+        try { redirectPort = ResolveRedirectPort(site, await ReadHttpsBindingsAsync(cancellationToken)); }
+        catch (Exception error) when (error is not OperationCanceledException)
+        { logger.LogWarning(error, "Imported certificate; site-wide HTTPS redirect preserved for {SiteName}.", site.Name); }
+        await ReapproveAsync(cancellationToken);
+        var redirectApplied = redirectPort is not null && await ApplyHttpsRedirectCoreAsync(
+            site.Name, true, cancellationToken, ReapproveAsync, RunRedirectAsync, targetPort: redirectPort.Value);
         await ReapproveAsync(cancellationToken);
         var dto = ToDto(site.Name, hostName, certificate, ResolveCertificateSource(certificate), null);
         dto.Port = port;
+        dto.FallbackReason = redirectPort is null ? "ssl.https_redirect_preserved"
+            : redirectApplied ? string.Empty : "ssl.https_redirect_failed";
         await OlcVeIsleAsync(dto, site.Name, hostName, port, certificate.Thumbprint ?? string.Empty, cancellationToken);
         await target.RunAsync(async current =>
         {
@@ -904,7 +914,12 @@ public sealed class WinAcmeSslService(
         }, cancellationToken);
         try
         {
-            if (!await ApplyHttpsRedirectCoreAsync(site.Name, request.Enabled, cancellationToken, ApproveAsync, RunCommandAsync))
+            // Enabling must lead to a measured TLS endpoint. Disabling is also
+            // the recovery path for a broken redirect and must not require TLS.
+            var targetPort = request.Enabled
+                ? ResolveRedirectPort(site, await ReadHttpsBindingsAsync(cancellationToken))
+                : 443;
+            if (!await ApplyHttpsRedirectCoreAsync(site.Name, request.Enabled, cancellationToken, ApproveAsync, RunCommandAsync, targetPort))
                 throw new AppException("ssl.https_redirect_failed", 502, 502);
             var workspace = await GetSiteWorkspaceCoreAsync(site.Name, ValidateAsync, cancellationToken, PublishAsync);
             await ApproveAsync(cancellationToken);
@@ -927,11 +942,31 @@ public sealed class WinAcmeSslService(
     private Task<bool> ApplyHttpsRedirectAsync(string siteName, bool enabled, CancellationToken cancellationToken) =>
         ApplyHttpsRedirectCoreAsync(siteName, enabled, cancellationToken, null);
 
+    private static int ResolveRedirectPort(SiteDto site, IReadOnlyCollection<IisHttpsBinding>? bindings)
+    {
+        var usable = (bindings ?? []).Where(binding =>
+            string.Equals(binding.SiteName, site.Name, StringComparison.OrdinalIgnoreCase) &&
+            binding.CertificateReadable && !string.IsNullOrWhiteSpace(binding.Thumbprint) &&
+            binding.Port is > 0 and <= 65535).ToArray();
+        var httpHosts = site.Bindings.Where(binding => string.Equals(binding.Protocol, "http", StringComparison.OrdinalIgnoreCase))
+            .Select(binding => binding.HostName.TrimEnd('.')).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var ports = usable.Select(binding => binding.Port).Distinct().Where(port => httpHosts.All(host =>
+            usable.Any(binding => binding.Port == port && (string.IsNullOrWhiteSpace(binding.HostName) ||
+                string.Equals(binding.HostName.TrimEnd('.'), host, StringComparison.OrdinalIgnoreCase))))).ToArray();
+        if (ports.Length != 1)
+            throw new AppException("ssl.https_redirect_failed", 409, 409,
+                "HTTPS redirect needs one unambiguous, certificate-bound TLS port shared by every HTTP host of this site.");
+        return ports[0];
+    }
+
     private async Task<bool> ApplyHttpsRedirectCoreAsync(string siteName, bool enabled, CancellationToken cancellationToken,
         Func<CancellationToken, Task>? beforeMutation,
-        Func<string, CancellationToken, Task<CommandResult>>? commandRunner = null)
+        Func<string, CancellationToken, Task<CommandResult>>? commandRunner = null, int targetPort = 443)
     {
         var site = siteName.Replace("'", "''");
+        // HTTP_HOST may carry the incoming HTTP port. Capture only its host so
+        // an HTTP request on :8080 cannot redirect to TLS on that old port.
+        var redirectUrl = targetPort == 443 ? "https://{C:1}/{R:1}" : $"https://{{C:1}}:{targetPort}/{{R:1}}";
         /*
          * $ErrorActionPreference = 'Stop' EKLENDI — ve bu, ayni surumde kapatilan hata sinifinin
          * bir ornegi daha.
@@ -963,17 +998,20 @@ public sealed class WinAcmeSslService(
                 Set-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/match" -name 'url' -value '(.*)'
                 Add-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/conditions" -name '.' -value @{input='{HTTPS}'; pattern='off'}
                 Add-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/conditions" -name '.' -value @{input='{REQUEST_URI}'; pattern='^/\.well-known/acme-challenge/'; negate='True'}
+                Add-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/conditions" -name '.' -value @{input='{HTTP_HOST}'; pattern='^(\[[^\]]+\]|[^:]+)(?::[0-9]+)?$'}
                 Set-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'type' -value 'Redirect'
-                Set-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'url' -value 'https://{HTTP_HOST}/{R:1}'
+                Set-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'url' -value '{{redirectUrl}}'
                 Set-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'redirectType' -value 'Permanent'
                 # YAZDIGINI GERI OKU. Bu satirlar olmadan betik, kural YARIM yazilmis olsa bile
                 # 'OK' basiyordu (gerekcesi asagida, $ErrorActionPreference notunda).
                 $adaKural = Get-WebConfiguration -pspath "IIS:\Sites\$site" -filter $r
                 $adaEylem = Get-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'type' -ErrorAction SilentlyContinue
                 $adaDesen = Get-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/match" -name 'url' -ErrorAction SilentlyContinue
+                $adaHedef = Get-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'url' -ErrorAction Stop
                 if (-not $adaKural) { throw "kural yazildi ama geri okunamadi: $name" }
                 if ("$($adaEylem.Value)" -ne 'Redirect') { throw "kural YARIM: action/type='$($adaEylem.Value)' (beklenen Redirect)" }
                 if ([string]::IsNullOrWhiteSpace("$($adaDesen.Value)")) { throw "kural YARIM: match/url bos" }
+                if ("$($adaHedef.Value)" -cne '{{redirectUrl}}') { throw 'HTTPS redirect target was not applied.' }
                 'OK'
                 """
             : $$"""

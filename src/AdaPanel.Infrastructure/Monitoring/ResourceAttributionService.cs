@@ -38,6 +38,10 @@ internal sealed partial class ResourceAttributionService(
     IDatabaseOwnershipService databaseOwnership,
     ILogger<ResourceAttributionService> logger) : IResourceAttributionService
 {
+    internal string? AppcmdExecutable { get; init; }
+    internal Func<string, CancellationToken, Task<CommandResult>>? AppcmdCommand { get; init; }
+    private Task<CommandResult> RunAppcmdAsync(string executable, string arguments, CancellationToken token) =>
+        AppcmdCommand is { } command ? command(arguments, token) : ProcessRunner.RunAsync(executable, arguments, cancellationToken: token, timeout: TimeSpan.FromSeconds(10));
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
@@ -321,7 +325,7 @@ internal sealed partial class ResourceAttributionService(
     /// </summary>
     private async Task<ResourceConsumerSnapshotDto> GetIisConsumersAsync(int take, CancellationToken cancellationToken)
     {
-        var appcmd = ResolveAppcmdPath();
+        var appcmd = AppcmdExecutable ?? ResolveAppcmdPath();
         if (appcmd is null)
         {
             return Snapshot("iis", "IIS", installed: false, statusCode: "not_installed");
@@ -331,11 +335,7 @@ internal sealed partial class ResourceAttributionService(
         {
             // XML biçimi SİTE ADINI da taşır (metin biçimi taşımaz) — bu ekranın asıl değeri site sütunu
             // olduğu için önce XML denenir. appcmd asılırsa istek kilitlenmesin diye kısa zaman aşımı.
-            var result = await ProcessRunner.RunAsync(
-                appcmd,
-                "list requests /xml",
-                cancellationToken: cancellationToken,
-                timeout: TimeSpan.FromSeconds(10));
+            var result = await RunAppcmdAsync(appcmd, "list requests /xml", cancellationToken);
 
             var output = result.StandardOutput;
 
@@ -354,17 +354,21 @@ internal sealed partial class ResourceAttributionService(
                 return Snapshot("iis", "IIS", installed: true, statusCode: statusCode);
             }
 
-            var rows = ParseAppcmdRequests(output);
+            // Parse failures and command failures cannot establish an empty measurement.
+            if (result.Success && LooksLikeXml(output)) _ = XDocument.Parse(output);
+            var rows = result.Success ? ParseAppcmdRequests(output) : [];
 
             // XML denemesi başarısızsa (eski appcmd, /xml desteklenmiyor) düz metin biçimine düş.
             // Site adı bu biçimde yoktur; yine de URL + süre gösterilir, hiç göstermemekten iyidir.
-            if (rows.Count == 0 && !LooksLikeXml(output))
+            if (!result.Success || (rows.Count == 0 && !LooksLikeXml(output)))
             {
-                var fallback = await ProcessRunner.RunAsync(
-                    appcmd,
-                    "list requests",
-                    cancellationToken: cancellationToken,
-                    timeout: TimeSpan.FromSeconds(10));
+                var fallback = await RunAppcmdAsync(appcmd, "list requests", cancellationToken);
+                if (!fallback.Success)
+                    return Snapshot("iis", "IIS", installed: true, statusCode: "unavailable");
+                if (TryGetAppcmdError(fallback.StandardOutput, out var fallbackError))
+                    return Snapshot("iis", "IIS", installed: true,
+                        statusCode: string.Equals(fallbackError, "80004001", StringComparison.OrdinalIgnoreCase) ? "request_monitor_missing" : "unavailable");
+                if (LooksLikeXml(fallback.StandardOutput)) _ = XDocument.Parse(fallback.StandardOutput);
                 rows = ParseAppcmdRequests(fallback.StandardOutput);
             }
 

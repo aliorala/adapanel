@@ -7,6 +7,8 @@ namespace AdaPanel.Core.Dtos.Store;
 public sealed class AppInstallResultDto
 {
     public string TemplateId { get; set; } = string.Empty;
+    /// <summary>Files are installed, but automatic WordPress setup was not confirmed; finish or inspect setup manually.</summary>
+    public bool RequiresManualSetup { get; set; }
 
     /// <summary>WordPress otomatik kurulduysa yönetici paneli adresi (.../wp-admin/).</summary>
     public string AdminUrl { get; set; } = string.Empty;

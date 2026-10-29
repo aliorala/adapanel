@@ -22,11 +22,17 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
     public async Task<WebStatisticsDto> GetSiteStatisticsAsync(string siteName, int days, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        return await ReadLogsAsync(siteName, days, IisLogPaths.ResolveSiteDirectory(site.Id), MaxLinesScanned, cancellationToken);
+    }
+
+    internal static async Task<WebStatisticsDto> ReadLogsAsync(string siteName, int days, string logsDirectory,
+        int maxRecords, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRecords);
         var periodDays = Math.Clamp(days, 1, 365);
         var cutoff = DateTime.UtcNow.Date.AddDays(-(periodDays - 1));
 
         // IIS'in GERÇEK günlük dizini (sabit kodlu değil) — gerekçe: IisLogPaths.
-        var logsDirectory = IisLogPaths.ResolveSiteDirectory(site.Id);
 
         var result = new WebStatisticsDto
         {
@@ -61,12 +67,11 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (linesScanned >= MaxLinesScanned)
+            if (await ParseFileAsync(file.FullName, cutoff, aggregator, () => linesScanned++, () => linesScanned, maxRecords, cancellationToken))
             {
+                result.ScanLimitReached = true;
                 break;
             }
-
-            await ParseFileAsync(file.FullName, cutoff, aggregator, () => linesScanned++, () => linesScanned, cancellationToken);
         }
 
         aggregator.Fill(result);
@@ -91,12 +96,13 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
         return result;
     }
 
-    private static async Task ParseFileAsync(
+    private static async Task<bool> ParseFileAsync(
         string path,
         DateTime cutoff,
         Aggregator aggregator,
         Action onLine,
         Func<int> currentCount,
+        int maxRecords,
         CancellationToken cancellationToken)
     {
         // Sikistirilmis gunlukleri de okur; bicim uzantidan degil ICERIKTEN cozulur. Paylasim
@@ -105,14 +111,15 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
 
         await foreach (var record in W3cLogReader.ReadAsync(reader, cancellationToken))
         {
-            if (currentCount() >= MaxLinesScanned)
+            if (currentCount() >= maxRecords)
             {
-                break;
+                return true;
             }
 
             onLine();
             aggregator.Add(record, cutoff);
         }
+        return false;
     }
 
     /// <summary>

@@ -170,7 +170,9 @@ public sealed class WebmailSsoTests
         var ledger = await File.ReadAllTextAsync(f.Store.ResolvePath(WebmailSsoService.LedgerPath));
         Assert.DoesNotContain(login.Password, ledger);
         Assert.DoesNotContain("ADMIN-FIXTURE-ONLY", ledger);
+        Assert.Equal("example.test", await sso.GetLeaseDomainAsync(login.Lease, default));
         await sso.RevokeAsync(login.Lease, default);
+        Assert.Null(await sso.GetLeaseDomainAsync(login.Lease, default));
         Assert.Equal("other-id", Assert.Single(f.Cloud.Passwords).Id);
         Assert.Empty(await f.Store.ReadAsync(WebmailSsoService.LedgerPath, new List<WebmailSsoService.Lease>()));
     }

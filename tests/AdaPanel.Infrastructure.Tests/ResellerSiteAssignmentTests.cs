@@ -6,6 +6,8 @@ using AdaPanel.Core.Entities;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Services;
+using AdaPanel.Infrastructure.Support;
+using AdaPanel.Infrastructure.Options;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -91,6 +93,103 @@ public sealed class ResellerSiteAssignmentTests
         Assert.Equal(["herhangi-bir-site"], yazilan.Siteler);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Rejected_create_does_not_persist_user_or_success_audit(bool forbiddenSite)
+    {
+        using var fixture = Duzenek.Kur(["owned"], persistingAudit: true);
+        var request = new CreateUserRequest
+        {
+            UserName = "rejected-customer", Email = "rejected@example.test",
+            Password = "Cok-Guclu-Parola-123!", Role = "Customer", SendWelcomeEmail = false,
+            AssignedSites = forbiddenSite ? ["foreign"] : ["owned", "second"],
+            MaxSites = forbiddenSite ? 0 : 1
+        };
+        var error = await Record.ExceptionAsync(() => fixture.Servis.CreateUserAsync(request,
+            forbiddenSite ? fixture.BayiId : fixture.YoneticiId, null));
+        if (forbiddenSite) Assert.Equal("users.site_forbidden", Assert.IsType<AppException>(error).MessageKey);
+        else Assert.Equal("users.too_many_sites", Assert.IsType<InvalidOperationException>(error).Message);
+
+        Assert.False(await fixture.Db.Users.AsNoTracking().AnyAsync(user => user.UserName == request.UserName));
+        Assert.False(await fixture.Db.AuditLogs.AsNoTracking().AnyAsync(log => log.Action == "users.created"));
+        Assert.Empty(fixture.Kapsam.YazilanKapsamlar);
+        // A later unrelated save must not publish a rejected tracked entity either.
+        await fixture.Db.SaveChangesAsync();
+        Assert.False(await fixture.Db.Users.AsNoTracking().AnyAsync(user => user.UserName == request.UserName));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Rejected_update_preserves_persisted_and_tracked_user_fields(bool forbiddenSite)
+    {
+        using var fixture = Duzenek.Kur(["owned"], persistingAudit: true);
+        var user = new PanelUser { UserName = "existing", Email = "old@example.test",
+            Role = Core.Enums.UserRole.Customer, PreferredLanguage = "tr", IsActive = true, PasswordHash = "x" };
+        fixture.Db.Users.Add(user);
+        await fixture.Db.SaveChangesAsync();
+        fixture.Kapsam.OwnerId = fixture.BayiId;
+        var request = new UpdateUserRequest { Email = "new@example.test", Role = "Customer",
+            PreferredLanguage = "en", IsActive = false,
+            AssignedSites = forbiddenSite ? ["foreign"] : ["owned", "second"],
+            MaxSites = forbiddenSite ? 0 : 1 };
+        var error = await Record.ExceptionAsync(() => fixture.Servis.UpdateUserAsync(user.Id, request,
+            forbiddenSite ? fixture.BayiId : fixture.YoneticiId, null));
+        if (forbiddenSite) Assert.Equal("users.site_forbidden", Assert.IsType<AppException>(error).MessageKey);
+        else Assert.Equal("users.too_many_sites", Assert.IsType<InvalidOperationException>(error).Message);
+
+        var saved = await fixture.Db.Users.AsNoTracking().SingleAsync(item => item.Id == user.Id);
+        Assert.Equal("old@example.test", saved.Email);
+        Assert.Equal("tr", saved.PreferredLanguage);
+        Assert.True(saved.IsActive);
+        Assert.False(await fixture.Db.AuditLogs.AsNoTracking().AnyAsync(log => log.Action == "users.updated"));
+        Assert.Empty(fixture.Kapsam.YazilanKapsamlar);
+        await fixture.Db.SaveChangesAsync();
+        Assert.Equal("old@example.test", (await fixture.Db.Users.AsNoTracking().SingleAsync(item => item.Id == user.Id)).Email);
+    }
+
+    [Fact]
+    public async Task Accepted_create_and_update_still_persist_with_real_audit_writer()
+    {
+        using var fixture = Duzenek.Kur(["owned"], persistingAudit: true);
+        var created = await fixture.Servis.CreateUserAsync(Istek("owned"), fixture.BayiId, null);
+        Assert.True(await fixture.Db.Users.AsNoTracking().AnyAsync(user => user.Id == created.Id));
+        Assert.Single(await fixture.Db.AuditLogs.Where(log => log.Action == "users.created").ToListAsync());
+        fixture.Kapsam.OwnerId = fixture.BayiId;
+        await fixture.Servis.UpdateUserAsync(created.Id,
+            new UpdateUserRequest { Email = "updated@example.test", Role = "Customer", AssignedSites = ["owned"], MaxSites = 1 },
+            fixture.BayiId, null);
+        Assert.Equal("updated@example.test", (await fixture.Db.Users.AsNoTracking().SingleAsync(user => user.Id == created.Id)).Email);
+        Assert.Single(await fixture.Db.AuditLogs.Where(log => log.Action == "users.updated").ToListAsync());
+        Assert.Equal(2, fixture.Kapsam.YazilanKapsamlar.Count);
+    }
+
+    [Fact]
+    public async Task Additional_user_keeps_parent_scope_and_ignores_independent_site_limits()
+    {
+        using var fixture = Duzenek.Kur([], persistingAudit: true);
+        var parent = new PanelUser { UserName = "parent", Email = "parent@example.test",
+            Role = Core.Enums.UserRole.Customer, IsActive = true, PasswordHash = "x" };
+        fixture.Db.Users.Add(parent);
+        await fixture.Db.SaveChangesAsync();
+        var created = await fixture.Servis.CreateUserAsync(new CreateUserRequest {
+            UserName = "additional", Email = "additional@example.test", Password = "Cok-Guclu-Parola-123!",
+            Role = "Customer", ParentUserId = parent.Id, AssignedSites = ["ignored-a", "ignored-b"], MaxSites = 1,
+            SendWelcomeEmail = false }, fixture.YoneticiId, null);
+        Assert.Equal(parent.Id, created.ParentUserId);
+        Assert.Empty(fixture.Kapsam.YazilanKapsamlar);
+
+        var updated = await fixture.Servis.UpdateUserAsync(created.Id, new UpdateUserRequest {
+            Email = "additional-new@example.test", Role = "Customer", IsActive = false,
+            AssignedSites = ["ignored-a", "ignored-b"], MaxSites = 1 }, fixture.YoneticiId, null);
+        Assert.Equal(parent.Id, updated.ParentUserId);
+        Assert.False(updated.IsActive);
+        Assert.Empty(fixture.Kapsam.YazilanKapsamlar);
+        Assert.True((await fixture.Db.Users.AsNoTracking().SingleAsync(user => user.Id == parent.Id)).IsActive);
+        Assert.False((await fixture.Db.Users.AsNoTracking().SingleAsync(user => user.Id == created.Id)).IsActive);
+    }
+
     private static CreateUserRequest Istek(params string[] siteler) => new()
     {
         UserName = $"musteri-{Guid.NewGuid():N}"[..20],
@@ -118,12 +217,13 @@ public sealed class ResellerSiteAssignmentTests
             YoneticiId = yoneticiId;
         }
 
+        public AdaPanelDbContext Db => dbContext;
         public UserManagementService Servis { get; }
         public KayitEdenKapsam Kapsam { get; }
         public Guid BayiId { get; }
         public Guid YoneticiId { get; }
 
-        public static Duzenek Kur(string[] bayiSiteleri)
+        public static Duzenek Kur(string[] bayiSiteleri, bool persistingAudit = false)
         {
             var baglanti = new SqliteConnection("Filename=:memory:");
             baglanti.Open();
@@ -159,7 +259,9 @@ public sealed class ResellerSiteAssignmentTests
                 new ThrowingPreferencesService(),
                 new ThrowingSecurityService(),
                 NullLogger<UserManagementService>.Instance,
-                new RecordingAuditService(),
+                persistingAudit
+                    ? new AuditService(dbContext, kapsam, new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = Path.Combine(Path.GetTempPath(), "AdaPanel-audit-fixture-" + Guid.NewGuid().ToString("N")) })))
+                    : new RecordingAuditService(),
                 new KullanilmayanSiteServisi(),
                 new KullanilmayanDbSahiplik(),
                 new KullanilmayanZamanlayici(),
@@ -180,6 +282,8 @@ public sealed class ResellerSiteAssignmentTests
     /// <summary>Kapsam yazımlarını KAYDEDER; testin "hiç yazılmadı"yı doğrulaması buna dayanıyor.</summary>
     internal sealed class KayitEdenKapsam(string[] bayiSiteleri) : ICustomerScopeService
     {
+        private readonly Dictionary<Guid, Guid?> parents = [];
+        public Guid? OwnerId { get; set; }
         public List<(Guid UserId, string[] Siteler)> YazilanKapsamlar { get; } = [];
 
         public Task SetScopeAsync(Guid userId, IEnumerable<string> siteNames, int maxSites, int maxDiskMb, CancellationToken cancellationToken = default)
@@ -197,8 +301,8 @@ public sealed class ResellerSiteAssignmentTests
 
         public Task SetExtraLimitsAsync(Guid userId, int maxDatabases, int maxMailboxes, int maxScheduledTasks, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SetOwnerAsync(Guid userId, Guid? ownerId, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task<Guid?> GetOwnerAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<Guid?>(null);
-        public Task<Guid?> GetParentSubscriptionAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<Guid?>(null);
+        public Task<Guid?> GetOwnerAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult(OwnerId);
+        public Task<Guid?> GetParentSubscriptionAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult(parents.GetValueOrDefault(userId));
         /// <summary>
         /// Disk ölçümünün SONUCU testten verilir. Varsayılan "ölçülmüş sıfır"dır; kullanıcı
         /// listesinin eksik ölçümü bildirdiğini ölçen test (<c>DiskUsageMeasurementTests</c>)
@@ -216,7 +320,7 @@ public sealed class ResellerSiteAssignmentTests
         public Task<IReadOnlyCollection<Guid>> GetOwnedUserIdsAsync(Guid ownerId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyCollection<string>> GetResellerMailDomainsAsync(Guid resellerId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Guid?> GetSiteOwnerUserIdAsync(string siteName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task SetParentSubscriptionAsync(Guid userId, Guid? parentUserId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task SetParentSubscriptionAsync(Guid userId, Guid? parentUserId, CancellationToken cancellationToken = default) { parents[userId] = parentUserId; return Task.CompletedTask; }
         public Task<IReadOnlyCollection<Guid>> GetSubUserIdsAsync(Guid parentUserId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<Guid>>([]);
         public Task SetSubUserSectionsAsync(Guid userId, IReadOnlyCollection<string>? sections, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyCollection<string>?> GetSubUserSectionsAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<string>?>(null);

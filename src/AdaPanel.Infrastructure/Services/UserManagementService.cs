@@ -141,6 +141,12 @@ public sealed class UserManagementService(
             parentUserId = requestedParent;
         }
 
+        if (parentUserId is null)
+        {
+            await ValidateScopeAsync(role, request.AssignedSites, request.MaxSites,
+                actorIsReseller ? actorUserId : null, cancellationToken);
+        }
+
         var user = new PanelUser
         {
             UserName = normalizedUserName,
@@ -172,7 +178,7 @@ public sealed class UserManagementService(
         }
         else
         {
-            scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, actorIsReseller ? actorUserId : null, cancellationToken);
+            scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, cancellationToken);
             if (role == UserRole.Customer)
             {
                 await customerScopeService.SetOwnerAsync(user.Id, ownerId, cancellationToken);
@@ -308,6 +314,17 @@ public sealed class UserManagementService(
             }
         }
 
+        // Validate the requested scope before changing tracked SQL fields or writing a success audit.
+        // Additional users inherit their parent's scope; their independent quotas remain ignored.
+        var existingParent = newRole == UserRole.Customer
+            ? await customerScopeService.GetParentSubscriptionAsync(user.Id, cancellationToken)
+            : null;
+        if (existingParent is null)
+        {
+            await ValidateScopeAsync(newRole, request.AssignedSites, request.MaxSites,
+                actorIsReseller ? actorUserId : null, cancellationToken);
+        }
+
         // profesyonel paneller gibi abonelik askıya alma: aktiflik değişimini yakala (sonra sitelerini durdur/başlat).
         var wasActive = user.IsActive;
 
@@ -325,11 +342,6 @@ public sealed class UserManagementService(
             ipAddress,
             cancellationToken);
 
-        // Alt-kullanıcı ise: kapsamı parent'tan MIRAS; düzenlemede kendi site/kota YAZILMAZ (parent bağı korunur).
-        var existingParent = user.Role == UserRole.Customer
-            ? await customerScopeService.GetParentSubscriptionAsync(user.Id, cancellationToken)
-            : null;
-
         CustomerScope scope;
         if (existingParent is not null)
         {
@@ -337,7 +349,7 @@ public sealed class UserManagementService(
         }
         else
         {
-            scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, actorIsReseller ? actorUserId : null, cancellationToken);
+            scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, cancellationToken);
             if (user.Role == UserRole.Customer)
             {
                 await customerScopeService.SetOwnerAsync(user.Id, ownerId, cancellationToken);
@@ -363,10 +375,10 @@ public sealed class UserManagementService(
             parentId, await ResolveOwnerNameAsync(parentId, cancellationToken));
     }
 
-    /// <summary>Customer rolünde kapsamı (siteler + limitler) kaydeder; diğer rollerde varsa temizler.</summary>
-    private async Task<CustomerScope> ApplyScopeAsync(PanelUser user, string[] assignedSites, int maxSites, int maxDiskMb, int maxDatabases, int maxMailboxes, int maxScheduledTasks, Guid? resellerActorId, CancellationToken cancellationToken)
+    private async Task ValidateScopeAsync(UserRole role, string[] assignedSites, int maxSites,
+        Guid? resellerActorId, CancellationToken cancellationToken)
     {
-        if (user.Role == UserRole.Customer)
+        if (role == UserRole.Customer)
         {
             // maxSites > 0 ise atanan site sayısı sınırı aşamaz.
             if (maxSites > 0 && assignedSites.Length > maxSites)
@@ -396,7 +408,14 @@ public sealed class UserManagementService(
                     throw new AppException("users.site_forbidden", 403, 403);
                 }
             }
+        }
+    }
 
+    /// <summary>Customer rolünde kapsamı (siteler + limitler) kaydeder; diğer rollerde varsa temizler.</summary>
+    private async Task<CustomerScope> ApplyScopeAsync(PanelUser user, string[] assignedSites, int maxSites, int maxDiskMb, int maxDatabases, int maxMailboxes, int maxScheduledTasks, CancellationToken cancellationToken)
+    {
+        if (user.Role == UserRole.Customer)
+        {
             await customerScopeService.SetScopeAsync(user.Id, assignedSites, maxSites, maxDiskMb, cancellationToken);
             await customerScopeService.SetExtraLimitsAsync(user.Id, maxDatabases, maxMailboxes, maxScheduledTasks, cancellationToken);
             return await customerScopeService.GetScopeAsync(user.Id, cancellationToken);

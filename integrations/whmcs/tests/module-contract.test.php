@@ -70,8 +70,10 @@ function ada_sunucu_baslat($port)
         exit(1);
     }
 
-    $komut = escapeshellarg(PHP_BINARY) . ' -d disable_functions= -S 127.0.0.1:' . $port . ' '
-        . escapeshellarg(__DIR__ . DIRECTORY_SEPARATOR . 'fake-panel.php');
+    // Use the explicit working directory below. On Windows the string command
+    // loses non-ASCII router paths during process creation; the server starts
+    // but serves an error body instead of the test endpoint.
+    $komut = array(PHP_BINARY, '-d', 'disable_functions=', '-S', '127.0.0.1:' . $port, 'fake-panel.php');
 
     // ÇIKTI BORUYA DEGIL DOSYAYA. `php -S` her istek icin stderr'e bir satir yazar; boru
     // okunmazsa isletim sistemi tamponu dolar ve SUNUCU KILITLENIR (ilk denemede tam olarak bu

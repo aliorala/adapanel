@@ -187,16 +187,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { allowPort, blockPort, getFirewallRules, getPortStatus, type FirewallRule, type PortStatus } from "../api/firewall";
 import { useConfirm } from "../components/ConfirmDialog.vue";
-import { extractApiMessage } from "../stores/auth";
+import { extractApiMessage, useAuthStore } from "../stores/auth";
+import { getSessionEpoch } from "../api/client";
 // Eylem sözcüğü İKİ ekranda çiziliyor; kural tek kaynakta (bkz. utils/firewallAction.ts).
 import { firewallActionLabel, normalizeFirewallAction } from "../utils/firewallAction";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
+const auth = useAuthStore();
 const rules = ref<FirewallRule[]>([]);
 const portStatus = ref<PortStatus[]>([]);
 const loading = ref(false);
@@ -245,32 +247,62 @@ function protectedPortReasonKey(port: number): string {
   return "";
 }
 
-onMounted(refreshAll);
+let disposed = false, generation = 0, ruleRead = 0, portRead = 0;
+function captureContext() {
+  const session = auth.session, id = session?.user?.id, role = session?.user?.role, epoch = getSessionEpoch(), captured = generation;
+  return { current: () => !disposed && generation === captured && epoch === getSessionEpoch() && auth.session === session &&
+    session?.isAuthenticated === true && session.user?.id === id && session.user?.role === role };
+}
+function beginMutation() {
+  generation++; loading.value = false; loadingPorts.value = false;
+  return captureContext();
+}
+onBeforeUnmount(() => { disposed = true; generation++; });
+watch(() => [auth.session, auth.session?.isAuthenticated, auth.session?.user?.id, auth.session?.user?.role], () => {
+  generation++; rules.value = []; portStatus.value = []; portsLoaded.value = false;
+  loading.value = false; loadingPorts.value = false; busy.value = false; notice.value = "";
+  void refreshAll();
+}, { immediate: true, flush: "sync" });
 
 async function refreshAll() {
-  await Promise.all([refresh(), refreshPorts()]);
+  const outcomes = await Promise.all([refresh(), refreshPorts()]);
+  return outcomes.every(Boolean);
 }
 
 async function refresh() {
+  const context = captureContext(), request = ++ruleRead;
+  const current = () => context.current() && request === ruleRead;
+  if (!current()) return false;
   loading.value = true;
   try {
-    rules.value = await getFirewallRules();
+    const result = await getFirewallRules();
+    if (!current()) return false;
+    rules.value = result;
+    return true;
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) showNotice(resolveApiMessage(error), true);
+    return false;
   } finally {
-    loading.value = false;
+    if (current()) loading.value = false;
   }
 }
 
 async function refreshPorts() {
+  const context = captureContext(), request = ++portRead;
+  const current = () => context.current() && request === portRead;
+  if (!current()) return false;
   loadingPorts.value = true;
   try {
-    portStatus.value = await getPortStatus();
+    const result = await getPortStatus();
+    if (!current()) return false;
+    portStatus.value = result;
     portsLoaded.value = true;
+    return true;
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) { portsLoaded.value = false; showNotice(resolveApiMessage(error), true); }
+    return false;
   } finally {
-    loadingPorts.value = false;
+    if (current()) loadingPorts.value = false;
   }
 }
 
@@ -337,30 +369,38 @@ function rowStatus(p: PortStatus): "ok" | "warn" | "problem" | "unused" {
 }
 
 async function openPort(p: PortStatus) {
+  if (busy.value || !captureContext().current()) return;
+  const context = beginMutation();
   busy.value = true;
   try {
-    await allowPort(p.port, p.protocol || "TCP", `AdaPanel ${serviceName(p.serviceKey)} ${p.port}`);
-    await refreshAll();
-    showNotice(t("panel.firewall.ports.opened"), false);
+    const result = await allowPort(p.port, p.protocol || "TCP", `AdaPanel ${serviceName(p.serviceKey)} ${p.port}`);
+    if (!context.current()) return;
+    if (!result.verified) { showNotice(t("panel.firewall.savedUnverified"), true); return; }
+    if (await refreshAll() && context.current()) showNotice(t("panel.firewall.ports.opened"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (context.current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    busy.value = false;
+    if (context.current()) busy.value = false;
   }
 }
 
 async function openAllMissing() {
+  if (busy.value || !captureContext().current()) return;
+  const ports = missingRequired.value.map(port => ({ ...port }));
+  const context = beginMutation();
   busy.value = true;
   try {
-    for (const p of missingRequired.value) {
-      await allowPort(p.port, p.protocol || "TCP", `AdaPanel ${serviceName(p.serviceKey)} ${p.port}`);
+    for (const p of ports) {
+      if (!context.current()) return;
+      const result = await allowPort(p.port, p.protocol || "TCP", `AdaPanel ${serviceName(p.serviceKey)} ${p.port}`);
+      if (!context.current()) return;
+      if (!result.verified) { showNotice(t("panel.firewall.savedUnverified"), true); return; }
     }
-    await refreshAll();
-    showNotice(t("panel.firewall.ports.opened"), false);
+    if (await refreshAll() && context.current()) showNotice(t("panel.firewall.ports.opened"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (context.current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    busy.value = false;
+    if (context.current()) busy.value = false;
   }
 }
 
@@ -376,13 +416,16 @@ async function openAllMissing() {
  * "İzin ver" onaysız kalır: kapıyı açmak geri alınabilir bir işlemdir.
  */
 async function saveRule(action: "allow" | "block") {
+  if (busy.value) return;
+  const confirmation = captureContext(), submitted = { ...form };
+  if (!confirmation.current()) return;
   if (action === "block") {
-    const port = form.port;
-    const protocol = form.protocol;
+    const port = submitted.port;
+    const protocol = submitted.protocol;
     const reasonKey = protectedPortReasonKey(port);
     const impact = [
       t("panel.firewall.confirmBlockTarget", { port, protocol }),
-      t("panel.firewall.confirmBlockRuleName", { name: form.ruleName.trim() || t("panel.firewall.ruleNameAuto") })
+      t("panel.firewall.confirmBlockRuleName", { name: submitted.ruleName.trim() || t("panel.firewall.ruleNameAuto") })
     ];
     if (reasonKey) {
       impact.push(t(reasonKey, { port }));
@@ -397,17 +440,21 @@ async function saveRule(action: "allow" | "block") {
       requireText: reasonKey ? String(port) : undefined,
       confirmLabel: t("panel.firewall.block")
     });
-    if (!onay) {
+    if (!onay || !confirmation.current() || busy.value) {
       return;
     }
   }
 
+  const context = beginMutation();
   busy.value = true;
   try {
     const operation = action === "allow" ? allowPort : blockPort;
-    const kural = await operation(form.port, form.protocol, form.ruleName);
-    form.ruleName = "";
-    showRuleForm.value = false;
+    const kural = await operation(submitted.port, submitted.protocol, submitted.ruleName);
+    if (!context.current()) return;
+    if (form.port === submitted.port && form.protocol === submitted.protocol && form.ruleName === submitted.ruleName) {
+      form.ruleName = "";
+      showRuleForm.value = false;
+    }
 
     // SABIT YESIL "kaydedildi" KALKTI. Sunucu kurali yazdiktan sonra guvenlik duvarindan GERI
     // OKUYOR; okuyamadiysa `verified` false doner ve o durumda "kaydedildi" demek, olcmedigimiz
@@ -420,12 +467,11 @@ async function saveRule(action: "allow" | "block") {
       return;
     }
 
-    await refreshAll();
-    showNotice(t("panel.firewall.saved"), false);
+    if (await refreshAll() && context.current()) showNotice(t("panel.firewall.saved"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (context.current()) showNotice(resolveApiMessage(error), true);
   } finally {
-    busy.value = false;
+    if (context.current()) busy.value = false;
   }
 }
 

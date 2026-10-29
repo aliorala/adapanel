@@ -376,6 +376,7 @@
               </select>
             </div>
 
+            <p v-if="stats?.scanLimitReached" class="notice page-notice" role="status">{{ t("panel.hosting.statsPartial") }}</p>
             <p v-if="stats && !stats.hasData" class="empty-state">{{ t("panel.hosting.statsEmpty") }}</p>
 
             <template v-if="stats && stats.hasData">

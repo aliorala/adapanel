@@ -5,17 +5,19 @@ import * as api from '../api/siteBuilder';
 import { allowNavigation } from '../composables/navigationGuard';
 
 const confirm = vi.hoisted(() => vi.fn());
+const session = vi.hoisted(() => ({ epoch: 0 }));
+vi.mock('../api/client', () => ({ getSessionEpoch: () => session.epoch }));
 let sites: ReturnType<typeof reactive<{ selectedSiteName: string; sites: {name: string}[]; fetchSites: () => Promise<void>; selectSite: (name: string) => void }>>;
 vi.mock('../stores/sites', () => ({ useSitesStore: () => sites }));
 vi.mock('../components/ConfirmDialog.vue', () => ({ useConfirm: () => ({ confirm }) }));
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock('../api/siteBuilder', async importOriginal => {
   const original = await importOriginal<typeof api>();
-  return { ...original, getSiteBuilderCatalog: vi.fn(), getSiteBuilderImages: vi.fn(), getSiteBuilderProject: vi.fn(), getSiteBuilderPreview: vi.fn(), getSiteBuilderPublishPlan: vi.fn(), saveSiteBuilderProject: vi.fn(), deleteSiteBuilderImage: vi.fn() };
+  return { ...original, getSiteBuilderCatalog: vi.fn(), getSiteBuilderImages: vi.fn(), getSiteBuilderProject: vi.fn(), getSiteBuilderPreview: vi.fn(), getSiteBuilderPublishPlan: vi.fn(), saveSiteBuilderProject: vi.fn(), publishSiteBuilder: vi.fn(), deleteSiteBuilderImage: vi.fn() };
 });
 vi.mock('../stores/auth', () => ({ extractApiMessage: () => 'failed', extractApiDetails: () => '' }));
 let app: App | undefined;
-type State = { plan: api.SiteBuilderPublishPlan | null; tab: string; project: api.SiteBuilderProject; previewHtml: string; loading: boolean; dirty: boolean; previewLoad: {message: {value: string}}; removeImage: (name: string) => Promise<void>; selectSiteFromEvent: (event: Event) => Promise<void>; changeSite: (name: string) => Promise<void>; openPublishTab: () => Promise<void>; save: () => Promise<void>; loadPreview: () => Promise<void> };
+type State = { plan: api.SiteBuilderPublishPlan | null; tab: string; project: api.SiteBuilderProject; previewHtml: string; loading: boolean; dirty: boolean; previewLoad: {message: {value: string}}; removeImage: (name: string) => Promise<void>; selectSiteFromEvent: (event: Event) => Promise<void>; changeSite: (name: string) => Promise<void>; openPublishTab: () => Promise<void>; save: () => Promise<void>; publish: () => Promise<void>; loadPreview: () => Promise<void> };
 const project = (siteTitle: string) => ({ siteTitle, pages: [], sections: [] } as unknown as api.SiteBuilderProject);
 const flush = async () => { for (let i=0;i<12;i++) await nextTick(); };
 function mount(): State {
@@ -25,6 +27,7 @@ function mount(): State {
   return (app.mount({}).$ as unknown as {setupState: State}).setupState;
 }
 beforeEach(() => {
+  session.epoch = 0;
   vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
   sites=reactive({ selectedSiteName:'first.example', sites:[{name:'first.example'},{name:'second.example'}], fetchSites:async()=>{}, selectSite(name:string){this.selectedSiteName=name;} });
   vi.mocked(api.getSiteBuilderCatalog).mockResolvedValue({} as api.SiteBuilderCatalog);
@@ -121,3 +124,50 @@ it('discards a late preview from the previous site', async () => {
   resolve('old preview'); await pending;
   expect(state.previewHtml).toBe('second.example');
 });
+
+for (const operation of ['save', 'publish'] as const) {
+  for (const invalidate of ['site', 'session', 'unmount'] as const) {
+    it(`discards late ${operation} after ${invalidate} changes without new followup requests`, async () => {
+      const state=mount(); await flush();
+      let resolve!: (value: never)=>void;
+      if (operation === 'save') vi.mocked(api.saveSiteBuilderProject).mockImplementationOnce(()=>new Promise(r=>{resolve=r;}));
+      else vi.mocked(api.publishSiteBuilder).mockImplementationOnce(()=>new Promise(r=>{resolve=r;}));
+      const pending=state[operation]();
+      if (invalidate === 'site') { sites.selectSite('second.example'); await flush(); }
+      else if (invalidate === 'session') session.epoch++;
+      else { app?.unmount(); app=undefined; }
+      const title=state.project?.siteTitle;
+      const projectCalls=vi.mocked(api.getSiteBuilderProject).mock.calls.length;
+      const previewCalls=vi.mocked(api.getSiteBuilderPreview).mock.calls.length;
+      const planCalls=vi.mocked(api.getSiteBuilderPublishPlan).mock.calls.length;
+      resolve((operation === 'save' ? project('stale saved') : { writtenFiles: ['index.html'] }) as never);
+      await pending;
+      expect(state.project?.siteTitle).toBe(title);
+      expect(vi.mocked(api.getSiteBuilderProject).mock.calls.length).toBe(projectCalls);
+      expect(vi.mocked(api.getSiteBuilderPreview).mock.calls.length).toBe(previewCalls);
+      expect(vi.mocked(api.getSiteBuilderPublishPlan).mock.calls.length).toBe(planCalls);
+    });
+  }
+}
+for (const stage of ['project', 'plan'] as const) {
+  for (const invalidate of ['site', 'session', 'unmount'] as const) {
+    it(`discards publish ${stage} followup after ${invalidate} changes`, async () => {
+      const state=mount(); await flush();
+      let resolve!: (value: never)=>void;
+      vi.mocked(api.publishSiteBuilder).mockResolvedValue({ writtenFiles: ['index.html'] } as api.SiteBuilderPublishResult);
+      if (stage === 'project') vi.mocked(api.getSiteBuilderProject).mockImplementationOnce(()=>new Promise(r=>{resolve=r;}));
+      else vi.mocked(api.getSiteBuilderPublishPlan).mockImplementationOnce(()=>new Promise(r=>{resolve=r;}));
+      const pending=state.publish(); await flush();
+      if (invalidate === 'site') { sites.selectSite('second.example'); await flush(); }
+      else if (invalidate === 'session') session.epoch++;
+      else { app?.unmount(); app=undefined; }
+      const title=state.project?.siteTitle, plan=state.plan;
+      const calls=vi.mocked(api.getSiteBuilderPublishPlan).mock.calls.length;
+      resolve((stage === 'project' ? project('stale published') : {siteName:'stale'}) as never);
+      await pending;
+      expect(state.project?.siteTitle).toBe(title);
+      expect(state.plan).toBe(plan);
+      expect(vi.mocked(api.getSiteBuilderPublishPlan).mock.calls.length).toBe(calls);
+    });
+  }
+}

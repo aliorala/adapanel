@@ -128,10 +128,22 @@ $testler = @(
     'integrations\whmcs\tests\module-contract.test.php'
 )
 
+# A standalone test PHP may have no php.ini. Enable its bundled cURL only for
+# these test processes; never change the hosting runtime's persistent settings.
+$testPhpArgs = @('-d', 'disable_functions=')
+$curlLoaded = & $php -r 'echo extension_loaded("curl") ? "yes" : "no";'
+if ($curlLoaded -ne 'yes') {
+    $extensionDir = Join-Path (Split-Path -Parent (Resolve-Path -LiteralPath $php).Path) 'ext'
+    if (-not (Test-Path -LiteralPath (Join-Path $extensionDir 'php_curl.dll'))) {
+        throw 'WHMCS tests require the PHP cURL extension; no bundled php_curl.dll was found.'
+    }
+    $testPhpArgs += @('-d', "extension_dir=$extensionDir", '-d', 'extension=curl')
+}
+
 foreach ($test in $testler) {
     Write-Host ''
     Write-Host "== $test"
-    & $php -d disable_functions= (Join-Path $repoRoot $test)
+    & $php @testPhpArgs (Join-Path $repoRoot $test)
     if ($LASTEXITCODE -ne 0) {
         $hata++
     }

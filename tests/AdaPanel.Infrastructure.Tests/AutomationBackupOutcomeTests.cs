@@ -17,6 +17,46 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class AutomationBackupOutcomeTests
 {
     [Theory]
+    [InlineData("ftp", "ftp://backup.test/base", "user", "", true)]
+    [InlineData("ftp", "ftp://different.test/base", "user", "", false)]
+    [InlineData("ftp", "ftp://backup.test/base", "other", "", false)]
+    [InlineData("webdav", "ftp://backup.test/base", "user", "", false)]
+    [InlineData("ftp", "ftp://backup.test/base", "user", "other-region", false)]
+    public async Task RemoteTest_UsesSavedSecretOnlyForItsOriginalIdentity(string type, string url, string user, string region, bool same)
+    {
+        using var fixture = new Fixture();
+        await fixture.Service.UpdateSettingsAsync(new() { BackupTargetType = "ftp", BackupRemoteUrl = "ftp://backup.test/base",
+            BackupRemoteUserName = "user", BackupRemotePassword = "original-secret" });
+        var request = new BackupRemoteTestRequest { TargetType = type, RemoteUrl = url, RemoteUserName = user, RemoteRegion = region };
+        if (same)
+        {
+            await fixture.Service.TestRemoteBackupAsync(request);
+            Assert.Equal("original-secret", Assert.Single(fixture.RemoteCalls).RemotePassword);
+        }
+        else
+        {
+            var error = await Assert.ThrowsAsync<AdaPanel.Core.Common.AppException>(() => fixture.Service.TestRemoteBackupAsync(request));
+            Assert.Equal("backup.remote_password_required", error.MessageKey);
+            Assert.Empty(fixture.RemoteCalls);
+            await fixture.Service.TestRemoteBackupAsync(new() { TargetType = type, RemoteUrl = url,
+                RemoteUserName = user, RemoteRegion = region, RemotePassword = "new-secret" });
+            Assert.Equal("new-secret", Assert.Single(fixture.RemoteCalls).RemotePassword);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RemoteSettings_KeepSecretOnlyWhenIdentityIsUnchanged(bool changed)
+    {
+        using var fixture = new Fixture();
+        await fixture.Service.UpdateSettingsAsync(new() { BackupTargetType = "ftp", BackupRemoteUrl = "ftp://backup.test/base",
+            BackupRemoteUserName = "user", BackupRemotePassword = "original-secret" });
+        var status = await fixture.Service.UpdateSettingsAsync(new() { BackupTargetType = "ftp",
+            BackupRemoteUrl = changed ? "ftp://different.test/base" : "ftp://backup.test/base", BackupRemoteUserName = "user" });
+        Assert.Equal(!changed, status.Settings.BackupRemotePasswordSet);
+    }
+    [Theory]
     [InlineData("created")]
     [InlineData("created_with_errors")]
     public async Task Summary_CountsMeasuredSiteAndSeparateDatabasesExactlyOnce(string siteStatus)
@@ -382,6 +422,7 @@ public sealed class AutomationBackupOutcomeTests
         public int EngineDiscoveryCalls { get; private set; }
         public List<BackupDatabaseRequest> DatabaseCalls { get; } = [];
         public int PruneCalls { get; private set; }
+        public List<BackupRemoteTestRequest> RemoteCalls { get; } = [];
 
         public Fixture()
         {
@@ -392,6 +433,7 @@ public sealed class AutomationBackupOutcomeTests
             {
                 switch (method.Name)
                 {
+                    case "TestRemoteTargetAsync": RemoteCalls.Add((BackupRemoteTestRequest)args[0]!); return Task.FromResult(new BackupRemoteTestResultDto { Success = true });
                     case "BackupSiteAsync": return SiteResult((BackupSiteRequest)args[0]!);
                     case "BackupDatabaseAsync":
                         var request = (BackupDatabaseRequest)args[0]!;
@@ -415,7 +457,7 @@ public sealed class AutomationBackupOutcomeTests
                 _ => throw new NotSupportedException(method.Name)
             });
             Service = new AutomationService(store, backups, null!, null!, sites, null!, null!, null!, databases,
-                null!, null!, null!, null!, null!, null!, null!, new ConcurrencyLock(), null!, ownership, jobs,
+                null!, Fake<ISecretProtector>((method, args) => method.Name == "Protect" ? "protected:" + args[0] : ((string)args[0]!)[10..]), null!, null!, null!, null!, null!, new ConcurrencyLock(), null!, ownership, jobs,
                 NullLogger<AutomationService>.Instance);
         }
 

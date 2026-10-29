@@ -1067,6 +1067,30 @@ const isAdmin = computed(() => authStore.session?.user?.role === "Administrator"
 const workspace = ref<MailWorkspace | null>(null);
 const isMailEnable = computed(() => workspace.value?.provider === "mailenable");
 const selectedDomain = ref("");
+let workspaceContext = 0;
+let workspaceRead = 0;
+let loadingRequest = 0;
+let workspaceDisposed = false;
+watch(() => [selectedDomain.value, authStore.session?.isAuthenticated, authStore.session?.user?.id,
+  authStore.session?.user?.role], () => {
+  workspaceContext++; workspaceRead++;
+  // A measurement for the previous domain no longer owns the new domain's spinner.
+  diagLoading.value = false;
+  autoconfigBusy.value = false;
+  autoconfigPublishing.value = false;
+}, { flush: "sync" });
+onBeforeUnmount(() => { workspaceDisposed = true; workspaceContext++; workspaceRead++; });
+function currentWorkspaceContext() {
+  const context = workspaceContext;
+  return () => !workspaceDisposed && context === workspaceContext;
+}
+const sectionReads = new Map<string, number>();
+function beginSectionRead(section: string) {
+  const context = currentWorkspaceContext();
+  const request = (sectionReads.get(section) ?? 0) + 1;
+  sectionReads.set(section, request);
+  return () => context() && sectionReads.get(section) === request;
+}
 const adminPassword = ref("");
 const accountForm = reactive({ localPart: "", password: "", maxSizeMB: 1024 });
 const autoResponderFor = ref("");
@@ -1120,15 +1144,19 @@ const clientSettingsLoad = useSectionError();
  * dağıtmak, hiç göstermemekten kötüdür.
  */
 async function loadClientSettings() {
+  const isCurrent = beginSectionRead("client-settings");
   if (!selectedDomain.value) {
     clientSettings.value = null;
     clientSettingsLoad.clear();
     return;
   }
   try {
-    clientSettings.value = await getMailClientSettings(selectedDomain.value);
+    const result = await getMailClientSettings(selectedDomain.value);
+    if (!isCurrent()) return;
+    clientSettings.value = result;
     clientSettingsLoad.clear();
   } catch (error) {
+    if (!isCurrent()) return;
     clientSettings.value = null;
     clientSettingsLoad.capture(error);
   }
@@ -1172,6 +1200,7 @@ const autoconfigContactEmail = ref("");
  * autodiscover'a güvendirirdi.
  */
 async function loadAutoconfig() {
+  const isCurrent = beginSectionRead("autoconfig");
   if (!selectedDomain.value || !isAdmin.value) {
     autoconfig.value = null;
     autoconfigDomain.value = "";
@@ -1183,13 +1212,16 @@ async function loadAutoconfig() {
   autoconfigDomain.value = domain;
   autoconfigBusy.value = true;
   try {
-    autoconfig.value = await getMailAutoconfig(domain);
+    const result = await getMailAutoconfig(domain);
+    if (!isCurrent()) return;
+    autoconfig.value = result;
     autoconfigLoad.clear();
   } catch (error) {
+    if (!isCurrent()) return;
     autoconfig.value = null;
     autoconfigLoad.capture(error);
   } finally {
-    autoconfigBusy.value = false;
+    if (isCurrent()) autoconfigBusy.value = false;
   }
 }
 
@@ -1200,25 +1232,30 @@ async function loadAutoconfig() {
  */
 async function publishAutoconfig() {
   if (!selectedDomain.value) return;
+  const isCurrent = beginSectionRead("autoconfig");
   autoconfigPublishing.value = true;
   autoconfigBusy.value = true;
   try {
     const envelope = await publishMailAutoconfig(selectedDomain.value, autoconfigContactEmail.value);
+    if (!isCurrent()) return;
     autoconfig.value = envelope.data;
     autoconfigDomain.value = selectedDomain.value;
     autoconfigLoad.clear();
     showNotice(translateKey(envelope.message), !envelope.data.isPublished);
   } catch (error) {
-    showError(error);
+    if (isCurrent()) showError(error);
   } finally {
-    autoconfigPublishing.value = false;
-    autoconfigBusy.value = false;
+    if (isCurrent()) {
+      autoconfigPublishing.value = false;
+      autoconfigBusy.value = false;
+    }
   }
 }
 
 /** Yayını geri alır. Yıkıcı olduğu için ONAY ZORUNLU: istemciler ayarı bir daha bulamaz. */
 async function unpublishAutoconfig() {
   const domain = selectedDomain.value;
+  const context = currentWorkspaceContext();
   if (!domain) return;
 
   await confirm({
@@ -1226,17 +1263,20 @@ async function unpublishAutoconfig() {
     message: t("panel.mail.autoconfig.unpublishConfirmMessage"),
     impact: [`${t("panel.mail.domain")}: ${domain}`, `${t("panel.mail.autoconfig.site")}: ${autoconfig.value?.siteName || "—"}`],
     action: async () => {
+      if (!context()) return;
+      const isCurrent = beginSectionRead("autoconfig");
       autoconfigBusy.value = true;
       try {
         const envelope = await unpublishMailAutoconfig(domain);
+        if (!isCurrent()) return;
         autoconfig.value = envelope.data;
         autoconfigDomain.value = domain;
         autoconfigLoad.clear();
         showNotice(translateKey(envelope.message), false);
       } catch (error) {
-        showError(error);
+        if (isCurrent()) showError(error);
       } finally {
-        autoconfigBusy.value = false;
+        if (isCurrent()) autoconfigBusy.value = false;
       }
     }
   });
@@ -1288,6 +1328,7 @@ const outboundLimitState = ref<MailOutboundLimit | null>(null);
 const outboundLimitLoad = useSectionError();
 
 async function loadOutboundLimit() {
+  const isCurrent = beginSectionRead("outbound-limit");
   if (isMailEnable.value) {
     outboundLimitState.value = null;
     outboundLimitLoad.clear();
@@ -1299,25 +1340,32 @@ async function loadOutboundLimit() {
     return;
   }
   try {
-    outboundLimitState.value = await getOutboundLimit(selectedDomain.value);
+    const result = await getOutboundLimit(selectedDomain.value);
+    if (!isCurrent()) return;
+    outboundLimitState.value = result;
     outboundLimit.value = outboundLimitState.value.messagesPerHour;
     outboundLimitLoad.clear();
   } catch (error) {
     // Okunamadıysa "limitsiz" GÖSTERMİYORUZ: durum bilinmiyor demek, bilgi vermek değil.
     // Hata da YUTULMUYOR: aksi halde boş alan "limit yok" sanılırdı.
+    if (!isCurrent()) return;
     outboundLimitState.value = null;
     outboundLimitLoad.capture(error);
   }
 }
 
 async function saveOutboundLimit() {
+  const isCurrent = beginSectionRead("outbound-limit");
+  const draft = outboundLimit.value;
   busy.value = true;
   try {
-    outboundLimitState.value = await setOutboundLimit(selectedDomain.value, outboundLimit.value);
+    const result = await setOutboundLimit(selectedDomain.value, outboundLimit.value);
+    if (!isCurrent() || draft !== outboundLimit.value) return;
+    outboundLimitState.value = result;
     outboundLimit.value = outboundLimitState.value.messagesPerHour;
     showNotice(t("mail.outbound_limit_saved"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
   } finally {
     busy.value = false;
   }
@@ -1408,10 +1456,11 @@ async function removeSelectedAccounts() {
 // o domaini yukle ve DNS kayitlarini hazirla.
 async function openDomain(name: string) {
   const lower = name.toLowerCase();
-  await run(async () => {
+  selectedDomain.value = lower;
+  await run(async (isCurrent) => {
     const exists = (workspace.value?.domains ?? []).some((item) => item.name.toLowerCase() === lower);
     if (!exists) {
-      apply(await createMailDomain(lower));
+      await applyWorkspace(createMailDomain(lower), isCurrent);
     }
     selectedDomain.value = lower;
     // Domaine özgü durumları sıfırla ki önceki domainin sonucu yanlışlıkla görünmesin.
@@ -1420,8 +1469,9 @@ async function openDomain(name: string) {
     // Önceki alan adında yapılan seçim taşınmaz: başka domainin kutularını silmeye yol açardı.
     accountSelection.clear();
     accountPager.reset();
-    apply(await getMailWorkspace(lower));
-    dns.value = await getMailDns(lower).catch(() => null);
+    await applyWorkspace(getMailWorkspace(lower), isCurrent);
+    const records = await getMailDns(lower).catch(() => null);
+    if (isCurrent()) dns.value = records;
   });
 }
 
@@ -1468,13 +1518,18 @@ async function ensureSiteDomain() {
 }
 
 async function refresh() {
+  const context = currentWorkspaceContext();
+  const request = ++workspaceRead;
+  loadingRequest = request;
+  const isCurrent = () => context() && request === workspaceRead;
   loading.value = true;
   try {
-    apply(await getMailWorkspace(selectedDomain.value || undefined));
+    const next = await getMailWorkspace(selectedDomain.value || undefined);
+    if (isCurrent()) apply(next);
   } catch (error) {
-    showError(error);
+    if (isCurrent()) showError(error);
   } finally {
-    loading.value = false;
+    if (!workspaceDisposed && request === loadingRequest) loading.value = false;
   }
 }
 
@@ -1489,27 +1544,31 @@ const rdnsClass = computed(() => {
 });
 
 async function runRdns() {
-  await run(async () => {
+  await run(async (isCurrent) => {
     const host = rdnsHost.value || `mail.${selectedDomain.value}`;
-    rdns.value = await checkRdns(host);
+    const result = await checkRdns(host);
+    if (isCurrent()) rdns.value = result;
   });
 }
 
 async function loadDns() {
-  await run(async () => {
-    dns.value = await getMailDns(selectedDomain.value);
+  await run(async (isCurrent) => {
+    const result = await getMailDns(selectedDomain.value);
+    if (isCurrent()) dns.value = result;
   });
 }
 
 async function loadListeners() {
-  await run(async () => {
-    listeners.value = await getMailListeners();
+  await run(async (isCurrent) => {
+    const result = await getMailListeners();
+    if (isCurrent()) listeners.value = result;
   });
 }
 
 async function applyDns() {
-  await run(async () => {
+  await run(async (isCurrent) => {
     const result = await applyMailDns(selectedDomain.value);
+    if (!isCurrent()) return;
     // DURUM OLCULUR: "cagri patlamadi" ile "kayitlar bolgeye yazildi" ayni sey degildir.
     // Ikincil bolgede ve DNS rolu kurulu degilken yazma basariyla doner ama hicbir sey
     // yayinlanmaz; eski ekran bu durumda da "N kayit uygulandi" yaziyordu.
@@ -1622,7 +1681,7 @@ async function openWebmail(address?: string) {
     tab.document.close();
   }
   webmailOpening.value = true;
-  await run(async () => {
+  await run(async (isCurrent) => {
     try {
       const result = await openWebmailApi({ domain, ...(mailbox ? { address: mailbox } : {}) });
       let url: URL;
@@ -1666,13 +1725,15 @@ async function openWebmail(address?: string) {
 // Panel domainin yayınlanmış mail kayıtlarını canlı kontrol eder; kullanıcı eksiği kendi aramaz.
 async function runDiagnostics() {
   if (!selectedDomain.value) return;
+  const isCurrent = beginSectionRead("diagnostics");
   diagLoading.value = true;
   try {
-    diagnostics.value = await getMailDiagnostics(selectedDomain.value);
+    const result = await getMailDiagnostics(selectedDomain.value);
+    if (isCurrent()) diagnostics.value = result;
   } catch (error) {
-    showError(error);
+    if (isCurrent()) showError(error);
   } finally {
-    diagLoading.value = false;
+    if (isCurrent()) diagLoading.value = false;
   }
 }
 
@@ -1683,8 +1744,8 @@ async function copyDnsValue(value: string) {
 }
 
 async function configure() {
-  await run(async () => {
-    apply(await configureMail(adminPassword.value));
+  await run(async (isCurrent) => {
+    await applyWorkspace(configureMail(adminPassword.value), isCurrent);
     adminPassword.value = "";
     showNotice(t("panel.mail.configured"), false);
   });
@@ -1693,6 +1754,7 @@ async function configure() {
 async function removeDomain() {
   const domain = selectedDomain.value;
   if (!domain) return;
+  const confirmationContext = currentWorkspaceContext();
 
   const impact = [
     `${t("panel.mail.domainName")}: ${domain}`,
@@ -1708,8 +1770,9 @@ async function removeDomain() {
     impact,
     requireText: domain,
     action: async () => {
-      await run(async () => {
-        apply(await deleteMailDomain(domain));
+      if (!confirmationContext()) return;
+      await run(async (isCurrent) => {
+        await applyWorkspace(deleteMailDomain(domain), isCurrent);
         selectedDomain.value = "";
         showNotice(t("panel.mail.domainDeleted"), false);
       });
@@ -1723,8 +1786,8 @@ async function addAccount() {
     showNotice(t("mail.weak_password"), true);
     return;
   }
-  await run(async () => {
-    apply(await createMailAccount(selectedDomain.value, accountForm.localPart, accountForm.password, accountForm.maxSizeMB));
+  await run(async (isCurrent) => {
+    await applyWorkspace(createMailAccount(selectedDomain.value, accountForm.localPart, accountForm.password, accountForm.maxSizeMB), isCurrent);
     accountForm.localPart = "";
     accountForm.password = "";
     showAccountForm.value = false;
@@ -1747,8 +1810,8 @@ async function removeAccount(address: string) {
     message: t("panel.mail.confirmDelete"),
     impact,
     action: async () => {
-      await run(async () => {
-        apply(await deleteMailAccount(address));
+      await run(async (isCurrent) => {
+        await applyWorkspace(deleteMailAccount(address), isCurrent);
         showNotice(t("panel.mail.mailboxDeleted"), false);
       });
     },
@@ -1773,13 +1836,14 @@ async function openAutoResponder(address: string) {
 
 async function saveAutoResponder() {
   if (!autoResponderFor.value) return;
-  await run(async () => {
+  await run(async (isCurrent) => {
     const saved = await setAutoResponder({
       address: autoResponderFor.value,
       enabled: autoResponderForm.enabled,
       subject: autoResponderForm.subject,
       message: autoResponderForm.message
     });
+    if (!isCurrent()) return;
     autoResponderForm.enabled = saved.enabled;
     autoResponderForm.subject = saved.subject;
     autoResponderForm.message = saved.message;
@@ -1801,15 +1865,15 @@ async function changePassword(address: string) {
     showNotice(t("mail.weak_password"), true);
     return;
   }
-  await run(async () => {
-    apply(await setMailAccountPassword(address, password));
+  await run(async (isCurrent) => {
+    await applyWorkspace(setMailAccountPassword(address, password), isCurrent);
     showNotice(t("panel.mail.passwordChanged"), false);
   });
 }
 
 async function addAlias() {
-  await run(async () => {
-    apply(await createMailAlias(selectedDomain.value, aliasForm.localPart, aliasForm.target));
+  await run(async (isCurrent) => {
+    await applyWorkspace(createMailAlias(selectedDomain.value, aliasForm.localPart, aliasForm.target), isCurrent);
     aliasForm.localPart = "";
     aliasForm.target = "";
     showAliasForm.value = false;
@@ -1830,8 +1894,8 @@ async function removeAlias(address: string) {
     message: t("panel.mail.confirmDelete"),
     impact,
     action: async () => {
-      await run(async () => {
-        apply(await deleteMailAlias(address));
+      await run(async (isCurrent) => {
+        await applyWorkspace(deleteMailAlias(address), isCurrent);
         showNotice(t("panel.mail.aliasDeleted"), false);
       });
     },
@@ -1851,16 +1915,16 @@ async function addList() {
     showError(t("panel.mail.mailEnableListPolicyHint"));
     return;
   }
-  await run(async () => {
-    apply(
-      await createMailList(
+  await run(async (isCurrent) => {
+    await applyWorkspace(
+      createMailList(
         selectedDomain.value,
         listForm.localPart,
         parseRecipients(listForm.recipients),
         listForm.description,
         listForm.postingPolicy,
         parseRecipients(listForm.allowedSenders)
-      )
+      ), isCurrent
     );
     listForm.localPart = "";
     listForm.description = "";
@@ -1886,7 +1950,7 @@ async function loadPublicBaseUrl() {
 }
 
 async function savePublicBaseUrl() {
-  await run(async () => {
+  await run(async (isCurrent) => {
     publicBaseUrl.value = await setMailPublicBaseUrl(publicBaseUrl.value);
     showNotice(t("panel.mail.publicBaseUrlSaved"), false);
   });
@@ -1935,8 +1999,8 @@ async function editListPolicy(list: MailList) {
     allowed = parseRecipients(senders);
   }
 
-  await run(async () => {
-    apply(await setMailListPolicy(list.address, policy, allowed));
+  await run(async (isCurrent) => {
+    await applyWorkspace(setMailListPolicy(list.address, policy, allowed), isCurrent);
     showNotice(t("panel.mail.listPolicySaved"), false);
   });
 }
@@ -1953,8 +2017,8 @@ async function subscribe(address: string) {
   const subscriber = value.trim();
   if (!subscriber) return;
 
-  await run(async () => {
-    apply(await subscribeToMailList(address, subscriber));
+  await run(async (isCurrent) => {
+    await applyWorkspace(subscribeToMailList(address, subscriber), isCurrent);
     showNotice(t("panel.mail.listSubscribed", { address: subscriber }), false);
   });
 }
@@ -1967,8 +2031,8 @@ async function unsubscribe(address: string, subscriber: string) {
     message: t("panel.mail.confirmUnsubscribe"),
     impact: [`${t("panel.mail.listAddress")}: ${address}`, `${t("panel.mail.listSubscribers")}: ${subscriber}`],
     action: async () => {
-      await run(async () => {
-        apply(await unsubscribeFromMailList(address, subscriber));
+      await run(async (isCurrent) => {
+        await applyWorkspace(unsubscribeFromMailList(address, subscriber), isCurrent);
         showNotice(t("panel.mail.listUnsubscribed", { address: subscriber }), false);
       });
     }
@@ -1989,8 +2053,8 @@ async function addListAlias(listAddress: string) {
   const alias = value.trim();
   if (!alias) return;
 
-  await run(async () => {
-    apply(await addMailListAlias(listAddress, alias));
+  await run(async (isCurrent) => {
+    await applyWorkspace(addMailListAlias(listAddress, alias), isCurrent);
     showNotice(t("panel.mail.listAliasAdded", { address: alias }), false);
   });
 }
@@ -2003,8 +2067,8 @@ async function removeListAlias(listAddress: string, alias: string) {
     message: t("panel.mail.confirmRemoveAlias"),
     impact: [`${t("panel.mail.listAddress")}: ${listAddress}`, `${t("panel.mail.listAliases")}: ${alias}`],
     action: async () => {
-      await run(async () => {
-        apply(await removeMailListAlias(listAddress, alias));
+      await run(async (isCurrent) => {
+        await applyWorkspace(removeMailListAlias(listAddress, alias), isCurrent);
         showNotice(t("panel.mail.listAliasRemoved", { address: alias }), false);
       });
     }
@@ -2022,8 +2086,8 @@ async function editListRecipients(address: string, current: string[]) {
     allowEmpty: true
   });
   if (value === null) return;
-  await run(async () => {
-    apply(await setMailListRecipients(address, parseRecipients(value)));
+  await run(async (isCurrent) => {
+    await applyWorkspace(setMailListRecipients(address, parseRecipients(value)), isCurrent);
     showNotice(t("panel.mail.listUpdated"), false);
   });
 }
@@ -2041,23 +2105,35 @@ async function removeList(address: string) {
     message: t("panel.mail.confirmDelete"),
     impact,
     action: async () => {
-      await run(async () => {
-        apply(await deleteMailList(address));
+      await run(async (isCurrent) => {
+        await applyWorkspace(deleteMailList(address), isCurrent);
         showNotice(t("panel.mail.listDeleted"), false);
       });
     },
   });
 }
 
-async function run(operation: () => Promise<void>) {
+async function run(operation: (isCurrent: () => boolean) => Promise<void>) {
+  const context = currentWorkspaceContext();
+  const draftKey = () => JSON.stringify([accountForm, aliasForm, listForm, autoResponderForm, adminPassword.value]);
+  const draft = draftKey();
+  const isCurrent = () => context() && draft === draftKey();
   busy.value = true;
   try {
-    await operation();
+    await operation(isCurrent);
   } catch (error) {
-    showError(error);
+    if (!workspaceDisposed && error !== staleWorkspaceResult && (isCurrent() || error instanceof UserFacingError)) showError(error);
   } finally {
-    busy.value = false;
+    if (!workspaceDisposed) busy.value = false;
   }
+}
+
+const staleWorkspaceResult = Symbol("stale mail workspace");
+async function applyWorkspace(result: Promise<MailWorkspace>, isCurrent: () => boolean) {
+  const next = await result;
+  if (!isCurrent()) throw staleWorkspaceResult;
+  workspaceRead++; // Reads started before a mutation finished cannot overwrite its result.
+  apply(next);
 }
 
 function apply(next: MailWorkspace) {
@@ -2101,15 +2177,15 @@ async function loadSpam() {
 
 async function saveSpam() {
   if (!spam.value) return;
-  await run(async () => {
+  await run(async (isCurrent) => {
     spam.value = await updateMailSpam(spam.value as MailSpamSettings);
     showNotice(t("panel.mail.spamSaved"), false);
   });
 }
 
 async function saveDomainQuota() {
-  await run(async () => {
-    apply(await setMailDomainQuota(selectedDomain.value, domainQuota.value));
+  await run(async (isCurrent) => {
+    await applyWorkspace(setMailDomainQuota(selectedDomain.value, domainQuota.value), isCurrent);
     showNotice(t("panel.mail.quotaSaved"), false);
   });
 }
@@ -2124,8 +2200,8 @@ async function changeAccountQuota(address: string, currentMax: number) {
   if (value === null) return;
   const mb = Number(value);
   if (Number.isNaN(mb) || mb < 0) return;
-  await run(async () => {
-    apply(await setMailAccountQuota(address, mb));
+  await run(async (isCurrent) => {
+    await applyWorkspace(setMailAccountQuota(address, mb), isCurrent);
     showNotice(t("panel.mail.quotaSaved"), false);
   });
 }

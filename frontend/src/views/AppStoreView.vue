@@ -400,14 +400,15 @@ async function install(templateId: string) {
     wpAdmin.adminUrl = result.adminUrl || "";
     wpAdmin.adminUser = result.adminUser || "";
     wpAdmin.adminPassword = result.adminPassword || "";
-    showNotice(t("panel.appStore.installed"), false);
+    const installationMessage = t(result.requiresManualSetup ? "panel.appStore.manualSetupRequired" : "panel.appStore.installed");
+    showNotice(installationMessage, result.requiresManualSetup === true);
     try {
       await sitesStore.fetchSites();
     } catch (error) {
       if (current()) {
         sitesReady.value = false;
         sitesUnavailable.value = true;
-        showNotice(`${t("panel.appStore.installedRefreshFailed")}\n\n${resolveApiMessage(error)}`, true, extractApiDetails(error));
+        showNotice(`${installationMessage}\n\n${t("panel.appStore.installedRefreshFailed")}\n\n${resolveApiMessage(error)}`, true, extractApiDetails(error));
       }
     }
   } catch (error) {

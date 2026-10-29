@@ -3919,9 +3919,8 @@ public sealed partial class MailService(
     // Değeri JSON string/number literal'ine çevirir (tırnaklama + kaçışlar dahil).
     private static string JsonValue(string value) => JsonSerializer.Serialize(value);
 
-    // Komut satırında JSON taşıyan tek argüman: iç tırnaklar MSVC kuralıyla kaçırılır.
-    private static string CliJsonArg(string value) =>
-        "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    // JSON kaçışlarını koru: yalnız tırnaktan ve kapanıştan önceki ters bölüler ikilenir.
+    private static string CliJsonArg(string value) => WindowsArgument.Quote(value);
 
     private static string NormalizeAddress(string address, string domain)
     {

@@ -81,8 +81,18 @@ public sealed class MailController(
             }
         }
         Response.Headers.CacheControl = "no-store";
-        await auditService.AuditAsync(HttpContext, "mail.webmail.opened", request.Address ?? "webmail", "Webmail was opened (installed/configured if needed).");
+        await AuditWebmailOpenedAsync(request, cancellationToken);
         return Ok(ApiResponse<WebmailOpenDto>.Ok(result));
+    }
+
+    internal async Task AuditWebmailOpenedAsync(WebmailOpenRequest request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Domain))
+            await auditService.AuditAsync(HttpContext, "mail.webmail.opened", "webmail", "Webmail was opened (installed/configured if needed).");
+        else
+            await auditService.AuditAsync(HttpContext, "mail.webmail.opened", request.Address ?? request.Domain,
+                "Domain webmail was opened (installed/configured if needed).",
+                await AlanAdiSahibiAsync(request.Domain, cancellationToken));
     }
 
     /// <summary>

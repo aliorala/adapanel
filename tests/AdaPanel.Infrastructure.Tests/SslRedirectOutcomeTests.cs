@@ -28,6 +28,58 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class SslRedirectOutcomeTests
 {
     [Theory]
+    [InlineData("absent")]
+    [InlineData("unknown")]
+    [InlineData("unreadable-certificate")]
+    [InlineData("empty-certificate")]
+    [InlineData("different-host")]
+    [InlineData("multiple-ports")]
+    public async Task EnableRejectsMissingOrAmbiguousTLSBeforeWritingARedirect(string problem)
+    {
+        using var f = new Fixture(true);
+        f.Bindings = problem switch
+        {
+            "absent" => [],
+            "unknown" => null,
+            "unreadable-certificate" => [Binding(443, readable: false)],
+            "empty-certificate" => [Binding(443, thumbprint: "")],
+            "different-host" => [Binding(443, host: "other.example.test")],
+            _ => [Binding(443), Binding(8443)]
+        };
+        await Assert.ThrowsAsync<AppException>(() => f.Set(true));
+        Assert.Equal(0, f.WriteCalls);
+        Assert.Empty(f.Area.Denetim.Kayitlar);
+    }
+
+    [Theory]
+    [InlineData(443)]
+    [InlineData(8443)]
+    public async Task EnableUsesTheSingleMeasuredTLSPortAndStripsTheOldHTTPPort(int port)
+    {
+        using var f = new Fixture(true); f.Bindings = [Binding(port)];
+        await f.Set(true);
+        var script = Assert.Single(f.WrittenScripts);
+        var pattern = System.Text.RegularExpressions.Regex.Match(script, """input='\{HTTP_HOST\}'; pattern='([^']+)'""");
+        Assert.True(pattern.Success);
+        var host = System.Text.RegularExpressions.Regex.Match(Fixture.SiteName + ":8080", pattern.Groups[1].Value).Groups[1].Value;
+        var action = System.Text.RegularExpressions.Regex.Match(script, """-name 'url' -value '(https://[^']+)'""").Groups[1].Value;
+        Assert.Equal($"https://{Fixture.SiteName}{(port == 443 ? "" : ":8443")}/path",
+            action.Replace("{C:1}", host).Replace("{R:1}", "path"));
+    }
+
+    [Fact]
+    public async Task DisableRecoversABrokenRedirectWithoutReadingTLSBindings()
+    {
+        using var f = new Fixture(false); f.Bindings = null;
+        var response = await f.Set(false);
+        Assert.True(response.Success); Assert.False(response.Data!.HttpsRedirectEnabled);
+        Assert.Equal(1, f.WriteCalls);
+    }
+
+    private static IisHttpsBinding Binding(int port, bool readable = true, string thumbprint = "fixture-certificate", string? host = null) => new()
+    { SiteName = Fixture.SiteName, BindingInformation = $"*:{port}:{host ?? Fixture.SiteName}", CertificateReadable = readable, Thumbprint = thumbprint };
+
+    [Theory]
     [InlineData(true, true)]
     [InlineData(true, false)]
     [InlineData(false, true)]
@@ -257,9 +309,10 @@ public sealed class SslRedirectOutcomeTests
         internal Exception? InstallFailure;
         internal string InstallStatus = "Installed";
         internal int WriteCalls;
+        internal readonly List<string> WrittenScripts = [];
         internal int ReadCalls;
         internal int InstallCalls;
-        internal IReadOnlyCollection<IisHttpsBinding>? Bindings = [];
+        internal IReadOnlyCollection<IisHttpsBinding>? Bindings = [Binding(443)];
         internal int BindingRemovalCalls;
         internal bool AllowBindingRemoval;
         internal CancellationToken Token => Area.Iptal;
@@ -277,7 +330,8 @@ public sealed class SslRedirectOutcomeTests
             db.SaveChanges();
             Read = Result(0, enabled ? "YES" : "NO");
             var site = new SiteDto { Id = 1, Name = SiteName, PhysicalPath = Area.SiteKoku,
-                ApplicationRootPath = Area.SiteKoku, ApplicationPoolName = "redirect-pool" };
+                ApplicationRootPath = Area.SiteKoku, ApplicationPoolName = "redirect-pool",
+                Bindings = [new SiteBindingDto { Protocol = "http", HostName = SiteName, Port = 80 }] };
             sites = Proxy<IIisSiteService>((method, args) =>
             {
                 args.OfType<CancellationToken>().Single().ThrowIfCancellationRequested();
@@ -323,6 +377,7 @@ public sealed class SslRedirectOutcomeTests
             // Distinguish actual production write/read scripts at the external command boundary.
             if (script.Contains("Clear-WebConfiguration", StringComparison.Ordinal))
             {
+                WrittenScripts.Add(script);
                 WriteCalls++;
                 if (WriteFailure is not null) throw WriteFailure;
                 return Task.FromResult(Writes.Count > 0 ? Writes.Dequeue() : Result(0, "OK"));

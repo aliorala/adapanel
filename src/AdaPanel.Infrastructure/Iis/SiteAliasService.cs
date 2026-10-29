@@ -219,14 +219,13 @@ public sealed class SiteAliasService(
     /// boş bir kural bırakmak, sonradan "neden çalışmıyor" sorusunu doğururdu.
     /// </para>
     /// <para>
-    /// HTTPS bilgisi korunur (<c>{HTTPS}</c> koşulu değil, <c>{MapProtocol:}</c> yerine basit ve
-    /// güvenli yol: mevcut şemayı sunucu değişkeninden okumak yerine her iki şema için de tek
-    /// hedef kullanılır) — ziyaretçi güvenli bağlantıdan geldiyse güvenli kalır.
+    /// Ana alan adının IIS'te ölçülen HTTPS bağlaması tercih edilir; yoksa HTTP
+    /// bağlaması kullanılır. Standart dışı portlar hedefte korunur.
     /// </para>
     /// </remarks>
     private AliasRedirectRuleMeasurement YonlendirmeKuraliniYaz(SiteDto site, IReadOnlyCollection<AliasKaydi> kayitlar, string anaHost)
     {
-        var kok = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
+        var kok = site.PhysicalPath;
         if (string.IsNullOrWhiteSpace(kok) || !Directory.Exists(kok))
         {
             // Belge kökü yoksa yazacak yer de yok: bu "kural yazıldı" DEĞİL, "ölçülemedi"dir.
@@ -240,6 +239,9 @@ public sealed class SiteAliasService(
             .ToArray();
 
         var webConfig = Path.Combine(kok, "web.config");
+        var hedef = YonlendirmeHedefi(site, anaHost);
+        if (yonlendirilecek.Length > 0 && hedef is null)
+            return AliasRedirectRuleMeasurement.Olculemedi("Ana alan adinin HTTP/HTTPS baglamasi bulunamadi.");
 
         try
         {
@@ -275,7 +277,7 @@ public sealed class SiteAliasService(
                     new XElement(
                         "action",
                         new XAttribute("type", "Redirect"),
-                        new XAttribute("url", $"https://{anaHost}/{{R:1}}"),
+                        new XAttribute("url", $"{hedef}/{{R:1}}"),
                         new XAttribute("redirectType", "Permanent")));
 
                 // Kural EN BAŞA: kullanıcının kendi kuralları (ör. WordPress permalink) isteği
@@ -350,6 +352,21 @@ public sealed class SiteAliasService(
         }
 
         return element;
+    }
+
+    private static string? YonlendirmeHedefi(SiteDto site, string anaHost)
+    {
+        var binding = site.Bindings
+            .Where(item => Esit(Normalle(item.HostName), anaHost) && item.Port is > 0 and <= 65535 &&
+                (Esit(item.Protocol, "https") || Esit(item.Protocol, "http")))
+            .OrderByDescending(item => Esit(item.Protocol, "https"))
+            .ThenBy(item => item.Port == (Esit(item.Protocol, "https") ? 443 : 80) ? 0 : 1)
+            .ThenBy(item => item.Port)
+            .FirstOrDefault();
+        if (binding is null) return null;
+        var protocol = binding.Protocol.ToLowerInvariant();
+        var port = binding.Port == (protocol == "https" ? 443 : 80) ? "" : $":{binding.Port}";
+        return $"{protocol}://{anaHost}{port}";
     }
 
     /// <summary>Sitenin ana alan adı: takma ad OLMAYAN ilk gerçek host.</summary>

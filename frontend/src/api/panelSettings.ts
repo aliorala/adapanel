@@ -2,6 +2,16 @@ import { apiClient } from "./client";
 
 type ApiEnvelope<T> = { success: boolean; data: T; message: string; code: number };
 
+export type ServerAddressDnsSync = {
+  oldAddress: string;
+  newAddress: string;
+  pending: boolean;
+  skipped?: boolean;
+  zones: { siteName: string; zoneName: string; changedRecords: number; succeeded: boolean; skipped?: boolean; error: string }[];
+  error: string;
+  ftp?: { succeeded: boolean; skipped: boolean; changed: boolean; error: string; currentAddress?: string | null } | null;
+};
+
 export type PanelPreferences = {
   panelName: string;
   defaultLanguage: string;
@@ -10,6 +20,7 @@ export type PanelPreferences = {
   defaultSiteRoot: string;
   defaultBackupRoot: string;
   serverAddress: string;
+  serverAddressDnsSync?: ServerAddressDnsSync | null;
   /**
    * `serverAddress` internetten açılabilecek bir ad/adres mi. SUNUCUNUN TÜRETTİĞİ salt okunur
    * bilgi; PUT gövdesinde gönderilse de sunucu kendi hesabıyla ezer.
@@ -43,8 +54,13 @@ export async function getPanelPreferences() {
   return response.data.data;
 }
 
-export async function updatePanelPreferences(payload: PanelPreferences) {
-  const response = await apiClient.put<ApiEnvelope<PanelPreferences>>("/panel-settings", payload);
+export async function updatePanelPreferences(payload: PanelPreferences, reconcileServerAddress = false) {
+  const response = await apiClient.put<ApiEnvelope<PanelPreferences>>("/panel-settings", { ...payload, reconcileServerAddress });
+  return response.data.data;
+}
+
+export async function syncServerAddressDns(oldAddress: string) {
+  const response = await apiClient.post<ApiEnvelope<PanelPreferences>>("/panel-settings/dns-address-sync", { oldAddress });
   return response.data.data;
 }
 

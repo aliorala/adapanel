@@ -33,7 +33,6 @@ public sealed class ServicePlanService(JsonFileStore fileStore) : IServicePlanSe
             throw new AppException("plans.name_required", 400, 400);
         }
 
-        var plans = (await fileStore.ReadAsync(StatePath, Array.Empty<ServicePlanDto>(), cancellationToken)).ToList();
         var plan = new ServicePlanDto
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -55,45 +54,46 @@ public sealed class ServicePlanService(JsonFileStore fileStore) : IServicePlanSe
             // hata (istek dolu, kayda 0) tam olarak eşleştirmenin bir yerde unutulmasıydı.
             MaxBackupsPerDay = Math.Max(0, request.MaxBackupsPerDay)
         };
-        plans.Add(plan);
-        await fileStore.WriteAsync(StatePath, plans, cancellationToken);
+        await fileStore.UpdateAsync(StatePath, Array.Empty<ServicePlanDto>(),
+            plans => [.. plans, plan], cancellationToken);
         return plan;
     }
 
     public async Task<ServicePlanDto> UpdatePlanAsync(string id, ServicePlanRequest request, CancellationToken cancellationToken = default)
     {
-        var plans = (await fileStore.ReadAsync(StatePath, Array.Empty<ServicePlanDto>(), cancellationToken)).ToList();
-        var plan = plans.FirstOrDefault(item => string.Equals(item.Id, id, StringComparison.OrdinalIgnoreCase))
-            ?? throw new AppException("plans.not_found", 404, 404);
-
-        var name = (request.Name ?? string.Empty).Trim();
-        if (name.Length > 0)
+        ServicePlanDto plan = null!;
+        await fileStore.UpdateAsync(StatePath, Array.Empty<ServicePlanDto>(), plans =>
         {
-            plan.Name = name;
-        }
+            plan = plans.FirstOrDefault(item => string.Equals(item.Id, id, StringComparison.OrdinalIgnoreCase))
+                ?? throw new AppException("plans.not_found", 404, 404);
 
-        // OwnerId BİLEREK güncellenmiyor: sahiplik plan oluşturulurken belirlenir ve düzenleme
-        // isteğiyle devredilemez. Aksi hâlde bir bayi, düzenleme gövdesine sahiplik yazarak planı
-        // kendi üstüne alabilir ya da sistem planına çevirebilirdi.
-        plan.MaxSites = Math.Max(0, request.MaxSites);
-        plan.MaxDiskMb = Math.Max(0, request.MaxDiskMb);
-        plan.MaxDatabases = Math.Max(0, request.MaxDatabases);
-        plan.MaxMailboxes = Math.Max(0, request.MaxMailboxes);
-        plan.MaxScheduledTasks = Math.Max(0, request.MaxScheduledTasks);
-        plan.MaxFtpUsers = Math.Max(0, request.MaxFtpUsers);
-        plan.MaxTrafficGbPerMonth = Math.Max(0, request.MaxTrafficGbPerMonth);
-        plan.ValidityDays = Math.Max(0, request.ValidityDays);
-        plan.MaxBackupsPerDay = Math.Max(0, request.MaxBackupsPerDay);
-        await fileStore.WriteAsync(StatePath, plans, cancellationToken);
+            var name = (request.Name ?? string.Empty).Trim();
+            if (name.Length > 0)
+            {
+                plan.Name = name;
+            }
+
+            // OwnerId BİLEREK güncellenmiyor: sahiplik plan oluşturulurken belirlenir ve düzenleme
+            // isteğiyle devredilemez. Aksi hâlde bir bayi, düzenleme gövdesine sahiplik yazarak planı
+            // kendi üstüne alabilir ya da sistem planına çevirebilirdi.
+            plan.MaxSites = Math.Max(0, request.MaxSites);
+            plan.MaxDiskMb = Math.Max(0, request.MaxDiskMb);
+            plan.MaxDatabases = Math.Max(0, request.MaxDatabases);
+            plan.MaxMailboxes = Math.Max(0, request.MaxMailboxes);
+            plan.MaxScheduledTasks = Math.Max(0, request.MaxScheduledTasks);
+            plan.MaxFtpUsers = Math.Max(0, request.MaxFtpUsers);
+            plan.MaxTrafficGbPerMonth = Math.Max(0, request.MaxTrafficGbPerMonth);
+            plan.ValidityDays = Math.Max(0, request.ValidityDays);
+            plan.MaxBackupsPerDay = Math.Max(0, request.MaxBackupsPerDay);
+            return plans;
+        }, cancellationToken);
         return plan;
     }
 
     public async Task DeletePlanAsync(string id, CancellationToken cancellationToken = default)
     {
-        var plans = (await fileStore.ReadAsync(StatePath, Array.Empty<ServicePlanDto>(), cancellationToken)).ToList();
-        if (plans.RemoveAll(plan => string.Equals(plan.Id, id, StringComparison.OrdinalIgnoreCase)) > 0)
-        {
-            await fileStore.WriteAsync(StatePath, plans, cancellationToken);
-        }
+        await fileStore.UpdateAsync(StatePath, Array.Empty<ServicePlanDto>(),
+            plans => plans.Where(plan => !string.Equals(plan.Id, id, StringComparison.OrdinalIgnoreCase)).ToArray(),
+            cancellationToken);
     }
 }

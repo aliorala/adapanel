@@ -1204,12 +1204,8 @@ public sealed class ComponentBootstrapper(
         {
             try
             {
-                await TryRunManagedUninstallerAsync(
-                    component,
-                    component.Id,
-                    cleanupPath,
-                    cancellationToken);
-                DeleteManagedPath(cleanupPath, component.Id);
+                await RollbackInstallerFilesAsync(component, cleanupPath, () =>
+                    TryRunManagedUninstallerAsync(component, component.Id, cleanupPath, cancellationToken));
             }
             catch (Exception exception)
             {
@@ -1239,6 +1235,19 @@ public sealed class ComponentBootstrapper(
         {
             logger.LogWarning(exception, "Rollback cleanup failed for path {CleanupPath}", cleanupPath);
         }
+    }
+
+    internal async Task RollbackInstallerFilesAsync(ComponentManifestItemDto component, string cleanupPath, Func<Task> uninstallAsync)
+    {
+        // The installer/uninstaller may remove the whole installation tree. Move existing
+        // customer state aside before either cleanup step and restore it even on failure.
+        var preserved = IsManagedPath(cleanupPath) ? PreserveDataDirectories(component, cleanupPath) : null;
+        try
+        {
+            await uninstallAsync();
+            DeleteManagedPath(cleanupPath, component.Id);
+        }
+        finally { preserved?.Restore(); }
     }
 
     internal void RollbackInstallationFiles(ComponentManifestItemDto component, string cleanupPath, bool preserveNginxConfiguration)
@@ -2578,7 +2587,7 @@ public sealed class ComponentBootstrapper(
     /// MoveFile'da "Access denied" verebilir; bu yüzden hedefi temizleyip taşımayı
     /// kısa beklemelerle birkaç kez dener.
     /// </summary>
-    private static async Task FinalizeDownloadAsync(
+    internal static async Task FinalizeDownloadAsync(
         string temporaryPath,
         string destinationPath,
         CancellationToken cancellationToken)
@@ -2602,11 +2611,10 @@ public sealed class ComponentBootstrapper(
                 File.Move(temporaryPath, destinationPath, overwrite: true);
                 return;
             }
-            catch (Exception exception) when (
-                (exception is UnauthorizedAccessException or IOException) &&
-                attempt < 6)
+            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt), cancellationToken);
+                if (attempt < 6)
+                    await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt), cancellationToken);
             }
         }
 
@@ -4938,7 +4946,8 @@ public sealed class ComponentBootstrapper(
 
     private static void SetPhpIniExtension(List<string> lines, string extension)
     {
-        var index = lines.FindIndex(line =>
+        var globalEnd = AdaPanel.Infrastructure.Php.PhpIniSiteIsolation.GlobalInsertIndex(lines);
+        var index = lines.FindIndex(0, globalEnd, line =>
         {
             var normalized = line.Trim().TrimStart(';').TrimStart().Replace(" ", string.Empty);
             if (!normalized.StartsWith("extension=", StringComparison.OrdinalIgnoreCase))
@@ -4959,7 +4968,7 @@ public sealed class ComponentBootstrapper(
         {
             // GENEL bölüme: site [PATH=] bloklarından SONRA eklenen bir extension yalnız o siteye
             // yüklenirdi (öteki bütün siteler eklentisiz kalırdı).
-            lines.Insert(AdaPanel.Infrastructure.Php.PhpIniSiteIsolation.GlobalInsertIndex(lines), directive);
+            lines.Insert(globalEnd, directive);
         }
     }
 

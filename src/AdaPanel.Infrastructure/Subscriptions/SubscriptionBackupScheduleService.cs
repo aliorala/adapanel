@@ -102,12 +102,16 @@ public sealed class SubscriptionBackupScheduleService(
                 kayit.IncludeFtp = request.IncludeFtp;
 
                 // Hedef listesi BackupService'in tek kaynağından gelir; burada elle liste tutulmaz.
-                kayit.TargetType = Backup.BackupService.NormalizeScheduleTargetType(request.TargetType);
+                var targetType = Backup.BackupService.NormalizeScheduleTargetType(request.TargetType);
+                var sameRemote = AutomationService.SameRemoteIdentity(kayit.TargetType, kayit.RemoteUrl,
+                    kayit.RemoteUserName, kayit.RemoteRegion, targetType, request.RemoteUrl,
+                    request.RemoteUserName, request.RemoteRegion);
+                kayit.TargetType = targetType;
                 kayit.RemoteUrl = request.RemoteUrl?.Trim() ?? string.Empty;
                 kayit.RemoteUserName = request.RemoteUserName?.Trim() ?? string.Empty;
                 kayit.RemoteRegion = request.RemoteRegion?.Trim() ?? string.Empty;
 
-                if (kayit.TargetType == "local")
+                if (kayit.TargetType == "local" || (!sameRemote && string.IsNullOrEmpty(request.RemotePassword)))
                 {
                     kayit.RemotePasswordProtected = string.Empty;
                 }

@@ -198,7 +198,8 @@ public sealed partial class QueuedBackupActorLifecycleTests
             measuredRedirect = !enabled;
             rewriteAvailable = wait is not ("norewrite" or "install");
             RedirectSite = new SiteDto { Id = 21, Name = Site, PhysicalPath = Area.SiteKoku,
-                ApplicationRootPath = Area.SiteKoku, ApplicationPoolName = "redirect-actor-pool" };
+                ApplicationRootPath = Area.SiteKoku, ApplicationPoolName = "redirect-actor-pool",
+                Bindings = [new SiteBindingDto { Protocol = "http", HostName = Site, Port = 80 }] };
             RedirectSites = Fake<IIisSiteService>((method, args) => method.Name == "GetSiteAsync"
                 ? ReadRedirectSite(args.OfType<CancellationToken>().Single()) : throw new NotSupportedException(method.Name));
             RedirectScopes = Fake<ICustomerScopeService>((method, args) => method.Name == "GetAssignedSitesAsync"
@@ -207,7 +208,9 @@ public sealed partial class QueuedBackupActorLifecycleTests
             var installer = Fake<IComponentBootstrapper>((method, args) => method.Name == "InstallAsync"
                 ? InstallRedirectRewrite(args.OfType<CancellationToken>().Single()) : throw new NotSupportedException(method.Name));
             RedirectService = new WinAcmeSslService(Context(), RedirectSites, null!, Area.DosyaDeposu, installer,
-                NullLogger<WinAcmeSslService>.Instance, _ => Task.FromResult<IReadOnlyCollection<IisHttpsBinding>?>([]), RedirectGates)
+                NullLogger<WinAcmeSslService>.Instance, _ => Task.FromResult<IReadOnlyCollection<IisHttpsBinding>?>([
+                    new IisHttpsBinding { SiteName = Site, BindingInformation = "*:443:" + Site,
+                        Thumbprint = "redirect-fixture-certificate", CertificateReadable = true }]), RedirectGates)
             {
                 RedirectCommand = RunRedirectCommand,
                 CertificateProbeAsync = async (_, token) =>

@@ -6,6 +6,7 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Mail;
+using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.Security;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -20,7 +21,8 @@ namespace AdaPanel.Api.Controllers;
 [Route("api/v1/mail/webmail/handoff")]
 [RequestSizeLimit(2048)]
 public sealed class WebmailHandoffController(WebmailSsoTickets tickets, AdaPanelDbContext db,
-    ICustomerScopeService scopes, SessionRevocationStore sessions) : ControllerBase
+    ICustomerScopeService scopes, SessionRevocationStore sessions, IAuditService auditService,
+    IIisSiteService iisSiteService) : ControllerBase
 {
     [HttpPost]
     [Consumes("application/x-www-form-urlencoded")]
@@ -36,6 +38,7 @@ public sealed class WebmailHandoffController(WebmailSsoTickets tickets, AdaPanel
         // determines the credential target; the ticket already owns that immutable account ID.
         var host = "webmail." + WebmailRequestValidation.Domain(grant.Domain);
         if (grant.Host != host) throw Invalid();
+        await AuditHandoffAsync(grant, token);
         var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         Response.Headers.CacheControl = "no-store, max-age=0";
         Response.Headers.Pragma = "no-cache";
@@ -52,5 +55,9 @@ public sealed class WebmailHandoffController(WebmailSsoTickets tickets, AdaPanel
             + "<script nonce=\"" + encoder.Encode(nonce) + "\">window.opener=null;document.getElementById('adapanel-webmail-handoff').submit();</script></html>",
             "text/html; charset=utf-8");
     }
+    internal async Task AuditHandoffAsync(WebmailSsoTickets.Grant grant, CancellationToken token) =>
+        await auditService.AuditAsync(HttpContext, "mail.webmail.handoff", grant.Address,
+            "Authorized mailbox handoff document issued.",
+            await AuditSubject.MailDomainOwnerAsync(scopes, iisSiteService, grant.Domain, token));
     private static AppException Invalid() => new("mail.webmail_sso_invalid", 403, 403);
 }

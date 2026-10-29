@@ -52,6 +52,8 @@ internal sealed class FileMigrationService(
     // İSTEĞE BAĞLI: adres çözümleyici. Testte sahte — birim testi gerçek DNS'e çıkmamalı.
     OutboundAddressGuard.OutboundHostResolver? outboundResolver = null) : IFileMigrationService
 {
+    internal Func<CancellationToken, Task<RemoteFileMigrationResult>>? PullTransport { get; init; }
+
     public async Task<RemoteFileMigrationResult> PullAsync(RemoteFileMigrationRequest request, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(request.Host))
@@ -108,7 +110,7 @@ internal sealed class FileMigrationService(
 
         try
         {
-            var sonuc = protocol switch
+            var sonuc = PullTransport is not null ? await PullTransport(cancellationToken) : protocol switch
             {
                 "sftp" => await PullSftpAsync(request, target, remotePath, hostKeyTrust, cancellationToken),
                 _ => await PullFtpAsync(request, target, remotePath, protocol == "ftps", certificateTrust, cancellationToken)
@@ -125,6 +127,7 @@ internal sealed class FileMigrationService(
                 sonuc.TargetPath);
             return sonuc;
         }
+        catch (OperationCanceledException) { throw; }
         catch (AppException exception)
         {
             // Buraya "sıfır dosya indi" koruması da düşer. İSTİSNA HTTP yanıtına gider ve orada

@@ -20,7 +20,20 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class WebDbDeploymentTests
 {
     [Fact]
-    public async Task DeployPhpMyAdmin_RecreatesSiteAndPersistsActualWildcardPort()
+    public async Task DeploymentLease_SerializesSameProviderButAllowsDifferentProvider()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "webdb.json");
+        var first = await WebDbClientService.DeploymentLifecycle.EnterAsync(path, "adminer", default);
+        var waiting = WebDbClientService.DeploymentLifecycle.EnterAsync(path, "adminer", default);
+        Assert.False(waiting.IsCompleted);
+        using var other = await WebDbClientService.DeploymentLifecycle.EnterAsync(path, "phpmyadmin", default);
+        first.Dispose();
+        using var second = await waiting.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeployPhpMyAdmin_RecreatesSiteAndPersistsActualWildcardPort(bool concurrentAdminer)
     {
         var dataRoot = Path.Combine(Path.GetTempPath(), $"adapanel-webdb-{Guid.NewGuid():N}");
         var installRoot = Path.Combine(dataRoot, "phpmyadmin");
@@ -55,7 +68,14 @@ public sealed class WebDbDeploymentTests
             });
         await dbContext.SaveChangesAsync();
 
-        var iis = new RecordingIisSiteService(actualPort: 18996);
+        var adminerRoot = Path.Combine(dataRoot, "adminer");
+        Directory.CreateDirectory(adminerRoot);
+        await File.WriteAllTextAsync(Path.Combine(adminerRoot, "adminer.php"), "<?php echo 'ready';");
+        dbContext.InstalledComponents.Add(new InstalledComponent { ComponentId = "adminer", DisplayName = "Adminer",
+            Version = "5", InstallDir = adminerRoot, Status = ComponentInstallStatus.Installed });
+        await dbContext.SaveChangesAsync();
+
+        var iis = new RecordingIisSiteService(actualPort: 18996) { ConcurrentProviders = concurrentAdminer };
         var fileStore = new JsonFileStore(Microsoft.Extensions.Options.Options.Create(
             new PanelRuntimeOptions { DataRoot = dataRoot }));
         var service = new WebDbClientService(
@@ -71,10 +91,17 @@ public sealed class WebDbDeploymentTests
 
         try
         {
-            var result = await service.DeployPhpMyAdminAsync();
+            var first = service.DeployPhpMyAdminAsync();
+            if (concurrentAdminer)
+            {
+                await iis.FirstCreateEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                await service.DeployAdminerAsync();
+                iis.ReleaseFirstCreate.TrySetResult();
+            }
+            var result = await first;
 
-            Assert.Equal(1, iis.DeleteCalls);
-            Assert.Equal(8896, iis.RequestedPort);
+            Assert.Equal(concurrentAdminer ? 2 : 1, iis.DeleteCalls);
+            if (!concurrentAdminer) Assert.Equal(8896, iis.RequestedPort);
             Assert.Equal(18996, result.Port);
             Assert.Equal("http://127.0.0.1:18996/", result.Url);
             Assert.True(result.IsHealthy);
@@ -82,6 +109,13 @@ public sealed class WebDbDeploymentTests
             var stateJson = await File.ReadAllTextAsync(Path.Combine(dataRoot, "config", "webdb.json"));
             Assert.Contains("\"port\": 18996", stateJson, StringComparison.Ordinal);
             Assert.Contains("\"url\": \"http://127.0.0.1:18996/\"", stateJson, StringComparison.Ordinal);
+            if (concurrentAdminer)
+            {
+                using var states = System.Text.Json.JsonDocument.Parse(stateJson);
+                Assert.Equal(2, states.RootElement.GetArrayLength());
+                Assert.Contains("adminer", stateJson);
+                Assert.Contains("phpmyadmin", stateJson);
+            }
         }
         finally
         {
@@ -93,18 +127,21 @@ public sealed class WebDbDeploymentTests
 
     private sealed class RecordingIisSiteService(int actualPort) : IIisSiteService
     {
-        private SiteDto? site;
+        private readonly Dictionary<string, SiteDto> sites = new(StringComparer.OrdinalIgnoreCase);
+        public bool ConcurrentProviders { get; init; }
+        public TaskCompletionSource FirstCreateEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirstCreate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public int DeleteCalls { get; private set; }
 
         public int RequestedPort { get; private set; }
 
-        public Task<SiteDto> CreateSiteAsync(
+        public async Task<SiteDto> CreateSiteAsync(
             CreateSiteRequest request,
             CancellationToken cancellationToken = default)
         {
             RequestedPort = request.Port;
-            site = new SiteDto
+            var site = new SiteDto
             {
                 Id = 1,
                 Name = request.Name,
@@ -124,21 +161,27 @@ public sealed class WebDbDeploymentTests
                     }
                 ]
             };
-            return Task.FromResult(site);
+            sites[request.Name] = site;
+            if (ConcurrentProviders && request.Name.EndsWith("PhpMyAdmin", StringComparison.Ordinal))
+            {
+                FirstCreateEntered.TrySetResult();
+                await ReleaseFirstCreate.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+            }
+            return site;
         }
 
         public Task DeleteSiteAsync(string siteName, CancellationToken cancellationToken = default)
         {
             DeleteCalls++;
-            site = null;
+            sites.Remove(siteName);
             return Task.CompletedTask;
         }
 
         public Task<SiteDto> GetSiteAsync(string siteName, CancellationToken cancellationToken = default)
-            => Task.FromResult(site ?? throw new AppException("sites.site_not_found", 404, 404));
+            => Task.FromResult(sites.GetValueOrDefault(siteName) ?? throw new AppException("sites.site_not_found", 404, 404));
 
         public Task<IReadOnlyCollection<SiteDto>> GetSitesAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyCollection<SiteDto>>(site is null ? [] : [site]);
+            => Task.FromResult<IReadOnlyCollection<SiteDto>>(sites.Values.ToArray());
 
         public Task<SiteDto> UpdatePhysicalPathAsync(string siteName, string physicalPath, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();

@@ -368,7 +368,7 @@ internal sealed class HtaccessRewriteRunner
         {
             yeniSorgu = acilmis[(soru + 1)..];
             acilmis = acilmis[..soru];
-            if (kural.Flags.QsAppend && !string.IsNullOrEmpty(durum.CurrentQuery))
+            if (kural.Flags.QsAppend && !kural.Flags.QsDiscard && !string.IsNullOrEmpty(durum.CurrentQuery))
             {
                 yeniSorgu = string.IsNullOrEmpty(yeniSorgu)
                     ? durum.CurrentQuery
@@ -380,7 +380,7 @@ internal sealed class HtaccessRewriteRunner
             yeniSorgu = durum.CurrentQuery;
         }
 
-        if (kural.Flags.QsDiscard)
+        if (kural.Flags.QsDiscard && soru < 0)
         {
             yeniSorgu = string.Empty;
         }

@@ -657,6 +657,7 @@ exit;
         int defaultPort,
         CancellationToken cancellationToken)
     {
+        using var deploymentLease = await DeploymentLifecycle.EnterAsync(fileStore.ResolvePath(StatePath), componentId, cancellationToken);
         var component = await EnsureInstalledAsync(componentId, cancellationToken);
         var phpComponentId = await EnsurePhpInstalledAsync(cancellationToken);
         var entryRoot = await PrepareEntryRootAsync(componentId, component.InstallDir, cancellationToken);
@@ -727,17 +728,7 @@ exit;
             PhpComponentId = phpComponentId
         };
 
-        var index = states.FindIndex(item => item.Provider == componentId);
-        if (index >= 0)
-        {
-            states[index] = state;
-        }
-        else
-        {
-            states.Add(state);
-        }
-
-        await fileStore.WriteAsync(StatePath, states, cancellationToken);
+        await PublishDeploymentAsync(state, cancellationToken);
         var deployment = MapState(state, true, true);
         await UpdateHealthAsync(deployment, cancellationToken, retry: true);
         if (!deployment.IsHealthy)
@@ -752,6 +743,48 @@ exit;
         }
 
         return deployment;
+    }
+
+    private Task PublishDeploymentAsync(WebDbState state, CancellationToken token) =>
+        fileStore.UpdateAsync(StatePath, Array.Empty<WebDbState>(), current =>
+            current.Where(item => item.Provider != state.Provider).Append(state).ToArray(), token);
+
+    // One provider's IIS/files/state form one lifecycle; different providers can provision
+    // concurrently and merge their records atomically at publication.
+    internal static class DeploymentLifecycle
+    {
+        private sealed class Entry { internal readonly SemaphoreSlim Gate = new(1, 1); internal int References; }
+        private static readonly Dictionary<string, Entry> Entries = new(StringComparer.OrdinalIgnoreCase);
+        internal static async Task<IDisposable> EnterAsync(string statePath, string provider, CancellationToken token)
+        {
+            var key = Path.GetFullPath(statePath) + "\n" + provider;
+            Entry entry;
+            lock (Entries)
+            {
+                if (!Entries.TryGetValue(key, out entry!)) Entries.Add(key, entry = new Entry());
+                entry.References++;
+            }
+            try { await entry.Gate.WaitAsync(token); }
+            catch { Return(key, entry); throw; }
+            var lease = new Lease(key, entry);
+            try { token.ThrowIfCancellationRequested(); return lease; }
+            catch { lease.Dispose(); throw; }
+        }
+        private static void Return(string key, Entry entry)
+        {
+            lock (Entries)
+                if (--entry.References == 0) { Entries.Remove(key); entry.Gate.Dispose(); }
+        }
+        private sealed class Lease(string key, Entry entry) : IDisposable
+        {
+            private int disposed;
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref disposed, 1) != 0) return;
+                entry.Gate.Release();
+                Return(key, entry);
+            }
+        }
     }
 
     private async Task DeleteManagedSiteIfPresentAsync(

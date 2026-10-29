@@ -2,6 +2,7 @@ namespace AdaPanel.Core.Dtos.Settings;
 
 public sealed class PanelPreferencesDto
 {
+    public ServerAddressDnsSyncDto? ServerAddressDnsSync { get; set; }
     public string PanelName { get; set; } = "AdaPanel";
 
     public string DefaultLanguage { get; set; } = "tr";

@@ -9,6 +9,7 @@ import { useSystemStore } from "../stores/system";
 import { useSoftwareStore } from "../stores/software";
 import { useSitesStore } from "../stores/sites";
 import { useDatabasesStore } from "../stores/databases";
+import type { PanelPreferences, ServerAddressDnsSync } from "../api/panelSettings";
 
 const shared = vi.hoisted(() => ({ epoch: 0, route: { value: { query: { section: "home" } as Record<string, string> } } }));
 vi.mock("../api/client", () => ({
@@ -25,6 +26,8 @@ type State = {
   mode: string; bootstrapState: string; ftpUserCount: number | null; databaseCount: number | null; sitesCount: number | null; totalBindingCount: number | null;
   mailAccountCount: number | null; dashboardSections: { id: string; badge?: string }[];
   banner: string; bannerError: boolean;
+  panelPreferences: PanelPreferences; preferencesBusy: boolean;
+  savePanelPreferences(): Promise<void>; retryServerAddressDns(oldAddress: string): Promise<void>; toggleTheme(): Promise<void>;
   loadDashboardData(): Promise<void>; refreshDashboard(): Promise<void>; logout(): Promise<void>; handleSessionExpired(): void;
   initializeView(): Promise<void>; submitLogin(): Promise<void>;
 };
@@ -55,7 +58,7 @@ beforeEach(() => {
     if (url === "/ftp/users") return envelope(ftpRows);
     if (url === "/scope/sites" || url === "/users" || url === "/audit-logs?take=25" || url === "/php/versions") return envelope([]);
     if (url === "/security/settings") return envelope({ secureEntryPath: "/panel", allowedIpAddresses: [], hasIpRestrictions: false });
-    if (url === "/panel-settings") return envelope({ panelName: "Fixture", defaultLanguage: "tr", themeMode: "dark", uiDensity: "comfortable" });
+    if (url === "/panel-settings") return envelope({ panelName: "Fixture", defaultLanguage: "tr", themeMode: "dark", uiDensity: "comfortable", serverAddress: "84.51.22.239" });
     if (url === "/branding") return envelope({ panelName: "", accentColor: "", logoDataUrl: "", faviconDataUrl: "", logoLinkUrl: "", scope: "server" });
     if (url === "/subscriptions/me") return envelope({ isSuspended: false });
     throw new Error(`Unexpected fixture request: ${url}`);

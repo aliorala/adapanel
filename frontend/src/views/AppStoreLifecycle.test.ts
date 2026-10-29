@@ -52,6 +52,14 @@ it("cleans only the same confirmed site and template", async () => {
 it("does not retry a cancelled clean install", async () => {
   const { state } = await mount(); vi.mocked(installAppTemplate).mockRejectedValueOnce(contentError()); await state.install("wordpress"); expect(installAppTemplate).toHaveBeenCalledOnce(); expect(state.busyTemplate).toBe("");
 });
+it("shows files installed with manual WordPress setup required as an incomplete outcome", async () => {
+  const { state } = await mount();
+  vi.mocked(installAppTemplate).mockResolvedValueOnce({ templateId: "wordpress", adminUrl: "", adminUser: "", adminPassword: "", requiresManualSetup: true });
+  await state.install("wordpress");
+  expect(state.notice).toBe("panel.appStore.manualSetupRequired");
+  expect(state.noticeError).toBe(true);
+  expect(state.wpAdmin.adminPassword).toBe("");
+});
 it("does not overlap ordinary installations", async () => {
   const { state } = await mount(), pending = deferred<AppInstallResult>(); vi.mocked(installAppTemplate).mockReturnValueOnce(pending.promise); const installing = state.install("wordpress"); await state.install("wordpress"); await state.install("other"); expect(installAppTemplate).toHaveBeenCalledOnce(); pending.resolve(result()); await installing;
 });

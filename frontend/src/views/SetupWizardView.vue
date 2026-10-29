@@ -455,6 +455,7 @@
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.settings.serverAddress") }}</span>
             <input v-model="panelPreferences.serverAddress" />
+            <small class="field-hint">{{ t("panel.settings.dnsSync.autoHint") }}</small>
             <!-- Adres ayarlanmadığında sunucu makinenin İÇ IP'sini yazıyor (192.168.x.x gibi) ve
                  müşteriye e-posta ile giden bağlantılar o adresi taşıyor: müşteri açamıyor, panel
                  "gönderildi" diyordu. Uyarı ENGELLEMEZ — iç ağa kurulmuş panelde adres doğrudur.
@@ -504,8 +505,9 @@
           </label>
         </div>
         <div class="row-actions">
-          <button class="compact" @click="savePanelPreferences">{{ t("panel.settings.saveGeneral") }}</button>
+          <button class="compact" :disabled="preferencesBusy" @click="savePanelPreferences">{{ t("panel.settings.saveGeneral") }}</button>
         </div>
+        <ServerAddressDnsSyncCard :result="panelPreferences.serverAddressDnsSync" :current-address="savedServerAddress" :busy="preferencesBusy" :feedback-version="dnsSyncFeedbackVersion" @retry="retryServerAddressDns" />
 
         <!-- Panel erişimi: paneli yöneticinin KENDİ alan adıyla ve geçerli sertifikayla dışarıya
              açar. Yapay zeka istemcileri kendinden imzalı sertifikayı kabul etmiyor, bu yüzden
@@ -560,7 +562,7 @@
             </label>
           </div>
           <div class="row-actions">
-            <button class="compact" @click="saveBranding">{{ t("panel.branding.save") }}</button>
+            <button class="compact" :disabled="brandingBusy" @click="saveBranding">{{ t("panel.branding.save") }}</button>
           </div>
 
           <!--
@@ -580,11 +582,11 @@
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/gif,image/webp"
-                @change="uploadBrandingAsset('logo', $event)" />
+                :disabled="brandingBusy" @change="uploadBrandingAsset('logo', $event)" />
               <button
                 type="button"
                 class="secondary compact"
-                :disabled="!brandingForm.logoDataUrl"
+                :disabled="brandingBusy || !brandingForm.logoDataUrl"
                 @click="removeBrandingAsset('logo')">
                 {{ t("panel.branding.remove") }}
               </button>
@@ -600,11 +602,11 @@
               <input
                 type="file"
                 accept="image/png,image/x-icon,image/vnd.microsoft.icon,.ico"
-                @change="uploadBrandingAsset('favicon', $event)" />
+                :disabled="brandingBusy" @change="uploadBrandingAsset('favicon', $event)" />
               <button
                 type="button"
                 class="secondary compact"
-                :disabled="!brandingForm.faviconDataUrl"
+                :disabled="brandingBusy || !brandingForm.faviconDataUrl"
                 @click="removeBrandingAsset('favicon')">
                 {{ t("panel.branding.remove") }}
               </button>
@@ -658,21 +660,17 @@ import SectionLoadError from "../components/SectionLoadError.vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import MainLayout from "../layouts/MainLayout.vue";
+import { useBrandingWorkspace } from "../composables/useBrandingWorkspace";
 import { getMailWorkspace } from "../api/mail";
 import { getSessionEpoch, readSecureEntryPath, setSessionExpiredHandler } from "../api/client";
 import { getFtpUsers } from "../api/ftp";
 import { getMyDatabases } from "../api/myDatabases";
 import {
   emptyBranding,
-  getBranding,
-  getBrandingSettings,
   getPanelPreferences,
-  removeBrandingImage,
-  updateBrandingSettings,
   updatePanelPreferences,
-  uploadBrandingImage,
+  syncServerAddressDns,
   type Branding,
-  type BrandingImageKind,
   type PanelPreferences
 } from "../api/panelSettings";
 import { useAppsStore } from "../stores/apps";
@@ -688,6 +686,8 @@ import { useSystemStore } from "../stores/system";
 import AttentionSectionNotice from "../components/AttentionSectionNotice.vue";
 import PanelAccessCard from "../components/PanelAccessCard.vue";
 import InstallationReportingCard from "../components/InstallationReportingCard.vue";
+import ServerAddressDnsSyncCard from "../components/ServerAddressDnsSyncCard.vue";
+import { dnsSyncHasFailure, usePanelPreferencesMutation } from "../composables/usePanelPreferencesMutation";
 import DashboardOverviewView from "./DashboardOverviewView.vue";
 import { checkForUpdate, type UpdateStatus } from "../api/update";
 import { useSectionError } from "../composables/useNotice";
@@ -857,6 +857,7 @@ const panelPreferences = reactive<PanelPreferences>({
   defaultSiteRoot: "C:\\inetpub\\wwwroot",
   defaultBackupRoot: "%ProgramData%\\AdaPanel\\backups",
   serverAddress: "",
+  serverAddressDnsSync: null,
   preferredHttpsPort: 8888,
   // Sunucudan gelmeden önceki YER TUTUCU değer KAPALI olmalı: tercihler yüklenemeden form
   // kaydedilirse (istek hata verdi, kullanıcı hızlı davrandı) açık bir yer tutucu, oturum
@@ -871,6 +872,9 @@ const panelPreferences = reactive<PanelPreferences>({
 // Tercihler sunucudan gelmeden yukarıdaki varsayılanlar gerçek ayar sanılıyordu (anahtarlar
 // yanlış konumda görünüp yanlışlıkla üzerine kaydedilebiliyordu).
 const panelPreferencesLoaded = ref(false);
+const savedServerAddress = ref("");
+const dnsSyncFeedbackVersion = ref(0);
+let savedPanelPreferences: PanelPreferences | null = null;
 const initialPanelPreferences = { ...panelPreferences };
 
 /*
@@ -884,8 +888,19 @@ const initialPanelPreferences = { ...panelPreferences };
  * değiştirdiğini sanmasına ya da tam tersine yol açardı.
  */
 const branding = ref<Branding>(emptyBranding());
-const brandingForm = ref<Branding>(emptyBranding());
-const brandingLoaded = ref(false);
+const brandingWorkspace = useBrandingWorkspace({
+  active: () => dashboardActive,
+  actor: dashboardActorKey,
+  allowed: () => authStore.session?.isAuthenticated === true && (isAdmin.value || isReseller.value),
+  apply: brand => applyBranding(brand, false),
+  notify: showBanner,
+  error: resolveApiMessage,
+  saved: () => t("panel.branding.saved"),
+  refreshFailed: () => t("panel.branding.savedRefreshFailed")
+});
+const { form: brandingForm, loaded: brandingLoaded, busy: brandingBusy, loadEffective: loadBranding,
+  loadSettings: loadBrandingSettings, save: saveBranding, upload: uploadBrandingAsset,
+  remove: removeBrandingAsset } = brandingWorkspace;
 
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const isCustomer = computed(() => authStore.session?.user?.role === "Customer");
@@ -900,6 +915,14 @@ function dashboardActorKey() {
   return JSON.stringify([getSessionEpoch(), session?.isAuthenticated, session?.user?.id, session?.user?.role,
     session?.isSubUser, session?.allowedSections?.map(section => section.toLowerCase()).sort() ?? null]);
 }
+watch(dashboardActorKey, () => {
+  if (!dashboardActive) return;
+  brandingWorkspace.invalidate();
+  brandingLoaded.value = false;
+  brandingForm.value = emptyBranding();
+  applyBranding(emptyBranding(), false);
+  void loadBranding();
+});
 function canReadDashboardSection(section: string) {
   if (!authStore.session?.isAuthenticated || !(isAdmin.value || isCustomer.value || isReseller.value)) return false;
   return !isSubUser.value || !subUserAllowedSections.value ||
@@ -1533,8 +1556,10 @@ async function loadDashboardData() {
         securityForm.allowedIpAddressesText = settings.allowedIpAddresses.join("\n");
       }),
       getPanelPreferences().then(async preferences => {
-        if (!current()) return;
+        if (!current() || preferencesBusy.value) return;
         Object.assign(panelPreferences, preferences);
+        savedServerAddress.value = preferences.serverAddress;
+        savedPanelPreferences = { ...preferences };
         panelPreferencesLoaded.value = true;
         await setPanelLocale(preferences.defaultLanguage);
         if (current()) applyAppearance(preferences);
@@ -1568,19 +1593,33 @@ async function loadDashboardData() {
   return true;
 }
 
-async function savePanelPreferences() {
-  try {
-    const updated = await updatePanelPreferences({ ...panelPreferences });
+const { busy: preferencesBusy, run: mutatePanelPreferences } = usePanelPreferencesMutation({
+  actor: dashboardActorKey,
+  allowed: () => dashboardActive && isAdmin.value && authStore.session?.isAuthenticated === true && panelPreferencesLoaded.value,
+  before: () => { dashboardRead++; },
+  apply: async (updated, current) => {
     Object.assign(panelPreferences, updated);
+    savedServerAddress.value = updated.serverAddress;
+    savedPanelPreferences = { ...updated };
     await setPanelLocale(updated.defaultLanguage);
+    if (!current()) return;
     applyAppearance(updated);
     setupForm.preferredHttpsPort = updated.preferredHttpsPort;
-    showBanner(t("panel.settings.saved"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  }
+    const sync = updated.serverAddressDnsSync;
+    dnsSyncFeedbackVersion.value++;
+    showBanner(t(dnsSyncHasFailure(sync) ? (sync?.pending ? "panel.settings.dnsSync.pending" : "panel.settings.dnsSync.partial") : "panel.settings.saved"), dnsSyncHasFailure(sync));
+  },
+  failure: error => showBanner(resolveApiMessage(error), true)
+});
+
+async function savePanelPreferences() {
+  const { serverAddressDnsSync: _readOnlySync, ...payload } = panelPreferences;
+  await mutatePanelPreferences(() => updatePanelPreferences({ ...payload }, true));
 }
 
+async function retryServerAddressDns(oldAddress: string) {
+  if (oldAddress.trim()) await mutatePanelPreferences(() => syncServerAddressDns(oldAddress.trim()));
+}
 function applyAppearance(preferences: PanelPreferences) {
   const resolvedTheme = preferences.themeMode === "system"
     ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
@@ -1606,16 +1645,8 @@ function applyAppearance(preferences: PanelPreferences) {
 const brandName = computed(() => branding.value.panelName || panelPreferences.panelName || "AdaPanel");
 const brandLogo = computed(() => branding.value.logoDataUrl);
 
-async function loadBranding() {
-  try {
-    applyBranding(await getBranding());
-  } catch {
-    // Marka okunamazsa panel ürün görünümüyle çalışmaya DEVAM eder; giriş ekranını bir marka
-    // isteği yüzünden kilitlemek, çalışan bir paneli görsel bir ayar uğruna erişilemez kılardı.
-  }
-}
-
-function applyBranding(brand: Branding) {
+function applyBranding(brand: Branding, invalidate = true) {
+  if (invalidate) brandingWorkspace.invalidate();
   branding.value = brand;
 
   const documentTitle = brand.panelName || panelPreferences.panelName || "AdaPanel";
@@ -1643,62 +1674,6 @@ function openBrandingTab() {
   void loadBrandingSettings();
 }
 
-async function loadBrandingSettings() {
-  try {
-    brandingForm.value = await getBrandingSettings();
-    brandingLoaded.value = true;
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  }
-}
-
-async function saveBranding() {
-  try {
-    const saved = await updateBrandingSettings({
-      panelName: brandingForm.value.panelName,
-      accentColor: brandingForm.value.accentColor,
-      logoLinkUrl: brandingForm.value.logoLinkUrl
-    });
-    brandingForm.value = saved;
-    // Kaydeden kişi kendi markasının kapsamındadır (yönetici→sunucu, bayi→kendisi), yani
-    // değişiklik kendi ekranında da GÖRÜNMELİ; aksi halde "kaydettim ama bir şey olmadı" denir.
-    await loadBranding();
-    showBanner(t("panel.branding.saved"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  }
-}
-
-async function uploadBrandingAsset(kind: BrandingImageKind, event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) {
-    return;
-  }
-
-  try {
-    brandingForm.value = await uploadBrandingImage(kind, file);
-    await loadBranding();
-    showBanner(t("panel.branding.saved"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  } finally {
-    // Seçim TEMİZLENİR: aynı dosya reddedildikten sonra düzeltilip yeniden seçilebilsin
-    // (tarayıcı aynı dosya adı için `change` olayını tekrar tetiklemez).
-    input.value = "";
-  }
-}
-
-async function removeBrandingAsset(kind: BrandingImageKind) {
-  try {
-    brandingForm.value = await removeBrandingImage(kind);
-    await loadBranding();
-    showBanner(t("panel.branding.saved"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  }
-}
-
 function pickAccentColor(event: Event) {
   brandingForm.value.accentColor = (event.target as HTMLInputElement).value;
 }
@@ -1710,12 +1685,12 @@ async function toggleTheme() {
   const next = resolvedThemeMode.value === "light" ? "dark" : "light";
   panelPreferences.themeMode = next;
   applyAppearance(panelPreferences);
-  if (isAdmin.value) {
-    try {
-      await updatePanelPreferences({ ...panelPreferences });
-    } catch {
-      // kaydedilemese bile görsel tercih localStorage'da kalır
-    }
+  if (isAdmin.value && savedPanelPreferences) {
+    // A theme click must never publish an edited server IP or other unsaved settings.
+    const { serverAddressDnsSync: _readOnlySync, ...saved } = savedPanelPreferences;
+    await mutatePanelPreferences(() => updatePanelPreferences({ ...saved, themeMode: next }), async updated => {
+      savedPanelPreferences = { ...updated };
+    });
   }
 }
 

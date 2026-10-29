@@ -32,6 +32,7 @@ public sealed class AppStoreService(
     IOptions<PanelRuntimeOptions> runtimeOptions,
     ILogger<AppStoreService> logger) : IAppStoreService
 {
+    internal Func<string, CancellationToken, Task>? PrepareWordPressFiles { get; init; }
     private static readonly SemaphoreSlim LaravelInstallLock = new(1, 1);
     private static readonly HashSet<string> ReplaceableStarterFiles = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -293,6 +294,7 @@ public sealed class AppStoreService(
                 break;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         // TÜM PHP app'leriyle ortak güvence: placeholder index.html kaldır + index.php varsayılan
         // belge (yoksa). index.php olmayan kökte (aspnet-static) no-op. Laravel/Roundcube kendi
         // web.config'ini (index.php'li) yazdığından korunur.
@@ -301,6 +303,7 @@ public sealed class AppStoreService(
         return new AppInstallResultDto
         {
             TemplateId = template.Id,
+            RequiresManualSetup = template.Id == "wordpress" && wordpressAdmin is null,
             AdminUrl = wordpressAdmin?.Url ?? string.Empty,
             AdminUser = wordpressAdmin?.User ?? string.Empty,
             AdminPassword = wordpressAdmin?.Password ?? string.Empty
@@ -333,6 +336,30 @@ public sealed class AppStoreService(
 
     private async Task<(string Url, string User, string Password)?> InstallWordPressAsync(InstallAppTemplateRequest request, string destination, CancellationToken cancellationToken)
     {
+        if (PrepareWordPressFiles is not null) await PrepareWordPressFiles(destination, cancellationToken);
+        else await PrepareWordPressFilesAsync(destination, cancellationToken);
+
+        // Files remain available for WordPress's manual setup if automatic bootstrapping fails.
+        // Cancellation is still cancellation, even after package publication.
+        try
+        {
+            var (phpComponentId, phpExecutable) = await EnsurePhpRuntimeAsync(cancellationToken);
+            await phpService.EnsureExtensionsAsync(phpComponentId, WordPressExtensions, cancellationToken);
+            var (dbName, dbUser, dbPassword) = await ProvisionWordPressDatabaseAsync(request, cancellationToken);
+            WriteWordPressConfig(destination, dbName, dbUser, dbPassword);
+            logger.LogInformation("WordPress veritabanı sağlandı (site {Site}): db={Db} user={User}", request.SiteName, dbName, dbUser);
+            return await TryInstallWordPressCoreAsync(request, destination, phpExecutable, cancellationToken);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "WordPress DB/wp-config otomatik kurulamadı (dosyalar kuruldu): {Site}", request.SiteName);
+            return null;
+        }
+    }
+
+    private async Task PrepareWordPressFilesAsync(string destination, CancellationToken cancellationToken)
+    {
         var package = await ResolveWordPressPackageAsync(cancellationToken);
         var workspace = Path.Combine(dataRoot, "temp", "app-installs", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workspace);
@@ -353,26 +380,6 @@ public sealed class AppStoreService(
             TryDeleteDirectory(workspace);
         }
 
-        // TURNKEY (Plesk/cPanel WordPress Toolkit gibi): PHP'de mysqli vb. etkinleştir + veritabanı/kullanıcı oluştur +
-        // wp-config.php'yi yaz → kullanıcı DB ekranını ELLE doldurmak zorunda kalmaz, doğrudan "5 dakikalık" kuruluma düşer.
-        // Best-effort: DB sağlanamasa bile dosyalar kurulu kalır (kullanıcı wp-config'i elle tamamlayabilir).
-        try
-        {
-            var (phpComponentId, phpExecutable) = await EnsurePhpRuntimeAsync(cancellationToken);
-            await phpService.EnsureExtensionsAsync(phpComponentId, WordPressExtensions, cancellationToken);
-
-            var (dbName, dbUser, dbPassword) = await ProvisionWordPressDatabaseAsync(request, cancellationToken);
-            WriteWordPressConfig(destination, dbName, dbUser, dbPassword);
-            logger.LogInformation("WordPress veritabanı sağlandı (site {Site}): db={Db} user={User}", request.SiteName, dbName, dbUser);
-
-            // wp-cli ile çekirdek kurulumu (admin hesabı oluştur) → site DB ekranı YERİNE doğrudan giriş yapılabilir olur.
-            return await TryInstallWordPressCoreAsync(request, destination, phpExecutable, cancellationToken);
-        }
-        catch (Exception exception)
-        {
-            logger.LogWarning(exception, "WordPress DB/wp-config otomatik kurulamadı (dosyalar kuruldu): {Site}", request.SiteName);
-            return null;
-        }
     }
 
     // wp-cli ile WordPress çekirdek kurulumunu tamamlar (admin hesabı + site başlığı). Başarılıysa giriş bilgilerini döner;
@@ -411,6 +418,7 @@ public sealed class AppStoreService(
 
             return ($"{url.TrimEnd('/')}/wp-admin/", adminUser, adminPassword);
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "wp-cli core install hatası ({Site})", request.SiteName);

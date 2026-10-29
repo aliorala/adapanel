@@ -1,3 +1,4 @@
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
@@ -49,6 +50,7 @@ public sealed class ClusterNodeStore(
             new ClusterNodeStoreFile(),
             current =>
             {
+                EnsureUniqueAddress(current, record);
                 current.Nodes.Add(record);
                 return current;
             },
@@ -81,6 +83,7 @@ public sealed class ClusterNodeStore(
                 }
 
                 mutate(record);
+                EnsureUniqueAddress(current, record);
                 if (!string.IsNullOrWhiteSpace(plainToken))
                 {
                     record.TokenProtected = secretProtector.Protect(plainToken);
@@ -92,6 +95,13 @@ public sealed class ClusterNodeStore(
             cancellationToken);
 
         return updated;
+    }
+
+    private static void EnsureUniqueAddress(ClusterNodeStoreFile current, ClusterNodeRecord candidate)
+    {
+        if (current.Nodes.Any(node => node.Id != candidate.Id &&
+            string.Equals(node.Address, candidate.Address, StringComparison.OrdinalIgnoreCase)))
+            throw new AppException(ClusterMessages.DuplicateAddress, 409, 409);
     }
 
     public async Task<bool> RemoveAsync(Guid id, CancellationToken cancellationToken = default)

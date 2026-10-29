@@ -496,7 +496,7 @@ import { formatDateTime } from "../utils/datetime";
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmesi bastan devre disi + sebebi title/aria ile soylenir.
 // Okuma dugmeleri (incele, denetle, benzet) kapiya girmez.
-const { writeGate } = useSubscriptionGate();
+const { writeGate, locked } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const { resolveApiMessage } = useNotice();
 const sitesStore = useSitesStore();
@@ -556,11 +556,18 @@ const simulatePath = ref("/");
 const simulateMethod = ref("GET");
 const simulateHttps = ref(false);
 let siteGeneration = 0, reportRequest = 0;
+let serverGeneration = 0, serverRequest = 0;
 let disposed = false;
 onBeforeUnmount(() => { disposed = true; });
 function siteContext() {
   const site = siteName.value, generation = siteGeneration, epoch = getSessionEpoch();
   return { site, current: () => !disposed && siteName.value === site && generation === siteGeneration && getSessionEpoch() === epoch };
+}
+function serverContext() {
+  const session = authStore.session, generation = serverGeneration, epoch = getSessionEpoch();
+  const actor = session?.user?.id, role = session?.user?.role;
+  return { current: () => !disposed && isAdmin.value && generation === serverGeneration && epoch === getSessionEpoch() &&
+    session === authStore.session && actor === authStore.session?.user?.id && role === authStore.session?.user?.role };
 }
 
 const methods = ["GET", "POST", "HEAD", "PUT", "DELETE"];
@@ -657,10 +664,13 @@ async function loadServerSwitch() {
     serverSwitch.value = null;
     return;
   }
-
+  if (disposed || serverBusy.value) return;
+  const target = serverContext(), request = ++serverRequest;
   try {
-    serverSwitch.value = await getServerHtaccessMode();
+    const result = await getServerHtaccessMode();
+    if (target.current() && request === serverRequest) serverSwitch.value = result;
   } catch (error) {
+    if (!target.current() || request !== serverRequest) return;
     // Okunamadıysa DURUM UYDURULMAZ: `null` kalır ve arayüz "bilinmiyor" der. "off" varsaymak,
     // açık bir sunucuyu kapalı göstermek olurdu.
     serverSwitch.value = null;
@@ -695,12 +705,16 @@ async function repairModule() {
 }
 
 async function saveServerMode(mode: HtaccessMode) {
+  if (disposed || !isAdmin.value || serverBusy.value || locked.value) return;
+  const target = serverContext(), request = ++serverRequest;
   serverBusy.value = true;
   serverNotice.value = "";
   serverNoticeError.value = false;
 
   try {
-    serverSwitch.value = await setServerHtaccessMode(mode, note.value.trim());
+    const result = await setServerHtaccessMode(mode, note.value.trim());
+    if (!target.current() || request !== serverRequest) return;
+    serverSwitch.value = result;
     serverNotice.value = t("panel.htaccess.server.saved", { mode: modeLabel(serverSwitch.value.mode) });
 
     // Sitenin raporu da TAZELENİR: etkin kip sunucu ile sitenin en düşüğü olduğu için, sunucu
@@ -708,10 +722,11 @@ async function saveServerMode(mode: HtaccessMode) {
     // açtığı hâlde ekranda hâlâ "sunucu geneli KAPALI" yazardı.
     await load();
   } catch (error) {
+    if (!target.current() || request !== serverRequest) return;
     serverNotice.value = resolveApiMessage(error) || t("panel.htaccess.server.saveFailed");
     serverNoticeError.value = true;
   } finally {
-    serverBusy.value = false;
+    if (target.current() && request === serverRequest) serverBusy.value = false;
   }
 }
 
@@ -976,7 +991,15 @@ watch(siteName, () => {
 // Oturumun rolü belirlendiği anda bir kez okunur (rol başta `undefined` olabilir: oturum
 // bilgisi ayrı bir istekle geliyor; `immediate` ile o an okuyup boş dönmek "bilinmiyor"u
 // kalıcılaştırırdı).
-watch(isAdmin, loadServerSwitch, { immediate: true });
+watch(() => [authStore.session, authStore.session?.user?.id, authStore.session?.user?.role], () => {
+  serverGeneration++;
+  serverRequest++;
+  serverSwitch.value = null;
+  serverBusy.value = false;
+  serverNotice.value = "";
+  serverNoticeError.value = false;
+  void loadServerSwitch();
+}, { immediate: true, flush: "sync" });
 </script>
 
 <style scoped>

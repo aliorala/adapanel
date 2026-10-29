@@ -126,7 +126,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { getSessionEpoch } from "../api/client";
 import { useI18n } from "vue-i18n";
 
 import { activateLicense, getLicense, refreshLicense, removeLicense, type LicenseStatus } from "../api/license";
@@ -144,6 +145,17 @@ const loadError = useSectionError();
 const status = ref<LicenseStatus | null>(null);
 const licenseKey = ref("");
 const busy = ref(false);
+const mountedEpoch = getSessionEpoch();
+let disposed = false, generation = 0, readSequence = 0, draftRevision = 0;
+const isActive = () => !disposed && mountedEpoch === getSessionEpoch();
+watch(licenseKey, () => { draftRevision++; }, { flush: "sync" });
+onBeforeUnmount(() => { disposed = true; licenseKey.value = ""; });
+function beginMutation() {
+  const current = ++generation;
+  readSequence++;
+  busy.value = true;
+  return () => isActive() && current === generation;
+}
 
 const STATE_LABEL_KEYS: Record<LicenseStatus["state"], string> = {
   NotConfigured: "panel.license.stateNotConfigured",
@@ -182,48 +194,63 @@ const showGraceEnds = computed(() =>
 onMounted(load);
 
 async function load() {
+  if (!isActive() || busy.value) return;
+  const request = ++readSequence, version = generation;
+  const current = () => isActive() && request === readSequence && version === generation;
   try {
-    status.value = await getLicense();
+    const loaded = await getLicense();
+    if (!current()) return;
+    status.value = loaded;
     loadError.clear();
   } catch (error) {
+    if (!current()) return;
     status.value = null;
     loadError.capture(error);
   }
 }
 
 async function activate() {
-  if (!licenseKey.value) {
+  if (!isActive() || busy.value || !licenseKey.value) {
     return;
   }
 
-  busy.value = true;
+  const key = licenseKey.value, revision = draftRevision;
+  const current = beginMutation();
   try {
-    status.value = await activateLicense(licenseKey.value);
+    const activated = await activateLicense(key);
+    if (!current()) return;
+    status.value = activated;
+    loadError.clear();
     // Anahtar bir SIRDIR: kaydedildikten sonra alanda asılı kalmaz.
-    licenseKey.value = "";
+    if (revision === draftRevision) licenseKey.value = "";
     showNotice(t("license.activated"), false);
   } catch (error) {
-    showError(error);
+    if (current()) showError(error);
   } finally {
-    busy.value = false;
+    if (current()) busy.value = false;
   }
 }
 
 async function refreshStatus() {
-  busy.value = true;
+  if (!isActive() || busy.value) return;
+  const current = beginMutation();
   try {
     // Ağ hatasında bile 200 döner; sonuç `state`'e yansır.
-    status.value = await refreshLicense();
+    const refreshed = await refreshLicense();
+    if (!current()) return;
+    status.value = refreshed;
     loadError.clear();
     showNotice(t("license.refreshed"), false);
   } catch (error) {
-    showError(error);
+    if (current()) showError(error);
   } finally {
-    busy.value = false;
+    if (current()) busy.value = false;
   }
 }
 
 async function remove() {
+  if (!isActive() || busy.value || !status.value?.hasKey) return;
+  const confirmedStatus = status.value, version = generation;
   // Yıkıcı değil: siteler/posta/veritabanları etkilenmez, yalnız yeni kaynak kapısı kapanır.
   await confirm({
     title: t("panel.license.remove"),
@@ -231,20 +258,25 @@ async function remove() {
     tone: "neutral",
     confirmLabel: t("panel.license.remove"),
     action: async () => {
-      busy.value = true;
+      if (!isActive() || busy.value || version !== generation || status.value !== confirmedStatus) return;
+      const current = beginMutation();
       try {
-        status.value = await removeLicense();
+        const removed = await removeLicense();
+        if (!current()) return;
+        status.value = removed;
+        loadError.clear();
         showNotice(t("license.deactivated"), false);
       } catch (error) {
-        showError(error);
+        if (current()) showError(error);
       } finally {
-        busy.value = false;
+        if (current()) busy.value = false;
       }
     }
   });
 }
 
 async function copyFingerprint() {
+  if (!isActive()) return;
   const value = status.value?.fingerprint ?? "";
   if (!value) {
     return;
@@ -252,6 +284,7 @@ async function copyFingerprint() {
 
   // Kopyalanmadıysa "kopyalandı" DEMEYİZ: `copyToClipboard` gerçekten kopyalayıp kopyalamadığını döndürür.
   const copied = await copyToClipboard(value);
+  if (!isActive() || status.value?.fingerprint !== value) return;
   showNotice(copied ? t("panel.common.copied") : t("panel.common.copyFailed"), !copied);
 }
 

@@ -364,6 +364,124 @@ public sealed class LicenseEnforcementTests : IDisposable
                 + string.Join("\n  ", ihlaller));
     }
 
+    [Fact]
+    public async Task Deactivation_waits_for_pending_activation_and_cannot_be_undone_by_its_reply()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = new SahteLisansSunucusu { BeforeReply = async token =>
+        { entered.TrySetResult(); await release.Task.WaitAsync(token); } };
+        var first = Servis(server);
+        var second = Servis(server); // Different DI scope, same persisted license.
+        var activate = first.ActivateAsync("ADA-TEST-0001");
+        Task<LicenseStatusDto>? deactivate = null;
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            deactivate = second.DeactivateAsync();
+            Assert.False(deactivate.IsCompleted);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await activate.WaitAsync(TimeSpan.FromSeconds(5));
+            if (deactivate is not null) await deactivate.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        Assert.False((await second.GetStatusAsync()).HasKey);
+    }
+
+    [Fact]
+    public async Task Canceled_waiting_license_operation_does_not_modify_the_active_key()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = new SahteLisansSunucusu { BeforeReply = async token =>
+        { entered.TrySetResult(); await release.Task.WaitAsync(token); } };
+        var service = Servis(server);
+        var activate = service.ActivateAsync("ADA-TEST-0001");
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            using var cancellation = new CancellationTokenSource();
+            var deactivate = service.DeactivateAsync(cancellation.Token);
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => deactivate);
+        }
+        finally { release.TrySetResult(); await activate.WaitAsync(TimeSpan.FromSeconds(5)); }
+        Assert.True((await service.GetStatusAsync()).HasKey);
+        Assert.False((await service.DeactivateAsync()).HasKey);
+    }
+
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("invalid")]
+    [InlineData("expired")]
+    public async Task New_offline_key_does_not_inherit_previous_keys_verdict_or_entitlements(string previousVerdict)
+    {
+        var now = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
+        var clock = new SabitSaat(now);
+        var server = new SahteLisansSunucusu { EnFazlaAbonelik = 2, BitisUtc = now.AddDays(1) };
+        var service = Servis(server, saat: clock);
+        await service.ActivateAsync("FIXTURE-OLD-0001");
+        server.Karar = previousVerdict;
+        await service.RefreshAsync();
+        clock.Ilerlet(TimeSpan.FromDays(3));
+        server.Ulasilabilir = false;
+        var status = await service.ActivateAsync("FIXTURE-NEW-0002");
+        Assert.Equal(LicenseState.Grace, status.State);
+        Assert.True(status.HasKey);
+        Assert.Equal("0002", status.KeySuffix);
+        Assert.False(status.RestrictsNewResources);
+        Assert.Null(status.LastVerifiedAtUtc);
+        Assert.Null(status.ExpiresAtUtc);
+        Assert.Equal(string.Empty, status.Sku);
+        Assert.Equal(0, status.MaxSubscriptions);
+        Assert.Equal(now.AddDays(17), status.OfflineGraceEndsAtUtc);
+        var reloaded = await Servis(server, saat: clock).GetStatusAsync();
+        Assert.Equal("0002", reloaded.KeySuffix);
+        Assert.Equal(LicenseState.Grace, reloaded.State);
+    }
+
+    [Fact]
+    public async Task First_offline_key_is_saved_with_its_own_grace_start()
+    {
+        var now = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
+        var server = new SahteLisansSunucusu { Ulasilabilir = false };
+        var service = Servis(server, saat: new SabitSaat(now));
+        var status = await service.ActivateAsync("FIXTURE-FIRST-0001");
+        Assert.True(status.HasKey);
+        Assert.Equal(LicenseState.Grace, status.State);
+        Assert.Equal(now.AddDays(14), status.OfflineGraceEndsAtUtc);
+        Assert.Null(status.LastVerifiedAtUtc);
+    }
+
+    [Theory]
+    [InlineData("valid", LicenseState.GraceExpired)]
+    [InlineData("invalid", LicenseState.Invalid)]
+    [InlineData("expired", LicenseState.Expired)]
+    public async Task Reentering_same_offline_key_preserves_its_proof_and_does_not_restart_grace(string verdict, LicenseState expected)
+    {
+        var now = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
+        var clock = new SabitSaat(now);
+        var server = new SahteLisansSunucusu { EnFazlaAbonelik = 2, BitisUtc = now.AddDays(90) };
+        var service = Servis(server, saat: clock);
+        await service.ActivateAsync("FIXTURE-SAME-0001");
+        server.Karar = verdict;
+        await service.RefreshAsync();
+        clock.Ilerlet(TimeSpan.FromDays(15));
+        server.Ulasilabilir = false;
+        var status = await service.ActivateAsync("  FIXTURE-SAME-0001  ");
+        Assert.Equal(expected, status.State);
+        Assert.True(status.HasKey);
+        Assert.True(status.RestrictsNewResources);
+        Assert.Equal(now, status.LastVerifiedAtUtc);
+        Assert.Equal(now.AddDays(90), status.ExpiresAtUtc);
+        Assert.Equal("pro", status.Sku);
+        Assert.Equal(2, status.MaxSubscriptions);
+        var store = new LicenseStateStore(new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = dataRoot })), new TersinirKoruyucu());
+        Assert.Equal(now, (await store.ReadAsync(default)).KeyStoredAtUtc);
+    }
+
     // --- düzenek ---
 
     private LicenseService Servis(
@@ -414,19 +532,21 @@ public sealed class LicenseEnforcementTests : IDisposable
         public int EnFazlaAbonelik { get; set; }
         public DateTime? BitisUtc { get; set; }
         public int CagriSayisi { get; private set; }
+        public Func<CancellationToken, Task>? BeforeReply { get; init; }
 
-        public Task<LicenseVerificationOutcome> VerifyAsync(
+        public async Task<LicenseVerificationOutcome> VerifyAsync(
             LicenseVerificationRequest request,
             CancellationToken cancellationToken)
         {
             CagriSayisi++;
+            if (BeforeReply is not null) await BeforeReply(cancellationToken);
 
             if (!Ulasilabilir)
             {
-                return Task.FromResult(new LicenseVerificationOutcome(null, "timeout"));
+                return new LicenseVerificationOutcome(null, "timeout");
             }
 
-            return Task.FromResult(new LicenseVerificationOutcome(
+            return new LicenseVerificationOutcome(
                 new LicenseVerificationResponse
                 {
                     Status = Karar,
@@ -434,7 +554,7 @@ public sealed class LicenseEnforcementTests : IDisposable
                     MaxSubscriptions = EnFazlaAbonelik,
                     ExpiresAtUtc = BitisUtc
                 },
-                string.Empty));
+                string.Empty);
         }
     }
 

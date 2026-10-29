@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -8,6 +9,7 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Migration;
 using AdaPanel.Core.Dtos.Notifications;
 using AdaPanel.Core.Dtos.Scheduler;
+using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Extensions;
 using AdaPanel.Infrastructure.Migration;
@@ -389,8 +391,13 @@ public sealed class OutboundRedirectGuardTests
             },
             CancellationToken.None);
 
+        var kaynakKontrolleri = sonuc.Checks.Where(kontrol => kontrol.Name is "file_source" or "db_source").ToArray();
+        Assert.Equal(3, sonuc.Checks.Count);
+        Assert.Equal(2, kaynakKontrolleri.Length);
+        Assert.Equal(new[] { "file_source", "db_source" }, kaynakKontrolleri.Select(kontrol => kontrol.Name));
+        Assert.False(sonuc.AllPassed);
         Assert.All(
-            sonuc.Checks.Where(kontrol => kontrol.Name is "file_source" or "db_source"),
+            kaynakKontrolleri,
             kontrol =>
             {
                 Assert.False(kontrol.Ok);
@@ -815,7 +822,7 @@ public sealed class OutboundRedirectGuardTests
             null!,
             null!,
             null!,
-            null!,
+            DispatchProxy.Create<IIisSiteService, MissingMigrationSite>(),
             NullLogger<SiteMigrationService>.Instance,
             userIniScanEntryBudget: null,
             runtimeOptions: Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions
@@ -834,6 +841,16 @@ public sealed class OutboundRedirectGuardTests
                     ? throw new SocketException(11001)
                     : Task.FromResult(adresler);
             });
+
+    public class MissingMigrationSite : DispatchProxy
+    {
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            if (targetMethod?.Name == nameof(IIisSiteService.GetSiteAsync))
+                throw new AppException("sites.site_not_found", 404, 404);
+            throw new InvalidOperationException("Unexpected migration IIS dependency: " + targetMethod?.Name);
+        }
+    }
 
     /// <summary>
     /// Panelin GERÇEK DI kurulumu. Nöbetçi testlerin değeri buradan gelir: istemciler testin

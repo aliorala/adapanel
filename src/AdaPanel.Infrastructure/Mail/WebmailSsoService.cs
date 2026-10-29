@@ -11,7 +11,8 @@ public sealed class WebmailSsoService(StalwartWebmailCredentials credentials, IM
     JsonFileStore files, MailProviderSelection provider)
 {
     internal const string LedgerPath = "config/webmail-sso-leases.json";
-    public sealed record Lease(string Correlation, string AccountId, string? CredentialId, DateTimeOffset ExpiresAt);
+    public sealed record Lease(string Correlation, string AccountId, string? CredentialId, DateTimeOffset ExpiresAt,
+        string Domain = "");
     public sealed record Login(string Address, string Password, string Lease, long ExpiresAt);
 
     public async Task<string> ResolveAsync(string domain, string address, CancellationToken token)
@@ -35,7 +36,7 @@ public sealed class WebmailSsoService(StalwartWebmailCredentials credentials, IM
         await authorize(token);
         var correlation = "AdaPanel webmail SSO " + Guid.NewGuid().ToString("N");
         var expiry = DateTimeOffset.UtcNow.AddMinutes(30);
-        var lease = new Lease(correlation, grant.AccountId, null, expiry);
+        var lease = new Lease(correlation, grant.AccountId, null, expiry, grant.Domain);
         // Persist ownership before a request can have an ambiguous created-but-timed-out result.
         await files.UpdateAsync(LedgerPath, new List<Lease>(), list =>
         {
@@ -72,6 +73,10 @@ public sealed class WebmailSsoService(StalwartWebmailCredentials credentials, IM
         if (!removed && lease.CredentialId is null && lease.ExpiresAt > DateTimeOffset.UtcNow) return;
         await files.UpdateAsync(LedgerPath, new List<Lease>(), list => list.Where(x => x.Correlation != correlation).ToList(), token);
     }
+
+    public async Task<string?> GetLeaseDomainAsync(string correlation, CancellationToken token) =>
+        (await files.ReadAsync(LedgerPath, new List<Lease>(), token))
+            .SingleOrDefault(lease => lease.Correlation == correlation)?.Domain;
 
     internal async Task CleanupAsync(CancellationToken token)
     {

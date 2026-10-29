@@ -23,6 +23,24 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class SubscriptionBackupDueLifecycleTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UpdatingRemoteIdentity_DoesNotCarrySecretToAnotherTarget(bool changed)
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        var original = Fixture.Request();
+        original.TargetType = "ftp";
+        original.RemoteUrl = "ftp://original.test/backups";
+        original.RemoteUserName = "backup-user";
+        original.RemotePassword = "old-secret";
+        await f.Schedules.UpdateScheduleAsync(f.User, original, f.Token);
+        original.RemotePassword = "";
+        if (changed) original.RemoteUrl = "ftp://different.test/backups";
+        var updated = await f.Schedules.UpdateScheduleAsync(f.User, original, f.Token);
+        Assert.Equal(!changed, updated.RemotePasswordSet);
+    }
+    [Theory]
     [InlineData("global", false)]
     [InlineData("global", true)]
     [InlineData("producer", false)]

@@ -133,9 +133,12 @@ public sealed class NotificationService(
         if (BeforeSettingsWrite is not null) await BeforeSettingsWrite(cancellationToken);
         var updated = await fileStore.UpdateAsync(SettingsPath, new NotificationSettingsDto(), current =>
         {
-            // A blank password means keep the latest stored secret. Reading it under the
-            // publication lock prevents another request's password rotation being undone.
-            settings.SmtpPassword = protectedPassword ?? current.SmtpPassword ?? string.Empty;
+            // A secret belongs to the validated transport identity, including TLS mode.
+            // Compare the latest stored identity under the publication lock as well as the secret.
+            var sameIdentity = string.Equals(settings.SmtpHost, current.SmtpHost?.Trim(), StringComparison.OrdinalIgnoreCase)
+                && settings.SmtpPort == current.SmtpPort && settings.UseSsl == current.UseSsl
+                && string.Equals(settings.SmtpUserName, current.SmtpUserName?.Trim(), StringComparison.Ordinal);
+            settings.SmtpPassword = protectedPassword ?? (sameIdentity ? current.SmtpPassword ?? string.Empty : string.Empty);
             settings.HasSmtpPassword = !string.IsNullOrWhiteSpace(settings.SmtpPassword);
             settings.SettingsRevision = SettingsRevision.New();
             return settings;

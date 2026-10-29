@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Git;
@@ -26,6 +26,8 @@ public sealed class GitDeploymentService(
     // ön çözümleme yapılmaz; git yine yönlendirmesiz koşar (bkz. RunGitAsync).
     IHttpClientFactory? httpClientFactory = null) : IGitDeploymentService
 {
+    internal Func<string, string?, CancellationToken, Task<CommandResult>>? CommandRunner { get; init; }
+    private string DeploymentKey(string siteName) => "git:" + fileStore.ResolvePath(ConfigPath(siteName)).ToUpperInvariant();
     /// <summary>
     /// Depo adresinin KONAĞI panelin ulaşmaması gereken bir yere mi çözülüyor.
     /// </summary>
@@ -99,12 +101,12 @@ public sealed class GitDeploymentService(
 
     public async Task<GitDeploymentDto> ConfigureAsync(string siteName, ConfigureGitDeploymentRequest request, CancellationToken cancellationToken = default)
     {
-        var path = await ResolveSitePathAsync(siteName, cancellationToken);
         ValidateRepositoryUrl(request.RepositoryUrl);
         await EnsureRepositoryHostAllowedAsync(request.RepositoryUrl, cancellationToken);
 
-        return await concurrencyLock.RunExclusiveAsync(async () =>
+        return await concurrencyLock.RunExclusiveAsync(DeploymentKey(siteName), async () =>
         {
+            var path = await ResolveSitePathAsync(siteName, cancellationToken);
             var record = await LoadAsync(siteName, cancellationToken);
             record.RepositoryUrl = request.RepositoryUrl.Trim();
             record.Branch = NormalizeBranch(request.Branch);
@@ -120,31 +122,26 @@ public sealed class GitDeploymentService(
 
     public async Task<GitDeployResultDto> DeployAsync(string siteName, CancellationToken cancellationToken = default)
     {
-        var path = await ResolveSitePathAsync(siteName, cancellationToken);
-        var record = await LoadAsync(siteName, cancellationToken);
-        if (string.IsNullOrWhiteSpace(record.RepositoryUrl))
+        return await concurrencyLock.RunExclusiveAsync(DeploymentKey(siteName), async () =>
         {
-            throw new AppException("git.not_configured", 409, 409);
-        }
-
-        return await concurrencyLock.RunExclusiveAsync(() => RunDeployAsync(siteName, path, record, cancellationToken), cancellationToken);
+            var path = await ResolveSitePathAsync(siteName, cancellationToken);
+            var record = await LoadAsync(siteName, cancellationToken);
+            if (string.IsNullOrWhiteSpace(record.RepositoryUrl)) throw new AppException("git.not_configured", 409, 409);
+            return await RunDeployAsync(siteName, path, record, cancellationToken);
+        }, cancellationToken);
     }
 
     public async Task<GitDeployResultDto> DeployViaWebhookAsync(string siteName, string token, CancellationToken cancellationToken = default)
     {
-        var path = await ResolveSitePathAsync(siteName, cancellationToken);
-        var record = await LoadAsync(siteName, cancellationToken);
-        if (string.IsNullOrWhiteSpace(record.RepositoryUrl) || string.IsNullOrWhiteSpace(record.WebhookSecret))
+        return await concurrencyLock.RunExclusiveAsync(DeploymentKey(siteName), async () =>
         {
-            throw new AppException("git.not_configured", 409, 409);
-        }
-
-        if (!FixedTimeEquals(token, record.WebhookSecret))
-        {
-            throw new AppException("git.webhook_unauthorized", 401, 401);
-        }
-
-        return await concurrencyLock.RunExclusiveAsync(() => RunDeployAsync(siteName, path, record, cancellationToken), cancellationToken);
+            var path = await ResolveSitePathAsync(siteName, cancellationToken);
+            var record = await LoadAsync(siteName, cancellationToken);
+            if (string.IsNullOrWhiteSpace(record.RepositoryUrl) || string.IsNullOrWhiteSpace(record.WebhookSecret))
+                throw new AppException("git.not_configured", 409, 409);
+            if (!FixedTimeEquals(token, record.WebhookSecret)) throw new AppException("git.webhook_unauthorized", 401, 401);
+            return await RunDeployAsync(siteName, path, record, cancellationToken);
+        }, cancellationToken);
     }
 
     private async Task<GitDeployResultDto> RunDeployAsync(string siteName, string path, GitDeploymentRecord record, CancellationToken cancellationToken)
@@ -177,7 +174,7 @@ public sealed class GitDeploymentService(
             }
             else
             {
-                result = await RunGitAsync(
+                result = await ExecuteGitAsync(
                     $"clone --branch {QuoteArg(record.Branch)} --single-branch {QuoteArg(adres)} .",
                     path,
                     cancellationToken);
@@ -190,7 +187,7 @@ public sealed class GitDeploymentService(
             // `origin/<dal>` varsa fetch TAMAMEN başarısız olsa bile reset 0 ile çıkar. Yalnızca
             // reset'e bakmak, süresi dolmuş bir deploy token'ında her dağıtımın "başarılı" görünmesine
             // ve sitenin günlerce eski kodda kalmasına yol açıyordu.
-            var setUrl = await RunGitAsync($"remote set-url origin {QuoteArg(adres)}", path, cancellationToken);
+            var setUrl = await ExecuteGitAsync($"remote set-url origin {QuoteArg(adres)}", path, cancellationToken);
             if (!setUrl.Success)
             {
                 // Depo adresi güncellenemediyse sonraki adımlar ESKİ depodan çeker; "dağıtıldı" demek yanıltıcı olur.
@@ -198,10 +195,10 @@ public sealed class GitDeploymentService(
             }
             else
             {
-                var fetch = await RunGitAsync($"fetch origin {QuoteArg(record.Branch)} --prune", path, cancellationToken);
+                var fetch = await ExecuteGitAsync($"fetch origin {QuoteArg(record.Branch)} --prune", path, cancellationToken);
                 result = !fetch.Success
                     ? fetch
-                    : await RunGitAsync($"reset --hard {QuoteArg($"origin/{record.Branch}")}", path, cancellationToken);
+                    : await ExecuteGitAsync($"reset --hard {QuoteArg($"origin/{record.Branch}")}", path, cancellationToken);
             }
         }
 
@@ -211,7 +208,14 @@ public sealed class GitDeploymentService(
         record.LastCommit = commit;
         record.LastDeployUtc = DateTime.UtcNow;
         record.LastDeployStatus = success ? "succeeded" : "failed";
-        await SaveAsync(siteName, record, cancellationToken);
+        using (var publication = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
+            await fileStore.UpdateAsync(ConfigPath(siteName), record, current =>
+            {
+                current.LastCommit = record.LastCommit;
+                current.LastDeployUtc = record.LastDeployUtc;
+                current.LastDeployStatus = record.LastDeployStatus;
+                return current;
+            }, publication.Token);
 
         if (!success)
         {
@@ -228,26 +232,29 @@ public sealed class GitDeploymentService(
         };
     }
 
-    private static async Task<CommandResult> InitAndFetchAsync(string path, string adres, string branch, CancellationToken cancellationToken)
+    private async Task<CommandResult> InitAndFetchAsync(string path, string adres, string branch, CancellationToken cancellationToken)
     {
-        await RunGitAsync("init", path, cancellationToken);
-        await RunGitAsync($"remote add origin {QuoteArg(adres)}", path, cancellationToken);
-        await RunGitAsync($"fetch origin {QuoteArg(branch)} --prune", path, cancellationToken);
-        await RunGitAsync($"checkout -f -B {QuoteArg(branch)} {QuoteArg($"origin/{branch}")}", path, cancellationToken);
-        return await RunGitAsync($"reset --hard {QuoteArg($"origin/{branch}")}", path, cancellationToken);
+        string[] stages = ["init", $"remote add origin {QuoteArg(adres)}",
+            $"fetch origin {QuoteArg(branch)} --prune", $"checkout -f -B {QuoteArg(branch)} {QuoteArg($"origin/{branch}")}"];
+        foreach (var stage in stages)
+        {
+            var result = await ExecuteGitAsync(stage, path, cancellationToken);
+            if (!result.Success) return result;
+        }
+        return await ExecuteGitAsync($"reset --hard {QuoteArg($"origin/{branch}")}", path, cancellationToken);
     }
 
-    private static async Task<string> GetCurrentCommitAsync(string path, CancellationToken cancellationToken)
+    private async Task<string> GetCurrentCommitAsync(string path, CancellationToken cancellationToken)
     {
-        var result = await RunGitAsync("rev-parse --short HEAD", path, cancellationToken);
+        var result = await ExecuteGitAsync("rev-parse --short HEAD", path, cancellationToken);
         return result.Success ? result.StandardOutput.Trim() : string.Empty;
     }
 
-    private static async Task EnsureGitAvailableAsync(CancellationToken cancellationToken)
+    private async Task EnsureGitAvailableAsync(CancellationToken cancellationToken)
     {
         try
         {
-            var result = await RunGitAsync("--version", null, cancellationToken);
+            var result = await ExecuteGitAsync("--version", null, cancellationToken);
             if (!result.Success)
             {
                 throw new AppException("git.not_available", 409, 409);
@@ -420,6 +427,9 @@ public sealed class GitDeploymentService(
     /// Bu değişkenlerle git, "kimlik doğrulama gerekli" diyerek HEMEN hata verir.
     /// </para>
     /// </summary>
+    private Task<CommandResult> ExecuteGitAsync(string arguments, string? workingDirectory, CancellationToken token) =>
+        CommandRunner?.Invoke(arguments, workingDirectory, token) ?? RunGitAsync(arguments, workingDirectory, token);
+
     private static Task<CommandResult> RunGitAsync(string arguments, string? workingDirectory, CancellationToken cancellationToken)
         => ProcessRunner.RunAsync(
             "git",

@@ -14,7 +14,7 @@ namespace AdaPanel.Infrastructure.Migration;
 /// <summary>
 /// Site göçü orkestratörü (Plesk/cPanel/ham sunucu → AdaPanel): mevcut, test edilmiş parçaları zincirler —
 /// site sağlama (ISiteProvisioningService), dosya çekme (IFileMigrationService), DB transfer (IDatabaseService).
-/// Her adım bağımsız try/catch → biri patlasa migration durmaz; kısmi sonuç adım-adım raporlanır.
+/// Site oluşturma sonraki yazmaların önkoşuludur; diğer hatalar kısmi sonuç olarak raporlanır. İptal zinciri durdurur.
 /// </summary>
 public sealed class SiteMigrationService(
     ISiteProvisioningService siteProvisioningService,
@@ -33,6 +33,8 @@ public sealed class SiteMigrationService(
     // İSTEĞE BAĞLI: adres çözümleyici. Testte sahte — birim testi gerçek DNS'e çıkmamalı.
     Support.OutboundAddressGuard.OutboundHostResolver? outboundResolver = null) : ISiteMigrationService
 {
+    internal Func<HttpClient>? DiscoveryClientFactory { get; init; }
+
     /// <summary>
     /// Plesk/cPanel KEŞİF isteklerinin tek istemcisi: bağlantı ANINDA adres denetimi yapar.
     /// </summary>
@@ -60,6 +62,7 @@ public sealed class SiteMigrationService(
     /// </remarks>
     private HttpClient CreateDiscoveryHttpClient(RemoteCertificateTrustGate certificateTrust)
     {
+        if (DiscoveryClientFactory is not null) return DiscoveryClientFactory();
         var handler = Support.OutboundConnectGuard.CreateHandler(
             () => Support.OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false),
             outboundResolver,
@@ -133,6 +136,7 @@ public sealed class SiteMigrationService(
 
         async Task ReportAsync(MigrationProgressEvent progressEvent)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (onProgress is not null)
             {
                 await onProgress(progressEvent, cancellationToken);
@@ -147,11 +151,14 @@ public sealed class SiteMigrationService(
             await ReportAsync(new MigrationProgressEvent { Phase = "start", Step = stepId });
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var successDetail = await action();
+                cancellationToken.ThrowIfCancellationRequested();
                 steps.Add(new MigrationStepDto { Step = stepId, Success = true, Message = successMessage, Detail = successDetail });
                 await ReportAsync(new MigrationProgressEvent { Phase = "result", Step = stepId, Success = true, Message = successMessage, Detail = successDetail });
                 return true;
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception exception)
             {
                 logger.LogWarning(exception, "Göç: {Step} adımı başarısız {Site}", stepId, request.SiteName);
@@ -170,9 +177,10 @@ public sealed class SiteMigrationService(
         if (request.TransferDatabase) plan.Add("database");
         await ReportAsync(new MigrationProgressEvent { Phase = "plan", Steps = plan });
 
+        var siteReady = true;
         if (request.CreateSite)
         {
-            await ExecuteStepAsync("site", "migration.step.site_created", async () =>
+            siteReady = await ExecuteStepAsync("site", "migration.step.site_created", async () =>
             {
                 await siteProvisioningService.CreateAndProvisionAsync(
                     new CreateSiteRequest
@@ -194,7 +202,17 @@ public sealed class SiteMigrationService(
             });
         }
 
-        if (request.PullFiles)
+        if (!siteReady)
+        {
+            foreach (var dependent in plan.Where(step => step != "site"))
+            {
+                const string message = "migration.step.site_required";
+                steps.Add(new MigrationStepDto { Step = dependent, Success = false, Message = message });
+                await ReportAsync(new MigrationProgressEvent { Phase = "result", Step = dependent, Success = false, Message = message });
+            }
+        }
+
+        if (request.PullFiles && siteReady)
         {
             var filesPulled = await ExecuteStepAsync("files", "migration.step.files_pulled", async () =>
             {
@@ -236,7 +254,7 @@ public sealed class SiteMigrationService(
             }
         }
 
-        if (request.TransferDatabase)
+        if (request.TransferDatabase && siteReady)
         {
             await ExecuteStepAsync("database", "migration.step.db_transferred", async () =>
             {
@@ -257,31 +275,26 @@ public sealed class SiteMigrationService(
                         new CreateDatabaseRequest { Engine = request.DatabaseEngine, Name = target, SiteName = request.SiteName },
                         cancellationToken);
                 }
-                catch (Exception createException)
+                catch (AppException createException) when (createException.MessageKey == "database.database_already_exists")
                 {
                     logger.LogInformation(createException, "Göç: hedef DB zaten var olabilir ({Db}); devam ediyor.", target);
                 }
 
-                // 2) DB KULLANICISINI oluştur + bu DB'ye tam yetki (Plesk göçü gibi). Eskiden yalnız DB taşınıyordu →
-                //    kullanıcı olmayınca uygulama "Access denied for user" alıyordu. Kullanıcı zaten varsa yok say.
-                try
-                {
-                    await databaseService.CreateUserAsync(
-                        new CreateDatabaseUserRequest
-                        {
-                            Engine = request.DatabaseEngine,
-                            UserName = dbUser,
-                            Password = dbPassword,
-                            DatabaseName = target
-                        },
-                        cancellationToken);
-                }
-                catch (Exception userException)
-                {
-                    logger.LogInformation(userException, "Göç: DB kullanıcısı zaten var olabilir ({User}); devam ediyor.", dbUser);
-                }
+                // 2) A successful creation proves the submitted/generated password and grant.
+                // An existing user has neither proof; do not guess its password or reset it.
+                cancellationToken.ThrowIfCancellationRequested();
+                await databaseService.CreateUserAsync(
+                    new CreateDatabaseUserRequest
+                    {
+                        Engine = request.DatabaseEngine,
+                        UserName = dbUser,
+                        Password = dbPassword,
+                        DatabaseName = target
+                    },
+                    cancellationToken);
 
                 // 3) Veriyi aktar (mysqldump → mysql).
+                cancellationToken.ThrowIfCancellationRequested();
                 await databaseService.TransferDatabaseAsync(
                     new DatabaseTransferRequest
                     {
@@ -388,6 +401,7 @@ public sealed class SiteMigrationService(
         {
             response = await http.GetAsync($"https://{host}:{port}/api/v2/domains", cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception) when (Support.OutboundBlockedException.Cikar(exception) is { } blocked)
         {
             // YÖNLENDİRME/REBINDING DALI: konak ön kapıda temizdi ama zincir iç ağa saptı.
@@ -491,6 +505,7 @@ public sealed class SiteMigrationService(
         {
             response = await http.GetAsync($"https://{host}:{port}/json-api/listaccts?api.version=1", cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception) when (Support.OutboundBlockedException.Cikar(exception) is { } blocked)
         {
             // Gerekçe Plesk dalındaki ikiziyle aynı.
@@ -571,6 +586,7 @@ public sealed class SiteMigrationService(
     // kaynağı TCP erişilebilirliği (kimlik doğrulamaz; "host:port'a bağlanılıyor mu" = en sık göç tıkanması).
     public async Task<MigrationValidationResultDto> ValidateMigrationAsync(MigrateSiteRequest request, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var checks = new List<MigrationCheckDto>();
 
         if (string.IsNullOrWhiteSpace(request.SiteName))
@@ -628,7 +644,7 @@ public sealed class SiteMigrationService(
             _ = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
             return true;
         }
-        catch
+        catch (AppException exception) when (exception.MessageKey == "sites.site_not_found")
         {
             return false;
         }
@@ -679,6 +695,7 @@ public sealed class SiteMigrationService(
 
     private static async Task<bool> CanConnectAsync(string host, int port, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(host) || port is <= 0 or > 65535)
         {
             return false;
@@ -692,6 +709,7 @@ public sealed class SiteMigrationService(
             await client.ConnectAsync(host.Trim(), port, timeout.Token);
             return client.Connected;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch
         {
             return false;

@@ -29,6 +29,39 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </summary>
 public sealed class AntivirusRunningScanTests
 {
+    [Theory]
+    [InlineData(0, "Scanned files: 17\n", "clean", 17, 0)]
+    [InlineData(1, "Scanned files: 17\n", "failed", 17, 0)]
+    [InlineData(1, "unrecognized scanner output", "failed", 0, 0)]
+    [InlineData(1, "C:\\site\\file.txt: Eicar-Test-Signature FOUND\r\nScanned files: 17\n", "infected", 17, 1)]
+    [InlineData(0, "Scanned files: 999999999999999999999\n", "clean", 0, 0)]
+    [InlineData(2, "Scanned files: 17\n", "failed", 0, 0)]
+    public void Native_scan_outcome_cannot_be_replaced_by_missing_finding_lines(
+        int exitCode, string output, string expectedStatus, int files, int infections)
+    {
+        var result = AntivirusService.ParseScanResult(new CommandResult
+        { ExitCode = exitCode, StandardOutput = output }, "test", DateTime.UtcNow, TimeSpan.FromSeconds(2));
+        Assert.Equal(expectedStatus, result.Status);
+        Assert.Equal(files, result.ScannedFiles);
+        Assert.Equal(infections, result.InfectedCount);
+        if (exitCode == 1 && infections == 0) Assert.Contains("infection", result.Detail);
+    }
+
+    [Fact]
+    public async Task Result_write_failure_releases_the_finished_scan_slot()
+    {
+        using var alan = new AntivirusAlani();
+        alan.ClamAvKur(gercekCalisanTaklit: true);
+        // A directory at the result file path forces persistence to fail only after
+        // the harmless native process has returned. Running state is a separate file.
+        Directory.CreateDirectory(Path.Combine(alan.Kok, "config", "antivirus.json"));
+        await Assert.ThrowsAnyAsync<Exception>(() => alan.Servis().ScanAsync(
+            new AntivirusScanRequest { Path = alan.HedefDizin }, alan.Iptal));
+        Assert.Null(await alan.KayitOkuAsync());
+        await alan.Servis().YuvayiAyirtAsync("next", DateTime.UtcNow, alan.Iptal);
+        Assert.Equal("next", (await alan.KayitOkuAsync())!.Target);
+    }
+
     [Fact]
     public async Task Tarama_Yokken_Durum_SurenTarama_Bildirmez()
     {

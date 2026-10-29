@@ -475,6 +475,7 @@
 import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useSitesStore } from "../stores/sites";
+import { getSessionEpoch } from "../api/client";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import { useNotice, useSectionError } from "../composables/useNotice";
 import { useNavigationGuard } from "../composables/navigationGuard";
@@ -542,6 +543,9 @@ let loadSequence = 0;
 let previewSequence = 0;
 let planSequence = 0;
 let disposed = false;
+const sessionEpoch = getSessionEpoch();
+const isActive = () => !disposed && sessionEpoch === getSessionEpoch();
+const isCurrent = (site: string, sequence: number) => isActive() && site === selectedSite.value && sequence === loadSequence;
 async function canLeaveBuilder(): Promise<boolean> {
   if (saving.value || publishing.value || imageBusy.value) return false;
   return !dirty.value || await confirm({ title: t('panel.siteBuilder.unsavedTitle'), message: t('panel.siteBuilder.unsavedHint'), confirmLabel: t('panel.files.discard'), tone: 'neutral' });
@@ -582,7 +586,8 @@ const activeSections = computed(() => activePage.value?.sections ?? project.valu
 
 async function initialize() {
   try { await sitesStore.fetchSites(); }
-  catch (error) { projectLoad.capture(error); return; }
+  catch (error) { if (isActive()) projectLoad.capture(error); return; }
+  if (!isActive()) return;
   ready = true;
   await load();
 }
@@ -592,10 +597,12 @@ watch(selectedSite, () => { clearNotice(); if (ready) void load(); });
 watch(previewSlug, () => { if (project.value && !loading.value) void loadPreview(); });
 
 async function load() {
+  if (!isActive()) return;
   const site = selectedSite.value;
   const request = ++loadSequence;
   previewSequence++;
   planSequence++;
+  saving.value = false; publishing.value = false;
   tab.value = 'design';
   project.value = null; images.value = []; plan.value = null; previewHtml.value = '';
   savedProject.value = ''; projectLoad.clear(); previewLoad.clear();
@@ -604,27 +611,31 @@ async function load() {
   loading.value = true;
   try {
     if (!catalog.value) catalog.value = await getSiteBuilderCatalog();
+    if (!isCurrent(site, request)) return;
     const [nextProject, nextImages] = await Promise.all([getSiteBuilderProject(site), getSiteBuilderImages(site)]);
-    if (disposed || request !== loadSequence || site !== selectedSite.value) return;
+    if (!isCurrent(site, request)) return;
     project.value = nextProject; images.value = nextImages;
     savedProject.value = JSON.stringify(nextProject);
     await loadPreview();
   } catch (error) {
-    if (!disposed && request === loadSequence) projectLoad.capture(error);
+    if (isCurrent(site, request)) projectLoad.capture(error);
   } finally {
-    if (request === loadSequence) loading.value = false;
+    if (isCurrent(site, request)) loading.value = false;
   }
 }
 
 async function save() {
-  if (!project.value || !selectedSite.value) {
+  if (!isActive() || !project.value || !selectedSite.value || saving.value || publishing.value) {
     return;
   }
 
+  const site = selectedSite.value, sequence = loadSequence;
   saving.value = true;
   try {
     const oncekiSayfaSayisi = project.value.pages.length;
-    project.value = await saveSiteBuilderProject(selectedSite.value, project.value);
+    const saved = await saveSiteBuilderProject(site, project.value);
+    if (!isCurrent(site, sequence)) return;
+    project.value = saved;
     savedProject.value = JSON.stringify(project.value);
 
     // SUNUCU SAYFA DÜŞÜRDÜ MÜ? Geçersiz ya da yinelenen adresli sayfalar kaydedilirken düşer.
@@ -649,30 +660,31 @@ async function save() {
 
     await loadPreview();
   } catch (error) {
-    report(error);
+    if (isCurrent(site, sequence)) report(error);
   } finally {
-    saving.value = false;
+    if (isCurrent(site, sequence)) saving.value = false;
   }
 }
 
 async function loadPreview() {
+  if (!isActive()) return;
   const site = selectedSite.value, slug = previewSlug.value;
   const request = ++previewSequence;
   if (!site) return;
   previewLoading.value = true; previewHtml.value = ''; previewLoad.clear();
   try {
     const html = await getSiteBuilderPreview(site, slug);
-    if (!disposed && request === previewSequence && site === selectedSite.value && slug === previewSlug.value) previewHtml.value = html;
+    if (isActive() && request === previewSequence && site === selectedSite.value && slug === previewSlug.value) previewHtml.value = html;
   } catch (error) {
-    if (!disposed && request === previewSequence) previewLoad.capture(error);
+    if (isActive() && request === previewSequence) previewLoad.capture(error);
   } finally {
-    if (request === previewSequence) previewLoading.value = false;
+    if (isActive() && request === previewSequence) previewLoading.value = false;
   }
 }
 
 /** Yayın sekmesi açılırken plan HER SEFERINDE yeniden alınır: disk bu arada değişmiş olabilir. */
 async function openPublishTab() {
-  if (loading.value || saving.value || publishing.value || imageBusy.value) return;
+  if (!isActive() || loading.value || saving.value || publishing.value || imageBusy.value) return;
   if (dirty.value) {
     showNotice(t('panel.siteBuilder.saveBeforePublish'), true);
     return;
@@ -689,29 +701,35 @@ async function openPublishTab() {
 
   try {
     const nextPlan = await getSiteBuilderPublishPlan(site);
-    if (!disposed && request === planSequence && site === selectedSite.value) plan.value = nextPlan;
+    if (isActive() && request === planSequence && site === selectedSite.value) plan.value = nextPlan;
   } catch (error) {
-    if (!disposed && request === planSequence) planLoad.capture(error);
+    if (isActive() && request === planSequence) planLoad.capture(error);
   }
 }
 
 async function publish() {
-  if (!selectedSite.value) {
+  if (!isActive() || !selectedSite.value || saving.value || publishing.value) {
     return;
   }
 
+  const site = selectedSite.value, sequence = loadSequence;
   publishing.value = true;
   try {
-    const result = await publishSiteBuilder(selectedSite.value, overwriteConfirmed.value);
+    const result = await publishSiteBuilder(site, overwriteConfirmed.value);
+    if (!isCurrent(site, sequence)) return;
     inform(t("panel.siteBuilder.publishedNotice", { count: result.writtenFiles.length }));
-    project.value = await getSiteBuilderProject(selectedSite.value);
+    const publishedProject = await getSiteBuilderProject(site);
+    if (!isCurrent(site, sequence)) return;
+    project.value = publishedProject;
     savedProject.value = JSON.stringify(project.value);
-    plan.value = await getSiteBuilderPublishPlan(selectedSite.value);
+    const publishedPlan = await getSiteBuilderPublishPlan(site);
+    if (!isCurrent(site, sequence)) return;
+    plan.value = publishedPlan;
     overwriteConfirmed.value = false;
   } catch (error) {
-    report(error);
+    if (isCurrent(site, sequence)) report(error);
   } finally {
-    publishing.value = false;
+    if (isCurrent(site, sequence)) publishing.value = false;
   }
 }
 

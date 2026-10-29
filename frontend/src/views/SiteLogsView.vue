@@ -6,12 +6,12 @@
         <p class="meta">{{ log && log.path ? log.path : t("panel.siteLogs.subtitle") }}</p>
       </div>
       <div class="log-actions">
-        <select v-model.number="lines" :disabled="loading" @change="load">
+        <select v-model.number="lines" :disabled="loading || rotationBusy" @change="load">
           <option :value="120">120</option>
           <option :value="300">300</option>
-          <option :value="1000">1000</option>
+          <option :value="500">500</option>
         </select>
-        <button class="secondary compact" :disabled="loading || !siteName" @click="load">
+        <button class="secondary compact" :disabled="loading || rotationBusy || !siteName" @click="load">
           {{ loading ? t("panel.siteLogs.loading") : t("panel.siteLogs.refresh") }}
         </button>
       </div>
@@ -67,7 +67,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   getSiteLog,
@@ -76,7 +76,8 @@ import {
   type LogRotationTarget,
   type LogTail
 } from "../api/logs";
-import { extractApiMessage } from "../stores/auth";
+import { extractApiMessage, useAuthStore } from "../stores/auth";
+import { getSessionEpoch } from "../api/client";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 import { useSitesStore } from "../stores/sites";
@@ -89,6 +90,7 @@ const { confirm } = useConfirm();
 // (bkz. composables/useSubscriptionGate.ts). Gunlugu yenileme bir OKUMA'dir, kapiya girmez.
 const { writeGate } = useSubscriptionGate();
 const sitesStore = useSitesStore();
+const auth = useAuthStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 const log = ref<LogTail | null>(null);
 const rotation = ref<LogRotationTarget | null>(null);
@@ -101,26 +103,48 @@ const noticeError = ref(false);
 const content = computed(() =>
   log.value && log.value.lines.length ? log.value.lines.join("\n") : t("panel.siteLogs.empty"));
 
-onMounted(load);
+let disposed = false;
+let generation = 0;
+let readSequence = 0;
+function captureContext() {
+  const site = siteName.value, session = auth.session, actor = session?.user?.id, role = session?.user?.role;
+  const version = generation, epoch = getSessionEpoch();
+  return { site, current: () => !disposed && generation === version && siteName.value === site &&
+    auth.session === session && session?.isAuthenticated === true && session.user?.id === actor &&
+    session.user?.role === role && getSessionEpoch() === epoch };
+}
+onBeforeUnmount(() => { disposed = true; ++generation; ++readSequence; });
+watch(() => [siteName.value, auth.session, auth.session?.isAuthenticated, auth.session?.user?.id, auth.session?.user?.role], () => {
+  ++generation; ++readSequence;
+  log.value = null; rotation.value = null; rotationBusy.value = false; loading.value = false;
+  notice.value = ""; noticeError.value = false;
+  void load();
+}, { immediate: true, flush: "sync" });
 
 async function load() {
-  if (!siteName.value) {
+  if (rotationBusy.value) return;
+  const context = captureContext(), request = ++readSequence, requestedLines = lines.value;
+  const current = () => context.current() && request === readSequence && lines.value === requestedLines;
+  if (!context.site || !context.current()) {
     return;
   }
   loading.value = true;
   notice.value = "";
   try {
-    log.value = await getSiteLog(siteName.value, lines.value);
+    const result = await getSiteLog(context.site, requestedLines);
+    if (!current()) return;
+    log.value = result;
     // Döndürme durumu AYRI yakalanır: bu kartın okunamaması, günlük kuyruğunu göstermeye engel değil.
     try {
-      rotation.value = await getSiteLogRotation(siteName.value);
+      const status = await getSiteLogRotation(context.site);
+      if (current()) rotation.value = status;
     } catch {
-      rotation.value = null;
+      if (current()) rotation.value = null;
     }
   } catch (error) {
-    gosterHata(error);
+    if (current()) gosterHata(error);
   } finally {
-    loading.value = false;
+    if (current()) loading.value = false;
   }
 }
 
@@ -130,7 +154,8 @@ async function load() {
  * döner ve düğme SESSİZCE HİÇBİR ŞEY YAPMAZ; kullanıcı düğmeyi bozuk sanır.
  */
 async function runRotation() {
-  if (!siteName.value) {
+  const confirmationContext = captureContext();
+  if (!confirmationContext.site || !confirmationContext.current() || rotationBusy.value) {
     return;
   }
 
@@ -140,20 +165,31 @@ async function runRotation() {
     confirmLabel: t("panel.logs.rotationRunConfirmLabel")
   });
 
-  if (!approved) {
+  if (!approved || !confirmationContext.current() || rotationBusy.value) {
     return;
   }
 
+  ++generation; ++readSequence;
+  const context = captureContext();
+  loading.value = false;
   rotationBusy.value = true;
   notice.value = "";
   try {
-    rotation.value = await runSiteLogRotation(siteName.value);
-    notice.value = t("panel.logs.rotationCompleted");
-    noticeError.value = false;
+    const result = await runSiteLogRotation(context.site);
+    if (!context.current()) return;
+    rotation.value = result;
+    if (result.status === "error") {
+      notice.value = result.error === "directory_is_reparse_point"
+        ? t("panel.logs.rotationErrorReparsePoint") : result.error || t("panel.logs.rotationFailed");
+      noticeError.value = true;
+    } else {
+      notice.value = t("panel.logs.rotationCompleted");
+      noticeError.value = false;
+    }
   } catch (error) {
-    gosterHata(error);
+    if (context.current()) gosterHata(error);
   } finally {
-    rotationBusy.value = false;
+    if (context.current()) rotationBusy.value = false;
   }
 }
 

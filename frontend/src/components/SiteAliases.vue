@@ -8,9 +8,9 @@
     </div>
 
     <p v-if="error" class="notice error" role="alert">{{ error }}</p>
-    <p v-else-if="loading && !workspace" class="empty-state">{{ t("panel.common.loading") }}</p>
+    <p v-if="loading && !workspace" class="empty-state">{{ t("panel.common.loading") }}</p>
 
-    <template v-else-if="workspace">
+    <template v-if="workspace">
       <!-- ANA ALAN ADI OLMADAN yönlendirme yapılamaz; sebebini önden söylüyoruz ki kullanıcı
            takma ad ekleyip "neden yönlenmiyor" diye aramasın. -->
       <p v-if="!workspace.primaryHostName" class="notice warn" role="alert">
@@ -67,7 +67,7 @@
               <button type="button" class="secondary compact" :disabled="busy" @click="openSsl(`www.${alias.hostName}`)">{{ t("panel.alias.reviewHttps") }}</button>
             </small>
           </span>
-          <span :class="['status-pill', alias.redirectToPrimary ? 'ok' : '']">
+          <span :class="['status-pill', alias.redirectToPrimary ? (workspace.redirectRuleNoticeKey ? 'warn' : 'ok') : '']">
             {{ alias.redirectToPrimary ? t("panel.alias.modeRedirect") : t("panel.alias.modeServe") }}
           </span>
           <!-- HTTPS yoksa bu bir EKSİKLİK, "kapalı" bir ayar değil: takma addan gelen ziyaretçi
@@ -115,7 +115,21 @@ const loading = ref(false);
 const busy = ref(false);
 const error = ref("");
 let disposed = false;
+let scopeVersion = 0;
+let loadRequest = 0;
 onBeforeUnmount(() => { disposed = true; });
+
+function context() {
+  const site = props.siteName, version = scopeVersion, epoch = getSessionEpoch();
+  const session = authStore.session, actor = session?.user?.id, role = session?.user?.role;
+  return { site, current: () => !disposed && props.siteName === site && scopeVersion === version &&
+    epoch === getSessionEpoch() && session === authStore.session && actor === authStore.session?.user?.id && role === authStore.session?.user?.role };
+}
+
+function applyWorkspace(value: SiteAliasWorkspace) {
+  workspace.value = value;
+  error.value = value.redirectRuleNoticeKey ? t(value.redirectRuleNoticeKey) : "";
+}
 const primaryWwwHost = computed(() => {
   if (workspace.value?.siteName !== props.siteName) return "";
   const host = workspace.value?.primaryHostName.trim().toLowerCase() ?? "";
@@ -128,10 +142,8 @@ const primaryWwwHost = computed(() => {
 
 async function preparePrimaryWww() {
   if (disposed || busy.value || loading.value || locked.value || !primaryWwwHost.value) return;
-  const site = props.siteName, host = primaryWwwHost.value, epoch = getSessionEpoch();
-  const actor = authStore.session?.user?.id, role = authStore.session?.user?.role;
-  const current = () => !disposed && props.siteName === site && primaryWwwHost.value === host && epoch === getSessionEpoch() &&
-    actor === authStore.session?.user?.id && role === authStore.session?.user?.role;
+  const target = context(), site = target.site, host = primaryWwwHost.value;
+  const current = () => target.current() && primaryWwwHost.value === host;
   busy.value = true;
   error.value = "";
   try {
@@ -142,16 +154,17 @@ async function preparePrimaryWww() {
     if (!measured.hostNames.some(value => value.toLowerCase() === host)) {
       const result = await addSiteAlias(site, { hostName: host, redirectToPrimary: true, includeWww: false });
       if (!current()) return;
-      workspace.value = result;
-      if (result.redirectRuleNoticeKey) { error.value = t(result.redirectRuleNoticeKey); return; }
+      applyWorkspace(result);
+      if (result.redirectRuleNoticeKey) return;
     }
     if (current()) await router.push({ query: { section: "sites", site, tool: "ssl", sslHost: host } });
   } catch (err) {
     if (current()) error.value = resolveApiMessage(err);
-  } finally { busy.value = false; }
+  } finally { if (target.current()) busy.value = false; }
 }
 
 function openSsl(hostName: string) {
+  if (disposed || loading.value || workspace.value?.siteName !== props.siteName) return;
   void router.push({ query: { section: "sites", site: props.siteName, tool: "ssl", sslHost: hostName } });
 }
 
@@ -171,33 +184,38 @@ function resolveApiMessage(err: unknown) {
 }
 
 async function load() {
-  if (!props.siteName) {
+  const target = context(), request = ++loadRequest;
+  if (!target.site || disposed) {
     return;
   }
   loading.value = true;
   error.value = "";
   try {
-    workspace.value = await getSiteAliases(props.siteName);
+    const result = await getSiteAliases(target.site);
+    if (target.current() && request === loadRequest) applyWorkspace(result);
   } catch (err) {
-    error.value = resolveApiMessage(err);
+    if (target.current() && request === loadRequest) error.value = resolveApiMessage(err);
   } finally {
-    loading.value = false;
+    if (target.current() && request === loadRequest) loading.value = false;
   }
 }
 
 async function add() {
-  if (!form.hostName) {
+  if (disposed || busy.value || loading.value || locked.value || !props.siteName || !form.hostName) {
     return;
   }
+  const target = context(), payload = { ...form };
   busy.value = true;
   error.value = "";
   try {
-    workspace.value = await addSiteAlias(props.siteName, { ...form });
-    form.hostName = "";
+    const result = await addSiteAlias(target.site, payload);
+    if (!target.current()) return;
+    applyWorkspace(result);
+    if (form.hostName === payload.hostName) form.hostName = "";
   } catch (err) {
-    error.value = resolveApiMessage(err);
+    if (target.current()) error.value = resolveApiMessage(err);
   } finally {
-    busy.value = false;
+    if (target.current()) busy.value = false;
   }
 }
 
@@ -206,26 +224,44 @@ async function add() {
  * ulaşamaz. Onaysız yapılmaz; onay metni hangi alan adının kalkacağını söyler.
  */
 async function remove(hostName: string) {
+  if (disposed || busy.value || loading.value || locked.value || !props.siteName) return;
+  const target = context();
+  busy.value = true;
+  error.value = "";
+  try {
   await confirm({
     title: t("panel.alias.confirmRemoveTitle"),
     message: t("panel.alias.confirmRemoveMessage", { host: hostName }),
     impact: [hostName],
     confirmLabel: t("panel.alias.remove"),
     action: async () => {
-      busy.value = true;
-      error.value = "";
+      if (!target.current() || locked.value) return;
       try {
-        workspace.value = await removeSiteAlias(props.siteName, hostName);
+        const result = await removeSiteAlias(target.site, hostName);
+        if (target.current()) applyWorkspace(result);
       } catch (err) {
-        error.value = resolveApiMessage(err);
-      } finally {
-        busy.value = false;
+        // ConfirmDialog handles action failures itself; publish the API error
+        // here while the original site/session context is still available.
+        if (target.current()) error.value = resolveApiMessage(err);
       }
     }
   });
+  } catch (err) {
+    if (target.current()) error.value = resolveApiMessage(err);
+  } finally {
+    if (target.current()) busy.value = false;
+  }
 }
 
-watch(() => props.siteName, () => void load());
+watch(() => [props.siteName, authStore.session, authStore.session?.user?.id, authStore.session?.user?.role], () => {
+  scopeVersion++;
+  workspace.value = null;
+  form.hostName = "";
+  error.value = "";
+  busy.value = false;
+  loading.value = false;
+  void load();
+}, { flush: "sync" });
 onMounted(() => void load());
 </script>
 

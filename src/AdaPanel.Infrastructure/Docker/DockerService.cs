@@ -29,6 +29,7 @@ namespace AdaPanel.Infrastructure.Docker;
 /// </remarks>
 public sealed partial class DockerService(ILogger<DockerService> logger) : IDockerService
 {
+    internal Func<string, CancellationToken, Task<CommandResult?>>? CommandRunner { get; init; }
     public async Task<DockerWorkspaceDto> GetWorkspaceAsync(CancellationToken cancellationToken = default)
     {
         var version = await TryRunAsync("version --format \"{{.Server.Version}}\"", cancellationToken);
@@ -154,18 +155,7 @@ public sealed partial class DockerService(ILogger<DockerService> logger) : IDock
 
     private async Task<IReadOnlyCollection<DockerContainerDto>> ReadContainersAsync(CancellationToken cancellationToken)
     {
-        var result = await TryRunAsync("ps -a --format \"{{json .}}\"", cancellationToken);
-        if (result is null || !result.Success)
-        {
-            // BOŞ LİSTE ≠ KONTEYNER YOK. Kullanıcıya boş bir tablo göstermek kabul edilebilir
-            // (uydurma veri göstermekten iyidir) ama sebebi kaydedilmezse "konteynerlerim kayboldu"
-            // şikâyetinin arkasındaki gerçek hata (izin, daemon, sürüm) hiç görünmez.
-            logger.LogWarning(
-                "Docker konteyner listesi OKUNAMADI; panel bos liste gosterecek. Cikti: {Error}",
-                result?.StandardError ?? "docker.exe bulunamadi");
-            return [];
-        }
-
+        var result = await RunRequiredAsync("ps -a --format \"{{json .}}\"", cancellationToken);
         return ParseLines(result.StandardOutput, element => new DockerContainerDto
         {
             Id = GetString(element, "ID"),
@@ -179,16 +169,7 @@ public sealed partial class DockerService(ILogger<DockerService> logger) : IDock
 
     private async Task<IReadOnlyCollection<DockerImageDto>> ReadImagesAsync(CancellationToken cancellationToken)
     {
-        var result = await TryRunAsync("images --format \"{{json .}}\"", cancellationToken);
-        if (result is null || !result.Success)
-        {
-            // Gerekçe: ReadContainersAsync ile aynı.
-            logger.LogWarning(
-                "Docker imaj listesi OKUNAMADI; panel bos liste gosterecek. Cikti: {Error}",
-                result?.StandardError ?? "docker.exe bulunamadi");
-            return [];
-        }
-
+        var result = await RunRequiredAsync("images --format \"{{json .}}\"", cancellationToken);
         return ParseLines(result.StandardOutput, element => new DockerImageDto
         {
             Id = GetString(element, "ID"),
@@ -208,6 +189,9 @@ public sealed partial class DockerService(ILogger<DockerService> logger) : IDock
             try
             {
                 using var document = JsonDocument.Parse(line);
+                if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                    string.IsNullOrWhiteSpace(GetString(document.RootElement, "ID")))
+                    throw new JsonException("Docker inventory row has no resource identity.");
                 items.Add(map(document.RootElement));
             }
             catch (JsonException)
@@ -222,8 +206,9 @@ public sealed partial class DockerService(ILogger<DockerService> logger) : IDock
         if (atlanan > 0)
         {
             logger.LogWarning(
-                "Docker CLI ciktisinda {Atlanan} satir ayristirilamadi; liste EKSIK olabilir (docker surumu cikti bicimini degistirmis olabilir).",
+                "Docker CLI ciktisinda {Atlanan} satir ayristirilamadi; eksik envanter yayinlanmadi.",
                 atlanan);
+            throw new AppException("docker.command_failed", 502, 502, "Docker inventory output could not be parsed.");
         }
 
         return items;
@@ -252,6 +237,7 @@ public sealed partial class DockerService(ILogger<DockerService> logger) : IDock
 
     private async Task<CommandResult?> TryRunAsync(string arguments, CancellationToken cancellationToken)
     {
+        if (CommandRunner is not null) return await CommandRunner(arguments, cancellationToken);
         try
         {
             return await ProcessRunner.RunAsync("docker", arguments, cancellationToken: cancellationToken);

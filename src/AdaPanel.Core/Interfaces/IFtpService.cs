@@ -5,6 +5,8 @@ namespace AdaPanel.Core.Interfaces;
 
 public interface IFtpService
 {
+    Task<FtpServerAddressSyncDto> SyncServerAddressAsync(string oldAddress, string newAddress, CancellationToken cancellationToken = default)
+        => Task.FromResult(new FtpServerAddressSyncDto { Skipped = true, Error = "FTP external address synchronization is unavailable." });
     Task<FtpCertificateDto> GetCertificateAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult(new FtpCertificateDto());
 

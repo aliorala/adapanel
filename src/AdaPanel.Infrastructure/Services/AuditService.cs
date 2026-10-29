@@ -72,10 +72,11 @@ public sealed class AuditService(
 
         var total = await filtered.CountAsync(cancellationToken);
 
-        var items = await filtered
+        var offset = (long)(page - 1) * pageSize;
+        List<AuditLog> items = offset >= total ? [] : await filtered
             .OrderByDescending(log => log.CreatedAtUtc)
             .ThenByDescending(log => log.Id) // aynı milisaniyedeki kayıtlar sayfalar arasında kaymasın
-            .Skip((page - 1) * pageSize)
+            .Skip((int)offset)
             .Take(pageSize)
             .ToListAsync(cancellationToken);
 

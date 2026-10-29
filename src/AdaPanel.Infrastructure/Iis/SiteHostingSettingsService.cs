@@ -36,6 +36,8 @@ public sealed class SiteHostingSettingsService(
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
     private const string HstsHeaderName = "Strict-Transport-Security";
     internal Func<Stream, Stream>? ConfigurationStream { get; init; }
+    internal Func<string, bool?>? WebConfigurationProbe { get; init; }
+    internal Action<string, long, long>? IisLimitsWriter { get; init; }
 
     // ".woff2" gibi: nokta + harf/rakam ile başlar, ayırıcı/boşluk/yol karakteri içermez.
     private static readonly Regex MimeExtensionPattern = new(@"^\.[a-z0-9][a-z0-9._-]{0,31}$", RegexOptions.Compiled);
@@ -46,7 +48,12 @@ public sealed class SiteHostingSettingsService(
         @"^[a-zA-Z0-9][a-zA-Z0-9!#$&^_+.-]{0,62}/[a-zA-Z0-9][a-zA-Z0-9!#$&^_+.-]{0,62}(; ?charset=[a-zA-Z0-9._-]{1,32})?$",
         RegexOptions.Compiled);
 
-    public async Task<SiteHostingSettingsDto> GetAsync(string siteName, CancellationToken cancellationToken = default)
+    private string SettingsLock(string siteName) => $"hosting-settings:{fileStore.ResolvePath(StatePath)}:{siteName.Trim().ToUpperInvariant()}";
+
+    public Task<SiteHostingSettingsDto> GetAsync(string siteName, CancellationToken cancellationToken = default) =>
+        concurrencyLock.RunExclusiveAsync(SettingsLock(siteName), () => GetCoreAsync(siteName, cancellationToken), cancellationToken);
+
+    private async Task<SiteHostingSettingsDto> GetCoreAsync(string siteName, CancellationToken cancellationToken)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var states = (await fileStore.ReadAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), cancellationToken)).ToList();
@@ -71,8 +78,10 @@ public sealed class SiteHostingSettingsService(
             AllowedReferrerHosts = string.IsNullOrWhiteSpace(zoneHost) ? [] : [zoneHost],
             ProtectedExtensions = ["jpg", "jpeg", "png", "gif", "webp", "svg", "mp4"]
         };
-        states.Add(state);
-        await fileStore.WriteAsync(StatePath, states, cancellationToken);
+        var published = await fileStore.UpdateAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), current =>
+            current.Any(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase))
+                ? current : [.. current, state], cancellationToken);
+        state = published.First(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase));
 
         // BURADA web.config YAZILMAZ. Okuma işleminin yan etkisi olmamalı — hele ki müşterinin
         // sitesini düşürebilecek bir yan etkisi.
@@ -89,10 +98,14 @@ public sealed class SiteHostingSettingsService(
         return state;
     }
 
-    public async Task<SiteHostingSettingsDto> UpdateAsync(
+    public Task<SiteHostingSettingsDto> UpdateAsync(
         string siteName,
         UpdateSiteHostingSettingsRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        concurrencyLock.RunExclusiveAsync(SettingsLock(siteName), () => UpdateCoreAsync(siteName, request, cancellationToken), cancellationToken);
+
+    private async Task<SiteHostingSettingsDto> UpdateCoreAsync(string siteName,
+        UpdateSiteHostingSettingsRequest request, CancellationToken cancellationToken)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         Validate(site.PhysicalPath, request);
@@ -101,7 +114,7 @@ public sealed class SiteHostingSettingsService(
         // vardı; panel koşulsuz "kaydedildi" diyordu. XML olarak geçerli bir belge IIS için hâlâ
         // geçersiz olabilir (tanımsız bölüm → sitenin TAMAMINA 500.19), o yüzden ikinci bir
         // kapı var. IIS yoksa cevap "reddetti" DEĞİL, "ölçülemedi"dir.
-        var yazma = UpdateWebConfig(site.PhysicalPath, request, () => IisWebConfigOkuyabiliyorMu(site.Name),
+        var yazma = UpdateWebConfig(site.PhysicalPath, request, () => (WebConfigurationProbe ?? IisWebConfigOkuyabiliyorMu)(site.Name),
             configureStream: ConfigurationStream, cancellationToken: cancellationToken);
         if (!yazma.Verified || (yazma.IisProbed && !yazma.IisAccepted))
         {
@@ -116,7 +129,7 @@ public sealed class SiteHostingSettingsService(
             // yazımda biri sessizce kaybolur. Gerekçe WafService.IsolateAppPoolAsync'te.
             await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Iis, () =>
             {
-                UpdateIisLimits(siteName, request.MaximumBandwidthBytesPerSecond, request.MaximumConnections);
+                (IisLimitsWriter ?? UpdateIisLimits)(siteName, request.MaximumBandwidthBytesPerSecond, request.MaximumConnections);
                 return Task.CompletedTask;
             }, cancellationToken);
         }
@@ -155,10 +168,9 @@ public sealed class SiteHostingSettingsService(
             HstsPreload = request.HstsPreload
         };
 
-        var states = (await fileStore.ReadAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), cancellationToken)).ToList();
-        states.RemoveAll(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase));
-        states.Add(state);
-        await fileStore.WriteAsync(StatePath, states, cancellationToken);
+        await fileStore.UpdateAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), current =>
+            current.Where(item => !string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase))
+                .Append(state).ToArray(), cancellationToken);
 
         // ÖLÇÜM KAYDEDİLDİKTEN SONRA İLİŞTİRİLİR. Durum dosyasına yazılsaydı, bir sonraki OKUMA
         // eski bir ölçümü BUGÜNÜN gerçeği gibi gösterirdi — düzeltmeye çalıştığımız hata sınıfının
@@ -417,7 +429,10 @@ public sealed class SiteHostingSettingsService(
         return await DurumuOlcAsync(QueueTaskName(siteName), null, cancellationToken);
     }
 
-    public async Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default)
+    public Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default) =>
+        concurrencyLock.RunExclusiveAsync(SettingsLock(siteName), () => RemoveSiteCoreAsync(siteName, cancellationToken), cancellationToken);
+
+    private async Task RemoveSiteCoreAsync(string siteName, CancellationToken cancellationToken)
     {
         // ÖNCE ARKA PLAN GÖREVLERİ, sonra ayar kaydı.
         //
@@ -431,13 +446,16 @@ public sealed class SiteHostingSettingsService(
         await StopQueueWorkerAsync(siteName, cancellationToken);
         await StopLaravelSchedulerAsync(siteName, cancellationToken);
 
-        var states = (await fileStore.ReadAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), cancellationToken)).ToList();
-        var kaldirilan = states.RemoveAll(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase));
-
-        if (kaldirilan > 0)
+        // Same-site Get/Update/Remove calls share SettingsLock, so an absent record
+        // stays absent until this cleanup exits. Other sites still use atomic removal.
+        var states = await fileStore.ReadAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), cancellationToken);
+        if (!states.Any(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase)))
         {
-            await fileStore.WriteAsync(StatePath, states, cancellationToken);
+            return;
         }
+
+        await fileStore.UpdateAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), current =>
+            current.Where(item => !string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase)).ToArray(), cancellationToken);
     }
 
     public async Task<QueueWorkerStatusDto> StopQueueWorkerAsync(string siteName, CancellationToken cancellationToken = default)

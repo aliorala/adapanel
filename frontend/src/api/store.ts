@@ -28,6 +28,7 @@ export async function getAppTemplates() {
 
 export type AppInstallResult = {
   templateId: string;
+  requiresManualSetup?: boolean;
   adminUrl: string;
   adminUser: string;
   adminPassword: string;

@@ -26,7 +26,7 @@ public sealed class JsonFileStore(IOptions<PanelRuntimeOptions> runtimeOptions)
             return fallbackValue;
         }
 
-        // Paylaşımlı + Delete izinli aç: atomik yazım (File.Move overwrite) okuma sırasında dosyayı
+        // Paylaşımlı + Delete izinli aç: atomik yazım (File.Replace) okuma sırasında dosyayı
         // değiştirse bile paylaşım ihlali olmaz; okuyucu eski içeriği görmeye devam eder.
         await using var stream = new FileStream(
             filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -34,8 +34,16 @@ public sealed class JsonFileStore(IOptions<PanelRuntimeOptions> runtimeOptions)
         return value is null ? fallbackValue : value;
     }
 
-    public Task WriteAsync<T>(string relativePath, T value, CancellationToken cancellationToken = default) =>
-        WriteCoreAsync(relativePath, value, null, cancellationToken);
+    public async Task WriteAsync<T>(string relativePath, T value, CancellationToken cancellationToken = default)
+    {
+        // Serialize writers, including the first publication and replacement.
+        // UpdateCoreAsync already holds this same gate and calls WriteCore directly.
+        var key = ResolvePath(relativePath).ToLowerInvariant();
+        var gate = PathLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken);
+        try { await WriteCoreAsync(relativePath, value, null, cancellationToken); }
+        finally { gate.Release(); }
+    }
 
     private async Task WriteCoreAsync<T>(string relativePath, T value,
         Func<CancellationToken, Task>? beforePublication, CancellationToken cancellationToken)
@@ -60,7 +68,23 @@ public sealed class JsonFileStore(IOptions<PanelRuntimeOptions> runtimeOptions)
             cancellationToken.ThrowIfCancellationRequested();
             if (beforePublication is not null) await beforePublication(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            File.Move(tempPath, filePath, overwrite: true);
+            if (File.Exists(filePath))
+            {
+                // On Windows MoveFileEx(overwrite) can reject an open destination
+                // even when the reader shares Delete. ReplaceFile preserves the
+                // old reader's snapshot while atomically publishing the new file.
+                File.Replace(tempPath, filePath, null);
+            }
+            else
+            {
+                try { File.Move(tempPath, filePath); }
+                catch (IOException) when (File.Exists(filePath) && File.Exists(tempPath))
+                {
+                    // Another writer may have created the destination after Exists.
+                    // Do not delete it first: readers must always see complete JSON.
+                    File.Replace(tempPath, filePath, null);
+                }
+            }
         }
         finally
         {

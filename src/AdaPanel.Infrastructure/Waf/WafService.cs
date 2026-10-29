@@ -235,18 +235,21 @@ public sealed class WafService(
                && HasHeader(customHeaders, "Referrer-Policy");
     }
 
-    private static int MeasureRateLimit(XElement systemWebServer)
+    private static int? MeasureRateLimit(XElement systemWebServer)
     {
         var dynamicIpSecurity = systemWebServer.Element("security")?.Element("dynamicIpSecurity");
-        if (dynamicIpSecurity is null || ReadBool(dynamicIpSecurity, "denyByRequestRate") != true)
-        {
-            // Kural kapalıysa sayının bir anlamı yok: sınır YOK.
-            return 0;
-        }
-
-        return int.TryParse((string?)dynamicIpSecurity.Attribute("maxRequests"), out var value) && value > 0
-            ? value
-            : 0;
+        if (dynamicIpSecurity is null) return 0;
+        // These attributes belonged to the panel's old, invalid IIS schema.
+        if (dynamicIpSecurity.Attribute("denyByRequestRate") is not null ||
+            dynamicIpSecurity.Attribute("maxRequests") is not null ||
+            dynamicIpSecurity.Attribute("requestIntervalInMilliseconds") is not null) return null;
+        if (ReadBool(dynamicIpSecurity, "enableLoggingOnlyMode") == true) return 0;
+        var rule = dynamicIpSecurity.Element("denyByRequestRate");
+        if (rule is null || ReadBool(rule, "enabled") == false || rule.Attribute("enabled") is null) return 0;
+        // A different burst window cannot honestly be presented as a per-minute limit.
+        if (ReadBool(rule, "enabled") != true ||
+            (string?)rule.Attribute("requestIntervalInMilliseconds") != "60000") return null;
+        return int.TryParse((string?)rule.Attribute("maxRequests"), out var value) && value > 0 ? value : null;
     }
 
     private static bool? ReadBool(XElement? element, string attributeName)
@@ -387,9 +390,14 @@ public sealed class WafService(
         var systemWebServer = EnsureElement(configuration, "system.webServer");
         var security = EnsureElement(systemWebServer, "security");
         var dynamicIpSecurity = EnsureElement(security, "dynamicIpSecurity");
-        dynamicIpSecurity.SetAttributeValue("denyByRequestRate", true);
-        dynamicIpSecurity.SetAttributeValue("maxRequests", Math.Max(1, request.RequestsPerMinute));
-        dynamicIpSecurity.SetAttributeValue("requestIntervalInMilliseconds", 60000);
+        dynamicIpSecurity.SetAttributeValue("denyByRequestRate", null);
+        dynamicIpSecurity.SetAttributeValue("maxRequests", null);
+        dynamicIpSecurity.SetAttributeValue("requestIntervalInMilliseconds", null);
+        dynamicIpSecurity.SetAttributeValue("enableLoggingOnlyMode", false);
+        var rateRule = EnsureElement(dynamicIpSecurity, "denyByRequestRate");
+        rateRule.SetAttributeValue("enabled", true);
+        rateRule.SetAttributeValue("maxRequests", Math.Max(1, request.RequestsPerMinute));
+        rateRule.SetAttributeValue("requestIntervalInMilliseconds", 60000);
 
         document.Save(webConfigPath);
         return await SaveStateAsync(site, requestsPerMinute: Math.Max(1, request.RequestsPerMinute), cancellationToken: cancellationToken);

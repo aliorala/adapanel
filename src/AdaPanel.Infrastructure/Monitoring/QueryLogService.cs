@@ -105,8 +105,7 @@ public sealed partial class QueryLogService(
             return 0;
         }
 
-        await YazAsync(bitenler, cancellationToken);
-        return bitenler.Count;
+        return await YazAsync(bitenler, cancellationToken) ? bitenler.Count : 0;
     }
 
     /// <summary>
@@ -141,7 +140,7 @@ public sealed partial class QueryLogService(
         return kirpilmis.Length <= MaxStatementLength ? kirpilmis : kirpilmis[..MaxStatementLength] + "…";
     }
 
-    private async Task YazAsync(IReadOnlyCollection<QueryLogEntryDto> kayitlar, CancellationToken cancellationToken)
+    private async Task<bool> YazAsync(IReadOnlyCollection<QueryLogEntryDto> kayitlar, CancellationToken cancellationToken)
     {
         await YazmaKilidi.WaitAsync(cancellationToken);
         try
@@ -160,11 +159,13 @@ public sealed partial class QueryLogService(
 
                 await File.AppendAllTextAsync(yol, govde.ToString(), Encoding.UTF8, cancellationToken);
             }
+            return true;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             // Günlük yazılamazsa panelin izleme akışı DURMAZ; sessiz de geçmez.
             logger.LogWarning(exception, "Sorgu geçmişi yazılamadı ({Adet} kayıt).", kayitlar.Count);
+            return false;
         }
         finally
         {

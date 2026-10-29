@@ -100,11 +100,14 @@ public sealed class AutomationService(
             // Uzak yedek hedefi: parola DPAPI ile korunur; boş gönderilirse mevcut korunur.
             // Hedef listesi BackupService'in tek kaynağından gelir; burada elle liste tutulmaz.
             var targetType = Backup.BackupService.NormalizeScheduleTargetType(request.BackupTargetType);
+            var sameRemote = SameRemoteIdentity(state.BackupTargetType, state.BackupRemoteUrl,
+                state.BackupRemoteUserName, state.BackupRemoteRegion, targetType, request.BackupRemoteUrl,
+                request.BackupRemoteUserName, request.BackupRemoteRegion);
             state.BackupTargetType = targetType;
             state.BackupRemoteUrl = request.BackupRemoteUrl?.Trim() ?? string.Empty;
             state.BackupRemoteUserName = request.BackupRemoteUserName?.Trim() ?? string.Empty;
             state.BackupRemoteRegion = request.BackupRemoteRegion?.Trim() ?? string.Empty;
-            if (state.BackupTargetType == "local")
+            if (state.BackupTargetType == "local" || (!sameRemote && string.IsNullOrEmpty(request.BackupRemotePassword)))
             {
                 state.BackupRemotePasswordProtected = string.Empty;
             }
@@ -190,6 +193,10 @@ public sealed class AutomationService(
         {
             // İstekte parola yoksa kayıtlı (korumalı) parolayı kullan → kullanıcı kayıtlı hedefi tekrar parola girmeden test eder.
             var state = await LoadAsync(cancellationToken);
+            if (!string.IsNullOrWhiteSpace(state.BackupRemotePasswordProtected) &&
+                !SameRemoteIdentity(state.BackupTargetType, state.BackupRemoteUrl, state.BackupRemoteUserName,
+                    state.BackupRemoteRegion, request.TargetType, request.RemoteUrl, request.RemoteUserName, request.RemoteRegion))
+                throw new AppException("backup.remote_password_required", 400, 400);
             password = ResolveRemotePassword(state);
         }
 
@@ -204,6 +211,13 @@ public sealed class AutomationService(
             },
             cancellationToken);
     }
+
+    internal static bool SameRemoteIdentity(string? type, string? url, string? user, string? region,
+        string? otherType, string? otherUrl, string? otherUser, string? otherRegion) =>
+        string.Equals(type?.Trim(), otherType?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(url?.Trim(), otherUrl?.Trim(), StringComparison.Ordinal) &&
+        string.Equals(user?.Trim(), otherUser?.Trim(), StringComparison.Ordinal) &&
+        string.Equals(region?.Trim(), otherRegion?.Trim(), StringComparison.Ordinal);
 
     public async Task RunDueJobsAsync(CancellationToken cancellationToken = default)
     {

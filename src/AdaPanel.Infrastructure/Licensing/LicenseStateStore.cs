@@ -14,6 +14,12 @@ namespace AdaPanel.Infrastructure.Licensing;
 public sealed class LicenseStateStore(JsonFileStore fileStore, ISecretProtector secretProtector)
 {
     internal const string StatePath = "config/license/state.json";
+    private readonly Services.ConcurrencyLock lifecycle = new();
+
+    // Verification includes a network wait. Serialize the whole decision with
+    // activation/deactivation so a late verdict cannot overwrite a newer key.
+    internal Task<T> RunExclusiveAsync<T>(Func<Task<T>> action, CancellationToken token) =>
+        lifecycle.RunExclusiveAsync("license:" + fileStore.ResolvePath(StatePath).ToUpperInvariant(), action, token);
 
     public Task<LicenseRecord> ReadAsync(CancellationToken cancellationToken)
     {

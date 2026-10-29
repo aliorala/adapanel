@@ -192,6 +192,7 @@ public sealed class WebmailSsoAuthorityTests
         var controller = f.Handoff(tickets);
         PanelSecurityHeaders.Apply(controller.HttpContext); // Real middleware runs before the endpoint.
         var result = Assert.IsType<ContentResult>(await controller.PostAsync(ticket, default));
+        Assert.Equal(f.Parent.Id, f.LastAuditSubject);
         Assert.Equal("text/html; charset=utf-8", result.ContentType);
         Assert.Equal("strict-origin", controller.Response.Headers["Referrer-Policy"].ToString());
         Assert.Contains("no-store", controller.Response.Headers.CacheControl.ToString());
@@ -237,6 +238,7 @@ public sealed class WebmailSsoAuthorityTests
         internal ICustomerScopeService Scopes = null!;
         internal SessionRevocationStore Sessions = null!;
         internal string ConfigRoot = "";
+        internal Guid? LastAuditSubject;
 
         internal static async Task<Fixture> Create()
         {
@@ -257,6 +259,7 @@ public sealed class WebmailSsoAuthorityTests
                 "GetParentSubscriptionAsync" => Task.FromResult<Guid?>((Guid)args![0]! == f.Actor.Id ? f.Parent.Id : null),
                 "GetSubUserSectionsAsync" => Task.FromResult<IReadOnlyCollection<string>?>(f.Sections),
                 "GetAllowedMailDomainsAsync" => Task.FromResult<IReadOnlyCollection<string>>(f.Domains),
+                "GetSiteOwnerUserIdAsync" => Task.FromResult<Guid?>((string)args![0]! == "example.test" ? f.Parent.Id : null),
                 "GetScopeAsync" => Task.FromResult(new CustomerScope([], 0, 0, 0, 0, 0, 0, SuspendedAtUtc: f.Suspended ? DateTime.UtcNow : null,
                     ExpiresAtUtc: f.Expired ? DateTime.UtcNow.AddSeconds(-1) : null)),
                 _ => throw new NotSupportedException(method.Name)
@@ -274,7 +277,14 @@ public sealed class WebmailSsoAuthorityTests
             http.Request.Headers.Origin = origin;
             http.Request.Method = "POST";
             http.Request.Path = "/api/v1/mail/webmail/handoff";
-            return new(tickets, Db, Scopes, Sessions) { ControllerContext = new ControllerContext { HttpContext = http } };
+            var audit = DispatchProxy.Create<IAuditService, ScopeProxy>();
+            ((ScopeProxy)(object)audit).Handler = (method, args) =>
+            {
+                Assert.Equal("WriteForSubscriptionAsync", method.Name);
+                LastAuditSubject = (Guid?)args![4];
+                return Task.CompletedTask;
+            };
+            return new(tickets, Db, Scopes, Sessions, audit, null!) { ControllerContext = new ControllerContext { HttpContext = http } };
         }
         internal async Task<WebmailSsoDeployment> Deployment()
         {

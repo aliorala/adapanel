@@ -25,6 +25,39 @@ public sealed class BackupCombinedRestoreSafetyTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task CancelledCombinedRestore_PersistsRecoveryPathAndRethrows(bool subscription)
+    {
+        using var area = new GeciciAlan();
+        using var cancellation = new CancellationTokenSource();
+        var root = area.KlasorAc("wwwroot");
+        await File.WriteAllTextAsync(Path.Combine(root, "old.txt"), "old data");
+        var files = subscription
+            ? new Dictionary<string, string> { ["sites/shop.example.com/files/new.txt"] = "new data",
+                ["sites/shop.example.com/config/site.json"] = System.Text.Json.JsonSerializer.Serialize(new SiteDto
+                { Name = "shop.example.com", PhysicalPath = root, ApplicationRootPath = root }) }
+            : new Dictionary<string, string> { ["files/new.txt"] = "new data" };
+        var zip = area.BirlesikYedekUret(files, new Dictionary<string, string> { ["databases/mariadb-shop.sql"] = "-- dump" });
+        var service = area.ServisKur(zip, root, new SahteVeritabaniServisi(_ =>
+        {
+            cancellation.Cancel();
+            throw new OperationCanceledException(cancellation.Token);
+        }));
+        if (subscription)
+        {
+            var records = await area.DosyaDeposu.ReadAsync("config/backups.json", Array.Empty<BackupRecordDto>());
+            records[0].Type = "subscription";
+            await area.DosyaDeposu.WriteAsync("config/backups.json", records);
+        }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.RestoreAsync(new() { BackupId = "b1" }, cancellation.Token));
+        var persisted = Assert.Single(await service.GetBackupsAsync());
+        Assert.Equal("restored_with_errors", persisted.Status);
+        Assert.NotEmpty(persisted.PreservedPath);
+        Assert.Contains(persisted.Warnings, warning => warning.MessageKey == "backup.restore_aborted");
+        Assert.Equal("old data", await File.ReadAllTextAsync(Path.Combine(persisted.PreservedPath, "old.txt")));
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task CombinedArchiveForwardsDefinerChoiceWithoutRewritingTheArchive(bool adapt)
     {
         using var alan = new GeciciAlan();

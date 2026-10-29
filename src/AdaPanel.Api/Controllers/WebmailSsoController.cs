@@ -8,6 +8,7 @@ using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.Security;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace AdaPanel.Api.Controllers;
 
@@ -16,9 +17,10 @@ namespace AdaPanel.Api.Controllers;
 [IgnoreAntiforgeryToken]
 [Route("api/internal/webmail-sso")]
 [RequestSizeLimit(2048)]
+[EnableRateLimiting(PanelRateLimits.PublicRead)]
 public sealed class WebmailSsoController(WebmailSsoTickets tickets, WebmailSsoDeployment deployment,
     WebmailSsoService sso, AdaPanelDbContext db, ICustomerScopeService scopes, SessionRevocationStore sessions,
-    IAuditService audit) : ControllerBase
+    IAuditService auditService, IIisSiteService? iisSites = null) : ControllerBase
 {
     public sealed class ConsumeRequest
     {
@@ -41,11 +43,17 @@ public sealed class WebmailSsoController(WebmailSsoTickets tickets, WebmailSsoDe
         }
         var login = await sso.ConsumeAsync(grant, Authorize, token, async _ =>
         {
-            HttpContext.User = grant.Actor;
-            await audit.AuditAsync(HttpContext, "mail.webmail.sso", grant.Address, "Selected mailbox webmail sign-in granted.");
+            await AuditSignonAsync(grant, token);
         });
         Response.Headers.CacheControl = "no-store";
         return Ok(login);
+    }
+
+    internal async Task AuditSignonAsync(WebmailSsoTickets.Grant grant, CancellationToken token)
+    {
+        HttpContext.User = grant.Actor;
+        await auditService.AuditAsync(HttpContext, "mail.webmail.sso", grant.Address, "Selected mailbox webmail sign-in granted.",
+            await AuditSubject.MailDomainOwnerAsync(scopes, iisSites ?? HttpContext.RequestServices.GetRequiredService<IIisSiteService>(), grant.Domain, token));
     }
 
     [HttpPost("revoke")]
@@ -54,10 +62,17 @@ public sealed class WebmailSsoController(WebmailSsoTickets tickets, WebmailSsoDe
     {
         await EnsureBrokerAsync(token);
         if (request.Lease.Length > 100) throw new AppException("mail.webmail_sso_invalid", 403, 403);
+        var domain = await sso.GetLeaseDomainAsync(request.Lease, token);
         await sso.RevokeAsync(request.Lease, token);
+        await AuditRevocationAsync(domain, token);
         Response.Headers.CacheControl = "no-store";
         return Ok(new { revoked = true });
     }
+
+    internal async Task AuditRevocationAsync(string? domain, CancellationToken token) =>
+        await auditService.AuditAsync(HttpContext, "mail.webmail.sso.revoked", "webmail-sso",
+            "Webmail broker requested revocation of its owned app credential.",
+            await AuditSubject.MailDomainOwnerAsync(scopes, iisSites ?? HttpContext.RequestServices.GetRequiredService<IIisSiteService>(), domain, token));
 
     private async Task EnsureBrokerAsync(CancellationToken token)
     {

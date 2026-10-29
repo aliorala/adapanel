@@ -27,6 +27,8 @@ public sealed class PhpService(
     IIisSiteService iisSiteService,
     ILogger<PhpService> logger) : IPhpService
 {
+    internal Func<CancellationToken, Task> RefreshPhpProcessesAsync { get; init; } = async token =>
+        await AdaPanel.Infrastructure.Support.ProcessRunner.RunAsync("taskkill.exe", "/f /im php-cgi.exe", cancellationToken: token);
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
     private const string ServerManagerTypeName = "Microsoft.Web.Administration.ServerManager";
     private const string PhpHandlerPrefix = "AdaPanel.Php.";
@@ -117,6 +119,7 @@ public sealed class PhpService(
         }
 
         var extensionDirectory = Path.Combine(component.InstallDir, "ext");
+        using var iniLease = await PhpIniFile.EnterAsync(phpIniPath, cancellationToken);
         var lines = (await File.ReadAllLinesAsync(phpIniPath, cancellationToken)).ToList();
         var changed = false;
 
@@ -144,7 +147,8 @@ public sealed class PhpService(
 
         if (changed)
         {
-            await File.WriteAllLinesAsync(phpIniPath, lines, cancellationToken);
+            await PhpIniFile.PublishLinesAsync(phpIniPath, lines, cancellationToken);
+            iniLease.Dispose();
 
             // php.ini DEĞİŞTİ → sıcak php-cgi süreçlerini yenile ki YENİ ayar (extension_dir + etkinleştirilen
             // eklentiler) HEMEN uygulansın. Aksi halde uygulama (ör. webmail) ilk açılışta hâlâ eski/eksik
@@ -152,7 +156,7 @@ public sealed class PhpService(
             // taze başlatır (güncel php.ini ile). Best-effort: yenilenemese de bir sonraki havuz dönüşünde uygulanır.
             try
             {
-                await AdaPanel.Infrastructure.Support.ProcessRunner.RunAsync("taskkill.exe", "/f /im php-cgi.exe", cancellationToken: cancellationToken);
+                await RefreshPhpProcessesAsync(cancellationToken);
             }
             catch (Exception exception)
             {
@@ -279,6 +283,7 @@ public sealed class PhpService(
         try
         {
             var iniPath = Path.Combine(installDir, "php.ini");
+            using var iniLease = await PhpIniFile.EnterAsync(iniPath, cancellationToken);
             if (!File.Exists(iniPath))
             {
                 return;
@@ -310,7 +315,7 @@ public sealed class PhpService(
 
             if (changed)
             {
-                await File.WriteAllLinesAsync(iniPath, lines, cancellationToken);
+                await PhpIniFile.PublishLinesAsync(iniPath, lines, cancellationToken);
                 logger.LogInformation("PHP varsayılanları uygulandı (expose_php=Off; memory_limit boş/128M ise 256M): {IniPath}", iniPath);
             }
         }
@@ -442,7 +447,7 @@ public sealed class PhpService(
         if (File.Exists(iniPath))
         {
             dto.Configured = true;
-            var values = ParseUserIni(await File.ReadAllLinesAsync(iniPath, cancellationToken));
+            var values = ParseUserIni(await PhpIniFile.ReadLinesAsync(iniPath, cancellationToken));
             if (values.TryGetValue("memory_limit", out var ml)) dto.MemoryLimit = ml;
             if (values.TryGetValue("max_execution_time", out var met) && int.TryParse(met, out var metVal)) dto.MaxExecutionTime = metVal;
             if (values.TryGetValue("upload_max_filesize", out var umf)) dto.UploadMaxFilesize = umf;
@@ -464,7 +469,7 @@ public sealed class PhpService(
     {
         foreach (var iniPath in await GetPhpIniPathsAsync(cancellationToken))
         {
-            var lines = await File.ReadAllLinesAsync(iniPath, cancellationToken);
+            var lines = await PhpIniFile.ReadLinesAsync(iniPath, cancellationToken);
             if (PhpIniSiteIsolation.IsEnabled(lines, siteName))
             {
                 return true;
@@ -584,11 +589,12 @@ public sealed class PhpService(
 
         foreach (var iniPath in iniPaths)
         {
+            using var iniLease = await PhpIniFile.EnterAsync(iniPath, cancellationToken);
             var lines = (await File.ReadAllLinesAsync(iniPath, cancellationToken)).ToList();
             var updated = enabled
                 ? PhpIniSiteIsolation.Upsert(lines, siteName, root!)
                 : PhpIniSiteIsolation.Remove(lines, siteName);
-            await File.WriteAllLinesAsync(iniPath, updated, cancellationToken);
+            await PhpIniFile.PublishLinesAsync(iniPath, updated, cancellationToken);
         }
 
         logger.LogInformation(
@@ -613,6 +619,7 @@ public sealed class PhpService(
             }
 
             var iniPath = Path.Combine(site.PhysicalPath, ".user.ini");
+            using var iniLease = await PhpIniFile.EnterAsync(iniPath, cancellationToken);
             if (File.Exists(iniPath))
             {
                 return;
@@ -625,7 +632,7 @@ public sealed class PhpService(
             content.AppendLine("upload_max_filesize = 64M");
             content.AppendLine("post_max_size = 64M");
             content.AppendLine("display_errors = Off");
-            await File.WriteAllTextAsync(iniPath, content.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+            await PhpIniFile.PublishBytesAsync(iniPath, new UTF8Encoding(false).GetBytes(content.ToString()), cancellationToken);
         }
         catch (Exception exception)
         {
@@ -645,11 +652,13 @@ public sealed class PhpService(
         }
 
         var iniPath = Path.Combine(site.PhysicalPath, ".user.ini");
+        using var iniLease = await PhpIniFile.EnterAsync(iniPath, cancellationToken);
         var lines = File.Exists(iniPath)
             ? await File.ReadAllLinesAsync(iniPath, cancellationToken)
             : ["; AdaPanel - site PHP ayarları (.user.ini, per-dizin)"];
         // Panelin beş alanı güncellenir; uygulamanın oturum, bootstrap ve özel ayarları korunur.
-        await File.WriteAllLinesAsync(iniPath, UpdateIniSettings(lines, request), cancellationToken);
+        await PhpIniFile.PublishLinesAsync(iniPath, UpdateIniSettings(lines, request), cancellationToken);
+        iniLease.Dispose();
 
         // İZOLASYON: istek bunu SÖYLEMİYORSA (null) mevcut durum KORUNUR.
         //
@@ -664,7 +673,7 @@ public sealed class PhpService(
             // php-cgi yenilenir (UpdateGlobalPhpSettingsAsync ile aynı, ölçülmüş yöntem). Best-effort.
             try
             {
-                await AdaPanel.Infrastructure.Support.ProcessRunner.RunAsync("taskkill.exe", "/f /im php-cgi.exe", cancellationToken: cancellationToken);
+                await RefreshPhpProcessesAsync(cancellationToken);
             }
             catch (Exception exception)
             {
@@ -702,7 +711,7 @@ public sealed class PhpService(
         {
             dto.Configured = true;
             // Site [PATH=] blokları hariç: genel ekran genel değerleri göstermeli.
-            var values = ParseUserIni(PhpIniSiteIsolation.GlobalLines(await File.ReadAllLinesAsync(iniPath, cancellationToken)));
+            var values = ParseUserIni(PhpIniSiteIsolation.GlobalLines(await PhpIniFile.ReadLinesAsync(iniPath, cancellationToken)));
             if (values.TryGetValue("memory_limit", out var ml)) dto.MemoryLimit = ml;
             if (values.TryGetValue("max_execution_time", out var met) && int.TryParse(met, out var metVal)) dto.MaxExecutionTime = metVal;
             if (values.TryGetValue("upload_max_filesize", out var umf)) dto.UploadMaxFilesize = umf;
@@ -740,13 +749,15 @@ public sealed class PhpService(
         var component = await GetLatestInstalledPhpAsync(cancellationToken)
             ?? throw new AppException("php.version_not_installed", 404, 404);
         var iniPath = Path.Combine(component.InstallDir, "php.ini");
+        using var iniLease = await PhpIniFile.EnterAsync(iniPath, cancellationToken);
         if (!File.Exists(iniPath))
         {
             throw new AppException("php.version_not_installed", 404, 404);
         }
 
         var lines = UpdateIniSettings(await File.ReadAllLinesAsync(iniPath, cancellationToken), request);
-        await File.WriteAllLinesAsync(iniPath, lines, cancellationToken);
+        await PhpIniFile.PublishLinesAsync(iniPath, lines, cancellationToken);
+        iniLease.Dispose();
 
         // Süre (max_execution_time) değişince FastCGI requestTimeout'u da yükselt (yoksa büyük import 500 timeout verir).
         await RaiseFastCgiTimeoutAsync(FastCgiSecondsFor(request.MaxExecutionTime), cancellationToken);
@@ -754,7 +765,7 @@ public sealed class PhpService(
         // php-cgi süreçlerini yenile ki yeni php.ini HEMEN uygulansın (FastCGI php.ini'yi süreç başında okur). Best-effort.
         try
         {
-            await AdaPanel.Infrastructure.Support.ProcessRunner.RunAsync("taskkill.exe", "/f /im php-cgi.exe", cancellationToken: cancellationToken);
+            await RefreshPhpProcessesAsync(cancellationToken);
         }
         catch (Exception exception)
         {
@@ -848,6 +859,7 @@ public sealed class PhpService(
         Func<CancellationToken, Task<bool>> verify,
         CancellationToken cancellationToken = default)
     {
+        using var iniLease = await PhpIniFile.EnterAsync(iniPath, cancellationToken);
         // Doğrulama başlamadan önce mevcut dosyaları sakla. Uyumsuz bir DLL, hata ya da
         // iptal durumunda yönetici ayarları (site bölümleri dahil) ve eski DLL geri gelir.
         var originalIni = await File.ReadAllBytesAsync(iniPath, cancellationToken);
@@ -863,7 +875,7 @@ public sealed class PhpService(
             File.Copy(sourceDll, dllPath, overwrite: true);
             if (iniChanged)
             {
-                await File.WriteAllLinesAsync(iniPath, lines, cancellationToken);
+                await PhpIniFile.PublishLinesAsync(iniPath, lines, cancellationToken);
             }
             verified = await verify(cancellationToken);
             return verified;
@@ -877,7 +889,7 @@ public sealed class PhpService(
                 try
                 {
                     if (iniChanged)
-                        await File.WriteAllBytesAsync(iniPath, originalIni, CancellationToken.None);
+                        await PhpIniFile.PublishBytesAsync(iniPath, originalIni, CancellationToken.None);
                 }
                 finally
                 {

@@ -73,7 +73,13 @@ public sealed class PanelPreferencesService(
 
         Directory.CreateDirectory(Environment.ExpandEnvironmentVariables(settings.DefaultSiteRoot));
         Directory.CreateDirectory(Environment.ExpandEnvironmentVariables(settings.DefaultBackupRoot));
-        await fileStore.WriteAsync(PreferencesPath, settings, cancellationToken);
+        await fileStore.UpdateAsync(PreferencesPath, CreateDefaults(), existing =>
+        {
+            // Public access owns this field and may have published a new hostname since
+            // the initial read. Preserve it under the same gate as that publisher.
+            settings.PanelHostName = existing.PanelHostName;
+            return settings;
+        }, cancellationToken);
         await fileStore.WriteAsync(
             RuntimeSettingsPath,
             new RuntimeSettingsDocument

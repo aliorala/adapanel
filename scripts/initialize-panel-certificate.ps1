@@ -70,6 +70,17 @@ function Set-AdaPanelSecureAcl {
     }
 }
 
+function Select-AdaPanelReusableCertificate {
+    param([object[]]$Certificates, [datetime]$Now = (Get-Date))
+    $Certificates |
+        Where-Object {
+            $_.FriendlyName -eq "AdaPanel Self Signed" -and
+            $_.HasPrivateKey -and $_.NotBefore -le $Now -and $_.NotAfter -gt $Now
+        } |
+        Sort-Object NotAfter -Descending |
+        Select-Object -First 1
+}
+
 if ($DefineFunctionsOnly) {
     return
 }
@@ -87,10 +98,9 @@ New-Item -ItemType Directory -Path $certDirectory -Force | Out-Null
 
 $dnsNames = @("localhost", $env:COMPUTERNAME) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
 $storeLocation = "LocalMachine"
-$existingCertificate = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
-    Where-Object { $_.FriendlyName -eq "AdaPanel Self Signed" } |
-    Sort-Object NotAfter -Descending |
-    Select-Object -First 1
+$existingCertificate = Select-AdaPanelReusableCertificate -Certificates @(
+    Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue
+)
 
 if (-not $existingCertificate) {
     try {
@@ -106,10 +116,9 @@ if (-not $existingCertificate) {
     }
     catch {
         $storeLocation = "CurrentUser"
-        $existingCertificate = Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue |
-            Where-Object { $_.FriendlyName -eq "AdaPanel Self Signed" } |
-            Sort-Object NotAfter -Descending |
-            Select-Object -First 1
+        $existingCertificate = Select-AdaPanelReusableCertificate -Certificates @(
+            Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue
+        )
 
         if (-not $existingCertificate) {
             $existingCertificate = New-SelfSignedCertificate `

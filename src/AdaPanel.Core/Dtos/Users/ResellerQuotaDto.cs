@@ -55,10 +55,10 @@ public sealed class ResellerQuotaUsageDto
     public int MaxDiskMb { get; set; }
 
     /// <summary>Müşterilere dağıtılan site hakkı + bayinin kendi doğrudan sitelerinin sayısı.</summary>
-    public int AllocatedSites { get; set; }
+    public long AllocatedSites { get; set; }
 
     /// <summary>Müşterilere dağıtılan disk hakkı, MB.</summary>
-    public int AllocatedDiskMb { get; set; }
+    public long AllocatedDiskMb { get; set; }
 
     /// <summary>Bayinin etkin kapsamında GERÇEKTEN var olan site sayısı.</summary>
     public int UsedSites { get; set; }
