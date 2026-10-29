@@ -82,9 +82,33 @@ görev sınıflandırma düzeltmesini yaptı.
 
 ## Dağıtım durumu
 
-0.8.138 paketleme ve dağıtım hazırlığındadır. Gerçek sunucu probe'unun geçmesi,
-uygulamanın yeni sürümünün kurulması veya tam üretim yedeğinin tamamlanmasıyla
-eş tutulmaz. Yeni sürüm sonrası gerçek yedek/arşiv kontrolü ayrıca kaydedilecektir.
+[0.8.138 yayımlandı](https://github.com/aliorala/adapanel/releases/tag/0.8.138).
+Kaynak commit `3d719fc`; nihai kurulum paketi 91.249.923 bayt,
+SHA-256 `68AD9ED18A85D9FF40CB709CDDAFD8EEF5AE82903FD61D70CF93EB8B3C50A4C7`.
+GitHub'dan indirilen dosyanın özeti eşleşti. Ev sunucusunun güncelleme ekranında
+kurulumun 29.10.2026 14:09:35'te tamamlandığı ve mevcut sürümün 0.8.138 olduğu
+bağımsız olarak doğrulandı.
+
+Ardından gerçek tam yedek çalıştırıldı. Panelin nihai sonucu 29.10.2026 14:16:58'de
+**Tamamlandı**: 4 site, 5 doğrulanan veritabanı kopyası (2 site arşivinde, 3 ayrı
+dökümde), posta ve panel yedeği. Dört zamanlanmış görev panel arşivinde eksiksiz.
+Bir sonraki çalışma 30.10.2026 03:00; mevcut zamanlama ve saklama ayarları korundu.
+
+Uzak FTP hedefindeki gerçek dosyalar ayrıca okundu: site/döküm/posta dosyalarının
+SHA-256 özetleri korumalı yedek indeksine uyuyor; ilgili ZIP girdilerinin CRC
+kontrolleri geçti. Önceden eksik kalabilen `jobs.db`, `jobs.db-wal`, `jobs.db-shm`
+ve kilit dosyası artık site arşivinde mevcut. Bu SQLite dosyalarının yalnız geçici
+çıkarılmış kopyasında `PRAGMA integrity_check` sonucu `ok`. Panel SQLite kopyası
+da `ok`; canlı veritabanında geri yükleme veya silme yapılmadı.
+
+Posta yedeğinden sonra üç mevcut posta sunucu adı için 587 STARTTLS ve 465 TLS
+bağlantılarının altısı da alan adı, süre ve güven zinciri doğrulamasını geçti.
+Bu kontrol dış alıcıya ileti teslimatı testi değildir.
+
+Yerel kanıtlar: `.tmp/release138-production-backup-verification.json`,
+`.tmp/release138-backup-complete.png`, `.tmp/release138-installed.png` ve
+`.tmp/mail-sni-probe/release138-after-backup.json`. Sunucuya ait özel envanter ve
+erişim bilgileri bu rapora eklenmedi.
 
 ## Paket restore sırasında bulunan bağlantı kütüphanesi yaması
 
@@ -98,4 +122,5 @@ canlı sunucuda parola sızıntısı yaşandığına dair bir bulgu yoktur. Yama
 dar SQL/DEFINER/transfer TLS/provider grubu 202/202 geçti. Force/no-cache restore
 ve API Release derlemesi başarılı; son derlemede sıfır uyarı ve sıfır hata var.
 API/Infrastructure/test assets kayıtları gerçek MySqlConnector/2.6.1 çözümlemesini
-doğruluyor. Nihai kurulum paketi de bu kaynakla yeniden üretilecektir.
+doğruluyor. Yayımlanan nihai kurulum paketi bu kaynakla yeniden üretildi;
+paketin bağımlılık kayıtları da MySqlConnector 2.6.1 içeriyor.
