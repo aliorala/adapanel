@@ -29,6 +29,45 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class BackupIncrementalChainTests
 {
     [Fact]
+    public async Task Same_size_and_timestamp_changes_are_included_by_content_hash()
+    {
+        using var area = new ZincirAlani();
+        var service = area.ServisKur();
+        area.DosyaYaz("jobs.db-wal", "AAAA");
+        var path = Path.Combine(area.SiteKoku, "jobs.db-wal");
+        var timestamp = File.GetLastWriteTimeUtc(path);
+        await service.BackupSiteAsync(area.Istek());
+        area.DosyaYaz("jobs.db-wal", "BBBB");
+        File.SetLastWriteTimeUtc(path, timestamp);
+        var changed = await service.BackupSiteAsync(area.Istek());
+        Assert.Equal("incremental", changed.BackupMode);
+        using var archive = ZipFile.OpenRead(changed.Path);
+        using var reader = new StreamReader(Assert.IsType<ZipArchiveEntry>(archive.GetEntry("files/jobs.db-wal")).Open());
+        Assert.Equal("BBBB", await reader.ReadToEndAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Legacy_hashless_or_incomplete_index_starts_new_full_chain(bool incomplete)
+    {
+        using var area = new ZincirAlani();
+        var service = area.ServisKur();
+        area.DosyaYaz("a.txt", "AAAA");
+        var first = await service.BackupSiteAsync(area.Istek());
+        var indexPath = "backups/index/" + first.Id + ".json";
+        var index = await area.DosyaDeposu.ReadAsync(indexPath, new BackupFileIndex());
+        if (incomplete) index.Complete = false;
+        else { index.HashVersion = 0; foreach (var entry in index.Entries) entry.Sha256 = null; }
+        await area.DosyaDeposu.WriteAsync(indexPath, index);
+        var second = await service.BackupSiteAsync(area.Istek());
+        Assert.Equal("full", second.BackupMode);
+        Assert.NotEqual(first.ChainId, second.ChainId);
+        using var archive = ZipFile.OpenRead(second.Path);
+        Assert.NotNull(archive.GetEntry("files/a.txt"));
+    }
+
+    [Fact]
     public async Task Incremental_SecondLink_CarriesOnlyChangedFilesAndRecordsDeletions()
     {
         using var alan = new ZincirAlani();

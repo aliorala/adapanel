@@ -285,7 +285,7 @@ public sealed class BackupSkippedFileTests
     // Yardimcilar
     // ===========================================================================================
 
-    private sealed class AtlamaAlani : IDisposable
+    internal sealed class AtlamaAlani : IDisposable
     {
         private readonly CancellationTokenSource _iptal = new(TimeSpan.FromSeconds(120));
 
@@ -314,14 +314,14 @@ public sealed class BackupSkippedFileTests
         /// IIS servisi panel yedeginde yalniz "en iyi caba" ile okunur (rol kurulu olmayabilir);
         /// site yedeginde ise sahtesi kullanilir. Uzak hedef YOK: olculen sey arsivin icerigi.
         /// </summary>
-        public BackupService Servis() =>
+        public BackupService Servis(IBackupSnapshotRuntime? snapshotRuntime = null) =>
             new(new SahteSiteServisi(SiteKoku),
                 null!,
                 null!,
                 new SahteTercihServisi(YedekKoku),
                 null!,
                 DosyaDeposu,
-                null!)
+                null!, snapshotRuntime: snapshotRuntime)
             {
                 TaskExportRunner = (_, _) => Task.FromResult(new CommandResult { StandardOutput = "[]" })
             };

@@ -368,7 +368,7 @@ public sealed class AutomationService(
         var summary = new StringBuilder();
         var hasError = false;
         var siteCount = 0;
-        var dbCount = 0;
+        var bagimsizYedeklenen = new HashSet<string>(StringComparer.Ordinal);
 
         // Sitenin arşivine giren veritabanları: aynı dökümü bir de tek başına yedeklemeyelim diye
         // hangilerinin siteye gittiği burada tutulur (anahtar "motor|ad").
@@ -482,9 +482,26 @@ public sealed class AutomationService(
                 //
                 // Kullanıcı motorları AÇIKÇA seçtiyse ona dokunulmaz (kurulu olmayan bir motoru
                 // seçmişse bunu bilmesi gerekir, hata mesajı bilinçli olarak korunur).
-                var engines = state.BackupDatabaseEngines.Count > 0
-                    ? state.BackupDatabaseEngines
-                    : await ResolveInstalledEnginesAsync(cancellationToken);
+                IReadOnlyCollection<string> engines = state.BackupDatabaseEngines;
+                if (engines.Count == 0)
+                {
+                    try
+                    {
+                        var installed = await databaseService.GetEnginesAsync(cancellationToken);
+                        engines = SelectBackupEngines(installed);
+                        foreach (var unavailable in installed.Where(engine => engine.Installed && !engine.Ready))
+                        {
+                            hasError = true;
+                            summary.AppendLine($"engine {unavailable.Engine}: kurulu ancak yönetilebilir değil; veritabanı kapsamı yedeklenemedi (database.engine_not_ready).");
+                        }
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException && approval?.Rejected(exception) != true)
+                    {
+                        hasError = true;
+                        summary.AppendLine($"engine discovery: {exception.Message}; veritabanı kapsamı belirlenemedi.");
+                        logger.LogWarning(exception, "Kurulu veritabanı motorları okunamadı; veritabanı yedek kapsamı doğrulanamadı.");
+                    }
+                }
                 foreach (var engine in engines)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -521,8 +538,8 @@ public sealed class AutomationService(
                                     : await backupService.BackupDatabaseAsync(request, approval.CheckAsync, cancellationToken);
                                 var outcome = EvaluateBackupResult(record, "database", $"{engine}:{database.Name}",
                                     [new BackupDatabaseRef { Engine = engine, DatabaseName = database.Name }]);
-                                if (outcome.Complete) dbCount++;
-                                else
+                                bagimsizYedeklenen.UnionWith(outcome.IncludedDatabases);
+                                if (!outcome.Complete)
                                 {
                                     hasError = true;
                                     summary.AppendLine($"db {engine}/{database.Name}: {outcome.Detail}");
@@ -612,8 +629,10 @@ public sealed class AutomationService(
 
             state.LastBackupRunUtc = DateTime.UtcNow;
             state.LastBackupStatus = ResolveBackupStatus(hasError, budama);
+            var dbCount = siteIcindeYedeklenen.Union(bagimsizYedeklenen, StringComparer.Ordinal).Count();
             state.LastBackupDetails = BuildDetails(
-                $"{siteCount} site, {dbCount} veritabanı yedeklendi, {budama.Sentence}.",
+                $"{siteCount} site, {dbCount} veritabanı kopyası doğrulandı " +
+                $"(site arşivlerinde: {siteIcindeYedeklenen.Count}, ayrı dökümlerde: {bagimsizYedeklenen.Count}), {budama.Sentence}.",
                 summary.ToString());
         }
         catch (OperationCanceledException)
@@ -1481,36 +1500,9 @@ public sealed class AutomationService(
     }
 
     /// <summary>
-    /// Otomatik yedeğin dokunacağı veritabanı motorları: KURULU ve YÖNETİLEBİLİR olanlar.
+    /// Motor durumlarından yedeklenebilir olanları seçer (saf; test edilebilir).
+    /// Kurulu ama hazır olmayan motorlar çağıran tarafından eksik kapsam olarak raporlanır.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Sabit bir liste tutmak, panelin kendi kurduğu motor değiştiğinde yedeği sessizce
-    /// devre dışı bırakır — nitekim bıraktı: liste <c>["mysql"]</c> idi, panel MariaDB kuruyor.
-    /// </para>
-    /// <para>
-    /// <see cref="DatabaseEngineStatusDto.Ready"/> şartı bilinçli: motor kurulu ama panel ona
-    /// bağlanamıyorsa (yönetici parolası yok) döküm zaten alınamaz. Onu listeye koymak her gece
-    /// bir hata satırı üretir ve gerçek arızaları gürültüye gömerdi.
-    /// </para>
-    /// </remarks>
-    private async Task<IReadOnlyList<string>> ResolveInstalledEnginesAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            return SelectBackupEngines(await databaseService.GetEnginesAsync(cancellationToken));
-        }
-        catch (Exception exception)
-        {
-            // Motor listesi okunamıyorsa SESSİZ KALMA: yedek "0 veritabanı" der ve sebebi
-            // görünmezdi. Boş liste dönüp özet satırında bunu söylemek, uydurma bir motor
-            // listesiyle devam etmekten dürüsttür.
-            logger.LogWarning(exception, "Kurulu veritabanı motorları okunamadı; otomatik veritabanı yedeği atlanıyor.");
-            return [];
-        }
-    }
-
-    /// <summary>Motor durumlarından yedeklenebilir olanları seçer (saf; test edilebilir).</summary>
     internal static IReadOnlyList<string> SelectBackupEngines(IEnumerable<DatabaseEngineStatusDto> engines)
     {
         return engines

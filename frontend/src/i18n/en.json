@@ -5664,6 +5664,7 @@
   "panel.health.service.ftp": "FTP (Microsoft FTP Service)",
   "panel.health.service.dns": "DNS Server",
   "panel.automation.result.backup": "Sites backed up: {sites}; databases: {databases}; expired backups deleted: {deleted}.",
+  "panel.automation.result.backupMeasured": "Complete site backups: {sites}; verified database copies: {databases} (in site archives: {siteDatabases}; separate dumps: {separateDatabases}); expired backups deleted: {deleted}.",
   "panel.automation.result.mail": "Mail: backed up",
   "panel.automation.result.panel": "Panel: backed up",
   "panel.automation.result.ssl": "Certificates renewed: {count}.",

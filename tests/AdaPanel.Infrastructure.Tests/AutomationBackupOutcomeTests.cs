@@ -16,6 +16,113 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class AutomationBackupOutcomeTests
 {
+    [Theory]
+    [InlineData("created")]
+    [InlineData("created_with_errors")]
+    public async Task Summary_CountsMeasuredSiteAndSeparateDatabasesExactlyOnce(string siteStatus)
+    {
+        using var fixture = new Fixture();
+        fixture.WorkspaceNames = ["foo", "Foo", "standalone", "standalone"];
+        fixture.SiteResult = _ => Task.FromResult(Result("site", "site",
+            [new() { Engine = "postgres", DatabaseName = "foo" },
+             new() { Engine = "postgresql", DatabaseName = "foo" },
+             new() { Engine = "postgresql", DatabaseName = "Foo" }], siteStatus,
+            warnings: siteStatus == "created_with_errors"
+                ? [new() { MessageKey = "backup.source_file_unreadable", Target = "files/locked.txt" }] : []));
+        await fixture.Configure(engines: ["postgres", "postgresql"]);
+
+        var status = await fixture.Service.RunBackupNowAsync();
+
+        Assert.Contains("3 veritabanı kopyası doğrulandı (site arşivlerinde: 2, ayrı dökümlerde: 1)", status.LastBackupDetails);
+        Assert.Equal("standalone", Assert.Single(fixture.DatabaseCalls).DatabaseName);
+        Assert.Equal(siteStatus == "created" ? "completed" : "completed_with_errors", status.LastBackupStatus);
+    }
+
+    [Fact]
+    public async Task Summary_CountsMeasuredSiteDatabasesWhenIndependentBackupIsDisabled()
+    {
+        using var fixture = new Fixture();
+        await fixture.Configure(backupDatabases: false);
+        var status = await fixture.Service.RunBackupNowAsync();
+        Assert.Contains("2 veritabanı kopyası doğrulandı (site arşivlerinde: 2, ayrı dökümlerde: 0)", status.LastBackupDetails);
+        Assert.Empty(fixture.DatabaseCalls);
+        Assert.Equal(0, fixture.EngineDiscoveryCalls);
+    }
+
+    [Fact]
+    public async Task DiscoveryFailure_IsAnIncompleteRunWithRealErrorInsteadOfEmptySuccess()
+    {
+        using var fixture = new Fixture();
+        fixture.EngineResult = () => Task.FromException<IReadOnlyCollection<DatabaseEngineStatusDto>>(new IOException("inventory unavailable"));
+        await fixture.Configure(backupSites: false, engines: []);
+        var status = await fixture.Service.RunBackupNowAsync();
+        Assert.Equal("completed_with_errors", status.LastBackupStatus);
+        Assert.Contains("engine discovery: inventory unavailable", status.LastBackupDetails);
+        Assert.Empty(fixture.DatabaseCalls);
+        Assert.Equal(2, fixture.PruneCalls);
+    }
+
+    [Fact]
+    public async Task DiscoveryCancellation_IsNotSwallowedAndSkipsPostPruning()
+    {
+        using var fixture = new Fixture();
+        using var cancellation = new CancellationTokenSource();
+        fixture.EngineResult = () =>
+        {
+            cancellation.Cancel();
+            return Task.FromCanceled<IReadOnlyCollection<DatabaseEngineStatusDto>>(cancellation.Token);
+        };
+        await fixture.Configure(backupSites: false, engines: []);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fixture.Service.RunBackupNowAsync(cancellation.Token));
+        Assert.Equal(1, fixture.PruneCalls);
+        Assert.Empty(fixture.DatabaseCalls);
+    }
+
+    [Fact]
+    public async Task InstalledUnavailableEngine_IsReportedWhileReadyEngineStillBacksUp()
+    {
+        using var fixture = new Fixture();
+        fixture.EngineResult = () => Task.FromResult<IReadOnlyCollection<DatabaseEngineStatusDto>>(
+            [new() { Engine = "mariadb", Installed = true, Ready = false },
+             new() { Engine = "postgresql", Installed = true, Ready = true }]);
+        await fixture.Configure(backupSites: false, engines: []);
+        var status = await fixture.Service.RunBackupNowAsync();
+        Assert.Equal("completed_with_errors", status.LastBackupStatus);
+        Assert.Contains("engine mariadb:", status.LastBackupDetails);
+        Assert.Contains("database.engine_not_ready", status.LastBackupDetails);
+        Assert.Contains("2 veritabanı kopyası doğrulandı", status.LastBackupDetails);
+        Assert.All(fixture.DatabaseCalls, call => Assert.Equal("postgresql", call.Engine));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EmptyServer_DoesNotInventMissingEngineFailure(bool withUninstalledEngine)
+    {
+        using var fixture = new Fixture();
+        fixture.EngineResult = () => Task.FromResult<IReadOnlyCollection<DatabaseEngineStatusDto>>(withUninstalledEngine
+            ? [new() { Engine = "mariadb", Installed = false, Ready = false }] : []);
+        await fixture.Configure(backupSites: false, engines: []);
+        var status = await fixture.Service.RunBackupNowAsync();
+        Assert.Equal("completed", status.LastBackupStatus);
+        Assert.Contains("0 veritabanı", status.LastBackupDetails);
+        Assert.Empty(fixture.DatabaseCalls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExplicitOrDisabledBackup_DoesNotDiscoverOrEnableOtherEngines(bool enabled)
+    {
+        using var fixture = new Fixture();
+        fixture.EngineResult = () => throw new InvalidOperationException("must not discover");
+        await fixture.Configure(backupSites: false, backupDatabases: enabled, engines: enabled ? ["postgresql"] : []);
+        var status = await fixture.Service.RunBackupNowAsync();
+        Assert.Equal("completed", status.LastBackupStatus);
+        Assert.Equal(0, fixture.EngineDiscoveryCalls);
+        Assert.Equal(enabled ? 2 : 0, fixture.DatabaseCalls.Count);
+    }
+
     [Fact]
     public async Task PartialSite_RetriesOnlyMissingDatabaseAndPreservesOriginalWarning()
     {
@@ -126,7 +233,6 @@ public sealed class AutomationBackupOutcomeTests
 
     [Theory]
     [InlineData("failed")]
-    [InlineData("remote_failed")]
     [InlineData("unknown")]
     [InlineData("unsound")]
     [InlineData("zero")]
@@ -140,7 +246,7 @@ public sealed class AutomationBackupOutcomeTests
         fixture.DatabaseResult = request => Task.FromResult(scenario == "null" ? null! : Result("database",
             scenario == "wrong_source" ? "postgresql:other" : $"{request.Engine}:{request.DatabaseName}",
             scenario == "missing_inclusion" ? null : scenario == "empty_inclusion" ? [] : Included(request.DatabaseName),
-            scenario == "failed" ? "failed" : scenario == "remote_failed" ? "created_remote_failed" : "created",
+            scenario == "failed" ? "failed" : "created",
             scenario is "unknown" or "unsound" ? scenario : "sound", scenario == "zero" ? 0 : 12));
         await fixture.Configure(backupSites: false);
         var status = await fixture.Service.RunBackupNowAsync();
@@ -157,6 +263,21 @@ public sealed class AutomationBackupOutcomeTests
         var status = await fixture.Service.RunBackupNowAsync();
         Assert.Equal("completed", status.LastBackupStatus);
         Assert.Contains("2 veritabanı", status.LastBackupDetails);
+    }
+
+    [Fact]
+    public async Task IndependentBackup_LocalMeasuredCopiesAreCountedButRemoteUploadFailureRemainsAnError()
+    {
+        using var fixture = new Fixture();
+        fixture.DatabaseResult = request => Task.FromResult(Result("database", $"{request.Engine}:{request.DatabaseName}",
+            Included(request.DatabaseName), "created_remote_failed",
+            warnings: [new() { MessageKey = "backup.remote_upload_failed", Target = "ftp", Detail = "connection refused" }]));
+        await fixture.Configure(backupSites: false);
+        var status = await fixture.Service.RunBackupNowAsync();
+        Assert.Equal("completed_with_errors", status.LastBackupStatus);
+        Assert.Contains("2 veritabanı kopyası doğrulandı (site arşivlerinde: 0, ayrı dökümlerde: 2)", status.LastBackupDetails);
+        Assert.Contains("backup.remote_upload_failed", status.LastBackupDetails);
+        Assert.Contains("connection refused", status.LastBackupDetails);
     }
 
     [Theory]
@@ -256,6 +377,9 @@ public sealed class AutomationBackupOutcomeTests
         public Func<BackupDatabaseRequest, Task<BackupRecordDto>> DatabaseResult { get; set; } = request => Task.FromResult(Result("database", $"{request.Engine}:{request.DatabaseName}", Included(request.DatabaseName)));
         public Func<string, Task<BackupRecordDto>> OtherResult { get; set; } = type => Task.FromResult(Result(type, type, null));
         public string[] WorkspaceNames { get; set; } = ["foo", "Foo"];
+        public Func<Task<IReadOnlyCollection<DatabaseEngineStatusDto>>> EngineResult { get; set; } =
+            () => Task.FromResult<IReadOnlyCollection<DatabaseEngineStatusDto>>([]);
+        public int EngineDiscoveryCalls { get; private set; }
         public List<BackupDatabaseRequest> DatabaseCalls { get; } = [];
         public int PruneCalls { get; private set; }
 
@@ -284,12 +408,21 @@ public sealed class AutomationBackupOutcomeTests
             var ownership = Fake<IDatabaseOwnershipService>((method, _) => method.Name == "GetAllAsync"
                 ? Task.FromResult<IReadOnlyCollection<(string, string, Guid, string)>>([("postgresql", "foo", Guid.NewGuid(), "site"), ("postgresql", "Foo", Guid.NewGuid(), "site")])
                 : throw new NotSupportedException(method.Name));
-            var databases = Fake<IDatabaseService>((method, args) => method.Name == "GetWorkspaceAsync"
-                ? Task.FromResult(new DatabaseWorkspaceDto { Engine = (string)args[0]!, Databases = (string)args[0]! == "mysql" ? [] : WorkspaceNames.Select(name => new DatabaseRecordDto { Name = name }).ToArray() })
-                : throw new NotSupportedException(method.Name));
+            var databases = Fake<IDatabaseService>((method, args) => method.Name switch
+            {
+                "GetWorkspaceAsync" => Task.FromResult(new DatabaseWorkspaceDto { Engine = (string)args[0]!, Databases = (string)args[0]! == "mysql" ? [] : WorkspaceNames.Select(name => new DatabaseRecordDto { Name = name }).ToArray() }),
+                "GetEnginesAsync" => DiscoverEngines(),
+                _ => throw new NotSupportedException(method.Name)
+            });
             Service = new AutomationService(store, backups, null!, null!, sites, null!, null!, null!, databases,
                 null!, null!, null!, null!, null!, null!, null!, new ConcurrencyLock(), null!, ownership, jobs,
                 NullLogger<AutomationService>.Instance);
+        }
+
+        private Task<IReadOnlyCollection<DatabaseEngineStatusDto>> DiscoverEngines()
+        {
+            EngineDiscoveryCalls++;
+            return EngineResult();
         }
 
         public Task Configure(bool backupSites = true, bool backupDatabases = true, string[]? engines = null, bool backupMail = false, bool backupPanel = false) => store.WriteAsync("config/automation.json", new

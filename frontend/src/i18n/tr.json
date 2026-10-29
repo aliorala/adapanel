@@ -5664,6 +5664,7 @@
   "panel.health.service.ftp": "FTP (Microsoft FTP Service)",
   "panel.health.service.dns": "DNS Sunucusu",
   "panel.automation.result.backup": "Siteler: {sites}; veritabanları: {databases}; silinen eski yedekler: {deleted}.",
+  "panel.automation.result.backupMeasured": "Tam site yedekleri: {sites}; doğrulanan veritabanı kopyaları: {databases} (site arşivlerinde: {siteDatabases}; ayrı dökümlerde: {separateDatabases}); silinen eski yedekler: {deleted}.",
   "panel.automation.result.mail": "Posta: yedeklendi",
   "panel.automation.result.panel": "Panel: yedeklendi",
   "panel.automation.result.ssl": "Yenilenen sertifikalar: {count}.",

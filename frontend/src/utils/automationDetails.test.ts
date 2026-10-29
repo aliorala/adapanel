@@ -13,6 +13,17 @@ it('localizes historical successful backup and certificate summaries', () => {
     .toBe('Certificates renewed: 1. Mail certificate (mail.example.com) updated.');
 });
 
+it('localizes measured database totals and their archive locations without claiming remote upload success', () => {
+  const details = '1 site, 4 veritabanı kopyası doğrulandı (site arşivlerinde: 2, ayrı dökümlerde: 2), 0 eski yedek silindi.\ndb postgresql/Foo: status=created_remote_failed; backup.remote_upload_failed (ftp) connection refused';
+  expect(automationDetails(details, translate(en))).toBe('Complete site backups: 1; verified database copies: 4 (in site archives: 2; separate dumps: 2); expired backups deleted: 0.\ndb postgresql/Foo: status=created_remote_failed; backup.remote_upload_failed (ftp) connection refused');
+  expect(automationDetails(details, translate(tr))).toBe('Tam site yedekleri: 1; doğrulanan veritabanı kopyaları: 4 (site arşivlerinde: 2; ayrı dökümlerde: 2); silinen eski yedekler: 0.\ndb postgresql/Foo: status=created_remote_failed; backup.remote_upload_failed (ftp) connection refused');
+});
+
+it('retains new summary prune failures verbatim rather than translating away the failure', () => {
+  const failure = '1 site, 4 veritabanı kopyası doğrulandı (site arşivlerinde: 2, ayrı dökümlerde: 2), 0 eski yedek silindi, 1 uzak kopya silme denemesi basarisiz.\nFTP: 550 Permission denied';
+  expect(automationDetails(failure, translate(en))).toBe(failure);
+});
+
 it('localizes update summaries in Turkish without losing component versions', () => {
   expect(automationDetails('0 update(s) installed, 1 pending: PHP 8.3.33 -> 8.3.35 | Version cannot be checked automatically (1): Docker', translate(tr)))
     .toBe('Yüklenen güncellemeler: 0; bekleyen: 1: PHP 8.3.33 -> 8.3.35 | Sürümü otomatik denetlenemeyen bileşenler (1): Docker');

@@ -156,7 +156,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<INotificationService, Notifications.NotificationService>();
         // Yedek şifreleme parolasının DPAPI korumalı kasası (zamanlanmış yedekler için şart).
         services.AddScoped<Backup.BackupEncryptionStore>();
-        services.AddScoped<IBackupService, Backup.BackupService>();
+        services.AddScoped<IBackupService>(provider => ActivatorUtilities.CreateInstance<Backup.BackupService>(
+            provider, provider.GetRequiredService<Backup.IBackupSnapshotRuntime>()));
+        services.AddSingleton<Backup.IBackupSnapshotRuntime, Backup.WindowsBackupSnapshotRuntime>();
         services.AddScoped<Backup.BackupNetworkTrustService>();
         services.AddScoped<IFileMigrationService, Migration.FileMigrationService>();
         services.AddScoped<ISiteMigrationService, Migration.SiteMigrationService>();

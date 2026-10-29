@@ -73,7 +73,8 @@ public sealed partial class BackupService(
     TimeProvider? timeProvider = null,
     IMailBackupRuntime? mailBackupRuntime = null,
     IConcurrencyLock? concurrencyLock = null,
-    BackupNetworkTrustService? networkTrust = null) : IBackupService
+    BackupNetworkTrustService? networkTrust = null,
+    IBackupSnapshotRuntime? snapshotRuntime = null) : IBackupService
 {
     private readonly IConcurrencyLock siteGates = concurrencyLock ?? new AdaPanel.Infrastructure.Services.ConcurrencyLock();
 
@@ -1240,9 +1241,12 @@ public sealed partial class BackupService(
         // Dosya listesi bir kez taranır: hem indeksin hem de arşive girecek kümenin kaynağı budur.
         // ATLANANLAR tek bir defterde toplanır (tarama + arşivleme aşamaları ayrı ayrı atlayabilir).
         var atlananlar = new BackupSkipLog();
+        await using var snapshot = request.IncludeFiles && snapshotRuntime is not null
+            ? await snapshotRuntime.CaptureAsync([applicationRoot], cancellationToken) : null;
+        var snapshotTime = snapshot?.CapturedAtUtc;
         var taranan = request.IncludeFiles
             ? ScanFiles(
-                applicationRoot,
+                snapshot?.ResolveRoot(applicationRoot) ?? applicationRoot,
                 "files",
                 atlananlar,
                 YeniTaramaButcesi(),
@@ -1265,7 +1269,9 @@ public sealed partial class BackupService(
         await using (var zipStream = new FileStream(targetPath, FileMode.Open, FileAccess.Write))
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
         {
-            var yazilan = AddFilesToArchive(archive, taranan, yazilacak, atlananlar);
+            var yazilan = AddFilesToArchive(archive, taranan, yazilacak, atlananlar, cancellationToken);
+            indeks.Complete = !atlananlar.Any;
+            if (snapshot is not null) await snapshot.DisposeAsync();
             if (yazilan > 0)
             {
                 includedParts.Add(artimsal ? $"files(+{yazilan})" : "files");
@@ -1343,6 +1349,7 @@ public sealed partial class BackupService(
             var manifest = System.Text.Json.JsonSerializer.Serialize(new
             {
                 site = site.Name,
+                filesystemSnapshot = new { capturedAtUtc = snapshotTime, consistency = snapshotTime is null ? "not-captured" : "volume-crash-consistent-nowriters", databaseDumpsSameInstant = false },
                 createdAtUtc = DateTime.UtcNow,
                 parts = includedParts,
                 mode = plan.Stamp?.Mode ?? BackupChainPlanner.ModeFull,
@@ -1516,7 +1523,7 @@ public sealed partial class BackupService(
     // =====================================================================================
 
     /// <summary>Arşive girecek tek bir dosya: arşiv adı + disk yolu + indeks ölçüleri.</summary>
-    private sealed record ArchiveFile(string EntryName, string FullPath, long Size, long ModifiedUtcTicks);
+    private sealed record ArchiveFile(string EntryName, string FullPath, long Size, long ModifiedUtcTicks, string Sha256);
 
     /// <summary>Kayda basılacak zincir damgası.</summary>
     private sealed record ChainStamp(string ChainId, int ChainIndex, string Mode, string BaseBackupId);
@@ -1588,7 +1595,7 @@ public sealed partial class BackupService(
             sonHalka,
             tamYedekZamani,
             request.FullBackupEveryDays,
-            oncekiIndeks is not null,
+            oncekiIndeks is { Complete: true, HashVersion: 1 } && oncekiIndeks.Entries.All(entry => !string.IsNullOrWhiteSpace(entry.Sha256)),
             DateTime.UtcNow);
 
         if (tamGerekli)
@@ -1755,7 +1762,7 @@ public sealed partial class BackupService(
                         return;
                     }
 
-                    sonuc.Add(new ArchiveFile(girdi, bilgi.FullName, bilgi.Length, bilgi.LastWriteTimeUtc.Ticks));
+                    sonuc.Add(new ArchiveFile(girdi, bilgi.FullName, bilgi.Length, bilgi.LastWriteTimeUtc.Ticks, HashFile(bilgi.FullName, cancellationToken)));
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
@@ -1790,17 +1797,33 @@ public sealed partial class BackupService(
         return sonuc;
     }
 
+    private static string HashFile(string path, CancellationToken cancellationToken)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.SequentialScan);
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        var buffer = new byte[128 * 1024];
+        int read;
+        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            hash.AppendData(buffer, 0, read);
+        }
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
     private static BackupFileIndex BuildIndex(ChainStamp? stamp, IReadOnlyCollection<ArchiveFile> files) => new()
     {
         ChainId = stamp?.ChainId ?? string.Empty,
         ChainIndex = stamp?.ChainIndex ?? 0,
         CreatedAtUtc = DateTime.UtcNow,
+        HashVersion = 1,
         Entries = files
             .Select(file => new BackupFileIndexEntry
             {
                 Path = file.EntryName,
                 Size = file.Size,
-                ModifiedUtcTicks = file.ModifiedUtcTicks
+                ModifiedUtcTicks = file.ModifiedUtcTicks,
+                Sha256 = file.Sha256
             })
             .ToList()
     };
@@ -1814,11 +1837,13 @@ public sealed partial class BackupService(
         ZipArchive archive,
         IReadOnlyCollection<ArchiveFile> files,
         HashSet<string> selected,
-        BackupSkipLog skipped)
+        BackupSkipLog skipped,
+        CancellationToken cancellationToken = default)
     {
         var eklenen = 0;
         foreach (var file in files)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!selected.Contains(file.EntryName))
             {
                 continue;
@@ -1826,7 +1851,20 @@ public sealed partial class BackupService(
 
             try
             {
-                archive.CreateEntryFromFile(file.FullPath, file.EntryName, CompressionLevel.Optimal);
+                using var input = new FileStream(file.FullPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    128 * 1024, FileOptions.SequentialScan);
+                var entry = archive.CreateEntry(file.EntryName, CompressionLevel.Optimal);
+                var modified = new DateTime(file.ModifiedUtcTicks, DateTimeKind.Utc);
+                entry.LastWriteTime = modified.Year is < 1980 or > 2107
+                    ? new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero) : new DateTimeOffset(modified);
+                using var output = entry.Open();
+                var buffer = new byte[128 * 1024];
+                int read;
+                while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    output.Write(buffer, 0, read);
+                }
                 eklenen++;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -2099,6 +2137,16 @@ public sealed partial class BackupService(
         var includedComponents = new List<BackupComponentRef>();
         var atlananlar = new BackupSkipLog();
         var taskWarnings = new List<BackupRestoreWarningDto>();
+        var panelRoots = new[] { configDirectory, Path.GetDirectoryName(dbPath)! }.Where(Directory.Exists).ToArray();
+        await using var snapshot = snapshotRuntime is not null && panelRoots.Length > 0
+            ? await snapshotRuntime.CaptureAsync(panelRoots, cancellationToken) : null;
+        var snapshotTime = snapshot?.CapturedAtUtc;
+        if (snapshot is not null)
+        {
+            if (Directory.Exists(configDirectory)) configDirectory = snapshot.ResolveRoot(configDirectory);
+            if (Directory.Exists(Path.GetDirectoryName(dbPath)!))
+                dbPath = Path.Combine(snapshot.ResolveRoot(Path.GetDirectoryName(dbPath)!), Path.GetFileName(dbPath));
+        }
 
         using var artifact = PendingBackupArtifact.Reserve(targetPath);
         await using (var zipStream = new FileStream(targetPath, FileMode.Open, FileAccess.Write))
@@ -2128,6 +2176,8 @@ public sealed partial class BackupService(
                 if (!atlananlar.Any)
                     includedComponents.Add(new() { Kind = "panel-config", Source = "panel" });
             }
+
+            if (snapshot is not null) await snapshot.DisposeAsync();
 
             // Planlı görevler (\AdaPanel\ klasörü): Windows Görev Zamanlayıcı'da yaşarlar, panel dosyalarında DEĞİL —
             // ham görev XML'i (principal/tetikleyici/eylem birebir) yedeğe girer; panel geri yüklemesinde otomatik kaydedilir.
@@ -2168,6 +2218,7 @@ public sealed partial class BackupService(
             var manifest = System.Text.Json.JsonSerializer.Serialize(new
             {
                 kind = "panel-config",
+                filesystemSnapshot = new { capturedAtUtc = snapshotTime, consistency = snapshotTime is null ? "not-captured" : "volume-crash-consistent-nowriters" },
                 createdAtUtc = DateTime.UtcNow,
                 parts = includedParts,
                 scheduledTasks = new { scope = "\\AdaPanel\\", count = exportedTasks.Count,
@@ -2298,11 +2349,7 @@ public sealed partial class BackupService(
                 var site = await siteReservations.CaptureAsync(siteAdi, cancellationToken);
                 siteBilgileri[siteAdi] = site;
 
-                if (request.IncludeFiles)
-                {
-                    var kok = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
-                    taranan.AddRange(ScanFiles(kok, $"sites/{siteAdi}/files", atlananlar, taramaButcesi, cancellationToken));
-                }
+
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
@@ -2317,6 +2364,16 @@ public sealed partial class BackupService(
             }
         }
 
+        var snapshotRoots = siteBilgileri.Values.Select(site => string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath).ToArray();
+        await using var snapshot = request.IncludeFiles && snapshotRoots.Length > 0 && snapshotRuntime is not null
+            ? await snapshotRuntime.CaptureAsync(snapshotRoots, cancellationToken) : null;
+        var snapshotTime = snapshot?.CapturedAtUtc;
+        if (request.IncludeFiles)
+            foreach (var (siteAdi, site) in siteBilgileri)
+            {
+                var root = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
+                taranan.AddRange(ScanFiles(snapshot?.ResolveRoot(root) ?? root, $"sites/{siteAdi}/files", atlananlar, taramaButcesi, cancellationToken));
+            }
         var indeks = BuildIndex(chainPlan.Stamp, taranan);
         var fark = BackupChainPlanner.Diff(chainPlan.PreviousIndex, indeks);
         var yazilacak = fark.Changed.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -2331,7 +2388,10 @@ public sealed partial class BackupService(
         await using (var zipStream = new FileStream(targetPath, FileMode.Open, FileAccess.Write))
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
         {
-            var yazilanDosya = AddFilesToArchive(archive, taranan, yazilacak, atlananlar);
+            AddTextEntry(archive, "filesystem-snapshot.json", System.Text.Json.JsonSerializer.Serialize(new { capturedAtUtc = snapshotTime, consistency = snapshotTime is null ? "not-captured" : "volume-crash-consistent-nowriters", databaseDumpsSameInstant = false }, BackupJsonOptions));
+            var yazilanDosya = AddFilesToArchive(archive, taranan, yazilacak, atlananlar, cancellationToken);
+            indeks.Complete = !atlananlar.Any;
+            if (snapshot is not null) await snapshot.DisposeAsync();
             if (yazilanDosya > 0)
             {
                 parcalar.Add(artimsal ? $"files(+{yazilanDosya})" : $"files({yazilanDosya})");

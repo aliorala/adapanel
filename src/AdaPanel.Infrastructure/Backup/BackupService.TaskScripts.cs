@@ -27,6 +27,17 @@ public sealed partial class BackupService
         {
             var command = action.Elements().FirstOrDefault(node => node.Name.LocalName == "Command")?.Value ?? "";
             var arguments = action.Elements().FirstOrDefault(node => node.Name.LocalName == "Arguments")?.Value ?? "";
+            // Logged actions wrap both scripts and the panel's URL runner in cmd.exe.
+            // The installed URL runner is not a user script to copy into the backup.
+            if (SchedulerService.TryUnwrapLoggedAction(command, arguments, out var executable, out var unwrapped)
+                && (ScriptTaskPlanner.IsAllowedExtension(executable)
+                    || ScriptTaskPlanner.IsScriptAction(executable, unwrapped)
+                    || UrlTaskRunner.IsUrlAction(executable, unwrapped)))
+            {
+                command = executable;
+                arguments = unwrapped;
+            }
+            if (UrlTaskRunner.IsUrlAction(command, arguments)) continue;
             if (ScriptTaskPlanner.IsAllowedExtension(command)) paths.Add(command);
             else if (ScriptTaskPlanner.TryResolveScriptPath(command, arguments, out var path, out _)) paths.Add(path);
             else if (ScriptTaskPlanner.IsScriptAction(command, arguments))

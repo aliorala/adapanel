@@ -5,6 +5,7 @@ using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Infrastructure.Backup;
 using AdaPanel.Infrastructure.Support;
 using AdaPanel.Infrastructure.Options;
+using AdaPanel.Infrastructure.Scheduler;
 using Xunit;
 
 namespace AdaPanel.Infrastructure.Tests;
@@ -14,6 +15,61 @@ public sealed class BackupTaskCoverageTests : IDisposable
     private readonly string root = Path.Combine(Path.GetTempPath(), "adapanel-task-coverage-" + Guid.NewGuid().ToString("N"));
     public BackupTaskCoverageTests() => Directory.CreateDirectory(root);
     public void Dispose() { try { Directory.Delete(root, true); } catch { } }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UrlRunnerHasNoInventedScriptDependency(bool logged)
+    {
+        var executable = Path.Combine(root, "AdaPanel.Api.exe");
+        var arguments = "--cron-url \"https://example.test/scheduled\"";
+        var task = ActionTask(logged ? "cmd.exe" : executable,
+            logged ? SchedulerService.BuildLoggedArguments(executable, arguments, Path.Combine(root, "job.log")) : arguments);
+        var warnings = new List<BackupRestoreWarningDto>();
+        using (var archive = ZipFile.Open(Path.Combine(root, "url.zip"), ZipArchiveMode.Create))
+            Assert.Empty(await BackupService.ArchiveTaskScriptsAsync(archive, task, 0, warnings, default));
+        Assert.Empty(warnings);
+        using var read = ZipFile.OpenRead(Path.Combine(root, "url.zip"));
+        Assert.Empty(read.Entries);
+    }
+
+    [Theory]
+    [InlineData(".bat")]
+    [InlineData(".ps1")]
+    public async Task LoggedScriptStillArchivesItsRealDependency(string extension)
+    {
+        var path = Path.Combine(root, "scheduled job" + extension);
+        await File.WriteAllTextAsync(path, "echo actual script");
+        var (execute, arguments) = ScriptTaskPlanner.BuildAction(path, "--cron-url literal");
+        var task = ActionTask("cmd.exe", SchedulerService.BuildLoggedArguments(execute, arguments, Path.Combine(root, "task.log")));
+        var warnings = new List<BackupRestoreWarningDto>();
+        List<BackupService.TaskScriptEntry> scripts;
+        using (var archive = ZipFile.Open(Path.Combine(root, "script.zip"), ZipArchiveMode.Create))
+            scripts = await BackupService.ArchiveTaskScriptsAsync(archive, task, 0, warnings, default);
+        Assert.Empty(warnings);
+        Assert.Equal(path, Assert.Single(scripts).Path);
+        Assert.Equal(64, scripts[0].Sha256.Length);
+        using var read = ZipFile.OpenRead(Path.Combine(root, "script.zip"));
+        using var reader = new StreamReader(Assert.Single(read.Entries).Open());
+        Assert.Equal("echo actual script", await reader.ReadToEndAsync());
+    }
+
+    [Fact]
+    public async Task UnrecognizedExecutableDoesNotMasqueradeAsUrlRunner()
+    {
+        var executable = Path.Combine(root, "unrelated.exe");
+        var task = ActionTask("cmd.exe", SchedulerService.BuildLoggedArguments(executable,
+            "--cron-url \"https://example.test/scheduled\"", Path.Combine(root, "task.log")));
+        var warnings = new List<BackupRestoreWarningDto>();
+        using var archive = ZipFile.Open(Path.Combine(root, "unknown.zip"), ZipArchiveMode.Create);
+        var scripts = await BackupService.ArchiveTaskScriptsAsync(archive, task, 0, warnings, default);
+        Assert.Empty(Assert.Single(scripts).Sha256);
+        Assert.Equal("backup.task_script_missing", Assert.Single(warnings).MessageKey);
+    }
+
+    private static BackupService.ScheduledTaskExport ActionTask(string execute, string arguments) => new("daily",
+        new XElement("Task", new XElement("Actions", new XElement("Exec",
+            new XElement("Command", execute), new XElement("Arguments", arguments)))).ToString());
 
     [Theory]
     [InlineData(false)]

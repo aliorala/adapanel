@@ -11,8 +11,8 @@ namespace AdaPanel.Core.Dtos.Backup;
 /// yavaşlama demektir; izin değişikliği yakalanmaz ve bu AÇIKÇA söylenir).
 /// </para>
 /// <para>
-/// İçerik özeti (hash) BİLEREK kullanılmaz: her yedekte bütün siteyi okumak, artımsal yedeğin
-/// var oluş sebebini (disk + süre kazancı) ortadan kaldırırdı.
+/// İçerik özeti aynı boyut ve tarih korunarak değiştirilen dosyaları da yakalar.
+/// Hash içermeyen eski indeksler yeni artımsal zincire temel olamaz.
 /// </para>
 /// </remarks>
 public sealed class BackupFileIndexEntry
@@ -24,6 +24,8 @@ public sealed class BackupFileIndexEntry
 
     /// <summary>Son değişiklik zamanı (UTC tick). Saniye altı fark da değişiklik sayılır.</summary>
     public long ModifiedUtcTicks { get; set; }
+
+    public string? Sha256 { get; set; }
 }
 
 /// <summary>
@@ -32,6 +34,8 @@ public sealed class BackupFileIndexEntry
 /// </summary>
 public sealed class BackupFileIndex
 {
+    public int HashVersion { get; set; }
+    public bool Complete { get; set; }
     public string ChainId { get; set; } = string.Empty;
 
     public int ChainIndex { get; set; }
