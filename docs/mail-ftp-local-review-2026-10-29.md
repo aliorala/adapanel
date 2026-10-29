@@ -56,3 +56,10 @@ sunucusuna bu turun DNS düzeltmeleri kurulmadı. Canlı test yalnız mevcut
 kurulumun durumunu ölçer. Hotmail'in Spamhaus engeli devam ediyor; gerçek
 harici alıcı teslimatı başarılı olarak doğrulanmış değildir. Mevcut TLS,
 parolalar, MX/DKIM ve genel posta ayarları test için zayıflatılmadı.
+
+## Sonraki yayın adımı
+
+Kullanıcının yayın talebiyle DNS kod düzeltmesi 0.8.137 olarak yayımlandı.
+Paketin GitHub'dan indirilen kopyası SHA-256 ile doğrulandı; ev sunucusuna
+kurulum henüz doğrulanmadı. Önceki "yayımlanmadı" açıklaması yerel inceleme
+aşamasına aittir. Güncel durum `release-0.8.137-2026-10-29.md` belgesindedir.

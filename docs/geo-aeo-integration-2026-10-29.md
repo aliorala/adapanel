@@ -69,3 +69,11 @@ Canlı SEO yayını ve gerçek arama motoru/AI performansı bu yerel turun dış
 Ortak kaynaklar hazır paketin src dosyalarıyla metin olarak birebir karşılaştırıldı.
 Paketin özgün 20/20 testi de geçti. Nihai boş CLI özeti
 `artifacts/geo-aeo/measurement-summary.json` dosyasına kaydedildi.
+
+## Sonraki yayın adımı
+
+Kullanıcının daha sonraki açık yayın talebiyle kaynaklar 0.8.137'ye alındı ve
+statik site FTPS üzerinden yayımlandı. 75 HTTPS dosya karşılaştırması ve 68
+yönlendirme kontrolü geçti. Yukarıdaki "yerel tur" açıklamaları entegrasyon
+aşamasının kaydıdır. Güncel yayın/kurulum ayrımı ve kanıtlar
+`release-0.8.137-2026-10-29.md` belgesindedir.
