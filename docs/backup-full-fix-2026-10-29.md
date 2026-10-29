@@ -85,3 +85,17 @@ görev sınıflandırma düzeltmesini yaptı.
 0.8.138 paketleme ve dağıtım hazırlığındadır. Gerçek sunucu probe'unun geçmesi,
 uygulamanın yeni sürümünün kurulması veya tam üretim yedeğinin tamamlanmasıyla
 eş tutulmaz. Yeni sürüm sonrası gerçek yedek/arşiv kontrolü ayrıca kaydedilecektir.
+
+## Paket restore sırasında bulunan bağlantı kütüphanesi yaması
+
+Yeni NuGet audit verisi MySqlConnector 2.6.0 için NU1902 bildirdi. Üreticinin
+[GHSA-473q-m89c-ghf8 duyurusu](https://github.com/advisories/GHSA-473q-m89c-ghf8)
+ve [2.6.1 sürüm notu](https://github.com/mysql-net/MySqlConnector/releases/tag/2.6.1)
+yamanın 2.6.1 olduğunu doğruluyor. Yalnız paket referansı 2.6.1 olarak güncellendi;
+TLS modu, CA, sertifika ve canlı veritabanı ayarları değiştirilmedi. Duyuru,
+yerel/loopback bağlantılarını bu saldırıdan etkilenmeyen kapsamda tanımlar;
+canlı sunucuda parola sızıntısı yaşandığına dair bir bulgu yoktur. Yama paketinin
+dar SQL/DEFINER/transfer TLS/provider grubu 202/202 geçti. Force/no-cache restore
+ve API Release derlemesi başarılı; son derlemede sıfır uyarı ve sıfır hata var.
+API/Infrastructure/test assets kayıtları gerçek MySqlConnector/2.6.1 çözümlemesini
+doğruluyor. Nihai kurulum paketi de bu kaynakla yeniden üretilecektir.
