@@ -15,6 +15,10 @@ export type CacheMetrics = {
   hits: number;
   misses: number;
   uptimeSeconds: number;
+  measuredAtUtc?: string;
+  runId?: string | null;
+  databases?: { index: number; keys: number; expires: number | null; averageTtlMilliseconds: number | null }[];
+  clients?: { name: string; databaseIndex: number; idleSeconds: number }[] | null;
 };
 
 export type CacheRuntime = {

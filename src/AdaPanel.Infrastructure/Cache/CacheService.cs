@@ -1,4 +1,4 @@
-﻿using System.Net.Sockets;
+using System.Net.Sockets;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -84,6 +84,7 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
         = ProcessRunner.RunPowerShellStrictAsync;
     internal Func<int, string, CancellationToken, Task<string?>>? InspectCachePortAsync { get; init; }
     internal Func<int, CancellationToken, Task<Stream>>? OpenRedisInfoStreamAsync { get; init; }
+    internal Func<int, CancellationToken, Task<(Stream Stream, string LocalAddress)>>? OpenRedisClientsStreamAsync { get; init; }
 
     private CacheDescriptor MemcachedDescriptor
         => new("memcached", "Memcached", "AdaMemcached", MemcachedProbePort, "memcached.exe", RunsAsScheduledTask: true);
@@ -597,6 +598,16 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
     // ve bağlantı adreslerini içerebilir. Günlüğe yalnız "okunamadı" bilgisi ve port düşer.
     private async Task<CacheMetricsDto?> ReadRedisInfoAsync(int port, CancellationToken cancellationToken)
     {
+        // Dispose the INFO connection before listing clients, so neither panel
+        // measurement socket appears in the returned external-client list.
+        var metrics = await ReadRedisInfoOnlyAsync(port, cancellationToken);
+        if (metrics is not null)
+            metrics.Clients = await ReadRedisClientsAsync(port, cancellationToken);
+        return metrics;
+    }
+
+    private async Task<CacheMetricsDto?> ReadRedisInfoOnlyAsync(int port, CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
@@ -652,9 +663,82 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
         {
             // Redis CANLI ölçülmüşken INFO'nun patlaması olağan değildir; metrikler sessizce
             // kaybolur ve panel "sorun yok" görüntüsü verir.
-            logger?.LogWarning(exception, "Redis INFO okunamadi: 127.0.0.1:{Port}. Metrikler gosterilmeyecek.", port);
+            logger?.LogWarning("Redis INFO okunamadi: 127.0.0.1:{Port}. Metrikler gosterilmeyecek.", port);
             return null;
         }
+    }
+
+    private async Task<List<CacheClientDto>?> ReadRedisClientsAsync(int port, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(1000);
+            using var client = new TcpClient();
+            Stream connectedStream;
+            string localAddress;
+            if (OpenRedisClientsStreamAsync is { } openStream)
+                (connectedStream, localAddress) = await openStream(port, cts.Token);
+            else
+            {
+                // An INFO fixture must never open a real client-list connection.
+                if (OpenRedisInfoStreamAsync is not null) return null;
+                await client.ConnectAsync("127.0.0.1", port, cts.Token);
+                connectedStream = client.GetStream();
+                var endpoint = (System.Net.IPEndPoint)client.Client.LocalEndPoint!;
+                localAddress = new System.Net.IPEndPoint(endpoint.Address.MapToIPv4(), endpoint.Port).ToString();
+            }
+            await using var stream = connectedStream;
+            await stream.WriteAsync("CLIENT LIST\r\n"u8.ToArray(), cts.Token);
+            var header = await ReadRedisReplyHeaderAsync(stream, cts.Token);
+            if (header is null || !header.StartsWith('$') ||
+                !int.TryParse(header.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out var length) ||
+                length is < 0 or > 131072) return null;
+            var body = new byte[length];
+            await stream.ReadExactlyAsync(body, cts.Token);
+            var trailer = new byte[2];
+            await stream.ReadExactlyAsync(trailer, cts.Token);
+            if (trailer[0] != '\r' || trailer[1] != '\n') return null;
+            var text = new UTF8Encoding(false, true).GetString(body);
+            cancellationToken.ThrowIfCancellationRequested();
+            return ParseRedisClients(text, localAddress);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // Do not log exception text: a stream/decoder error can include raw data.
+            logger?.LogDebug("Redis istemci olcumu okunamadi: 127.0.0.1:{Port}.", port);
+            return null;
+        }
+    }
+
+    private static List<CacheClientDto>? ParseRedisClients(string text, string localAddress)
+    {
+        var clients = new List<CacheClientDto>();
+        var ownConnections = 0;
+        var rows = 0;
+        foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (++rows > 2048) return null;
+            var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var field in line.TrimEnd('\r').Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var separator = field.IndexOf('=');
+                if (separator <= 0) return null;
+                var key = field[..separator];
+                // Retain only fields needed for the projection and own-socket filter.
+                if (key is "addr" or "name" or "db" or "idle")
+                    if (!fields.TryAdd(key, field[(separator + 1)..])) return null;
+            }
+            if (!fields.TryGetValue("addr", out var address)) return null;
+            if (address == localAddress) { ownConnections++; continue; }
+            if (!fields.TryGetValue("name", out var name) || name.Length > 256 || name.Any(char.IsControl) ||
+                !int.TryParse(fields.GetValueOrDefault("db"), NumberStyles.None, CultureInfo.InvariantCulture, out var database) ||
+                !long.TryParse(fields.GetValueOrDefault("idle"), NumberStyles.None, CultureInfo.InvariantCulture, out var idle)) return null;
+            clients.Add(new CacheClientDto { Name = name, DatabaseIndex = database, IdleSeconds = idle });
+        }
+        // Without a unique self match, external-client cardinality is unverified.
+        return ownConnections == 1 ? clients : null;
     }
 
     private static async Task<string?> ReadRedisReplyHeaderAsync(Stream stream, CancellationToken cancellationToken)
@@ -681,9 +765,9 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var metricKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "redis_version", "used_memory_human", "connected_clients", "keyspace_hits", "keyspace_misses", "uptime_in_seconds"
+            "redis_version", "used_memory_human", "connected_clients", "keyspace_hits", "keyspace_misses", "uptime_in_seconds", "run_id"
         };
-        var databases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var databases = new Dictionary<int, CacheDatabaseUsageDto>();
         var inKeyspace = false;
         var measuredKeyspace = false;
         long keys = 0;
@@ -708,17 +792,30 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
             }
             else if (inKeyspace && Regex.IsMatch(name, "^db[0-9]+$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
             {
-                if (!databases.Add(name)) return null;
+                if (!int.TryParse(name.AsSpan(2), NumberStyles.None, CultureInfo.InvariantCulture, out var index) || databases.ContainsKey(index)) return null;
                 string? keyCount = null;
+                var attributes = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
                 foreach (var attribute in value.Split(','))
                 {
                     var pair = attribute.Split('=', 2, StringSplitOptions.TrimEntries);
-                    if (pair.Length != 2 || !pair[0].Equals("keys", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (pair.Length != 2) continue;
+                    if (!attributes.TryAdd(pair[0], pair[1])) attributes[pair[0]] = null;
+                    if (!pair[0].Equals("keys", StringComparison.OrdinalIgnoreCase)) continue;
                     if (keyCount is not null) return null;
                     keyCount = pair[1];
                 }
                 if (!TryCount(keyCount, out var dbKeys) || keys > long.MaxValue - dbKeys) return null;
                 keys += dbKeys;
+                var expires = OptionalCount("expires");
+                databases.Add(index, new CacheDatabaseUsageDto
+                {
+                    Index = index, Keys = dbKeys,
+                    Expires = expires <= dbKeys ? expires : null,
+                    AverageTtlMilliseconds = OptionalCount("avg_ttl")
+                });
+
+                long? OptionalCount(string field)
+                    => TryCount(attributes.GetValueOrDefault(field), out var count) ? count : null;
             }
         }
 
@@ -734,6 +831,9 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
 
         return new CacheMetricsDto
         {
+            MeasuredAtUtc = DateTimeOffset.UtcNow,
+            RunId = map.TryGetValue("run_id", out var runId) && Regex.IsMatch(runId, "\\A[0-9a-fA-F]{40}\\z", RegexOptions.CultureInvariant) ? runId : null,
+            Databases = databases.Values.OrderBy(database => database.Index).ToList(),
             Version = version,
             UsedMemory = memory,
             ConnectedClients = clients,

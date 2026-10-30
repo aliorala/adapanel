@@ -3,6 +3,14 @@ namespace AdaPanel.Core.Dtos.Cache;
 /// <summary>Redis canlı metrikleri (RESP INFO'dan; salt-okunur).</summary>
 public sealed class CacheMetricsDto
 {
+    public DateTimeOffset MeasuredAtUtc { get; set; }
+
+    public string? RunId { get; set; }
+
+    public List<CacheDatabaseUsageDto> Databases { get; set; } = [];
+
+    public List<CacheClientDto>? Clients { get; set; }
+
     public string Version { get; set; } = string.Empty;
 
     public string UsedMemory { get; set; } = string.Empty;
