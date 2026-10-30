@@ -4471,6 +4471,7 @@
   "mail.relay_password_required": "A password is required when a user name is given.",
   "mail.relay_strategy_unavailable": "The mail server's outbound routing settings could not be read.",
   "mail.relay_failed": "The outbound mail relay could not be applied.",
+  "mail.relay_cleanup_incomplete": "Relay routing was removed, but the panel's saved relay settings and password could not be cleared. Check the mail server reload status in the details. After resolving the file access issue, click Save again with the relay disabled.",
   "mail.relay_unverified": "The relay command reported success but could not be verified on the server; it is treated as not applied.",
   "mail.settings_not_activated": "The setting was saved but could not be loaded into the mail server; the server is still running the old setting. Restart the mail service and try again.",
   "mail.certificate_not_activated": "The certificate may have been saved, but SMTP 587 STARTTLS and 465 TLS verification failed. This operation was not successful.",

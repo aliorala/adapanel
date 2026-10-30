@@ -4489,7 +4489,21 @@ public sealed partial class MailService(
             // panelin kendi kaydi da onunla ayni hikayeyi anlatmali. Once firlatsaydik panel
             // "role acik" der, sunucuda role olmazdi.
             var kapatmaYukleme = await ReloadMailSettingsAsync(cli, env, cancellationToken);
-            await fileStore.WriteAsync(RelayStorePath, yeniKayit, cancellationToken);
+            try
+            {
+                await fileStore.WriteAsync(RelayStorePath, yeniKayit, cancellationToken);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                // Server changes have already happened. Keep the old local file intact and
+                // report the incomplete cleanup; repeating disable safely finishes it.
+                // Do not return the exception text/path or any stored credentials to clients.
+                logger.LogError(error,
+                    "Relay route removed but local configuration cleanup failed. HResult={HResult}; Reload={ReloadOutcome}",
+                    $"0x{error.HResult:X8}", kapatmaYukleme);
+                throw new AppException("mail.relay_cleanup_incomplete", 503, 503,
+                    $"HResult=0x{error.HResult:X8}; Reload={kapatmaYukleme}");
+            }
 
             var kapali = await GetRelayAsync(cancellationToken);
             if (kapali.Enabled)

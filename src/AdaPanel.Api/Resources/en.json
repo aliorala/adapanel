@@ -1,4 +1,5 @@
 {
+  "mail.relay_cleanup_incomplete": "Relay routing was removed, but the panel's saved relay settings and password could not be cleared. Check the mail server reload status in the details. After resolving the file access issue, click Save again with the relay disabled.",
   "mail.webmail_domain_invalid": "The selected mail domain or mailbox address is invalid.",
   "mail.webmail_https_required": "The HTTPS webmail endpoint for this domain could not be verified. Check its DNS and SSL settings.",
   "mail.webmail_sso_unsupported": "Passwordless webmail sign-in is not available for this mail provider.",

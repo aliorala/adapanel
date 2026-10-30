@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.141",
-  "name": "0.8.141 — Redis kullanım görünürlüğü",
-  "body": "## 0.8.141\n\nRedis ekranına veritabanı bazında anahtar kullanımı ve bağlı istemciler eklendi. Redis istemci adı bildirildiğinde görüntülenir; site adının otomatik belirlenmesi garanti edilmez.\n\nBellek, bağlantı ve işlem ölçümleri Redis'in bildirdiği gerçek verilerden gösterilir. Ölçüm alınamadığında hata durumu belirtilir. Yeniden başlatma ve başarısız istek sonrasında eski ölçümlerin güncel veri gibi görünmesi önlendi.\n\nPanelin ölçüm bağlantısı uygulama bağlantısı olarak sayılmaz. İki geçerli ölçüm arasındaki okuma farkı gösterilir; veri bulunması tek başına etkin kullanım olarak sunulmaz.\n\n---\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
+  "tag_name": "0.8.142",
+  "name": "0.8.142 — Posta rölesi ve ayar kaydı düzeltmeleri",
+  "body": "## 0.8.142\n\nPosta rölesi kaldırılırken sunucu ayarı ile panelde saklanan bağlantı bilgilerinin durumu daha açık raporlanır. Yerel kayıt temizliği tamamlanamazsa yeniden denenebilir bir hata gösterilir.\n\nWindows üzerinde geçici dosya erişim engellerinde atomik ayar kaydı sınırlı olarak yeniden denenir. Dosya izinleri ve okuyucuların tutarlı veri görmesi korunur. Kısmi dosya değiştirme hatalarında kurtarılabilir içerik korunur.\n\n---\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
 }

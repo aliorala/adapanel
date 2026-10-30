@@ -1,4 +1,5 @@
 {
+  "mail.relay_cleanup_incomplete": "Röle yönlendirmesi kaldırıldı ancak panelde kayıtlı röle ayarları ve parola temizlenemedi. Posta sunucusunun ayarları yükleme durumunu ayrıntılardan kontrol edin. Dosya erişim sorunu giderildikten sonra röle kapalıyken yeniden Kaydet'e basın.",
   "mail.webmail_domain_invalid": "Seçilen posta alan adı veya posta kutusu adresi geçersiz.",
   "mail.webmail_https_required": "Bu alan adının Webmail HTTPS bağlantısı doğrulanamadı. DNS ve SSL ayarlarını kontrol edin.",
   "mail.webmail_sso_unsupported": "Bu posta sağlayıcısında parolasız Webmail girişi henüz kullanılamıyor.",

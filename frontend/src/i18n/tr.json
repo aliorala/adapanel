@@ -4471,6 +4471,7 @@
   "mail.relay_password_required": "Kullanıcı adı verildiğinde parola da gereklidir.",
   "mail.relay_strategy_unavailable": "Posta sunucusunun giden yönlendirme ayarı okunamadı.",
   "mail.relay_failed": "Giden posta rölesi uygulanamadı.",
+  "mail.relay_cleanup_incomplete": "Röle yönlendirmesi kaldırıldı ancak panelde kayıtlı röle ayarları ve parola temizlenemedi. Posta sunucusunun ayarları yükleme durumunu ayrıntılardan kontrol edin. Dosya erişim sorunu giderildikten sonra röle kapalıyken yeniden Kaydet'e basın.",
   "mail.relay_unverified": "Röle komutu başarılı döndü ama sunucuda doğrulanamadı; uygulanmamış sayılıyor.",
   "mail.settings_not_activated": "Ayar kaydedildi ama posta sunucusuna yüklenemedi; sunucu hâlâ eski ayarla çalışıyor. Posta hizmetini yeniden başlatıp tekrar deneyin.",
   "mail.certificate_not_activated": "Sertifika kaydı yazılmış olabilir ancak SMTP 587 STARTTLS ve 465 TLS üzerinde doğrulanamadı. İşlem başarılı sayılmadı.",
