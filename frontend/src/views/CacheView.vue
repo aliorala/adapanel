@@ -331,7 +331,7 @@ function resolveApiMessage(error: unknown) {
 .cache-row {
   grid-template-columns: 1.1fr 0.8fr 1fr 0.55fr 1.5fr 1.4fr;
 }
-.redis-usage { margin-top: 1.5rem; padding: 1rem; border: 1px solid var(--border-color, #64748b55); border-radius: 12px; overflow-wrap: anywhere; }
+.redis-usage { margin-top: 1.5rem; padding: 1rem; border: 1px solid var(--panel-border); border-radius: 12px; overflow-wrap: anywhere; }
 .redis-usage h4, .redis-usage h5 { margin: 0 0 .6rem; }
 .redis-usage h5 { margin-top: 1.3rem; }
 .redis-usage p { line-height: 1.6; }
