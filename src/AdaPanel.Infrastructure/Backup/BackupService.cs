@@ -3952,8 +3952,13 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         }
 
         var records = (await GetBackupsAsync(cancellationToken)).ToArray();
-        return await PruneRecordsAsync(records, retentionDays, keepCount: 0, remote, cancellationToken,
+        var result = await PruneRecordsAsync(records, retentionDays, keepCount: 0, remote, cancellationToken,
             beforeMutation: beforeMutation);
+        // A completed archive deletion publishes its index update even if cancellation
+        // arrives during publication. Return that committed result; start no new sweep.
+        if (!cancellationToken.IsCancellationRequested)
+            await PruneExpiredDayFoldersAsync(retentionDays, remote, result, beforeMutation, cancellationToken);
+        return result;
     }
 
     /// <inheritdoc />
@@ -4050,7 +4055,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     {
         // retentionDays <= 0 → süreye göre silme yok; yalnızca sayı limiti çalışsın diye cutoff
         // ULAŞILAMAZ bir geçmişe alınır (hiçbir kayıt "süresi dolmuş" sayılmaz).
-        var cutoff = retentionDays > 0 ? DateTime.UtcNow.AddDays(-retentionDays) : DateTime.MinValue;
+        var cutoff = BackupRetentionCalendar.GetExclusiveCutoffUtc(DateTime.UtcNow, retentionDays);
         var analysis = BackupPrunePlanner.Analyze(records, cutoff, keepCount, IsUsableBackup,
             BackupReplacementPolicy.CanReplace);
         var silinecekler = analysis.Selected;

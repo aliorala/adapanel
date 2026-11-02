@@ -19,6 +19,15 @@ public sealed class PanelPreferencesService(
     private const string RuntimeSettingsPath = "config/runtime-settings.json";
     private readonly PanelRuntimeOptions defaults = runtimeOptions.Value;
 
+    // Retention needs only the durable filesystem boundary. Reading it must not
+    // resolve network interfaces or enter a backup producer's preferences boundary.
+    internal static async Task<string> ReadBackupRootAsync(JsonFileStore store, CancellationToken cancellationToken)
+    {
+        var settings = await store.ReadAsync(PreferencesPath,
+            new PanelPreferencesDto { DefaultBackupRoot = store.ResolvePath("backups") }, cancellationToken);
+        return Environment.ExpandEnvironmentVariables(settings.DefaultBackupRoot ?? string.Empty);
+    }
+
     public async Task<PanelPreferencesDto> GetAsync(CancellationToken cancellationToken = default)
     {
         var fallback = CreateDefaults();

@@ -29,15 +29,16 @@ public sealed class BackupPruneResultDto
     public List<string> RetentionNotes { get; set; } = [];
 
     /// <summary>
-    /// Yerel kopyası silinen ama UZAK kopyası silinemeyen yedek sayısı. Bu kayıtlar
+    /// Uzak silme hatalarının sayısı (kayıtlı kopyalar veya günlük klasör temizliği).
+    /// Yerel kopyası silinen ama UZAK kopyası silinemeyen kayıtlar
     /// <c>deleted_remote_failed</c> olarak işaretlenir, listeden ÇIKARILMAZ (yetim üretmemek için)
     /// ve bir sonraki budamada yeniden denenir.
     /// </summary>
     public int RemoteDeleteFailed { get; set; }
 
     /// <summary>
-    /// Yerel dosyası silinemediği için (kilit/izin) hiç dokunulmamış yedek sayısı. Kayıt olduğu
-    /// gibi korunur.
+    /// Yerel dosya veya günlük klasör temizleme hatalarının sayısı (kilit/izin).
+    /// Kayıtlı bir arşiv silinemediyse kaydı olduğu gibi korunur.
     /// </summary>
     public int LocalDeleteFailed { get; set; }
 

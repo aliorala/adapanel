@@ -139,7 +139,8 @@ public interface IBackupService
     Task<RestoreBackupItemsResultDto> RestoreItemsAsync(RestoreBackupItemsRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// <paramref name="retentionDays"/> gününden eski yedekleri budar: yerel dosya + kayıt silinir; <paramref name="remote"/>
+    /// Sunucunun yerel takviminde <paramref name="retentionDays"/> gününü dolduran yedekleri budar;
+    /// saat beklenmez. Yerel dosya + kayıt silinir; <paramref name="remote"/>
     /// verilmişse off-site (S3/FTP/WebDAV) UZAK kopya da silinir (uzak rotasyon). 0/negatif gün hiçbir şeyi silmez.
     /// </summary>
     /// <remarks>

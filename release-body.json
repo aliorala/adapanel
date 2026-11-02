@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.142",
-  "name": "0.8.142 — Posta rölesi ve ayar kaydı düzeltmeleri",
-  "body": "## 0.8.142\n\nPosta rölesi kaldırılırken sunucu ayarı ile panelde saklanan bağlantı bilgilerinin durumu daha açık raporlanır. Yerel kayıt temizliği tamamlanamazsa yeniden denenebilir bir hata gösterilir.\n\nWindows üzerinde geçici dosya erişim engellerinde atomik ayar kaydı sınırlı olarak yeniden denenir. Dosya izinleri ve okuyucuların tutarlı veri görmesi korunur. Kısmi dosya değiştirme hatalarında kurtarılabilir içerik korunur.\n\n---\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
+  "tag_name": "0.8.143",
+  "name": "0.8.143 — Yedek saklama ve günlük klasör temizliği",
+  "body": "## 0.8.143\n\nYedek saklama süresi artık sunucunun yerel takvim gününe göre hesaplanır; yedeğin alındığı saat beklenmez. Örneğin 5 gün seçiliyken 2 Kasım'da 28 Ekim ve öncesi sona erer.\n\nSunucu geneli otomatik yedekleme, süresi dolan günlük ana klasörleri yerelde ve yapılandırılmış FTP hedefinde de temizler. Panelin yedek düzenindeki kayıtsız eski arşivler ve boş alt klasörler de kapsanır. Güncel artımlı yedeğin gerektirdiği eski dosyalar korunur; abonelikler birbirlerinin yedeklerini silemez.\n\nFTP listeleme ve silme hataları başarı sayılmaz. Silinemeyen veya tanınmayan içerikler işlem sonucunda bildirilir; yedek kökü korunur.\n\nDoğrulama: 1.632 yedek testi, bağımsız 496 kontrol, 43 arayüz testi ve üretim derlemeleri başarılı.\n\n---\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
 }
