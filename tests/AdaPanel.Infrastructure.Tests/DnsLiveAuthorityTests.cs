@@ -15,6 +15,23 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class DnsLiveAuthorityTests
 {
     [Fact]
+    public async Task Template_TXT_values_survive_save_expansion_and_native_publication()
+    {
+        using var f = new Fixture();
+        await f.SetNative(new Record("A", "@", "198.51.100.8"));
+        var service = f.Service();
+        await service.UpdateTemplateAsync(new() { Records = [
+            new() { Type = "TXT", Host = "_empty", Value = "", Ttl = 3600 },
+            new() { Type = "TXT", Host = "_spaces", Value = "  ", Ttl = 3600 },
+            new() { Type = "TXT", Host = "_proof", Value = "  MiXeD+/=; {domain}  ", Ttl = 3600 }
+        ] });
+        var zone = await service.ResetDefaultsAsync("example.test");
+        Assert.Equal("", Assert.Single(zone.Records, r => r.Host == "_empty").Value);
+        Assert.Equal("  ", Assert.Single(zone.Records, r => r.Host == "_spaces").Value);
+        Assert.Equal("  MiXeD+/=; example.test  ", Assert.Single(zone.Records, r => r.Host == "_proof").Value);
+    }
+
+    [Fact]
     public async Task Captured_long_public_RSA_keys_delete_only_the_obsolete_record_with_complete_native_RDATA()
     {
         using var f = new Fixture();

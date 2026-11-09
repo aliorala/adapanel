@@ -45,7 +45,7 @@
           spellcheck="false"
           :aria-label="t('panel.dnsTemplate.fieldAria', { field: t('panel.dnsTemplate.host'), index: index + 1 })" />
         <input
-          v-model.trim="record.value"
+          v-model="record.value"
           placeholder="{ip}"
           spellcheck="false"
           :aria-label="t('panel.dnsTemplate.fieldAria', { field: t('panel.dnsTemplate.value'), index: index + 1 })" />
@@ -165,7 +165,9 @@ function addRow() {
 async function save() {
   if (loading.value || saving.value || !templateLoaded.value) return;
   const request = ++epoch;
-  const acceptedRecords = records.value.map(record => ({ ...record }));
+  const acceptedRecords = records.value.map(record => ({ ...record,
+    value: record.type === "TXT" ? record.value : record.value.trim()
+  }));
   const acceptedMappings = ipMappings.value.map(mapping => ({ ...mapping }));
   const acceptedSecondaries = splitLines(secondaryServersText.value);
   const applyExisting = applyMappings.value;

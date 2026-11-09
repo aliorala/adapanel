@@ -617,7 +617,7 @@ function composeRecordValue() {
   if (recordForm.type === "TLSA") {
     return joinValueParts([recordForm.tlsaUsage, recordForm.tlsaSelector, recordForm.tlsaMatching, recordForm.tlsaCert]);
   }
-  return recordForm.value.trim();
+  return recordForm.type === "TXT" ? recordForm.value : recordForm.value.trim();
 }
 
 // Eksik bırakılan bir parça boş kalır; sunucu parça sayısını sayarak dns.invalid_*_value döndürür.

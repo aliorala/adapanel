@@ -1337,10 +1337,16 @@ public sealed partial class DnsService(
         {
             var type = (record.Type ?? string.Empty).Trim().ToUpperInvariant();
             var host = (record.Host ?? string.Empty).Trim();
-            var value = (record.Value ?? string.Empty).Trim();
-            if (!allowed.Contains(type) || host.Length == 0 || value.Length == 0)
+            var value = type == "TXT"
+                ? record.Value ?? throw new AppException("dns.invalid_record_value", 400, 400)
+                : (record.Value ?? string.Empty).Trim();
+            if (!allowed.Contains(type) || host.Length == 0 || type != "TXT" && value.Length == 0)
             {
                 continue;
+            }
+            if (type == "TXT")
+            {
+                ValidateRecordValue(type, value, record.Priority);
             }
 
             clean.Records.Add(new DnsTemplateRecordDto
@@ -1555,13 +1561,15 @@ public sealed partial class DnsService(
         var records = new List<DnsRecordState>();
         foreach (var tpl in template.Records)
         {
+            var isTxt = string.Equals(tpl.Type, "TXT", StringComparison.OrdinalIgnoreCase);
             var host = ExpandPlaceholders(tpl.Host, zoneName, ip, ns1, ns2);
-            var value = ExpandPlaceholders(tpl.Value, zoneName, ip, ns1, ns2);
+            var value = ExpandPlaceholders(tpl.Value, zoneName, ip, ns1, ns2, preserveWhitespace: isTxt);
             // {ip} çözülemediyse (sunucu IPv4 yok) A/AAAA gibi kayıtlar boş value'lu olur → atla (geçersiz kayıt yazma).
-            if (host.Length == 0 || value.Length == 0)
+            if (host.Length == 0 || !isTxt && value.Length == 0)
             {
                 continue;
             }
+            if (isTxt) ValidateRecordValue("TXT", value, tpl.Priority);
 
             records.Add(new DnsRecordState
             {
@@ -1579,7 +1587,8 @@ public sealed partial class DnsService(
         return records.Count > 0 ? records : CreateDefaultRecords(site, zoneName, serverAddress).ToList();
     }
 
-    private static string ExpandPlaceholders(string input, string zone, string ip, string ns1, string ns2)
+    private static string ExpandPlaceholders(string input, string zone, string ip, string ns1, string ns2,
+        bool preserveWhitespace = false)
     {
         var text = input ?? string.Empty;
 
@@ -1594,12 +1603,12 @@ public sealed partial class DnsService(
             text = text.Replace(" ip4:{ip}", string.Empty, StringComparison.OrdinalIgnoreCase);
         }
 
-        return text
+        var expanded = text
             .Replace("{domain}", zone, StringComparison.OrdinalIgnoreCase)
             .Replace("{ip}", ip, StringComparison.OrdinalIgnoreCase)
             .Replace("{ns1}", ns1, StringComparison.OrdinalIgnoreCase)
-            .Replace("{ns2}", ns2, StringComparison.OrdinalIgnoreCase)
-            .Trim();
+            .Replace("{ns2}", ns2, StringComparison.OrdinalIgnoreCase);
+        return preserveWhitespace ? expanded : expanded.Trim();
     }
 
     private static IEnumerable<DnsRecordState> CreateDefaultRecords(SiteDto site, string zoneName, string preferredServerAddress)

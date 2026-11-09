@@ -64,6 +64,31 @@ beforeEach(() => {
 });
 afterEach(() => { unmount(); apiClient.defaults.adapter = originalAdapter; invalidateSessionRequests(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+it.each(["", " ", "  MiXeD+/=;  ", "  {domain}  "].flatMap(value => [
+  { value, editing: false }, { value, editing: true }
+]))("preserves the complete TXT value in create/edit requests: %j", async ({ value, editing }) => {
+  const { state } = await mount();
+  if (editing) state.editRecord({ ...record("txt", "previous"), type: "TXT" });
+  else { state.recordForm.type = "TXT"; state.recordForm.host = "_proof"; }
+  state.recordForm.value = value;
+  writeReply = async config => {
+    const body = JSON.parse(String(config.data));
+    return reply(config, { ...zone(), records: [{ ...record(body.id || "created", body.value), type: body.type }] });
+  };
+  await state.saveRecord();
+  expect(writes()).toHaveLength(1);
+  expect(JSON.parse(String(writes()[0]!.data))).toMatchObject({ type: "TXT", value });
+  expect(state.zone?.records[0]?.value).toBe(value);
+  expect(state.noticeError).toBe(false);
+});
+
+it.each(["A", "CNAME", "MX"])("keeps trimming non-TXT %s manual values", async type => {
+  const { state } = await mount();
+  state.recordForm.type = type; state.recordForm.value = "  example.test  ";
+  await state.saveRecord();
+  expect(JSON.parse(String(writes()[0]!.data))).toMatchObject({ type, value: "example.test" });
+});
+
 it("keeps the next editable record draft when the previous record save completes", async () => {
   const { state } = await mount(), pending = deferred<AxiosResponse>(); let request!: InternalAxiosRequestConfig;
   state.editRecord(record()); state.recordForm.value = "192.0.2.2";
