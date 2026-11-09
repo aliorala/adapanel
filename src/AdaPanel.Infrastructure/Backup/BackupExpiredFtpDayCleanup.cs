@@ -80,7 +80,11 @@ internal static class BackupExpiredFtpDayCleanup
                 if (children is null) return false;
                 foreach (var childName in children.Names)
                 {
-                    if (IsArchiveName(childName))
+                    // TestRemoteTargetAsync owns this exact, case-sensitive day-relative
+                    // probe path. Never broaden deletion to arbitrary text files or trees.
+                    var isConnectionProbe = levels.Length == 1 && levels[0] == "connection-test"
+                        && childName == "adapanel-connection-test.txt";
+                    if (IsArchiveName(childName) || isConnectionProbe)
                     {
                         files.Add(Child(directory, childName, false));
                         continue;

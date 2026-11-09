@@ -90,6 +90,88 @@ public sealed class BackupExpiredFtpDayCleanupTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Exact_connection_probe_is_removed_with_expired_day_only(bool fullPaths)
+    {
+        var ftp = new FakeFtp { ReturnFullPaths = fullPaths };
+        ftp.AddFile("2026-10-27/connection-test/adapanel-connection-test.txt");
+        ftp.AddFile("2026-10-28/connection-test/adapanel-connection-test.txt");
+        ftp.AddFile("connection-test/adapanel-connection-test.txt");
+        var result = await Sweep(ftp);
+        Assert.Equal(1, result.RemovedDays);
+        Assert.Empty(result.Failures);
+        Assert.DoesNotContain("/backups/2026-10-27/", ftp.Directories);
+        Assert.Contains("/backups/2026-10-28/connection-test/adapanel-connection-test.txt", ftp.Files);
+        Assert.Contains("/backups/connection-test/adapanel-connection-test.txt", ftp.Files);
+        Assert.DoesNotContain("RMD /backups/", ftp.Mutations);
+    }
+
+    [Theory]
+    [InlineData("connection-test/other.txt")]
+    [InlineData("panel/adapanel-connection-test.txt")]
+    [InlineData("adapanel-connection-test.txt")]
+    [InlineData("connection-test/ADAPANEL-CONNECTION-TEST.TXT")]
+    [InlineData("CONNECTION-TEST/adapanel-connection-test.txt")]
+    [InlineData("sites/shop/adapanel-connection-test.txt")]
+    public async Task Other_text_names_locations_and_case_variants_abort_before_mutation(string relative)
+    {
+        var ftp = new FakeFtp();
+        ftp.AddFile("2026-10-27/connection-test/adapanel-connection-test.txt");
+        ftp.AddFile("2026-10-27/" + relative);
+        var result = await Sweep(ftp);
+        Assert.Equal(0, result.RemovedDays);
+        Assert.NotEmpty(result.Failures);
+        Assert.Empty(ftp.Mutations);
+    }
+
+    [Fact]
+    public async Task Protected_day_keeps_connection_probe_without_mutation()
+    {
+        var ftp = new FakeFtp();
+        ftp.AddFile("2026-10-27/connection-test/adapanel-connection-test.txt");
+        var result = await Sweep(ftp, [new Uri(Root, "2026-10-27/panel/keep.zip")]);
+        Assert.Equal(0, result.RemovedDays);
+        Assert.Empty(result.Failures);
+        Assert.Empty(ftp.Mutations);
+    }
+
+    [Fact]
+    public async Task Failed_probe_delete_is_reported_without_counting_or_removing_day()
+    {
+        var ftp = new FakeFtp { FailDelete = true };
+        ftp.AddFile("2026-10-27/connection-test/adapanel-connection-test.txt");
+        var result = await Sweep(ftp);
+        Assert.Equal(0, result.RemovedDays);
+        Assert.Equal("FTP DELE /backups/2026-10-27/connection-test/adapanel-connection-test.txt: 550", Assert.Single(result.Failures));
+        Assert.Equal("DELE /backups/2026-10-27/connection-test/adapanel-connection-test.txt", Assert.Single(ftp.Mutations));
+        Assert.Single(ftp.Files);
+    }
+
+    [Fact]
+    public async Task Probe_named_directory_is_not_followed_after_dele_fails()
+    {
+        var ftp = new FakeFtp();
+        ftp.AddFile("2026-10-27/connection-test/adapanel-connection-test.txt/precious.zip");
+        var result = await Sweep(ftp);
+        Assert.Equal(0, result.RemovedDays);
+        Assert.Contains(result.Failures, failure => failure.Contains("FTP DELE"));
+        Assert.DoesNotContain("/backups/2026-10-27/connection-test/adapanel-connection-test.txt/", ftp.Listed);
+        Assert.Single(ftp.Files);
+    }
+
+    [Fact]
+    public async Task Probe_obeys_mutation_gate_cancellation()
+    {
+        var ftp = new FakeFtp();
+        ftp.AddFile("2026-10-27/connection-test/adapanel-connection-test.txt");
+        using var cts = new CancellationTokenSource();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Sweep(ftp,
+            beforeMutation: _ => { cts.Cancel(); return Task.CompletedTask; }, ct: cts.Token));
+        Assert.Empty(ftp.Mutations);
+    }
+
+    [Theory]
     [InlineData("file.sql")]
     [InlineData("file.bak")]
     [InlineData("file.sql.zst")]
