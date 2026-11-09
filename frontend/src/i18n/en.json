@@ -971,6 +971,7 @@
   "panel.database.host": "Host",
   "panel.database.size": "Size",
   "panel.database.sizeUnknown": "Could not be measured",
+  "panel.database.detailsUnknown": "The database details could not be verified.",
   "panel.database.sizeApprox": "This is approximate; the server does not keep size statistics up to the second.",
   "panel.database.tableCount": "{count} tables",
   "panel.database.noUserWarn": "No database user",

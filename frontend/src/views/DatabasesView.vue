@@ -324,8 +324,8 @@
             <div class="data-row table-head database-row">
               <span>{{ t("panel.database.databaseName") }}</span>
               <span>{{ t("panel.database.dbUsers") }}</span>
-              <span>{{ t("panel.database.encoding") }}</span>
-              <span>{{ t("panel.database.collation") }}</span>
+              <span>{{ t("panel.database.size") }}</span>
+              <span>{{ t("panel.database.linkedSite") }}</span>
               <span>{{ t("panel.files.actions") }}</span>
             </div>
             <template v-for="item in databasePager.items.value" :key="item.name">
@@ -342,8 +342,8 @@
                   {{ t("panel.database.noUserWarn") }}
                 </span>
               </span>
-              <span>{{ item.encoding || "-" }}</span>
-              <span class="cell-muted">{{ item.collation || "-" }}</span>
+              <span :title="t('panel.database.sizeApprox')">{{ databaseSize(item.name) }}</span>
+              <span class="database-site" :title="databaseSite(item.name)">{{ databaseSite(item.name) }}</span>
               <span class="row-actions">
                 <button class="secondary compact" @click="toggleDetail(item.name)">
                   {{ openDetail === item.name ? t("panel.database.detailClose") : t("panel.database.detailOpen") }}
@@ -384,7 +384,7 @@
                     <span class="db-label">{{ t("panel.database.size") }}</span>
                     <!-- "Ölçülemedi" ile "0 bayt" AYRI gösterilir: biri bilmediğimiz, diğeri boş
                          bir veritabanı. Aynı göstermek sorunu yokmuş gibi okuturdu. -->
-                    <strong v-if="detail.sizeBytes === null">{{ t("panel.database.sizeUnknown") }}</strong>
+                    <strong v-if="!isMeasuredDatabaseSize(detail.sizeBytes)">{{ t("panel.database.sizeUnknown") }}</strong>
                     <strong v-else :title="t('panel.database.sizeApprox')">
                       {{ formatBytes(detail.sizeBytes) }}
                       <small>· {{ t("panel.database.tableCount", { count: detail.tableCount }) }}</small>
@@ -392,7 +392,15 @@
                   </div>
                   <div>
                     <span class="db-label">{{ t("panel.database.linkedSite") }}</span>
-                    <strong>{{ detail.siteName || t("panel.database.linkedSiteNone") }}</strong>
+                    <strong>{{ databaseSite(item.name) }}</strong>
+                  </div>
+                  <div>
+                    <span class="db-label">{{ t("panel.database.encoding") }}</span>
+                    <strong>{{ item.encoding || "-" }}</strong>
+                  </div>
+                  <div>
+                    <span class="db-label">{{ t("panel.database.collation") }}</span>
+                    <strong>{{ item.collation || "-" }}</strong>
                   </div>
                 </div>
 
@@ -751,6 +759,7 @@ import ResourceConsumers from "../components/ResourceConsumers.vue";
 import TablePager from "../components/TablePager.vue";
 import type { ConsumerSource } from "../api/consumers";
 import { usePagination } from "../composables/usePagination";
+import { isMeasuredDatabaseSize, useDatabaseDetailReads } from "../composables/useDatabaseDetailReads";
 import { useAuthStore } from "../stores/auth";
 import { lazyView } from "../utils/lazyView";
 
@@ -865,6 +874,7 @@ watch([() => databasesStore.selectedEngine, activeModule], () => {
   clearWorkspaceDrafts();
   Object.assign(pendingWrites, { database: false, user: false, import: false, credentials: false });
   clearDetail();
+  detailReads.reset();
   resetRemoteEditor();
   remoteReadSequence++;
   remoteEngines.value = [];
@@ -873,7 +883,7 @@ watch([() => databasesStore.selectedEngine, activeModule], () => {
   if (activeModule.value === "databases" && activeSection.value === "remote") void loadRemoteAccess();
   notice.value = "";
 }, { flush: "sync" });
-onBeforeUnmount(() => { disposed = true; contextVersion++; clearDetail(); clearWorkspaceDrafts(); resetRemoteEditor(); });
+onBeforeUnmount(() => { disposed = true; contextVersion++; detailReads.reset(); clearDetail(); clearWorkspaceDrafts(); resetRemoteEditor(); });
 
 const databaseForm = reactive({
   name: "",
@@ -888,13 +898,9 @@ const userForm = reactive({
   databaseName: ""
 });
 
-/**
- * Veritabani DETAY karti.
- *
- * Boyut listeye DEGIL karta konur: information_schema'nin boyut sutunlari sunucunun en yavas
- * sutunlaridir ve listeye katmak, on veritabanli bir sayfanin acilisini onlara baglardi. Kullanici
- * ise cogu zaman TEK bir veritabaninin boyutunu merak eder.
- */
+// List rows and detail cards share bounded reads. Slow size statistics never
+// block the workspace list or start one request per database simultaneously.
+const detailReads = useDatabaseDetailReads(getDatabaseDetail);
 const openDetail = ref("");
 const detail = ref<DatabaseDetail | null>(null);
 const attachUserName = ref("");
@@ -925,7 +931,8 @@ async function toggleDetail(name: string) {
   moving.value = false;
 
   try {
-    const result = await getDatabaseDetail(context.engine, name);
+    const result = await detailReads.read(context.engine, name,
+      () => contextCurrent(context) && request === detailSequence && openDetail.value === name, true);
     if (contextCurrent(context) && request === detailSequence && openDetail.value === name) detail.value = result;
   } catch (error) {
     if (!contextCurrent(context) || request !== detailSequence || openDetail.value !== name) return;
@@ -946,7 +953,8 @@ async function attachUser(databaseName: string) {
     // Host boşsa '%' UYDURULMAZ: sunucu kullanıcının gerçek hesaplarını motordan okuyup hepsine verir.
     await databasesStore.grantAccess(context.engine, databaseName, userName, host || "");
     if (!context.current()) return;
-    const result = await getDatabaseDetail(context.engine, databaseName);
+    detailReads.reset();
+    const result = await detailReads.read(context.engine, databaseName, context.current, true);
     if (!context.current()) return;
     detail.value = result;
     if (attachUserName.value === choice) attachUserName.value = "";
@@ -993,7 +1001,8 @@ async function doMove(databaseName: string) {
   try {
     await moveDatabase(context.engine, databaseName, destination);
     if (!context.current()) return;
-    const result = await getDatabaseDetail(context.engine, databaseName);
+    detailReads.reset();
+    const result = await detailReads.read(context.engine, databaseName, context.current, true);
     if (!context.current()) return;
     detail.value = result;
     if (moveTarget.value === destination) moveTarget.value = "";
@@ -1013,7 +1022,7 @@ async function runCheck(name: string) {
   checkResult.value = null;
   try {
     const result = await checkAndRepairDatabase(context.engine, name, []);
-    if (context.current()) checkResult.value = result;
+    if (context.current()) { checkResult.value = result; detailReads.reset(); }
   } catch (error) {
     if (context.current()) showNotice(resolveApiMessage(error), true);
   } finally {
@@ -1033,6 +1042,7 @@ async function runRepair(name: string) {
     const updated = await checkAndRepairDatabase(context.engine, name, tables);
     if (context.current()) {
       checkResult.value = updated;
+      detailReads.reset();
       selectedTables.value = [];
     }
   } catch (error) {
@@ -1153,6 +1163,55 @@ const filteredUsers = computed(() => {
 // (bkz. composables/usePagination.ts).
 const databasePager = usePagination(filteredDatabases);
 const userPager = usePagination(filteredUsers);
+
+const measurementsEnabled = computed(() => isAdmin.value && workspaceReady.value && catalogReady.value &&
+  activeModule.value === "databases" && activeSection.value === "databases" &&
+  contextCurrent(captureContext()) && workspace.value?.engine === selectedEngine.value &&
+  !refreshing.value && !hardening.value && !attaching.value && !moving.value && !checking.value &&
+  !Object.values(pendingWrites).some(Boolean));
+
+watch(workspace, value => {
+  detailReads.reset();
+  if (openDetail.value && !value?.databases.some(row => row.name === openDetail.value)) clearDetail();
+}, { flush: "sync" });
+watch(() => authStore.session, () => { detailReads.reset(); clearDetail(); }, { flush: "sync" });
+watch(activeSection, () => { clearDetail(); detailReads.reset(); }, { flush: "sync" });
+watch([measurementsEnabled, () => databasePager.items.value], () => {
+  detailReads.prune();
+  if (!measurementsEnabled.value) return;
+  const context = captureContext();
+  for (const row of databasePager.items.value) {
+    const current = () => contextCurrent(context) && measurementsEnabled.value &&
+      databasePager.items.value.some(item => item.name === row.name);
+    void detailReads.read(context.engine, row.name, current).catch(() => undefined);
+  }
+}, { immediate: true });
+watch(() => detailReads.entry(selectedEngine.value, openDetail.value)?.detail, value => {
+  if (value && openDetail.value && contextCurrent(captureContext())) detail.value = value;
+});
+
+function databaseSize(name: string) {
+  const measurement = detailReads.entry(selectedEngine.value, name);
+  if (!measurement) return measurementPendingLabel();
+  if (measurement.state === "loading") return t("panel.common.loading");
+  const bytes = measurement.detail?.sizeBytes;
+  return isMeasuredDatabaseSize(bytes) ? formatBytes(bytes) : t("panel.database.sizeUnknown");
+}
+function databaseSite(name: string) {
+  const measurement = detailReads.entry(selectedEngine.value, name);
+  if (!measurement) return measurementPendingLabel();
+  if (measurement.state === "loading") return t("panel.common.loading");
+  const site = measurement.detail?.siteName;
+  return typeof site === "string"
+    ? site === "" ? t("panel.database.linkedSiteNone") : site
+    : t("panel.database.sizeUnknown");
+}
+function measurementPendingLabel() {
+  const pending = isAdmin.value && (measurementsEnabled.value || refreshing.value || catalogPending.value ||
+    databasesStore.loadingEngines || databasesStore.loadingEngine === selectedEngine.value ||
+    hardening.value || attaching.value || moving.value || checking.value || Object.values(pendingWrites).some(Boolean));
+  return t(pending ? "panel.common.loading" : "panel.database.sizeUnknown");
+}
 
 // Arama değişince ilk sayfaya dön: 4. sayfadayken filtre daralınca boş tabloya düşülüyordu.
 watch(databaseSearch, () => {
@@ -1439,6 +1498,8 @@ async function refreshWorkspace() {
     return;
   }
   refreshing.value = true;
+  clearDetail();
+  detailReads.reset();
   workspaceReady.value = false;
   try {
     await softwareStore.fetchCatalog();
@@ -1965,6 +2026,11 @@ function showNotice(message: string, isError: boolean) {
 
 .database-row {
   grid-template-columns: minmax(190px, 1.35fr) 0.8fr 0.7fr minmax(180px, 1.1fr) auto;
+}
+
+.database-site {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .user-row {

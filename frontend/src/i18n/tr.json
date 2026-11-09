@@ -971,6 +971,7 @@
   "panel.database.host": "Ana bilgisayar",
   "panel.database.size": "Boyut",
   "panel.database.sizeUnknown": "Ölçülemedi",
+  "panel.database.detailsUnknown": "Veritabanı bilgileri doğrulanamadı.",
   "panel.database.sizeApprox": "Yaklaşık değerdir; sunucu boyut istatistiklerini anlık tutmaz.",
   "panel.database.tableCount": "{count} tablo",
   "panel.database.noUserWarn": "Veritabanı kullanıcısı yok",
