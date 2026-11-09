@@ -505,7 +505,7 @@ public sealed class FileRecursivePermissionBoundaryTests(ITestOutputHelper outpu
         }
         private static FileSystemSecurity ReadAccess(string path) => Directory.Exists(path)
             ? new DirectoryInfo(path).GetAccessControl(AccessControlSections.Access) : new FileInfo(path).GetAccessControl(AccessControlSections.Access);
-        private static string AccessText(string path) => ReadAccess(path).GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+        private static string AccessText(string path) => PermissionAclSnapshot.Read(ReadAccess(path));
         private void SaveAccess(string path) { ValidateOwnedPath(path); savedAccess[path] = ReadAccess(path).GetSecurityDescriptorBinaryForm(); }
         private void SetCurrentAllow(string path, FileSystemRights rights)
         {
@@ -514,7 +514,9 @@ public sealed class FileRecursivePermissionBoundaryTests(ITestOutputHelper outpu
             FileSystemSecurity security = directory ? new DirectorySecurity() : new FileSecurity();
             security.SetAccessRuleProtection(true, false);
             foreach (var rule in rules.Where(rule => !rule.IdentityReference.Equals(currentSid) || rule.AccessControlType != AccessControlType.Allow))
-                security.AddAccessRule(new FileSystemAccessRule(rule.IdentityReference, rule.FileSystemRights, rule.InheritanceFlags, rule.PropagationFlags, rule.AccessControlType));
+                // Preserve valid generic native masks while materializing explicit ACEs.
+                security.AddAccessRule((FileSystemAccessRule)security.AccessRuleFactory(rule.IdentityReference,
+                    (int)rule.FileSystemRights, false, rule.InheritanceFlags, rule.PropagationFlags, rule.AccessControlType));
             security.AddAccessRule(new FileSystemAccessRule(currentSid, rights, InheritanceFlags.None, PropagationFlags.None, AccessControlType.Allow));
             ApplyAccess(path, security);
         }

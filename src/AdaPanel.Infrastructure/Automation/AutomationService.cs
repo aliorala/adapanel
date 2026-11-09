@@ -355,8 +355,16 @@ public sealed class AutomationService(
                 changed = true;
             }
 
+            // Backup and SSL may both take a long time. A pending cleanup must use the
+            // current permission and schedule, and a skipped cleanup must preserve newer results.
+            var currentLogs = await LoadAsync(cancellationToken);
+            state.LogCleanupEnabled = currentLogs.LogCleanupEnabled;
+            state.LogRetentionDays = currentLogs.LogRetentionDays;
+            state.LastLogCleanupRunUtc = currentLogs.LastLogCleanupRunUtc;
+            state.LastLogCleanupStatus = currentLogs.LastLogCleanupStatus;
+            state.LastLogCleanupDetails = currentLogs.LastLogCleanupDetails;
             // Log temizliği günde bir çalışır (aralık ayarı yok; retention gün sayısı ayarlıdır).
-            if (state.LogCleanupEnabled && IsDue(state.LastLogCleanupRunUtc, 24, now))
+            if (state.LogCleanupEnabled && IsDue(state.LastLogCleanupRunUtc, 24, DateTime.UtcNow))
             {
                 await RunLogCleanupAsync(state, cancellationToken);
                 changed = true;
@@ -1189,6 +1197,12 @@ public sealed class AutomationService(
                 foreach (var component in outdated.Where(item => !item.VersionCheckFailed && IsAutoUpdatable(item.ComponentId)))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    // Catalog resolution and each installation can outlive an administrator's
+                    // approval. Finish the running install, but do not start another after opt-out.
+                    // Stay outside the automation lock: installers can acquire it themselves.
+                    var current = await LoadAsync(cancellationToken);
+                    if (!current.UpdateCheckEnabled || !current.AutoApplyComponentUpdates)
+                        break;
                     try
                     {
                         // Kurulum akışı aynı bileşeni yeni sürümle yeniden kurar (upgrade yolu budur).

@@ -320,7 +320,7 @@ public sealed class FtpPermissionRollbackTests
         private static FileSystemSecurity ReadAccess(string path) => Directory.Exists(path)
             ? new DirectoryInfo(path).GetAccessControl(AccessControlSections.Access) : new FileInfo(path).GetAccessControl(AccessControlSections.Access);
         private static FileSystemAccessRule[] Rules(string path) => ReadAccess(path).GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().ToArray();
-        private static string AccessText(string path) => ReadAccess(path).GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+        private static string AccessText(string path) => PermissionAclSnapshot.Read(ReadAccess(path));
         private void SaveAccess(string path) { ValidateOwnedPath(path); savedAccess[path] = ReadAccess(path).GetSecurityDescriptorBinaryForm(); }
         private void AddAccess(string path, SecurityIdentifier identity, FileSystemRights rights, AccessControlType type)
         {
@@ -335,7 +335,10 @@ public sealed class FtpPermissionRollbackTests
             FileSystemSecurity security = directory ? new DirectorySecurity() : new FileSecurity();
             security.SetAccessRuleProtection(true, false);
             foreach (var rule in rules.Where(rule => !rule.IdentityReference.Equals(CurrentSid) || rule.AccessControlType != AccessControlType.Allow))
-                security.AddAccessRule(new FileSystemAccessRule(rule.IdentityReference, rule.FileSystemRights, rule.InheritanceFlags, rule.PropagationFlags, rule.AccessControlType));
+                // Native ACEs can contain GENERIC_ALL (e.g. CREATOR OWNER). The public
+                // rights constructor rejects that valid raw mask; the factory preserves it.
+                security.AddAccessRule((FileSystemAccessRule)security.AccessRuleFactory(rule.IdentityReference,
+                    (int)rule.FileSystemRights, false, rule.InheritanceFlags, rule.PropagationFlags, rule.AccessControlType));
             security.AddAccessRule(new FileSystemAccessRule(CurrentSid, rights, directory ? InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit : InheritanceFlags.None, PropagationFlags.None, AccessControlType.Allow));
             ApplyAccess(path, security);
         }

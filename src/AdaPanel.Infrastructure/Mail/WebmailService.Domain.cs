@@ -78,16 +78,7 @@ public sealed partial class WebmailService
                     throw new AppException("mail.webmail_https_required", 409, 409);
             }
 
-            using (await MailCertificateLifecycle.EnterAsync(fileStore.ResolvePath(StatePath), cancellationToken))
-            {
-                var latest = await fileStore.ReadAsync<WebmailState?>(StatePath, null, cancellationToken)
-                    ?? throw new AppException("mail.webmail_sso_unavailable", 409, 409);
-                if (!latest.SecuredHosts.Contains(host, StringComparer.OrdinalIgnoreCase))
-                {
-                    latest.SecuredHosts.Add(host);
-                    await fileStore.WriteAsync(StatePath, latest, cancellationToken);
-                }
-            }
+            await RememberSecuredHostAsync(host, cancellationToken);
             return new WebmailOpenDto { Url = $"https://{host}/" };
         }
         finally { DomainPreparation.Release(); }
@@ -100,6 +91,9 @@ public sealed partial class WebmailService
         var owners = sites.Where(site => site.Bindings.Any(b => b.HostName.Equals(domain, StringComparison.OrdinalIgnoreCase))).ToArray();
         if (owners.Length != 1) return; // External DNS requires an explicit operator action.
         var zone = await dnsService.GetZoneAsync(owners[0].Name, token);
+        // A site's alias binding can belong to an externally hosted zone. Only mutate
+        // local DNS when this zone actually owns the requested mail domain.
+        if (!string.Equals(zone.ZoneName.Trim().TrimEnd('.'), domain.Trim().TrimEnd('.'), StringComparison.OrdinalIgnoreCase)) return;
         if (zone.IsSecondary || !zone.IsWindowsZonePresent || !zone.IsWindowsDnsAvailable) return;
         if (zone.Records.Any(r => r.Host.Equals("webmail", StringComparison.OrdinalIgnoreCase))) return;
         await dnsService.EnsureMissingRecordsAsync(owners[0].Name,

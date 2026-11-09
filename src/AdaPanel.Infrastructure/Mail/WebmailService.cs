@@ -35,6 +35,7 @@ public sealed partial class WebmailService(
     private const string SiteName = "AdaPanel.Webmail";
     private const int DefaultPort = 8899;
     private const string ManagedMarker = "Managed by AdaPanel";
+    internal Func<string, CancellationToken, Task<CommandResult>> HostBindingCommand { get; init; } = ProcessRunner.RunPowerShellAsync;
 
     // Roundcube 1.7 için gereken/önerilen PHP eklentileri. DLL yoksa atlanır (PhpService).
     // Çekirdek (dom/xml/json/session/ctype/filter/pcre) Windows PHP'ye gömülüdür, listelenmez.
@@ -126,12 +127,14 @@ public sealed partial class WebmailService(
         // Webmail portunu Windows Güvenlik Duvarı'nda aç (uzak tarayıcıdan erişilebilsin). Best-effort.
         OpenFirewallPort(port);
 
-        state ??= new WebmailState();
-        state.SiteName = SiteName;
-        state.Port = port;
-        state.EntryRoot = documentRoot;
-        state.PhpComponentId = phpComponentId;
-        await fileStore.WriteAsync(StatePath, state, cancellationToken);
+        await fileStore.UpdateAsync(StatePath, new WebmailState(), latest =>
+        {
+            latest.SiteName = SiteName;
+            latest.Port = port;
+            latest.EntryRoot = documentRoot;
+            latest.PhpComponentId = phpComponentId;
+            return latest;
+        }, cancellationToken);
 
         await VerifyHealthyAsync(port, documentRoot, cancellationToken);
 
@@ -178,13 +181,7 @@ public sealed partial class WebmailService(
             }
 
             // 3) başarılı → kaydet (OpenAsync artık https döner).
-            var hosts = new List<string>(state.SecuredHosts ?? new List<string>());
-            if (!hosts.Contains(webmailHost, StringComparer.OrdinalIgnoreCase))
-            {
-                hosts.Add(webmailHost);
-                state.SecuredHosts = hosts;
-                await fileStore.WriteAsync(StatePath, state, cancellationToken);
-            }
+            await RememberSecuredHostAsync(webmailHost, cancellationToken);
 
             logger.LogInformation("Webmail HTTPS etkin: {Host}", webmailHost);
         }
@@ -193,6 +190,17 @@ public sealed partial class WebmailService(
             logger.LogWarning(exception, "Webmail HTTPS yapılamadı: {Host} (best-effort).", webmailHost);
         }
     }
+
+    private Task RememberSecuredHostAsync(string host, CancellationToken token) =>
+        fileStore.UpdateAsync<WebmailState?>(StatePath, null, latest =>
+        {
+            if (latest is null || latest.Port <= 0)
+                throw new AppException("mail.webmail_sso_unavailable", 409, 409);
+            latest.SecuredHosts ??= new();
+            if (!latest.SecuredHosts.Contains(host, StringComparer.OrdinalIgnoreCase))
+                latest.SecuredHosts.Add(host);
+            return latest;
+        }, token);
 
     internal static string? ResolveWebmailHost(string? domain)
     {
@@ -410,7 +418,7 @@ public sealed partial class WebmailService(
         }
     }
 
-    private static async Task EnsureWebmailHostBindingAsync(string webmailHost, CancellationToken cancellationToken)
+    private async Task EnsureWebmailHostBindingAsync(string webmailHost, CancellationToken cancellationToken)
     {
         // Paylaşımlı webmail sitesine webmail.<domain>:80 host-header binding'i ekle (challenge + servis).
         // New-WebBinding zaten varsa hata verir, SilentlyContinue ile yutulur → idempotent. Mevcut :8899 erişimi etkilenmez.
@@ -423,7 +431,7 @@ public sealed partial class WebmailService(
             Import-Module WebAdministration -ErrorAction SilentlyContinue
             New-WebBinding -Name '{{SiteName}}' -Protocol http -Port 80 -HostHeader '{{webmailHost.Replace("'", "''")}}' -ErrorAction SilentlyContinue
             """;
-        await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        await HostBindingCommand(script, cancellationToken);
     }
 
     private async Task<InstalledRoundcube> EnsureInstalledAsync(CancellationToken cancellationToken)

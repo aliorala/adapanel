@@ -15,6 +15,8 @@ public sealed class AutomationVersionCheckTests
     [InlineData(true)]
     public async Task Failed_check_marks_job_incomplete_and_never_auto_applies_stale_version(bool knownUpdate)
     {
+        using var settings = new AutomationUpdateSettingsStore();
+        await settings.EnableAsync();
         var component = DispatchProxy.Create<IComponentBootstrapper, Proxy>();
         ((Proxy)(object)component).Handler = (method, _) => method.Name == nameof(IComponentBootstrapper.CheckForUpdatesAsync)
             ? Task.FromResult(new SoftwareCatalogDto
@@ -25,6 +27,7 @@ public sealed class AutomationVersionCheckTests
             }) : throw new InvalidOperationException("Must not install after an unsuccessful version check");
         var constructor = typeof(AutomationService).GetConstructors().Single();
         var service = constructor.Invoke(constructor.GetParameters().Select(parameter =>
+            parameter.ParameterType == typeof(AdaPanel.Infrastructure.Support.JsonFileStore) ? (object)settings.Store :
             parameter.ParameterType == typeof(IComponentBootstrapper) ? (object)component :
             parameter.ParameterType == typeof(ILogger<AutomationService>) ? NullLogger<AutomationService>.Instance : null).ToArray());
         var task = (Task)typeof(AutomationService).GetMethod("RunUpdateCheckAsync", BindingFlags.NonPublic | BindingFlags.Instance)!

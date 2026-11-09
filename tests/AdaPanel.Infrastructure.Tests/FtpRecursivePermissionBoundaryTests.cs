@@ -277,8 +277,9 @@ public sealed class FtpRecursivePermissionBoundaryTests(ITestOutputHelper output
             homeSecurity.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
             foreach (var rule in originalRules.Where(rule => !rule.IdentityReference.Equals(currentSid)
                 || rule.AccessControlType != AccessControlType.Allow))
-                homeSecurity.AddAccessRule(new FileSystemAccessRule(rule.IdentityReference, rule.FileSystemRights,
-                    rule.InheritanceFlags, rule.PropagationFlags, rule.AccessControlType));
+                // Preserve valid generic native masks while materializing explicit ACEs.
+                homeSecurity.AddAccessRule((FileSystemAccessRule)homeSecurity.AccessRuleFactory(rule.IdentityReference,
+                    (int)rule.FileSystemRights, false, rule.InheritanceFlags, rule.PropagationFlags, rule.AccessControlType));
             homeSecurity.AddAccessRule(new FileSystemAccessRule(currentSid, FileSystemRights.ReadAndExecute,
                 InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
             new DirectoryInfo(Home).SetAccessControl(homeSecurity);
@@ -507,7 +508,7 @@ public sealed class FtpRecursivePermissionBoundaryTests(ITestOutputHelper output
             ? new DirectoryInfo(path).GetAccessControl(AccessControlSections.Access)
             : new FileInfo(path).GetAccessControl(AccessControlSections.Access);
 
-        private static string AccessText(string path) => ReadAccess(path).GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+        private static string AccessText(string path) => PermissionAclSnapshot.Read(ReadAccess(path));
 
         private void AddCurrentAccess(string path, FileSystemRights rights)
         {
