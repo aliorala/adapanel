@@ -100,6 +100,13 @@ it("keeps a known PostgreSQL site independently of its unsupported size measurem
   expect(state.databaseSize("db0")).toBe("panel.database.sizeUnknown"); expect(state.databaseSite("db0")).toBe("pg-site.test");
 });
 
+it("keeps a measured size when the server could not read the site mapping", async () => {
+  const { state } = await mount(1);
+  requests[0]!.resolve({ ...detail(requests[0]!), siteName: null }); await flush();
+  expect(state.databaseSize("db0")).toContain("91");
+  expect(state.databaseSite("db0")).toBe("panel.database.sizeUnknown");
+});
+
 it("distinguishes measured zero and an explicitly unlinked site from missing data or failures", async () => {
   const { state } = await mount(3);
   requests[0]!.resolve(detail(requests[0]!, "", 0)); requests[1]!.reject(new Error("offline")); await flush();

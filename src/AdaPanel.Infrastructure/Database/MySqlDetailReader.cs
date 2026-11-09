@@ -22,7 +22,7 @@ internal static class MySqlDetailReader
     internal static async Task<DatabaseDetailDto> ReadAsync(
         DatabaseConnectionProfile profile,
         string databaseName,
-        string siteName,
+        string? siteName,
         CancellationToken cancellationToken)
     {
         var builder = new MySqlConnectionStringBuilder

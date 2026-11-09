@@ -49,6 +49,6 @@ public sealed class DatabaseDetailDto
     /// <summary>Kaç tablo olduğu; boyut anlamlandırmayı kolaylaştırır.</summary>
     public int TableCount { get; init; }
 
-    /// <summary>Bağlı olduğu site (panelin kendi kaydı); boş olabilir.</summary>
-    public string SiteName { get; init; } = string.Empty;
+    /// <summary>Bağlı site; boş = bağlı değil, null = bağlantı kaydı okunamadı.</summary>
+    public string? SiteName { get; init; } = string.Empty;
 }

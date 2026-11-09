@@ -280,7 +280,7 @@ export type DatabaseDetail = {
   // null = OLCULEMEDI (0 degil). "0 bayt" bos bir veritabani demektir; ikisi ayri seylerdir.
   sizeBytes: number | null;
   tableCount: number;
-  siteName: string;
+  siteName: string | null;
 };
 
 export async function getDatabaseDetail(engine: string, name: string) {

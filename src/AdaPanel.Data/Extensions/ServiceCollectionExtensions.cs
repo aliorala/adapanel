@@ -29,6 +29,10 @@ public static class ServiceCollectionExtensions
 
         var expandedConnectionString = Environment.ExpandEnvironmentVariables(rawConnectionString);
         var builder = new SqliteConnectionStringBuilder(expandedConnectionString);
+        // 8.0.27's pool can lend one native handle to concurrent openers during
+        // activation (dotnet/efcore#39008; fixed in 10.0.13). Keep .NET 8 opens
+        // independent, including when configuration explicitly enables pooling.
+        builder.Pooling = false;
 
         if (!string.IsNullOrWhiteSpace(builder.DataSource))
         {

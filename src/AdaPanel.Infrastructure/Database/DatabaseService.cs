@@ -219,8 +219,8 @@ internal sealed partial class DatabaseService(
             cancellationToken);
     }
 
-    /// <summary>Veritabanının bağlı olduğu site (panelin kendi kaydı); yoksa boş.</summary>
-    private async Task<string> ResolveLinkedSiteAsync(string engineKey, string databaseName, CancellationToken cancellationToken)
+    /// <summary>Bağlı site; yoksa boş, kayıt okunamadıysa bilinmiyor (null).</summary>
+    private async Task<string?> ResolveLinkedSiteAsync(string engineKey, string databaseName, CancellationToken cancellationToken)
     {
         try
         {
@@ -230,8 +230,8 @@ internal sealed partial class DatabaseService(
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            // Site bağı okunamadıysa kart yine de açılmalı; bu alan bilgilendirici, zorunlu değil.
-            return string.Empty;
+            // Keep the size/card usable, but never report a failed read as unlinked.
+            return null;
         }
     }
 

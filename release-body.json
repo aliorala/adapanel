@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.150",
-  "name": "0.8.150 — Veritabanı listesi sütun hizası",
-  "body": "## 0.8.150\n\nVeritabanı listesindeki başlıklar ve satırlar aynı sütun düzenini kullanır. Boyut ve bağlı site bilgileri doğru başlık altında gösterilir; uzun adlar ve dar ekranlarda tablo kendi içinde kaydırılabilir.\n\n0.8.149 veritabanı boyutu/bağlı site görünümü ve 0.8.148 DNS TXT boşluk düzeltmesi dahildir. Karakter kodlaması ve sıralama düzeni ayrıntı görünümünde korunur.\n\n---\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
+  "tag_name": "0.8.151",
+  "name": "0.8.151 — Panel kayıt veritabanı bağlantı kararlılığı",
+  "body": "## 0.8.151\n\nPanelin kendi kayıt veritabanında eşzamanlı bağlantı açılırken oluşabilen SQLite bağlantı havuzu hatası için havuz yeniden kullanımı kapatıldı. Sayfa açılışı, sayaçlar ve veritabanı ölçümlerinde rastgele hata üreten bağlantı çakışması önlenir. Site veritabanlarının bağlantı ayarları değiştirilmez.\n\nSite eşleştirme kaydı okunamadığında veritabanı bağlantısızmış gibi gösterilmez. Boyut ve bağlı site sütunları, hizalama düzeltmesi ve DNS TXT boşluk düzeltmeleri dahildir.\n\n---\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
 }
