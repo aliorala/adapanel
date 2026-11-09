@@ -225,7 +225,8 @@ public sealed class ComponentBootstrapper(
         HttpClient client, CancellationToken cancellationToken)
     {
         var supported = SupportsVersionCheck(component.Id);
-        var available = previous is not null && IsNewerVersion(previous.AvailableVersion, component.Version)
+        var available = previous is not null && ParseVersionParts(previous.AvailableVersion) is not null
+            && (ParseVersionParts(component.Version) is null || IsNewerVersion(previous.AvailableVersion, component.Version))
             ? previous.AvailableVersion : component.Version;
         var failed = false;
         if (supported)
@@ -235,7 +236,7 @@ public sealed class ComponentBootstrapper(
             timeout.CancelAfter(TimeSpan.FromSeconds(20));
             try
             {
-                var resolved = await ResolveDynamicComponentAsync(component, client, timeout.Token);
+                var resolved = await ResolveDynamicComponentAsync(component, client, timeout.Token, versionCheckOnly: true);
                 if (resolved is null || ParseVersionParts(resolved.Version) is null)
                     throw new InvalidDataException("The upstream version could not be verified.");
                 available = resolved.Version;
@@ -1483,7 +1484,8 @@ public sealed class ComponentBootstrapper(
     private async Task<ComponentManifestItemDto?> ResolveDynamicComponentAsync(
         ComponentManifestItemDto component,
         HttpClient client,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool versionCheckOnly = false)
     {
         var normalizedId = component.Id.Trim().ToLowerInvariant();
         switch (normalizedId)
@@ -1498,7 +1500,7 @@ public sealed class ComponentBootstrapper(
                     assetName =>
                         assetName.EndsWith(".php", StringComparison.OrdinalIgnoreCase) &&
                         !assetName.Contains("mysql", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    cancellationToken, versionCheckOnly);
 
             case "memcached":
                 return await ResolveLatestGitHubAssetAsync(
@@ -1508,7 +1510,7 @@ public sealed class ComponentBootstrapper(
                     assetName =>
                         assetName.StartsWith("memcached-", StringComparison.OrdinalIgnoreCase) &&
                         assetName.EndsWith("win64-mingw.zip", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    cancellationToken, versionCheckOnly);
 
             case "nodejs-lts":
                 return await ResolveLatestNodeLtsAsync(component, client, cancellationToken);
@@ -1524,7 +1526,7 @@ public sealed class ComponentBootstrapper(
                     assetName =>
                         assetName.StartsWith("roundcubemail-", StringComparison.OrdinalIgnoreCase) &&
                         assetName.EndsWith("-complete.tar.gz", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    cancellationToken, versionCheckOnly);
 
             // --- Manifeste sabitlenmis surumler icin canli cozumleyiciler ---
             // ORTAK KURAL: hepsi bilesenin KENDI SERISINDE kalir (php-8.3 -> 8.3.x, mariadb-11 -> 11.8.x,
@@ -1559,7 +1561,7 @@ public sealed class ComponentBootstrapper(
                     assetName =>
                         assetName.StartsWith("Redis-x64-", StringComparison.OrdinalIgnoreCase) &&
                         assetName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    cancellationToken, versionCheckOnly);
 
             // Antivirus imza motoru: eski surum = yeni tehditleri kacirma.
             case "clamav":
@@ -1570,7 +1572,7 @@ public sealed class ComponentBootstrapper(
                     assetName =>
                         assetName.EndsWith(".win.x64.zip", StringComparison.OrdinalIgnoreCase) &&
                         !assetName.Contains("debug", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    cancellationToken, versionCheckOnly);
 
             case "win-acme":
                 return await ResolveLatestGitHubAssetAsync(
@@ -1578,7 +1580,7 @@ public sealed class ComponentBootstrapper(
                     client,
                     "win-acme/win-acme",
                     assetName => assetName.EndsWith(".x64.trimmed.zip", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    cancellationToken, versionCheckOnly);
 
             case "composer":
                 return await ResolveChecksumTextAsync(
@@ -1605,7 +1607,7 @@ public sealed class ComponentBootstrapper(
                     client,
                     "stalwartlabs/stalwart",
                     assetName => assetName.Equals("stalwart-x86_64-pc-windows-msvc.zip", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    cancellationToken, versionCheckOnly);
 
             case "stalwart-cli":
                 return await ResolveLatestGitHubAssetAsync(
@@ -1613,7 +1615,7 @@ public sealed class ComponentBootstrapper(
                     client,
                     "stalwartlabs/cli",
                     assetName => assetName.Equals("stalwart-cli-x86_64-pc-windows-msvc.zip", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    cancellationToken, versionCheckOnly);
         }
 
         if (!component.Id.StartsWith("php-", StringComparison.OrdinalIgnoreCase))
@@ -1731,7 +1733,8 @@ public sealed class ComponentBootstrapper(
         HttpClient client,
         string repository,
         Func<string, bool> assetPredicate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool versionCheckOnly = false)
     {
         try
         {
@@ -1783,7 +1786,7 @@ public sealed class ComponentBootstrapper(
                 var sha256 = asset.TryGetProperty("digest", out var digestElement)
                     ? ParseSha256(digestElement.GetString())
                     : null;
-                if (string.IsNullOrWhiteSpace(sha256))
+                if (string.IsNullOrWhiteSpace(sha256) && !versionCheckOnly)
                 {
                     logger.LogWarning(
                         "GitHub release asset for {ComponentId} does not publish a SHA256 digest. Keeping the pinned manifest package.",
@@ -1801,7 +1804,8 @@ public sealed class ComponentBootstrapper(
                     component,
                     version: tagName.TrimStart('v'),
                     downloadUrl: downloadUrl,
-                    sha256: sha256);
+                    // Version metadata is independent of package integrity. Installation still requires a digest.
+                    sha256: sha256 ?? string.Empty);
             }
         }
         catch (Exception exception) when (exception is not OperationCanceledException)

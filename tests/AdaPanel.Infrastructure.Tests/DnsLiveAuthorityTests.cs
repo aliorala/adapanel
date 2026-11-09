@@ -15,6 +15,62 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class DnsLiveAuthorityTests
 {
     [Fact]
+    public async Task Native_multi_string_TXT_import_preserves_complete_separate_records_and_case()
+    {
+        using var f = new Fixture();
+        var first = "v=DKIM1; p=" + new string('A', 300) + "+/MiXeD=; quoted=\"x\"; slash=\\";
+        var second = first[..255] + "differentTAIL";
+        await f.SetNative(new Record("TXT", "selector._domainkey", first), new Record("TXT", "selector._domainkey", second));
+        var records = (await f.Service().GetZoneAsync("example.test")).Records;
+        Assert.Equal(2, records.Count());
+        Assert.Contains(records, record => record.Value == first);
+        Assert.Contains(records, record => record.Value == second);
+    }
+
+    [Fact]
+    public async Task Deleting_one_long_TXT_preserves_another_RR_with_the_same_first_fragment()
+    {
+        using var f = new Fixture();
+        var first = new string('A', 255) + "old-tail";
+        var second = new string('A', 255) + "NEW-tail";
+        await f.SetNative(new Record("TXT", "selector._domainkey", first), new Record("TXT", "selector._domainkey", second));
+        var service = f.Service();
+        var zone = await service.GetZoneAsync("example.test");
+        await service.DeleteRecordAsync("example.test", Assert.Single(zone.Records, record => record.Value == first).Id);
+        var remaining = (await service.GetZoneAsync("example.test")).Records;
+        Assert.Equal(second, Assert.Single(remaining).Value);
+    }
+
+    [Fact]
+    public async Task Updating_long_TXT_roundtrips_full_value_without_leaving_the_previous_record()
+    {
+        using var f = new Fixture();
+        var old = "v=DKIM1; p=" + new string('A', 390);
+        var updated = "v=DKIM1; p=" + new string('B', 390) + "+/MiXeD=";
+        await f.SetNative(new Record("TXT", "selector._domainkey", old), new Record("TXT", "@", "verification=Keep"));
+        var service = f.Service();
+        var zone = await service.GetZoneAsync("example.test");
+        var original = Assert.Single(zone.Records, record => record.Host == "selector._domainkey");
+        await service.UpsertRecordAsync("example.test", new() { Id = original.Id, Type = "TXT", Host = original.Host, Value = updated, Ttl = 3600 });
+        var records = (await service.GetZoneAsync("example.test")).Records;
+        Assert.Equal(updated, Assert.Single(records, record => record.Host == "selector._domainkey").Value);
+        Assert.Contains(records, record => record.Value == "verification=Keep");
+    }
+
+    [Fact]
+    public async Task Failed_full_TXT_inventory_is_not_an_empty_success_and_does_not_replace_cached_records()
+    {
+        using var f = new Fixture();
+        await f.SeedCache();
+        await f.SetNative(new Record("TXT", "selector._domainkey", new string('A', 400)));
+        var before = await File.ReadAllTextAsync(f.Store().ResolvePath("config/dns-zones.json"));
+        f.FailTxtRead = true;
+        await Assert.ThrowsAsync<AppException>(() => f.Service().GetZoneAsync("example.test"));
+        Assert.Equal(before, await File.ReadAllTextAsync(f.Store().ResolvePath("config/dns-zones.json")));
+        Assert.Equal(0, f.Publications);
+    }
+
+    [Fact]
     public async Task Same_address_general_save_discovers_verified_legacy_defaults_and_repeated_save_is_idempotent()
     {
         using var f = new Fixture();
@@ -477,6 +533,7 @@ public sealed class DnsLiveAuthorityTests
         private string NativePath => Path.Combine(Root, "native.json");
         internal int Publications;
         internal bool FailPublication;
+        internal bool FailTxtRead;
         internal Func<Task>? BeforePublication;
         private readonly CancellationTokenSource deadline = new(TimeSpan.FromSeconds(90));
         internal Fixture() { Directory.CreateDirectory(Root); }
@@ -522,6 +579,14 @@ public sealed class DnsLiveAuthorityTests
         }
         private async Task<CommandResult> Run(string script, CancellationToken token)
         {
+            // This fixture exercises RR inventory/publication, not DNSSEC. Its fake
+            // zone is always unsigned; avoid an unrelated PowerShell process per DTO.
+            if (script.Contains("Export-DnsServerDnsSecPublicKey"))
+                return new CommandResult { StandardOutput = "SIGNED=False" };
+            // These bounded tests mock the cmdlet writer. A regression must fail,
+            // never fall through to real dnscmd/WMI/zone-file writes on this PC.
+            if (script.Contains("$adaOlcum ="))
+                script = script.Replace("if (-not $adaVar) {", "if (-not $adaVar) { throw 'Test fixture forbids native fallback writes.';");
             if (script.Contains("$basarisiz"))
             {
                 Publications++;
@@ -529,8 +594,8 @@ public sealed class DnsLiveAuthorityTests
                 if (FailPublication) return new CommandResult { ExitCode = 22, StandardOutput = "ADAPANEL-FAIL: access denied" };
             }
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
-            var result = await ProcessRunner.RunPowerShellAsync("$taskNativePath='" + NativePath.Replace("'", "''") + "'\n" + FakeDns + "\n" + script, linked.Token);
-            if (!result.Success && script.Contains("ADAPANEL-LIVE-RECORDS"))
+            var result = await ProcessRunner.RunPowerShellAsync("$taskNativePath='" + NativePath.Replace("'", "''") + "'\n$taskFailTxtRead=$" + FailTxtRead.ToString().ToLowerInvariant() + "\n" + FakeDns + "\n" + script, linked.Token);
+            if (!result.Success && script.Contains("ADAPANEL-LIVE-RECORDS") && !FailTxtRead)
                 throw new Xunit.Sdk.XunitException(result.StandardError + result.StandardOutput);
             return result;
         }
@@ -557,7 +622,8 @@ public sealed class DnsLiveAuthorityTests
             if($Name -and $r.Host -ne $Name){continue}; if($RRType -and $r.Type -ne $RRType){continue}
             $d = switch($r.Type) {
               'A' { @{IPv4Address=$r.Value} }
-              'TXT' { @{DescriptiveText=@($r.Value)} }
+              # Model the real Windows provider: scalar, first character-string only.
+              'TXT' { @{DescriptiveText=$r.Value.Substring(0,[Math]::Min(255,$r.Value.Length))} }
               'CNAME' { @{HostNameAlias=$r.Value} }
               'NS' { @{NameServer=$r.Value} }
               'MX' { @{MailExchange=$r.Value;Preference=$r.Priority} }
@@ -565,6 +631,23 @@ public sealed class DnsLiveAuthorityTests
               'CAA' { $v=$r.Value.Split(' ',3); $bytes=[byte[]]@([byte]$v[0],[byte]$v[1].Length)+[Text.Encoding]::ASCII.GetBytes($v[1])+[Text.Encoding]::UTF8.GetBytes($v[2]); @{Type=257;Data=$bytes} }
             }
             [pscustomobject]@{RecordType=if($r.Type -eq 'CAA'){'Unknown'}else{$r.Type};HostName=$r.Host;RecordData=[pscustomobject]$d;TimeToLive=[timespan]::FromSeconds($r.Ttl)}
+          }
+        }
+        function Get-CimInstance {
+          param($Namespace,$ClassName)
+          if($taskFailTxtRead){throw 'Native TXT access denied.'}
+          foreach($r in @(Read-Rows|Where-Object Type -eq 'TXT')) {
+            $pieces=@(for($i=0;$i -lt $r.Value.Length;$i+=255){'"'+$r.Value.Substring($i,[Math]::Min(255,$r.Value.Length-$i)).Replace('\','\\').Replace('"','\"')+'"'})
+            if($pieces.Count -eq 0){$pieces=@('""')}
+            $owner=if($r.Host -eq '@'){'example.test'}else{$r.Host+'.example.test'}
+            [pscustomobject]@{ContainerName='example.test';OwnerName=$owner;TTL=$r.Ttl;TextRepresentation=($owner+' '+$r.Ttl+' IN TXT '+($pieces -join ' '))}
+          }
+        }
+        function Remove-CimInstance {
+          param([Parameter(ValueFromPipeline=$true)]$InputObject)
+          process {
+            $a=Convert-AdaNativeTxt $InputObject 'example.test'
+            Save-Rows @(Read-Rows|Where-Object{!($_.Type -eq 'TXT' -and $_.Host -eq $a.Host -and $_.Value -ceq $a.Value -and $_.Ttl -eq $a.Ttl)})
           }
         }
         function Add-Row($type,$name,$value,$ttl,$priority) {
@@ -577,7 +660,7 @@ public sealed class DnsLiveAuthorityTests
         function Add-DnsServerResourceRecordCName { param($ZoneName,$Name,$HostNameAlias,$TimeToLive) Add-Row 'CNAME' $Name $HostNameAlias $TimeToLive $null }
         function Add-DnsServerResourceRecordMX { param($ZoneName,$Name,$MailExchange,$Preference,$TimeToLive) Add-Row 'MX' $Name $MailExchange $TimeToLive $Preference }
         function Add-DnsServerResourceRecord { param($ZoneName,$Name,[switch]$Txt,[switch]$NS,[switch]$Srv,$DescriptiveText,$NameServer,$DomainName,$Weight,$Port,$Priority,$TimeToLive)
-          if($Txt){Add-Row 'TXT' $Name ($DescriptiveText -join '') $TimeToLive $null}
+          if($Txt){Add-Row 'TXT' $Name (($DescriptiveText -join '').Replace("`r`n",'')) $TimeToLive $null}
           elseif($NS){Add-Row 'NS' $Name $NameServer $TimeToLive $null}
           elseif($Srv){Add-Row 'SRV' $Name "$Weight $Port $DomainName" $TimeToLive $Priority}
         }

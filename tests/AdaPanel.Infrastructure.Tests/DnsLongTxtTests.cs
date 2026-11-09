@@ -152,7 +152,8 @@ public sealed class DnsLongTxtTests
         var line = DnsService.BuildTxtLine("selector._domainkey", Key(400), 3600);
 
         Assert.Contains("$adaTam", line, StringComparison.Ordinal);
-        Assert.Contains("DescriptiveText -join", line, StringComparison.Ordinal);
+        Assert.Contains("Convert-AdaNativeTxt", line, StringComparison.Ordinal);
+        Assert.Contains("$_.Value -ceq $adaTam", line, StringComparison.Ordinal);
     }
 
     // AJAN BULGUSU: yollardan biri sonlandirici hata firlatirsa geri yukleme satirina hic

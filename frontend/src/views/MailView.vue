@@ -56,7 +56,7 @@
           </div>
           <div v-for="item in domainPager.items.value" :key="item.name" class="data-row maildomain-row">
             <strong>{{ item.name }}</strong>
-            <span>{{ item.active ? (item.countMeasured ? item.accountCount : t("panel.mail.mailboxCountUnmeasured")) : "—" }}</span>
+            <span :data-label="t('panel.mail.mailboxes')">{{ item.active ? (item.countMeasured ? item.accountCount : t("panel.mail.mailboxCountUnmeasured")) : "—" }}</span>
             <span :class="['status-pill', item.active ? 'ok' : 'warn']">
               {{ item.active ? t("panel.status.enabled") : t("panel.mail.mailOff") }}
             </span>
@@ -209,7 +209,7 @@
                  1024*1024'e bölerek üretiyor ve kotayı `MaxSizeMB * 1024 * 1024` ile geri yazıyor.
                  Sayı ÖLÇEKLENMEZ (kutu kotası formda MiB olarak girilir, kart onun yankısıdır);
                  düzeltilen tek şey koda gömülü etiketin yanlış tabanı. -->
-            <span>{{ account.currentSizeMB }} / {{ account.maxSizeMB ? `${account.maxSizeMB} ${t("panel.units.mib")}` : "∞" }}</span>
+            <span :data-label="t('panel.mail.maxSize')">{{ account.currentSizeMB }} / {{ account.maxSizeMB ? `${account.maxSizeMB} ${t("panel.units.mib")}` : "∞" }}</span>
             <!-- UC DURUM, IKIYE INDIRILMEZ: `active === null` "sunucuya soruldu ama cevap
                  alinamadi" demek. Eskiden backend sabit `true` donduruyordu ve HER kutu yesil
                  "Etkin" goruluyordu; kapali bir kutu panelde saglikli gorunuyordu. -->
@@ -318,7 +318,7 @@
           </div>
           <div v-for="alias in workspace.aliases" :key="alias.address" class="data-row alias-row">
             <strong>{{ alias.address }}</strong>
-            <span>{{ alias.target }}</span>
+            <span :data-label="t('panel.mail.aliasTarget')">{{ alias.target }}</span>
             <button class="danger compact row-button" v-bind="writeGate(busy)" @click="removeAlias(alias.address)">
               {{ t("panel.mail.delete") }}
             </button>
@@ -415,7 +415,7 @@
                 </span>
               </span>
             </div>
-            <div class="list-subscribers">
+            <div class="list-subscribers" :data-label="t('panel.mail.listSubscribers')">
               <!-- Her abone tek tek cikarilabilir: tum listeyi elle yeniden yazmak, bir adresi
                    yanlis kopyalayip o kisiyi sessizce dusurmek demekti. -->
               <span v-for="subscriber in list.recipients" :key="subscriber" class="subscriber-chip">
@@ -2883,6 +2883,84 @@ function showError(error: unknown) {
 }
 
 @media (max-width: 760px) {
+  /* Keep wide advanced tables inside their own scroll container. Ordinary mail
+     rows become cards, so mailbox actions cannot squeeze status into letters. */
+  .mail-panel > *,
+  .mail-panel .form-surface > * {
+    min-width: 0;
+  }
+
+  .maildomain-row,
+  .mail-row,
+  .alias-row,
+  .list-row {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: start;
+  }
+
+  .maildomain-row.table-head,
+  .mail-row.table-head,
+  .alias-row.table-head,
+  .list-row.table-head {
+    display: none;
+  }
+
+  .mail-row {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+
+  .mail-row > :not(.select-cell) {
+    grid-column: 2;
+  }
+
+  .mail-row .select-cell {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: start;
+  }
+
+  [data-label]::before {
+    content: attr(data-label) ": ";
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+  }
+
+  .list-subscribers::before {
+    flex-basis: 100%;
+  }
+
+  .mail-row .status-pill,
+  .maildomain-row .status-pill {
+    max-width: 100%;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .mail-domain-bar .current-domain,
+  .address-field span,
+  .subscriber-chip,
+  .alias-chip {
+    overflow-wrap: anywhere;
+    min-width: 0;
+  }
+
+  .address-field {
+    flex-wrap: wrap;
+  }
+
+  .address-field span {
+    white-space: normal;
+  }
+
+  .mail-domain-bar .danger {
+    margin-left: 0;
+  }
+
+  .diag-row {
+    flex-wrap: wrap;
+  }
+
   .rdns-meta,
   .autoconfig-meta {
     grid-template-columns: 1fr;

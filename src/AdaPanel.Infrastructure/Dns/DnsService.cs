@@ -2227,6 +2227,7 @@ public sealed partial class DnsService(
 
         var satirlar = new List<string>
         {
+            NativeTxtFunctions,
             $"$adaAd = {adLiteral}",
             $"$adaTam = {tamDeger}",
             $"$adaCrlf = {crlfBirlesik}",
@@ -2245,8 +2246,10 @@ public sealed partial class DnsService(
             // Ayni konakta baska bir TXT bulunmasi yeterdi (ornegin '@' konagindaki SPF): olcum
             // true doner, kalan yollar atlanir ve panel kayit yazilmamisken TAM BASARI raporlardi.
             // Windows uzun TXT'i parcalara boldugu icin parcalar birlestirilip karsilastiriliyor.
-            "$adaOlcum = { [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue | " +
-            "Where-Object { ($_.RecordData.DescriptiveText -join '') -eq $adaTam }) }",
+            "$adaOlcum = { [bool](Get-AdaNativeTxt $zoneName | ForEach-Object { Convert-AdaNativeTxt $_ $zoneName } | " +
+            "Where-Object { $_.Host -ieq $adaAd -and $_.Value -ceq $adaTam }) }",
+            // A failed complete read must stop before trying any write strategy.
+            "$null = @(Get-AdaNativeTxt $zoneName | ForEach-Object { Convert-AdaNativeTxt $_ $zoneName })",
             "$adaEskiEap = $ErrorActionPreference",
             "$ErrorActionPreference = 'Continue'",
             // TRY/FINALLY: asagidaki yollardan biri sonlandirici bir hata firlatirsa (ornegin

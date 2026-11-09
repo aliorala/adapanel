@@ -37,7 +37,7 @@ public sealed partial class DnsService
     internal Func<string, CancellationToken, Task<CommandResult>>? InventoryCommand { get; set; }
     // Used by both inventory and optimistic publication. Never interpolate RDATA into
     // executable expressions; user data is quoted with EscapePowerShellLiteral.
-    private const string LiveRecordFunction = """
+    private const string LiveRecordFunction = NativeTxtFunctions + "\n" + """
         function Convert-AdaDnsRecord($r) {
           $d = $r.RecordData
           $p = $null
@@ -61,7 +61,7 @@ public sealed partial class DnsService
             'NS' { ([string]$d.NameServer).TrimEnd('.') }
             'PTR' { ([string]$d.PtrDomainName).TrimEnd('.') }
             'MX' { $p = [int]$d.Preference; ([string]$d.MailExchange).TrimEnd('.') }
-            'TXT' { $d.DescriptiveText -join '' }
+            'TXT' { throw 'TXT requires complete native RDATA.' }
             'SRV' { $p = [int]$d.Priority; '{0} {1} {2}' -f $d.Weight,$d.Port,([string]$d.DomainName).TrimEnd('.') }
             'TLSA' { $association = $d.CertificateAssociationData; if($association -is [byte[]]){$association=[BitConverter]::ToString($association).Replace('-','')}; '{0} {1} {2} {3}' -f $d.CertificateUsage,$d.Selector,$d.MatchingType,$association }
             default { return $null }
@@ -84,7 +84,7 @@ public sealed partial class DnsService
         var script = "$ErrorActionPreference='Stop'\n# ADAPANEL-LIVE-RECORDS\n" + LiveRecordFunction + "\n" +
             "$zones = @(Get-DnsServerZone -ErrorAction Stop)\n" +
             $"$z = $zones | Where-Object {{ $_.ZoneName.TrimEnd('.') -ieq '{EscapePowerShellLiteral(state.ZoneName)}' }}\n" +
-            "$records = @(); if ($z) { $records = @(Get-DnsServerResourceRecord -ZoneName $z.ZoneName -ErrorAction Stop | ForEach-Object { Convert-AdaDnsRecord $_ } | Where-Object { $null -ne $_ }) }\n" +
+            "$records = @(); if ($z) { $records = @(Get-AdaDnsRecords $z.ZoneName) }\n" +
             "[pscustomobject]@{ Exists=[bool]$z; ZoneType=if($z){[string]$z.ZoneType}else{''}; Records=$records } | ConvertTo-Json -Depth 6 -Compress";
         var response = await (InventoryCommand ?? NativeCommand)(script, token);
         if (!response.Success) throw new AppException("dns.sync_failed", 503, 503, BuildCommandDetails(response));
@@ -151,13 +151,15 @@ public sealed partial class DnsService
         {
             var sample = group.First();
             var expected = baseline.Where(record => record.Type == sample.Type && record.Host == sample.Host).ToArray();
-            lines.Add($"$rr = @(Get-DnsServerResourceRecord -ZoneName $zoneName -ErrorAction Stop | Where-Object {{ $a = Convert-AdaDnsRecord $_; $null -ne $a -and $a.Type -eq '{sample.Type}' -and $a.Host -ieq '{EscapePowerShellLiteral(sample.Host)}' }})");
+            lines.Add($"$rr = @(Get-AdaDnsRecords $zoneName | Where-Object {{ $_.Type -eq '{sample.Type}' -and $_.Host -ieq '{EscapePowerShellLiteral(sample.Host)}' }})");
             lines.Add($"if ($rr.Count -ne {expected.Length}) {{ throw 'DNS changed concurrently; refresh and retry.' }}");
             foreach (var record in expected)
-                lines.Add($"if (@($rr | Where-Object {{ $a = Convert-AdaDnsRecord $_; {LivePredicate(record)} }}).Count -ne 1) {{ throw 'DNS changed concurrently; refresh and retry.' }}");
+                lines.Add($"if (@($rr | Where-Object {{ $a = $_; {LivePredicate(record)} }}).Count -ne 1) {{ throw 'DNS changed concurrently; refresh and retry.' }}");
         }
         foreach (var record in removals)
-            lines.Add($"Get-DnsServerResourceRecord -ZoneName $zoneName -ErrorAction Stop | Where-Object {{ $a = Convert-AdaDnsRecord $_; $null -ne $a -and ({LivePredicate(record)}) }} | Remove-DnsServerResourceRecord -ZoneName $zoneName -Force -ErrorAction Stop");
+            lines.Add(record.Type == "TXT"
+                ? $"Get-AdaNativeTxt $zoneName | Where-Object {{ $a = Convert-AdaNativeTxt $_ $zoneName; {LivePredicate(record)} }} | Remove-CimInstance -ErrorAction Stop"
+                : $"Get-DnsServerResourceRecord -ZoneName $zoneName -ErrorAction Stop | Where-Object {{ [string]$_.RecordType -ne 'TXT' }} | Where-Object {{ $a = Convert-AdaDnsRecord $_; $null -ne $a -and ({LivePredicate(record)}) }} | Remove-DnsServerResourceRecord -ZoneName $zoneName -Force -ErrorAction Stop");
         return lines;
     }
 }
