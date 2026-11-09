@@ -158,7 +158,7 @@ public sealed partial class DnsService
         }
         foreach (var record in removals)
             lines.Add(record.Type == "TXT"
-                ? $"Get-AdaNativeTxt $zoneName | Where-Object {{ $a = Convert-AdaNativeTxt $_ $zoneName; {LivePredicate(record)} }} | Remove-CimInstance -ErrorAction Stop"
+                ? $"Remove-AdaNativeTxtExact $zoneName '{EscapePowerShellLiteral(record.Host)}' '{EscapePowerShellLiteral(record.Value)}' {record.Ttl}"
                 : $"Get-DnsServerResourceRecord -ZoneName $zoneName -ErrorAction Stop | Where-Object {{ [string]$_.RecordType -ne 'TXT' }} | Where-Object {{ $a = Convert-AdaDnsRecord $_; $null -ne $a -and ({LivePredicate(record)}) }} | Remove-DnsServerResourceRecord -ZoneName $zoneName -Force -ErrorAction Stop");
         return lines;
     }

@@ -1,4 +1,7 @@
 using System.Reflection;
+using System.Text.Json;
+using AdaPanel.Core.Common;
+using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Infrastructure.Dns;
 using AdaPanel.Infrastructure.Support;
 using Xunit;
@@ -9,6 +12,61 @@ public sealed class DnsTxtNativeParsingTests
 {
     private static string Functions => (string)typeof(DnsService)
         .GetField("NativeTxtFunctions", BindingFlags.Static | BindingFlags.NonPublic)!.GetRawConstantValue()!;
+
+    [Fact]
+    public void TXT_raw_normalization_keeps_existing_control_character_length_and_other_type_guards()
+    {
+        var normalize = typeof(DnsService).GetMethod("NormalizeRecord", BindingFlags.Static | BindingFlags.NonPublic,
+            null, [typeof(UpsertDnsRecordRequest), typeof(string)], null)!;
+        foreach (var invalid in new[] { "\t", "\rkey", "key\n", new string('A', 513) })
+        {
+            var exception = Assert.Throws<TargetInvocationException>(() => normalize.Invoke(null,
+                [new UpsertDnsRecordRequest { Type = "TXT", Host = "selector", Value = invalid }, "example.test"]));
+            Assert.IsType<AppException>(exception.InnerException);
+        }
+        foreach (var type in new[] { "A", "AAAA", "CNAME", "MX", "NS", "PTR", "SRV", "CAA", "TLSA" })
+        {
+            var exception = Assert.Throws<TargetInvocationException>(() => normalize.Invoke(null,
+                [new UpsertDnsRecordRequest { Type = type, Host = "selector", Value = " " }, "example.test"]));
+            Assert.IsType<AppException>(exception.InnerException);
+        }
+    }
+
+    [Theory]
+    [InlineData("example.test IN TXT \"first\" \"tail\"", "[\"first\",\"tail\"]")]
+    [InlineData("example.test IN TXT \"\"", "[\"\"]")]
+    [InlineData("example.test IN TXT \"a\\032b\" \"quote=\\\"x\\\"\"", "[\"a b\",\"quote=\\\"x\\\"\"]")]
+    public async Task Chunk_mode_preserves_boundaries_empty_string_and_decoded_escapes(string representation, string expected)
+    {
+        var result = await Run("[string[]]$data=@(Convert-AdaTxtRdata '" + representation.Replace("'", "''") + "' -AsChunks); ConvertTo-Json -InputObject $data -Compress");
+        Assert.True(result.Success, result.StandardError);
+        Assert.Equal(JsonSerializer.Deserialize<string[]>(expected), JsonSerializer.Deserialize<string[]>(result.StandardOutput));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task TXT_delete_refuses_zero_or_multiple_full_matches_before_any_native_write(int matches)
+    {
+        var result = await Run("function Get-CimInstance { for($j=0;$j -lt " + matches + ";$j++){[pscustomobject]@{ContainerName='example.test';OwnerName='selector.example.test';TTL=3600;TextRepresentation='selector.example.test IN TXT \"same\"'}} }\n" +
+            "function Remove-DnsServerResourceRecord { throw 'UNSAFE WRITE ATTEMPT' }\nRemove-AdaNativeTxtExact 'example.test' 'selector' 'same' 3600");
+        Assert.False(result.Success);
+        Assert.Contains("exactly one complete match", result.StandardError);
+        Assert.DoesNotContain("UNSAFE WRITE ATTEMPT", result.StandardError);
+    }
+
+    [Fact]
+    public async Task TXT_delete_binds_complete_chunks_and_explicit_empty_string_to_native_contract()
+    {
+        var result = await Run("$zoneName='example.test'\n" +
+            "function Get-CimInstance {[pscustomobject]@{ContainerName='example.test';OwnerName='selector.example.test';TTL=3600;RecordData='truncated';TextRepresentation=('selector.example.test IN TXT '+$taskRepresentation)}}\n" +
+            "function Remove-DnsServerResourceRecord { [CmdletBinding()]param($ZoneName,$RRType,$Name,[string[]]$RecordData,[switch]$Force)\n" +
+            "if($ZoneName -cne 'example.test' -or $Name -cne 'selector' -or $RRType -cne 'TXT' -or -not $Force -or -not $PSBoundParameters.ContainsKey('RecordData') -or $PSBoundParameters['ErrorAction'] -ne 'Stop'){throw 'Native deletion contract changed'}\n" +
+            "if($RecordData.Count -ne $taskExpected.Count){throw 'RDATA missing or merged'};for($j=0;$j -lt $RecordData.Count;$j++){if($RecordData[$j] -cne $taskExpected[$j]){throw 'RDATA changed'}} }\n" +
+            "$taskRepresentation='\"first\" \"MiXeD+/=\"';$taskExpected=@('first','MiXeD+/=');Remove-AdaNativeTxtExact 'example.test' 'selector' 'firstMiXeD+/=' 3600\n" +
+            "$taskRepresentation='\"\"';$taskExpected=@('');Remove-AdaNativeTxtExact 'example.test' 'selector' '' 3600");
+        Assert.True(result.Success, result.StandardError);
+    }
 
     [Theory]
     [InlineData("example.test. 3600 IN TXT \"MiXeD+/=;\" \"tail\"", "MiXeD+/=;tail")]

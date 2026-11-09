@@ -2497,8 +2497,8 @@ public sealed partial class DnsService(
         }
 
         var host = NormalizeHost(record.Host, zoneName);
-        var value = record.Value.Trim();
-        if (string.IsNullOrWhiteSpace(value))
+        var value = type == "TXT" ? record.Value : record.Value.Trim();
+        if (value is null || type != "TXT" && string.IsNullOrWhiteSpace(value))
         {
             throw new AppException("dns.invalid_record_value", 400, 400);
         }
@@ -2661,6 +2661,7 @@ public sealed partial class DnsService(
             "SRV" => FormatSrvValue(ParseSrvValue(value)),
             "CAA" => FormatCaaValue(ParseCaaValue(value)),
             "TLSA" => FormatTlsaValue(ParseTlsaValue(value)),
+            "TXT" => value,
             _ => value.Trim()
         };
     }

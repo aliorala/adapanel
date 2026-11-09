@@ -15,6 +15,40 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class DnsLiveAuthorityTests
 {
     [Fact]
+    public async Task Captured_long_public_RSA_keys_delete_only_the_obsolete_record_with_complete_native_RDATA()
+    {
+        using var f = new Fixture();
+        // Public TXT values captured in the incident; no private signing material.
+        const string old = "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtuAnAEy9YmJ9IRUKw2su7iEqD8G4uqEcWQyhB95/1ieRucIwoEZ/LPTNeFnAyFBEICxduD7cdR4rnjpPNNSZ5i/aPIP3F1XIxlqL2BZ2faTnA9hSDlO+XOnNLIXq4tYw3nabnMdRm3jh8nLiG/tARprfr2RXB6QSy7XhlFVX19W5+wZxO+2Gl5rJ9nNwLpT5aUp8UhMvQzihMC7cLcC21WqKqVv/rMSXa49LjiITGxfKbiuC59gIj+y6uv7W7PSueBz7BF7Q+HpvWTOz9ErDVo33S+RBVmdJIqZs8/ukbc7Ls1Gd00hOse3GVUMrLsE0kLp0E0v075P083Nz9+iaaQIDAQAB";
+        const string current = "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxiLQ8fdnUjEIWTPlzpvgQ8VY+akZojl9e9fmW2V7A/haOrrdGn0xK7ziehxHaqVcBBRucG4LXAOaH8Vmz51mRsLSeAvR7P5LTi9NSPBmxRnhXRTX9LRy4ynxd98QJGP92kpzwx0By0nAe+avXRCCz4m15r0G4r1RIY6TQLspZ54rCuRNYk+BKL3XBJgAq1NP/X70b91nF9e8Prd4PL0u18oK7x8BOy1pcHrroAXI+g4Gu/3aB76Tj8MI+02ChVj7MjDS4aW2EEwsLqEvOjl7kxc5A25cCje3j706418a7K92dPois/1+RiD3nagdV0V93BPbpGOXXjnY8JntqdiHQwIDAQAB";
+        Assert.Equal(410, old.Length); Assert.Equal(410, current.Length);
+        await f.SetNative(new Record("TXT", "selector._domainkey", old), new Record("TXT", "selector._domainkey", current));
+        var service = f.Service();
+        var zone = await service.GetZoneAsync("example.test");
+        var result = await service.DeleteRecordAsync("example.test", Assert.Single(zone.Records, r => r.Value == old).Id);
+        Assert.Equal(current, Assert.Single(result.Records).Value);
+        using var call = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(f.Root, "delete-call.json")));
+        Assert.Equal(new[] { old[..255], old[255..] }, call.RootElement.GetProperty("RecordData").EnumerateArray().Select(p => p.GetString()).ToArray());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("  MiXeD+/=;  ")]
+    public async Task TXT_cache_reload_and_targeted_delete_preserve_empty_and_surrounding_spaces(string value)
+    {
+        using var f = new Fixture();
+        await f.SetNative(new Record("TXT", "selector", value), new Record("TXT", "selector", "Keep"));
+        var service = f.Service();
+        var zone = await service.GetZoneAsync("example.test");
+        // Delete reloads the persisted native inventory through NormalizeRecord.
+        var result = await service.DeleteRecordAsync("example.test", Assert.Single(zone.Records, r => r.Value == value).Id);
+        Assert.Equal("Keep", Assert.Single(result.Records).Value);
+        using var call = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(f.Root, "delete-call.json")));
+        Assert.Equal(new[] { value }, call.RootElement.GetProperty("RecordData").EnumerateArray().Select(p => p.GetString()).ToArray());
+    }
+
+    [Fact]
     public async Task Native_multi_string_TXT_import_preserves_complete_separate_records_and_case()
     {
         using var f = new Fixture();
@@ -39,6 +73,12 @@ public sealed class DnsLiveAuthorityTests
         await service.DeleteRecordAsync("example.test", Assert.Single(zone.Records, record => record.Value == first).Id);
         var remaining = (await service.GetZoneAsync("example.test")).Records;
         Assert.Equal(second, Assert.Single(remaining).Value);
+        using var call = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(f.Root, "delete-call.json")));
+        Assert.Equal("TXT", call.RootElement.GetProperty("RRType").GetString());
+        Assert.Equal("selector._domainkey", call.RootElement.GetProperty("Name").GetString());
+        Assert.Equal("example.test", call.RootElement.GetProperty("ZoneName").GetString());
+        Assert.True(call.RootElement.GetProperty("Force").GetBoolean());
+        Assert.Equal(new[] { first[..255], first[255..] }, call.RootElement.GetProperty("RecordData").EnumerateArray().Select(p => p.GetString()).ToArray());
     }
 
     [Fact]
@@ -640,14 +680,15 @@ public sealed class DnsLiveAuthorityTests
             $pieces=@(for($i=0;$i -lt $r.Value.Length;$i+=255){'"'+$r.Value.Substring($i,[Math]::Min(255,$r.Value.Length-$i)).Replace('\','\\').Replace('"','\"')+'"'})
             if($pieces.Count -eq 0){$pieces=@('""')}
             $owner=if($r.Host -eq '@'){'example.test'}else{$r.Host+'.example.test'}
-            [pscustomobject]@{ContainerName='example.test';OwnerName=$owner;TTL=$r.Ttl;TextRepresentation=($owner+' '+$r.Ttl+' IN TXT '+($pieces -join ' '))}
+            # Simulate a truncated provider identity independently of full TextRepresentation.
+            [pscustomobject]@{ContainerName='example.test';OwnerName=$owner;TTL=$r.Ttl;RecordData=$r.Value.Substring(0,[Math]::Min(255,$r.Value.Length));TextRepresentation=($owner+' '+$r.Ttl+' IN TXT '+($pieces -join ' '))}
           }
         }
         function Remove-CimInstance {
           param([Parameter(ValueFromPipeline=$true)]$InputObject)
           process {
             $a=Convert-AdaNativeTxt $InputObject 'example.test'
-            Save-Rows @(Read-Rows|Where-Object{!($_.Type -eq 'TXT' -and $_.Host -eq $a.Host -and $_.Value -ceq $a.Value -and $_.Ttl -eq $a.Ttl)})
+            Save-Rows @(Read-Rows|Where-Object{!($_.Type -eq 'TXT' -and $_.Host -eq $a.Host -and $_.Value -ceq $InputObject.RecordData -and $_.Ttl -eq $a.Ttl)})
           }
         }
         function Add-Row($type,$name,$value,$ttl,$priority) {
@@ -664,9 +705,24 @@ public sealed class DnsLiveAuthorityTests
           elseif($NS){Add-Row 'NS' $Name $NameServer $TimeToLive $null}
           elseif($Srv){Add-Row 'SRV' $Name "$Weight $Port $DomainName" $TimeToLive $Priority}
         }
-        function Remove-DnsServerResourceRecord { param($ZoneName,[Parameter(ValueFromPipeline=$true)]$InputObject,[switch]$Force) process {
-          $a=Convert-AdaDnsRecord $InputObject
-          Save-Rows @(Read-Rows|Where-Object{!($_.Type -eq $a.Type -and $_.Host -eq $a.Host -and $_.Value -eq $a.Value -and $_.Priority -eq $a.Priority -and $_.Ttl -eq $a.Ttl)})
+        function Remove-DnsServerResourceRecord {
+          [CmdletBinding()]
+          param($ZoneName,[Parameter(ValueFromPipeline=$true)]$InputObject,$RRType,$Name,[string[]]$RecordData,[switch]$Force)
+          process {
+          if($RRType -eq 'TXT') {
+            if($ZoneName -cne 'example.test' -or -not $Force -or -not $Name -or $null -eq $RecordData -or $RecordData.Count -lt 1){throw 'Incomplete bounded TXT deletion.'}
+            [pscustomobject]@{ZoneName=$ZoneName;RRType=$RRType;Name=$Name;RecordData=@($RecordData);Force=[bool]$Force} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path (Split-Path $taskNativePath) 'delete-call.json')
+            Save-Rows @(Read-Rows|Where-Object {
+              $r=$_; $parts=@(for($i=0;$i -lt $r.Value.Length;$i+=255){$r.Value.Substring($i,[Math]::Min(255,$r.Value.Length-$i))})
+              if($parts.Count -eq 0){$parts=@('')}
+              $same=$parts.Count -eq $RecordData.Count
+              for($i=0;$same -and $i -lt $parts.Count;$i++){if($parts[$i] -cne $RecordData[$i]){$same=$false}}
+              -not($r.Type -eq 'TXT' -and $r.Host -eq $Name -and $same)
+            })
+          } else {
+            $a=Convert-AdaDnsRecord $InputObject
+            Save-Rows @(Read-Rows|Where-Object{!($_.Type -eq $a.Type -and $_.Host -eq $a.Host -and $_.Value -eq $a.Value -and $_.Priority -eq $a.Priority -and $_.Ttl -eq $a.Ttl)})
+          }
         } }
         """;
 }

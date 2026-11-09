@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.146",
-  "name": "0.8.146 — Mobil posta ekranı ve sürüm/DNS doğrulama düzeltmeleri",
-  "body": "## 0.8.146\n\nPosta yönetimi dar ekranlarda okunur kartlarla gösterilir; adresler, durumlar ve işlem düğmeleri sayfanın dışına taşmaz. Geniş teknik tablolar kendi içinde kaydırılır; alan adı ve işlem hedefi korumaları sürer.\n\nRedis ve win-acme dahil GitHub kaynaklı sürüm denetimleri, paket SHA-256 alanı boş olduğunda geçerli sürüm metadatasını okuyabilir. Paket kurulumu ve checksum doğrulaması aynı güvenlik koşullarını korur. Başarısız sorgu, önceden doğrulanmış sürüm bilgisini silmez.\n\nUzun Windows DNS TXT kayıtlarının parçaları aynı kayıt içinde eksiksiz okunur. Ayrı TXT kayıtları birleştirilmez; kayıt karşılaştırması, değiştirme/silme ve yayın doğrulaması tam değeri kullanır. Böylece uzun DKIM anahtarlarının ilk parçasının tam kayıt sanılması önlenir. Okuma ya da doğrulama hataları başarı olarak gösterilmez.\n\n---\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
+  "tag_name": "0.8.147",
+  "name": "0.8.147 — Tam DNS TXT kayıt yönetimi",
+  "body": "## 0.8.147\n\nWindows DNS TXT kaydı silinirken tam kayıt verisinin özgün parçaları açıkça belirtilir. Eksik veya belirsiz eşleşmede işlem durur; diğer TXT kayıtları korunur. İşlem sonrasında gerçek DNS envanterinde silme doğrulanmadan başarı gösterilmez.\n\n0.8.146 içindeki mobil posta ekranı, Redis/win-acme sürüm denetimi ve uzun TXT kayıtlarını eksiksiz okuma düzeltmeleri de dahildir. Kurulum paketlerinin SHA-256 doğrulaması korunur.\n\n---\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
 }
