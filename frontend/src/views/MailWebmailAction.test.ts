@@ -39,12 +39,23 @@ async function mount() {
   useSitesStore(pinia).sites = [{ name: "travianpanel.com", bindings: [] }] as never;
   const renderer = Vue.createRenderer<Node, Node>({
     createElement: tag => node(tag), createText: text => node("text", text), createComment: () => node(),
-    insert(child, parent, anchor) { child.parent = parent; const index = anchor ? parent.children.indexOf(anchor) : -1;
+    insert(child, parent, anchor) {
+      if (child.parent) {
+        const previousIndex = child.parent.children.indexOf(child);
+        if (previousIndex >= 0) child.parent.children.splice(previousIndex, 1);
+      }
+      child.parent = parent; const index = anchor ? parent.children.indexOf(anchor) : -1;
       if (index < 0) parent.children.push(child); else parent.children.splice(index, 0, child); },
-    remove(child) { const children = child.parent?.children; if (children) children.splice(children.indexOf(child), 1); },
+    remove(child) { const children = child.parent?.children;
+      if (children) { const index = children.indexOf(child); if (index >= 0) children.splice(index, 1); }
+      child.parent = undefined; },
     setText: (element, text) => { element.text = text; }, setElementText: (element, text) => { element.text = text; },
     patchProp: (element, key, _previous, value) => { element.props[key] = value; },
-    parentNode: element => element.parent ?? null, nextSibling: () => null,
+    parentNode: element => element.parent ?? null,
+    nextSibling: element => {
+      const siblings = element.parent?.children;
+      return siblings ? siblings[siblings.indexOf(element) + 1] ?? null : null;
+    },
   });
   const app = renderer.createApp({ ...MailView, render } as Vue.Component).use(pinia);
   app.provide(Vue.ssrContextKey, {});
@@ -67,6 +78,21 @@ function popup() {
   vi.stubGlobal("window", { open, location: { origin: "https://panel.test", hostname: "panel.test" } });
   return { tab, open, form, input };
 }
+
+it("removes the previous domain fragment and inserts only the newly loaded mailbox rows", async () => {
+  const { root, state } = await mount();
+  state.selectedDomain = "other.test";
+  await settle();
+  expect(descendants(root).filter(element => element.props.class === "data-row mail-row")).toHaveLength(0);
+  expect(content(root)).not.toContain("info@travianpanel.com");
+  state.workspace = { ...(state.workspace as object), selectedDomain: "other.test",
+    accounts: [{ address: "new@other.test", maxSizeMB: 10, currentSizeMB: 0, active: true }] };
+  await settle();
+  const rows = descendants(root).filter(element => element.props.class === "data-row mail-row");
+  expect(rows).toHaveLength(1);
+  expect(content(rows[0]!)).toContain("new@other.test");
+  expect(content(root)).not.toContain("info@travianpanel.com");
+});
 
 it("renders the mailbox action and delivers its captured address and opaque handoff using a native POST once", async () => {
   const { button } = await mount();
