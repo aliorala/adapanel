@@ -2025,7 +2025,16 @@ function showNotice(message: string, isError: boolean) {
 }
 
 .database-row {
-  grid-template-columns: minmax(190px, 1.35fr) 0.8fr 0.7fr minmax(180px, 1.1fr) auto;
+  min-width: 960px;
+  grid-template-columns: minmax(190px, 1.1fr) minmax(130px, 0.8fr) minmax(95px, 0.6fr) minmax(180px, 1.1fr) minmax(260px, 1.6fr);
+}
+
+.database-row .row-actions button,
+.database-row .status-pill {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .database-site {
