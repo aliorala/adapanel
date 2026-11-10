@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
     <AssemblyName>AdaPanel.Infrastructure</AssemblyName>
@@ -15,6 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
     <PackageReference Include="DnsClient" Version="1.8.0" />
     <PackageReference Include="FluentFTP" Version="52.0.0" />
     <PackageReference Include="MailKit" Version="4.17.0" />

@@ -6,6 +6,11 @@ public interface IIisSiteService
 {
     Task<IReadOnlyCollection<SiteDto>> GetSitesAsync(CancellationToken cancellationToken = default);
 
+    // Migration destinations must also avoid the roots/bindings of hidden panel tools and
+    // Default Web Site. The ordinary customer-facing list intentionally hides those sites.
+    Task<IReadOnlyCollection<SiteDto>> GetMigrationTargetSitesAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("A complete native IIS target inventory is required for migration.");
+
     Task<SiteDto> GetSiteAsync(string siteName, CancellationToken cancellationToken = default);
 
     Task<SiteDto> CreateSiteAsync(CreateSiteRequest request, CancellationToken cancellationToken = default);

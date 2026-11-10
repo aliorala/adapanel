@@ -32,6 +32,12 @@ public sealed partial class WebAdministrationSiteService(
     }
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
     private const string ServerManagerTypeName = "Microsoft.Web.Administration.ServerManager";
+
+    public Task<IReadOnlyCollection<SiteDto>> GetMigrationTargetSitesAsync(CancellationToken cancellationToken = default)
+        => ExecuteReadAsync<IReadOnlyCollection<SiteDto>>(manager => EnumerateSites(GetSitesCollection(manager))
+            .Where(site => Enumerate(GetPropertyObject(site, "Bindings")).Any(binding =>
+                GetStringProperty(binding, "Protocol") is "http" or "https"))
+            .Select(MapSite).ToArray(), "sites.read_failed", cancellationToken);
     // Onek ManagedAppPoolName.Prefix'ten gelir; burada IKINCI bir kopyasi TUTULMAZ. Iki dosyada
     // ayri yazilmis olmasi, WafService'in adi temizlemeden uretmesini kimseye fark ettirmemisti.
 
@@ -74,31 +80,14 @@ public sealed partial class WebAdministrationSiteService(
 
             EnsureSiteNameIsNotReserved(normalizedName, request.IsManagedInfrastructure);
 
-            // Aynı isimde IIS sitesi zaten varsa (genelde önceki bir AdaPanel kurulumu
-            // kaldırılınca IIS'te kalan artık site), onu KALDIR ve yeniden oluştur. Böylece
-            // kullanıcı domaini tekrar ekleyebilir (profesyonel paneller gibi: aynı domain = aynı site).
-            //
-            // ===> BU SATIR BAŞKASININ SİTESİNİ SİLEBİLİR. Sınırı burası ÇİZMEZ. <===
-            //
-            // Eskiden burada "tehlikeli olan tarafı yukarıdaki ad kontrolü kapatır" yazıyordu ve bu
-            // YANLIŞ BİR GÜVENCEYDİ: EnsureSiteNameIsNotReserved yalnızca "AdaPanel." önekini ve
-            // "Default Web Site"ı korur — yani PANELİN KENDİ altyapısını. MÜŞTERİLERİN siteleri o
-            // kontrolün kapsamında hiç değildi; bir kiracı, kurbanın site adıyla site açarak onun
-            // IIS sitesini sessizce kaldırabiliyordu.
-            //
-            // Çapraz-kiracı sınırı, TEK doğru katmanda duruyor: çağıranın kim olduğunu yalnızca API
-            // bilir. SitesController.EnsureSiteNameIsClaimableAsync, admin olmayan bir istekte adın
-            // ya boşta ya da çağıranın KENDİ kapsamında olmasını şart koşar (aksi hâlde 409
-            // sites.name_taken) ve bu kontrol provisyon çağrısından ÖNCE gelir.
-            //
-            // YENİ BİR ÇAĞIRAN EKLENİYORSA: bu servis güvenilmez girdi ile çağrılacaksa aynı
-            // sahiplik sorusunu ÇAĞIRAN sormak zorundadır. Bugünkü diğer çağıranların hepsi panelin
-            // kendi bileşenleridir (webmail, phpMyAdmin/Adminer, yedek geri yükleme, WP klonlama —
-            // sonuncusu adın boşta olduğunu ayrıca doğrular).
+            // The native commit boundary requires explicit replacement intent. Controller name
+            // claims still enforce ownership; callers cannot obtain replacement by omitting them.
             var existingSite = EnumerateSites(sites).FirstOrDefault(site =>
                 string.Equals(GetStringProperty(site, "Name"), normalizedName, StringComparison.OrdinalIgnoreCase));
             if (existingSite is not null)
             {
+                if (request.MigrationFreshOnly) throw new AppException("migration.target_site_exists", 409, 409);
+                if (!request.ReplaceExisting) throw new AppException("sites.name_exists", 409, 409);
                 InvokeMethod(sites, "Remove", existingSite);
             }
 
@@ -107,10 +96,18 @@ public sealed partial class WebAdministrationSiteService(
             var ipAddress = NormalizeIpAddress(request.IpAddress);
             var hostName = NormalizeHostName(request.HostName);
             var selectedPort = ResolveAvailableBindingPort(sites, protocol, ipAddress, request.Port, hostName);
+            if (request.MigrationFreshOnly && selectedPort != request.Port)
+                throw new AppException("migration.target_binding_conflict", 409, 409);
+            var migrationAliases = request.MigrationFreshOnly
+                ? request.MigrationHostNames.Select(NormalizeHostName).Where(host => !host.Equals(hostName, StringComparison.OrdinalIgnoreCase))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray() : [];
+            foreach (var alias in migrationAliases)
+                if (string.IsNullOrWhiteSpace(alias) || ResolveAvailableBindingPort(sites, protocol, ipAddress, request.Port, alias) != request.Port)
+                    throw new AppException("migration.target_binding_conflict", 409, 409);
             var bindingInformation = BuildBindingInformation(ipAddress, selectedPort, hostName);
             var physicalPath = ResolvePhysicalPath(request.PhysicalPath);
             Directory.CreateDirectory(physicalPath);
-            EnsureStarterContent(physicalPath, normalizedName, hostName, selectedPort);
+            if (!request.MigrationFreshOnly) EnsureStarterContent(physicalPath, normalizedName, hostName, selectedPort);
 
             var site = InvokeMethod(
                 sites,
@@ -119,6 +116,9 @@ public sealed partial class WebAdministrationSiteService(
                 protocol,
                 bindingInformation,
                 physicalPath);
+
+            foreach (var alias in migrationAliases)
+                InvokeMethod(GetPropertyObject(site, "Bindings"), "Add", BuildBindingInformation(ipAddress, selectedPort, alias), protocol);
 
             var appPoolName = string.IsNullOrWhiteSpace(request.ApplicationPoolName)
                 ? BuildManagedPoolName(normalizedName)

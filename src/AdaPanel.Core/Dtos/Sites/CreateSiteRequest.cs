@@ -57,6 +57,14 @@ public sealed class CreateSiteRequest
     /// </remarks>
     public bool ReplaceExisting { get; init; }
 
+    // Internal migration boundary: create a fresh, stopped site without changing its imported
+    // content or silently selecting another port. Never bind this mode from a public request.
+    [global::System.Text.Json.Serialization.JsonIgnore]
+    public bool MigrationFreshOnly { get; init; }
+
+    [global::System.Text.Json.Serialization.JsonIgnore]
+    public string[] MigrationHostNames { get; init; } = [];
+
     [Required]
     [RegularExpression("^(auto|static|php|aspnet|classic-asp|mixed|node|python)$")]
     public string RuntimeProfile { get; init; } = "auto";

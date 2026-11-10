@@ -77,7 +77,19 @@ public sealed class SpfTekKaynakTests
     private static string ExpandPlaceholders(string input, string zone, string ip)
     {
         var method = typeof(AdaPanel.Infrastructure.Dns.DnsService)
-            .GetMethod("ExpandPlaceholders", BindingFlags.NonPublic | BindingFlags.Static)!;
-        return (string)method.Invoke(null, [input, zone, ip, $"ns1.{zone}", $"ns2.{zone}"])!;
+            .GetMethod("ExpandPlaceholders", BindingFlags.NonPublic | BindingFlags.Static,
+                binder: null,
+                types: [typeof(string), typeof(string), typeof(string), typeof(string), typeof(string), typeof(bool)],
+                modifiers: null)!;
+        // TXT kayıtları üretimde boşlukları koruyan dalı kullanır.
+        return (string)method.Invoke(null, [input, zone, ip, $"ns1.{zone}", $"ns2.{zone}", true])!;
+    }
+
+    [Fact]
+    public void Sablon_TxtBosluklariniVeElleEklenenMekanizmalariKorur()
+    {
+        const string source = "  v=spf1 ip4:{ip} ip4:198.51.100.7 include:_spf.ornek.com ~all  ";
+        Assert.Equal("  v=spf1 ip4:198.51.100.7 include:_spf.ornek.com ~all  ",
+            ExpandPlaceholders(source, "ornek.com", string.Empty));
     }
 }

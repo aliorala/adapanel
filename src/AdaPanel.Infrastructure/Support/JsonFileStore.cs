@@ -24,17 +24,31 @@ public sealed class JsonFileStore(IOptions<PanelRuntimeOptions> runtimeOptions)
     public async Task<T> ReadAsync<T>(string relativePath, T fallbackValue, CancellationToken cancellationToken = default)
     {
         var filePath = ResolvePath(relativePath);
-        if (!File.Exists(filePath))
+        cancellationToken.ThrowIfCancellationRequested();
+        FileStream stream;
+        try
         {
+            // Open directly: Exists also returns false for unreadable paths and directories.
+            // Delete sharing preserves atomic publication and the reader's old snapshot.
+            stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        }
+        catch (FileNotFoundException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return fallbackValue;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             return fallbackValue;
         }
 
-        // Paylaşımlı + Delete izinli aç: atomik yazım (File.Replace) okuma sırasında dosyayı
-        // değiştirse bile paylaşım ihlali olmaz; okuyucu eski içeriği görmeye devam eder.
-        await using var stream = new FileStream(
-            filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        var value = await JsonSerializer.DeserializeAsync<T>(stream, SerializerOptions, cancellationToken);
-        return value is null ? fallbackValue : value;
+        await using (stream)
+        {
+            var value = await JsonSerializer.DeserializeAsync<T>(stream, SerializerOptions, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return value is null ? fallbackValue : value;
+        }
     }
 
     public async Task WriteAsync<T>(string relativePath, T value, CancellationToken cancellationToken = default)

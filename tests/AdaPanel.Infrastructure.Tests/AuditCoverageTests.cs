@@ -169,6 +169,14 @@ public sealed class AuditCoverageTests
     /// </remarks>
     private static readonly IReadOnlyDictionary<string, string> KiraciyaAitOlmayanlar = new Dictionary<string, string>(StringComparer.Ordinal)
     {
+        ["FullMigrationController.cs#\"migration.full.discover\"#\"migration:source\""] = "Kaynak sunucuya yalnız yönetici bağlantısı; hedefte henüz bir kiracı kaynağı yok. Kimlik bilgileri kayda yazılmaz.",
+        ["FullMigrationController.cs#\"migration.full.acquire\"#\"migration:source\""] = "Yöneticiye ait özel kaynak alma işi birden çok kaynak aboneliğini kapsar; hedef kiracı kaynağı henüz yaratılmaz.",
+        ["FullMigrationController.cs#\"migration.full.acquire.cancel\"#$\"migration-acquisition:{id:D}\""] = "Özel kaynak alma işinin sahibi yönetici; iptal hedef kiracı verilerini değiştirmez.",
+        ["FullMigrationController.cs#\"migration.full.plan\"#\"migration:plan\""] = "Özel ön kontrol planı mevcut bir kiracı kaynağına yazmaz; sadece taze hedefler kabul edilir.",
+        ["FullMigrationController.cs#\"migration.full.start\"#$\"migration-plan:{request.PlanId:D}\""] = "Yöneticiye ait çok bileşenli göç planının başlatılması; mevcut kiracı kaynakları fresh-only sınırında reddedilir.",
+        ["FullMigrationController.cs#\"migration.full.cancel\"#$\"migration-operation:{id:D}\""] = "Yöneticiye ait çok bileşenli göç işi durdurulur; tamamlanan kaynaklar silinmez ve kiracı ataması bu işlemde yapılmaz.",
+        ["FullMigrationController.cs#\"migration.full.credentials.read\"#$\"migration-operation:{id:D}\""] = "Göç işini başlatan yöneticinin yeni üretilmiş kimlik bilgilerini okuması; değerler kayda yazılmaz, mevcut kiracı parolaları okunmaz.",
+        ["MigrationSourceController.cs#\"migration.source.export\"#\"migration:source-export\""] = "Kaynak sunucunun yöneticisine ait birden çok site/veritabanı seçebilen salt okunur dışa aktarma işi; kaynak nesneler değişmez, içerik ve sırlar kayda yazılmaz.",
         ["InstallationReportingController.cs#\"installation.reporting.changed\"#\"panel\""] = "Kurulum bildirimi izni panel genelidir; yalnız yönetici değiştirir ve belirli bir aboneliğe ait değildir.",
         // --- AKTÖR ZATEN KONUNUN KENDİSİ ---
         //

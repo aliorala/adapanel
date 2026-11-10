@@ -11,7 +11,7 @@ using Microsoft.Extensions.Options;
 
 namespace AdaPanel.Infrastructure.Scheduler;
 
-public sealed class SchedulerService(
+public sealed partial class SchedulerService(
     IIisSiteService siteService,
     IOptions<PanelRuntimeOptions> runtimeOptions,
     ILogger<SchedulerService> logger,
@@ -773,6 +773,14 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
         CancellationToken cancellationToken = default)
     {
         ValidateRequest(request);
+        if (request.MigrationFreshDisabled)
+        {
+            ValidateMigrationRequest(request);
+            privilege = ScheduledTaskPrivilege.Limited;
+            request.RunAs = "limited";
+            if ((await GetTasksAsync(cancellationToken)).Any(task => task.Name.Equals(request.Name.Trim(), StringComparison.OrdinalIgnoreCase)))
+                throw new AppException("migration.target_task_exists", 409, 409);
+        }
         await EnsureTaskUrlTargetAllowedAsync(request, cancellationToken);
 
         // Betik görevi IIS'e (site kökü + havuz adı) bakmak zorunda olduğundan çözüm ASENKRON;
@@ -780,6 +788,11 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
         // "script" DIŞINDAKİ tipler için plan yalnız kimlik düşürüldüğünde üretilir (aşağıda).
         var plan = await ResolveScriptPlanAsync(request, privilege, cancellationToken)
                    ?? PlanForLimitedIdentity(request, privilege);
+        if (request.MigrationFreshDisabled && plan?.PrincipalUserId != ScriptTaskPlanner.LimitedUserId)
+        {
+            var action = ResolveAction(request);
+            plan = new ScriptPlan(action.Execute, action.Arguments, action.WorkingDirectory, ScriptTaskPlanner.LimitedUserId);
+        }
 
         // BETİK OLMAYAN sınırlı görev bir SİTEYE aitse o sitenin kökü açılır.
         //
@@ -808,7 +821,11 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
         }
 
         var logPath = await PrepareLogPathAsync(request.Name, plan?.PrincipalUserId, cancellationToken);
-        var result = await RunTaskCommandAsync(BuildCreateScript(request, plan, logPath), cancellationToken);
+        var migrationMarker = "AdaPanel-Migration-" + Guid.NewGuid().ToString("N");
+        var script = request.MigrationFreshDisabled ? BuildMigrationCreateScript(request, plan, logPath, migrationMarker) : BuildCreateScript(request, plan, logPath);
+        var result = await RunTaskCommandAsync(script, cancellationToken);
+        if (request.MigrationFreshDisabled && (!result.Success || !result.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Contains("ADAPANEL-MIGRATION-CREATED=" + migrationMarker)))
+            throw new AppException("migration.task_registration_unverified", 409, 409);
         if (!result.Success)
         {
             // Uygulama havuzu kimliğiyle kayıt başarısızsa SYSTEM'e SESSİZCE DÜŞME — bu, kullanıcının
@@ -845,6 +862,7 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
 
         if (kaydedilen is null)
         {
+            if (request.MigrationFreshDisabled) throw new AppException("migration.task_registration_unverified", 409, 409);
             throw new AppException(
                 "cron.write_unverified",
                 500,
@@ -852,6 +870,8 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
                 $"'{request.Name.Trim()}' kaydi basarili dondu ama gorev listesinde bulunamadi.");
         }
 
+        if (request.MigrationFreshDisabled && !kaydedilen.State.Equals("Disabled", StringComparison.OrdinalIgnoreCase))
+            throw new AppException("migration.task_disabled_state_unverified", 409, 409);
         return kaydedilen;
     }
 
@@ -964,6 +984,7 @@ else {{ [Console]::Out.WriteLine('ADAPANEL-DURUM=' + $gorev.State) }}";
 
     internal static string BuildCreateScript(CreateScheduledTaskRequest request, ScriptPlan? plan, string? logPath = null)
     {
+        if (request.MigrationFreshDisabled) return BuildMigrationCreateScript(request, plan, logPath);
         var scheduleType = request.ScheduleType.Trim().ToLowerInvariant();
         var interval = Math.Max(1, request.Interval);
         var (execute, arguments, workingDirectory) = plan is null
@@ -1628,13 +1649,13 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(req
     /// SİTE KÖKÜYLE sınırlıdır ve alternatifin (SYSTEM) yanında hâlâ çok dardır.
     /// </para>
     /// </summary>
-    private static async Task GrantLimitedIdentityAccessAsync(string siteRoot, CancellationToken cancellationToken)
+    private async Task GrantLimitedIdentityAccessAsync(string siteRoot, CancellationToken cancellationToken)
     {
         var script = $@"$ErrorActionPreference = 'Stop'
 & icacls.exe '{EscapeSingleQuoted(siteRoot)}' /grant '{EscapeSingleQuoted(ScriptTaskPlanner.LimitedUserId)}:(OI)(CI)M' /T | Out-Null
 if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        var result = await RunTaskCommandAsync(script, cancellationToken);
         if (!result.Success)
         {
             throw new AppException("cron.limited_grant_failed", 500, 500, result.StandardError);

@@ -62,21 +62,23 @@ internal static class MySqlDefinerRewriter
         return start <= line ? name == null ? statement : $"{statement} {kind} {name}" : null;
     }, cancellationToken);
 
-    public static Task<long> RewriteAsync(string sourcePath, string targetPath, CancellationToken cancellationToken = default, string? initialSqlMode = null)
+    public static Task<long> RewriteAsync(string sourcePath, string targetPath, CancellationToken cancellationToken = default, string? initialSqlMode = null, bool secureOutput = false)
     {
         if (initialSqlMode != null) EnsureSupportedSqlMode(initialSqlMode);
         if (string.Equals(Path.GetFullPath(sourcePath), Path.GetFullPath(targetPath), StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("The transformed SQL must have a different path from the original backup.", nameof(targetPath));
-        return Task.Run(() => Rewrite(sourcePath, targetPath, cancellationToken, initialSqlMode), cancellationToken);
+        return Task.Run(() => Rewrite(sourcePath, targetPath, cancellationToken, initialSqlMode, secureOutput), cancellationToken);
     }
 
-    private static long Rewrite(string sourcePath, string targetPath, CancellationToken cancellationToken, string? initialSqlMode)
+    private static long Rewrite(string sourcePath, string targetPath, CancellationToken cancellationToken, string? initialSqlMode, bool secureOutput)
     {
         using var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read);
         var bom = input.ReadByte() == 0xef && input.ReadByte() == 0xbb && input.ReadByte() == 0xbf;
         input.Position = bom ? 3 : 0;
         using var reader = new StreamReader(input, new UTF8Encoding(false, true), false, 16384);
-        using var output = new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        using var output = secureOutput
+            ? AdaPanel.Infrastructure.Support.SecureTempFile.Create(targetPath)
+            : new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         using var writer = new StreamWriter(output, new UTF8Encoding(bom, true), 16384);
         var lexer = new Lexer(reader, writer, cancellationToken);
         var state = State.Start;

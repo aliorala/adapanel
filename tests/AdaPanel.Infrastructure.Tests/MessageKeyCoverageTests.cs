@@ -26,13 +26,13 @@ public sealed class MessageKeyCoverageTests
         var tr = OkuSozluk(Path.Combine(kok, "frontend", "src", "i18n", "tr.json"));
         var en = OkuSozluk(Path.Combine(kok, "frontend", "src", "i18n", "en.json"));
 
-        var anahtarlar = ToplaAnahtarlar(Path.Combine(kok, "src"));
+        var anahtarlar = ToplaAnahtarlar(kok);
 
         // OLCEMEDIK ile SORUN YOK ayrimi: tarama bozulup hicbir anahtar bulamazsa test sessizce
         // gecerdi ve bir daha hicbir seyi korumazdi. Bugun 300'un uzerinde anahtar var.
         Assert.True(
             anahtarlar.Count > 200,
-            $"Mesaj anahtari taramasi bozulmus olabilir: yalnizca {anahtarlar.Count} anahtar bulundu. Kok: {Path.GetFullPath(kok)}, dosya: {Directory.EnumerateFiles(Path.Combine(kok, "src"), "*.cs", SearchOption.AllDirectories).Count()}");
+            $"Mesaj anahtari taramasi bozulmus olabilir: yalnizca {anahtarlar.Count} anahtar bulundu. Kok: {Path.GetFullPath(kok)}");
 
         var eksik = new List<string>();
         foreach (var anahtar in anahtarlar)
@@ -79,8 +79,58 @@ public sealed class MessageKeyCoverageTests
         Assert.Contains(anahtar, bulunanlar);
     }
 
-    private static IReadOnlyCollection<string> ToplaAnahtarlar(string kaynakKoku)
+    [Fact]
+    public void UretimTaramasi_SrcAnahtarlariniKorur_RepoKopyalariniVeFrontendTestleriniDislar()
     {
+        var root = Path.Combine(Path.GetTempPath(), "ada-message-key-scope-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Write("src/Production.cs", "new AppException(\"scope.error\"); TitleKey = \"scope.title\"; DetailKey = \"scope.detail\"; StatusMessage = \"scope.status\";");
+            Write(".tmp/private-copy/src/OldProduction.cs", "TitleKey = \"outside.private_copy\";");
+            Write("tests/TestFixture.cs", "new AppException(\"outside.test_fixture\");");
+            Write("frontend/src/Fixture.cs", "DetailKey = \"outside.frontend\";");
+            Write("frontend/node_modules/example/Fixture.cs", "StatusMessage = \"outside.node_modules\";");
+            Write("src/obj/Generated.cs", "TitleKey = \"outside.generated_obj\";");
+            Write("src/bin/Generated.cs", "TitleKey = \"outside.generated_bin\";");
+            var keys = ToplaAnahtarlar(root);
+            Assert.Equal(new[] { "scope.detail", "scope.error", "scope.status", "scope.title" }, keys.Order(StringComparer.Ordinal).ToArray());
+
+            void Write(string relative, string source)
+            {
+                var path = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!); File.WriteAllText(path, source);
+            }
+        }
+        finally
+        {
+            Assert.StartsWith(Path.GetFullPath(Path.GetTempPath()), Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void UretimTaramasi_EksikSrcYerineRepoFixturelariniTaramaz()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ada-message-key-scope-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "tests"));
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "tests", "Fixture.cs"), "TitleKey = \"outside.only_fixture\";");
+            Assert.Throws<DirectoryNotFoundException>(() => ToplaAnahtarlar(root));
+        }
+        finally
+        {
+            Assert.StartsWith(Path.GetFullPath(Path.GetTempPath()), Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static IReadOnlyCollection<string> ToplaAnahtarlar(string depoKoku)
+    {
+        // Every caller supplies the repository root. Fixture copies, tests and node_modules
+        // are outside the production contract and must never be traversed.
+        var kaynakKoku = Path.Combine(Path.GetFullPath(depoKoku), "src");
         // Anahtar bicimi: kucuk harfle baslar ve en az bir nokta icerir ("cron.run_failed").
         // Dosya adlari, yollar ve SQL parcalari bu bicime uymaz.
         //
@@ -134,7 +184,7 @@ public sealed class MessageKeyCoverageTests
             RegexOptions.Compiled);
 
         var anahtarlar = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var dosya in Directory.EnumerateFiles(kaynakKoku, "*.cs", SearchOption.AllDirectories))
+        foreach (var dosya in UretimKaynakDosyalari(kaynakKoku))
         {
             if (dosya.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
                 dosya.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
@@ -174,6 +224,22 @@ public sealed class MessageKeyCoverageTests
         }
 
         return anahtarlar;
+    }
+
+    private static IEnumerable<string> UretimKaynakDosyalari(string kaynakKoku)
+    {
+        var pending = new Stack<string>(); pending.Push(kaynakKoku);
+        while (pending.TryPop(out var directory))
+        {
+            foreach (var file in Directory.EnumerateFiles(directory, "*.cs", SearchOption.TopDirectoryOnly)) yield return file;
+            foreach (var child in Directory.EnumerateDirectories(directory))
+            {
+                var name = Path.GetFileName(child);
+                // Prune generated output before walking it, rather than rejecting only its files.
+                if (name.Equals("bin", StringComparison.OrdinalIgnoreCase) || name.Equals("obj", StringComparison.OrdinalIgnoreCase)) continue;
+                pending.Push(child);
+            }
+        }
     }
 
     private static HashSet<string> OkuSozluk(string yol)

@@ -79,7 +79,7 @@ public sealed class SiteSettingsLifecycleTests
             if (change == "same-id")
             {
                 var oldId = f.Current.Id;
-                await f.Native.CreateSiteAsync(f.Request(f.Name, f.SitePath));
+                await f.Native.CreateSiteAsync(f.Request(f.Name, f.SitePath, replaceExisting: true));
                 f.Current.Id = oldId;
             }
             else if (change == "id") f.Current.Id += 100;
@@ -132,7 +132,7 @@ public sealed class SiteSettingsLifecycleTests
         { entered.TrySetResult(); await release.Task.WaitAsync(Deadline); }, CancellationToken.None);
         await entered.Task.WaitAsync(Deadline);
         var originalId = f.Current.Id;
-        var replacement = f.Native.CreateSiteAsync(f.Request(f.Name, f.SitePath));
+        var replacement = f.Native.CreateSiteAsync(f.Request(f.Name, f.SitePath, replaceExisting: true));
         var action = Capture(() => f.Invoke(route));
         release.TrySetResult();
         await blocker.WaitAsync(Deadline);
@@ -395,10 +395,10 @@ public sealed class SiteSettingsLifecycleTests
         { var db = new AdaPanelDbContext(new DbContextOptionsBuilder<AdaPanelDbContext>().UseSqlite(keeper.ConnectionString).Options); contexts.Add(db); return db; }
         public static void WritePhp(string path)
         { Directory.CreateDirectory(path); File.WriteAllText(Path.Combine(path, "index.php"), "<?php echo 'fixture';"); File.WriteAllText(Path.Combine(path, "index.html"), "keep unless publishing succeeds"); }
-        public CreateSiteRequest Request(string name, string path) => new() { Name = name, HostName = name, PhysicalPath = path, Port = 8080 };
+        public CreateSiteRequest Request(string name, string path, bool replaceExisting = false) => new() { Name = name, HostName = name, PhysicalPath = path, Port = 8080, ReplaceExisting = replaceExisting };
         public Task Mutate(string kind) => kind switch
         {
-            "create" => Native.CreateSiteAsync(Request(Name, RequestedPath)),
+            "create" => Native.CreateSiteAsync(Request(Name, RequestedPath, replaceExisting: true)),
             "delete" => Native.DeleteSiteAsync(Name),
             _ => Native.UpdatePhysicalPathAsync(Name, ForeignPath)
         };

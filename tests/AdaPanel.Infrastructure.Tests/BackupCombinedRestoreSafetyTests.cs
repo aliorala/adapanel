@@ -23,6 +23,83 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class BackupCombinedRestoreSafetyTests
 {
     [Theory]
+    [InlineData("mssql", false, false)]
+    [InlineData("sqlserver", false, false)]
+    [InlineData("mssql", true, false)]
+    [InlineData("sqlserver", true, false)]
+    [InlineData("mssql", false, true)]
+    [InlineData("mssql", true, true)]
+    public async Task CombinedRestoreImportsBinarySqlServerBackupAndReportsItsOutcome(
+        string engine, bool subscription, bool fail)
+    {
+        using var area = new GeciciAlan();
+        var root = area.KlasorAc("wwwroot");
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "keep");
+        var files = subscription
+            ? new Dictionary<string, string> { ["sites/shop.example.com/config/site.json"] =
+                System.Text.Json.JsonSerializer.Serialize(new SiteDto
+                { Name = "shop.example.com", PhysicalPath = root, ApplicationRootPath = root }) }
+            : new Dictionary<string, string>();
+        var zip = area.BirlesikYedekUret(files, new Dictionary<string, string>());
+        byte[] content = [0x54, 0x41, 0x50, 0x45, 0x00, 0xff, 0x80, 0x0a, 0x0d];
+        using (var archive = ZipFile.Open(zip, ZipArchiveMode.Update))
+        using (var output = archive.CreateEntry($"databases/{engine}-shop-data.BAK").Open())
+            output.Write(content);
+        var original = await File.ReadAllBytesAsync(zip);
+        DatabaseDumpRequest? captured = null;
+        var calls = 0;
+        var service = area.ServisKur(zip, root, new SahteVeritabaniServisi(request =>
+        {
+            calls++;
+            captured = request;
+            Assert.Equal(content, File.ReadAllBytes(request.FilePath));
+            Assert.Equal(".bak", Path.GetExtension(request.FilePath), ignoreCase: true);
+            if (fail) throw new AppException("database.restore_failed", 500, 500, "SQL Server restore rejected");
+        }));
+        if (subscription)
+        {
+            var records = await area.DosyaDeposu.ReadAsync("config/backups.json", Array.Empty<BackupRecordDto>());
+            records[0].Type = "subscription";
+            await area.DosyaDeposu.WriteAsync("config/backups.json", records);
+        }
+
+        var result = await service.RestoreAsync(new RestoreBackupRequest { BackupId = "b1" });
+
+        Assert.Equal(1, calls);
+        Assert.NotNull(captured);
+        Assert.Equal(engine, captured.Engine);
+        Assert.Equal("shop-data", captured.DatabaseName);
+        Assert.False(File.Exists(captured.FilePath));
+        Assert.Equal(original, await File.ReadAllBytesAsync(zip));
+        Assert.Equal("keep", await File.ReadAllTextAsync(Path.Combine(root, "index.html")));
+        Assert.Equal(fail ? "restored_with_errors" : "restored", result.Status);
+        if (fail)
+        {
+            var warning = Assert.Single(result.Warnings);
+            Assert.Equal($"{engine}/shop-data", warning.Target);
+            Assert.Contains("SQL Server restore rejected", warning.Detail);
+            var persisted = Assert.Single(await service.GetBackupsAsync());
+            Assert.Equal("restored_with_errors", persisted.Status);
+        }
+        else Assert.Empty(result.Warnings);
+    }
+
+    [Fact]
+    public async Task CombinedRestoreRejectsBinaryBackupForNonSqlServerEngine()
+    {
+        using var area = new GeciciAlan();
+        var root = area.KlasorAc("wwwroot");
+        var zip = area.BirlesikYedekUret(new Dictionary<string, string>(),
+            new Dictionary<string, string> { ["databases/mariadb-shop.bak"] = "not a SQL dump" });
+        var called = false;
+        var service = area.ServisKur(zip, root, new SahteVeritabaniServisi(_ => called = true));
+        var result = await service.RestoreAsync(new RestoreBackupRequest { BackupId = "b1" });
+        Assert.False(called);
+        Assert.Equal("restored_with_errors", result.Status);
+        Assert.Equal("backup.invalid_entry_path", Assert.Single(result.Warnings).MessageKey);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task CancelledCombinedRestore_PersistsRecoveryPathAndRethrows(bool subscription)

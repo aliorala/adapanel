@@ -10,6 +10,12 @@
       </div>
     </header>
 
+    <div class="full-migration-switch">
+      <button type="button" class="secondary" :aria-expanded="fullMigrationOpen" @click="fullMigrationOpen = !fullMigrationOpen">{{ t(fullMigrationOpen ? 'panel.fullMigration.close' : 'panel.fullMigration.open') }}</button>
+    </div>
+    <FullMigrationPanel v-if="fullMigrationOpen" />
+    <template v-else>
+
     <!-- Sonuç ekrana SABİTLENİR (`page-notice`, bkz. styles/base.css): göç ekranı çok uzun
          (kaynak sekmeleri + ön kontroller + toplu liste + canlı akış günlüğü) ve kullanıcı
          "Taşı"ya bastığında sonuç şeridi sayfanın en tepesinde kalıyordu — görülmeyen bir sonuç,
@@ -410,6 +416,7 @@
         </div>
       </div>
     </section>
+    </template>
   </section>
 </template>
 
@@ -420,6 +427,8 @@ import axios from "axios";
 import { useI18n } from "vue-i18n";
 import CodeSample from "../components/CodeSample.vue";
 import PasswordField from "../components/PasswordField.vue";
+import FullMigrationPanel from "../components/FullMigrationPanel.vue";
+const fullMigrationOpen = ref(false);
 import {
   getMigrationRunningJobs,
   migrateSite,

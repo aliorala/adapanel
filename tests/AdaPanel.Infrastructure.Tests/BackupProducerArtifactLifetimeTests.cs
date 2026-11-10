@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Text.Json;
+using System.Security.Cryptography;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Dtos.Databases;
@@ -117,17 +119,27 @@ public sealed class BackupProducerArtifactLifetimeTests
     [InlineData(true)]
     public async Task IndexPublicationFailure_RemovesFinalArtifactAfterWrapping(bool encrypted)
     {
-        using var fixture = new Fixture();
-        Directory.CreateDirectory(Path.Combine(fixture.Root, "config", "backups.json"));
-
+        var publications = 0; string archive = ""; string expectedIndex = "";
+        using var fixture = new Fixture((temp, destination) =>
+        {
+            Assert.Equal(expectedIndex, destination);
+            var records = JsonSerializer.Deserialize<BackupRecordDto[]>(File.ReadAllText(temp), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+            archive = Assert.Single(records).Path; Assert.True(File.Exists(archive));
+            Assert.EndsWith(encrypted ? ".sql.zst.enc" : ".sql.zst", archive);
+            publications++;
+            throw new IOException("Injected final index atomic publication failure");
+        });
+        expectedIndex = fixture.IndexPath; await fixture.InitializeIndex();
+        var sourceHash = SHA256.HashData(await File.ReadAllBytesAsync(fixture.Source));
         var failure = await Record.ExceptionAsync(() => fixture.Service.BackupDatabaseAsync(new BackupDatabaseRequest
         {
             Engine = "mysql", DatabaseName = "shop", EncryptionPassword = encrypted ? "password" : ""
         }));
 
-        Assert.True(failure is IOException or UnauthorizedAccessException, failure?.ToString());
-        Assert.Empty(Directory.GetFiles(fixture.Backups, "*", SearchOption.AllDirectories));
-        Assert.Equal("live source", await File.ReadAllTextAsync(fixture.Source));
+        Assert.IsType<IOException>(failure); Assert.Equal(1, publications); Assert.NotEmpty(archive);
+        Assert.False(File.Exists(archive)); Assert.Empty(Directory.GetFiles(fixture.Backups, "*", SearchOption.AllDirectories));
+        Assert.Equal("[]", await File.ReadAllTextAsync(fixture.IndexPath)); Assert.Empty(await fixture.Service.GetBackupsAsync());
+        Assert.Equal(sourceHash, SHA256.HashData(await File.ReadAllBytesAsync(fixture.Source)));
     }
 
     [Theory]
@@ -174,18 +186,68 @@ public sealed class BackupProducerArtifactLifetimeTests
     [Fact]
     public async Task ChainIndexPublicationFailure_RemovesArchiveAndOwnedSidecar()
     {
-        using var fixture = new Fixture();
-        Directory.CreateDirectory(Path.Combine(fixture.Root, "config", "backups.json"));
-
+        var publications = 0; var sidecarPublications = 0; string archive = "", sidecar = "", expectedIndex = "";
+        byte[]? sidecarHash = null;
+        using var fixture = new Fixture((temp, destination) =>
+        {
+            if (!destination.Equals(expectedIndex, StringComparison.OrdinalIgnoreCase))
+            {
+                Assert.Contains(Path.Combine("backups", "index") + Path.DirectorySeparatorChar, destination, StringComparison.OrdinalIgnoreCase);
+                File.Replace(temp, destination, null); // Permit only this fixture's reserved sidecar publication.
+                sidecarPublications++;
+                return;
+            }
+            Assert.Equal(expectedIndex, destination);
+            var records = JsonSerializer.Deserialize<BackupRecordDto[]>(File.ReadAllText(temp), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+            var record = Assert.Single(records); archive = record.Path;
+            Assert.True(File.Exists(archive));
+            var dataRoot = Directory.GetParent(Path.GetDirectoryName(destination)!)!.FullName;
+            sidecar = Path.Combine(dataRoot, "backups", "index", record.Id + ".json");
+            Assert.True(File.Exists(sidecar), "The sidecar must already be published before final index publication.");
+            var bytes = File.ReadAllBytes(sidecar); Assert.NotEmpty(bytes);
+            using var parsed = JsonDocument.Parse(bytes); Assert.Equal(JsonValueKind.Object, parsed.RootElement.ValueKind);
+            sidecarHash = SHA256.HashData(bytes); publications++;
+            throw new IOException("Injected final index atomic publication failure after sidecar publication");
+        });
+        expectedIndex = fixture.IndexPath; await fixture.InitializeIndex();
+        var sourceHash = SHA256.HashData(await File.ReadAllBytesAsync(fixture.Source));
         var failure = await Record.ExceptionAsync(() => fixture.Service.BackupSiteAsync(new BackupSiteRequest
         {
             SiteName = "site", IncludeFiles = true, Incremental = true
         }));
 
-        Assert.True(failure is IOException or UnauthorizedAccessException, failure?.ToString());
+        Assert.IsType<IOException>(failure); Assert.Equal(1, publications); Assert.Equal(1, sidecarPublications); Assert.NotNull(sidecarHash);
+        Assert.NotEmpty(archive); Assert.NotEmpty(sidecar); Assert.False(File.Exists(archive)); Assert.False(File.Exists(sidecar));
         Assert.Empty(Directory.GetFiles(fixture.Backups, "*", SearchOption.AllDirectories));
         Assert.Empty(Directory.GetFiles(Path.Combine(fixture.Root, "backups", "index"), "*"));
-        Assert.Equal("live source", await File.ReadAllTextAsync(fixture.Source));
+        Assert.Equal("[]", await File.ReadAllTextAsync(fixture.IndexPath)); Assert.Empty(await fixture.Service.GetBackupsAsync());
+        Assert.Equal(sourceHash, SHA256.HashData(await File.ReadAllBytesAsync(fixture.Source)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Unreadable_chain_index_fails_before_production_and_preserves_existing_artifacts_and_source(bool malformedJson)
+    {
+        var publications = 0;
+        using var fixture = new Fixture((_, _) => { publications++; throw new IOException("No publication should be attempted"); });
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.IndexPath)!);
+        if (malformedJson) await File.WriteAllTextAsync(fixture.IndexPath, "{not-json");
+        else
+        {
+            Directory.CreateDirectory(fixture.IndexPath);
+            await File.WriteAllTextAsync(Path.Combine(fixture.IndexPath, "keep.txt"), "existing index directory content");
+        }
+        var previous = Path.Combine(fixture.Backups, "previous.zip"); await File.WriteAllTextAsync(previous, "existing completed backup");
+        var source = SHA256.HashData(await File.ReadAllBytesAsync(fixture.Source));
+        var failure = await Record.ExceptionAsync(() => fixture.Service.BackupSiteAsync(new BackupSiteRequest { SiteName = "site", IncludeFiles = true, Incremental = true }));
+        if (malformedJson) Assert.IsType<JsonException>(failure);
+        else Assert.True(failure is IOException or UnauthorizedAccessException, failure?.ToString());
+        Assert.Equal(0, publications); Assert.Equal(new[] { previous }, Directory.GetFiles(fixture.Backups, "*", SearchOption.AllDirectories));
+        Assert.Equal("existing completed backup", await File.ReadAllTextAsync(previous)); Assert.False(Directory.Exists(Path.Combine(fixture.Backups, "index")));
+        Assert.Equal(source, SHA256.HashData(await File.ReadAllBytesAsync(fixture.Source)));
+        if (malformedJson) Assert.Equal("{not-json", await File.ReadAllTextAsync(fixture.IndexPath));
+        else Assert.Equal("existing index directory content", await File.ReadAllTextAsync(Path.Combine(fixture.IndexPath, "keep.txt")));
     }
 
     [Fact]
@@ -219,6 +281,8 @@ public sealed class BackupProducerArtifactLifetimeTests
         public static readonly Guid Owner = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000014");
         public string Root { get; } = Path.Combine(Path.GetTempPath(), "adapanel-producer-lifetime-" + Guid.NewGuid().ToString("N"));
         public string Backups => Path.Combine(Root, "backups");
+        public string IndexPath => Path.Combine(Root, "config", "backups.json");
+        public Task InitializeIndex() { Directory.CreateDirectory(Path.GetDirectoryName(IndexPath)!); return File.WriteAllTextAsync(IndexPath, "[]"); }
         public string Source => Path.Combine(Root, "site", "source.txt");
         public BackupService Service { get; }
         public Func<DatabaseDumpRequest, CancellationToken, Task<DatabaseDumpResultDto>> Export { get; set; } = async (request, token) =>
@@ -227,12 +291,12 @@ public sealed class BackupProducerArtifactLifetimeTests
             return new DatabaseDumpResultDto { Engine = request.Engine, DatabaseName = request.DatabaseName, FilePath = request.FilePath, Size = new FileInfo(request.FilePath).Length };
         };
 
-        public Fixture()
+        public Fixture(Action<string, string>? replace = null)
         {
             Directory.CreateDirectory(Backups);
             Directory.CreateDirectory(Path.GetDirectoryName(Source)!);
             File.WriteAllText(Source, "live source");
-            var store = new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = Root }));
+            var store = new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = Root })) { AtomicReplaceOverride = replace };
             var sites = Fake<IIisSiteService>((method, _) => method.Name switch
             {
                 "GetSiteAsync" => Task.FromResult(new SiteDto { Name = "site", PhysicalPath = Path.GetDirectoryName(Source)! }),

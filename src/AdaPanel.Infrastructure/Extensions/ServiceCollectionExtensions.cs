@@ -162,6 +162,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Backup.BackupNetworkTrustService>();
         services.AddScoped<IFileMigrationService, Migration.FileMigrationService>();
         services.AddScoped<ISiteMigrationService, Migration.SiteMigrationService>();
+        services.AddFullMigration(configuration);
         services.AddScoped<IAppStoreService, AppStore.AppStoreService>();
         services.AddScoped<IWordPressToolkitService, AppStore.WordPressToolkitService>();
         services.AddScoped<ISelfUpdateService, SelfUpdate.SelfUpdateService>();

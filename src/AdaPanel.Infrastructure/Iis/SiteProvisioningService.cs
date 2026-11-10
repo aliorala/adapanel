@@ -55,7 +55,10 @@ public sealed class SiteProvisioningService(
             var profile = ResolveProfile(request.RuntimeProfile);
             await ApplyProfileAsync(site, target, profile, request, actorUserId, ipAddress, cancellationToken);
             site = await iisSiteService.GetSiteAsync(site.Name, cancellationToken);
-            _ = await siteDefaultsService.EnsureDefaultsAsync(site, cancellationToken);
+            // A migration plan owns DNS/FTP/mail separately. Provisioning a stopped web site
+            // must not publish defaults for components which were not selected for migration.
+            if (!request.MigrationFreshOnly)
+                _ = await siteDefaultsService.EnsureDefaultsAsync(site, cancellationToken);
             await GrantSiteWritableAsync(site, cancellationToken);
             await target.RunAsync(_ => Task.CompletedTask, cancellationToken);
             return site;
@@ -465,7 +468,7 @@ public sealed class SiteProvisioningService(
                 try
                 {
                     var componentId = await EnsurePhpAsync(request, actorUserId, ipAddress, cancellationToken);
-                    WriteMixedStarter(site);
+                    if (!request.MigrationFreshOnly) WriteMixedStarter(site);
                     await aspNetService.EnableMixedHandlersAsync(
                         site.Name,
                         new EnableMixedHandlersRequest
@@ -477,7 +480,7 @@ public sealed class SiteProvisioningService(
                         },
                         cancellationToken);
                 }
-                catch (AppException exception) when (
+                catch (AppException exception) when (!request.MigrationFreshOnly && (
                     exception.MessageKey is
                         "php.version_not_installed" or
                         "php.invalid_component" or
@@ -492,13 +495,13 @@ public sealed class SiteProvisioningService(
                         "software.signature_invalid" or
                         "software.executable_not_found" or
                         "software.dependency_not_found" or
-                        "software.dependency_cycle")
+                        "software.dependency_cycle"))
                 {
                     logger.LogWarning(
                         exception,
                         "Automatic runtime profile fell back to ASP.NET for site {SiteName}.",
                         site.Name);
-                    WriteAspNetStarter(site);
+                    if (!request.MigrationFreshOnly) WriteAspNetStarter(site);
                     await aspNetService.SetDotNetVersionAsync(
                         site.Name,
                         new UpdateDotNetRuntimeRequest
@@ -516,7 +519,7 @@ public sealed class SiteProvisioningService(
             case "php":
             {
                 var componentId = await EnsurePhpAsync(request, actorUserId, ipAddress, cancellationToken);
-                WritePhpStarter(site);
+                if (!request.MigrationFreshOnly) WritePhpStarter(site);
                 await phpService.SetSitePhpVersionAsync(
                     site.Name,
                     new SetSitePhpVersionRequest { ComponentId = componentId },
@@ -524,7 +527,7 @@ public sealed class SiteProvisioningService(
                 return;
             }
             case "aspnet":
-                WriteAspNetStarter(site);
+                if (!request.MigrationFreshOnly) WriteAspNetStarter(site);
                 await aspNetService.SetDotNetVersionAsync(
                     site.Name,
                     new UpdateDotNetRuntimeRequest
@@ -535,7 +538,7 @@ public sealed class SiteProvisioningService(
                     cancellationToken);
                 return;
             case "classic-asp":
-                WriteClassicAspStarter(site);
+                if (!request.MigrationFreshOnly) WriteClassicAspStarter(site);
                 await aspNetService.SetClassicAspAsync(
                     site.Name,
                     new UpdateClassicAspRequest { Enabled = true },
@@ -544,7 +547,7 @@ public sealed class SiteProvisioningService(
             case "mixed":
             {
                 var componentId = await EnsurePhpAsync(request, actorUserId, ipAddress, cancellationToken);
-                WriteMixedStarter(site);
+                if (!request.MigrationFreshOnly) WriteMixedStarter(site);
                 await aspNetService.EnableMixedHandlersAsync(
                     site.Name,
                     new EnableMixedHandlersRequest
@@ -563,7 +566,7 @@ public sealed class SiteProvisioningService(
                 await EnsureComponentAsync(componentId, request.InstallRuntimeIfMissing, actorUserId, ipAddress, cancellationToken);
                 await EnsureComponentAsync("http-platform-handler", request.InstallRuntimeIfMissing, actorUserId, ipAddress, cancellationToken);
                 var startupFile = string.IsNullOrWhiteSpace(request.StartupFile) ? "server.js" : request.StartupFile.Trim();
-                WriteNodeStarter(site.PhysicalPath, startupFile);
+                if (!request.MigrationFreshOnly) WriteNodeStarter(site.PhysicalPath, startupFile);
                 var runtimeRequest = new HostNodeAppRequest
                 {
                     ComponentId = componentId,
@@ -583,7 +586,7 @@ public sealed class SiteProvisioningService(
                 await EnsureComponentAsync(componentId, request.InstallRuntimeIfMissing, actorUserId, ipAddress, cancellationToken);
                 await EnsureComponentAsync("http-platform-handler", request.InstallRuntimeIfMissing, actorUserId, ipAddress, cancellationToken);
                 var startupFile = string.IsNullOrWhiteSpace(request.StartupFile) ? "app.py" : request.StartupFile.Trim();
-                WritePythonStarter(site.PhysicalPath, startupFile);
+                if (!request.MigrationFreshOnly) WritePythonStarter(site.PhysicalPath, startupFile);
                 var runtimeRequest = new HostPythonAppRequest
                 {
                     ComponentId = componentId,

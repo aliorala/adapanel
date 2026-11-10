@@ -345,11 +345,11 @@ public sealed class SiteNativeEntryLifetimeTests
             f.OriginalId = f.Current.Id;
             return f;
         }
-        public CreateSiteRequest Request(string name) => new()
-        { Name = name, HostName = name, PhysicalPath = SitePath, RuntimeProfile = "static", Port = 8080 };
+        public CreateSiteRequest Request(string name, bool replaceExisting = false) => new()
+        { Name = name, HostName = name, PhysicalPath = SitePath, RuntimeProfile = "static", Port = 8080, ReplaceExisting = replaceExisting };
         public Task<SiteDto> Replace(SiteMutationGuard.Creation? watcher, CancellationToken token) => watcher is null
-            ? Native.CreateSiteAsync(Request(Name), token)
-            : Native.CreateSiteAsync(Request(Name), watcher.RecordCommitted, token);
+            ? Native.CreateSiteAsync(Request(Name, replaceExisting: true), token)
+            : Native.CreateSiteAsync(Request(Name, replaceExisting: true), watcher.RecordCommitted, token);
         public async Task ReadAndUse(string name, CancellationToken token = default)
         {
             using var target = await SiteMutationGuard.CaptureAsync(Native, Gates, name, token);

@@ -7135,7 +7135,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         return warnings;
     }
 
-    /// <summary>Arşivdeki <c>*.sql</c> dökümlerini ilgili motorlara içe aktarır.</summary>
+    /// <summary>Arşivdeki SQL dökümlerini ve SQL Server .bak dosyalarını ilgili motorlara içe aktarır.</summary>
     private async Task ImportDatabasesFromArchiveAsync(
         ZipArchive archive,
         string prefix,
@@ -7148,26 +7148,37 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             cancellationToken.ThrowIfCancellationRequested();
             var ad = NormalizeArchivePath(entry.FullName);
             if (!ad.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
-                !ad.EndsWith(".sql", StringComparison.OrdinalIgnoreCase) ||
                 string.IsNullOrEmpty(entry.Name))
+            {
+                continue;
+            }
+
+            var extension = Path.GetExtension(entry.Name);
+            if (!extension.Equals(".sql", StringComparison.OrdinalIgnoreCase) &&
+                !extension.Equals(".bak", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
             var fileName = Path.GetFileNameWithoutExtension(entry.Name); // "engine-dbname"
             var split = fileName.Split('-', 2);
-            if (split.Length != 2)
+            if (split.Length != 2 || string.IsNullOrWhiteSpace(split[1]) ||
+                (extension.Equals(".bak", StringComparison.OrdinalIgnoreCase) &&
+                 !split[0].Equals("mssql", StringComparison.OrdinalIgnoreCase) &&
+                 !split[0].Equals("sqlserver", StringComparison.OrdinalIgnoreCase)))
             {
                 warnings.Add(new BackupRestoreWarningDto
                 {
                     MessageKey = "backup.invalid_entry_path",
                     Target = entry.FullName,
-                    Detail = "Girdi adi 'motor-veritabani' bicimine uymuyor."
+                    Detail = "Girdi adi veya yedek bicimi motorla uyusmuyor; .bak yalniz SQL Server icindir."
                 });
                 continue;
             }
 
-            var tempDump = Path.Combine(Path.GetTempPath(), $"adabk-restore-{Guid.NewGuid():N}.sql");
+            // SQL Server exports are binary .bak files. Keep the extension and stream
+            // bytes unchanged, just as direct database restore does.
+            var tempDump = Path.Combine(Path.GetTempPath(), $"adabk-restore-{Guid.NewGuid():N}{extension}");
             try
             {
                 entry.ExtractToFile(tempDump, overwrite: true);
