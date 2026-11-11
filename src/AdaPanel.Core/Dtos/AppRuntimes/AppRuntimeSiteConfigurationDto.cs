@@ -24,7 +24,7 @@ public sealed class AppRuntimeSiteConfigurationDto
 
     public bool HasHttpPlatformHandler { get; init; }
 
-    public bool ManagedRuntimeDisabled { get; init; }
+    public bool? ManagedRuntimeDisabled { get; init; }
 
     public string[] EnvironmentVariables { get; init; } = [];
 }

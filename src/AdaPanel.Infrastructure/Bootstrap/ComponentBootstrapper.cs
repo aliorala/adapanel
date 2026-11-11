@@ -1579,7 +1579,7 @@ public sealed class ComponentBootstrapper(
                     component,
                     client,
                     "win-acme/win-acme",
-                    assetName => assetName.EndsWith(".x64.trimmed.zip", StringComparison.OrdinalIgnoreCase),
+                    IsWinAcmeX64Package,
                     cancellationToken, versionCheckOnly);
 
             case "composer":
@@ -1727,6 +1727,10 @@ public sealed class ComponentBootstrapper(
             return null;
         }
     }
+
+    internal static bool IsWinAcmeX64Package(string name) =>
+        Regex.IsMatch(name, @"\Awin-acme\.v[0-9]+(?:\.[0-9]+){2,3}\.x64\.(?:pluggable|trimmed)\.zip\z",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private async Task<ComponentManifestItemDto?> ResolveLatestGitHubAssetAsync(
         ComponentManifestItemDto component,

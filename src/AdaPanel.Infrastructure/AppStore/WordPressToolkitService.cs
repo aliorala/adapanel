@@ -1,4 +1,4 @@
-using System.Net.Http;
+﻿using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -56,6 +56,12 @@ public sealed partial class WordPressToolkitService(
     ISiteHostingSettingsService hostingSettings,
     ILogger<WordPressToolkitService>? logger = null) : IWordPressToolkitService
 {
+    // Isolated tests replace only the filesystem transport, never IIS or database decisions.
+    internal Func<string, string, string, CancellationToken, Task<CommandResult>> CloneFileCopy { get; set; } =
+        (source, target, parent, ct) => ProcessRunner.RunAsync("robocopy",
+            $"\"{source.TrimEnd('\\')}\" \"{target.TrimEnd('\\')}\" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NP",
+            parent, ct, timeout: TimeSpan.FromMinutes(30));
+
     /// <summary>
     /// wp-cli çıktısını GÜNLÜĞE YAZILABİLİR hâle getirir: sır maskelenir, uzunluk kırpılır.
     /// </summary>
@@ -294,16 +300,11 @@ add_action('init', function () {
             RuntimeProfile = "php",
             ProvisionDefaultServices = false,
             CreateDatabase = false,
-            AutoStart = true
+            AutoStart = false
         }, cancellationToken);
 
         // 2) Dosyaları kopyala (robocopy /E; çıkış kodu < 8 başarı sayılır).
-        var copy = await ProcessRunner.RunAsync(
-            "robocopy",
-            $"\"{sourceRoot.TrimEnd('\\')}\" \"{targetRoot.TrimEnd('\\')}\" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NP",
-            parent,
-            cancellationToken,
-            timeout: TimeSpan.FromMinutes(30));
+        var copy = await CloneFileCopy(sourceRoot, targetRoot, parent, cancellationToken);
         if (!RobocopyBasarili(copy.ExitCode))
         {
             logger?.LogError(
@@ -355,74 +356,116 @@ add_action('init', function () {
         // Bayrak SONUCA KONUR: bu adım artık sessizce atlanamaz. Site ve veritabanı bu noktada ZATEN
         // OLUŞTU, bu yüzden istisna atılmaz (gerekçenin uzun hâli TryRewriteSiteUrlAsync'te); doğru
         // davranış panelin `wp.updates_partial` deseni — kısmi başarıyı SÖYLEMEK.
-        var configYazildi = true;
+        var configYazildi = false;
+        var databaseIsolated = false;
         var targetConfigPath = Path.Combine(targetRoot, "wp-config.php");
-        if (File.Exists(targetConfigPath))
+        try
         {
-            var targetConfig = await File.ReadAllTextAsync(targetConfigPath, cancellationToken);
-            var yazilamayan = new List<string>();
-            foreach (var (anahtar, deger) in new[]
-                     {
-                         ("DB_NAME", transfer.TargetDatabase),
-                         ("DB_USER", transfer.UserName),
-                         ("DB_PASSWORD", transfer.Password),
-                         ("DB_HOST", "127.0.0.1")
-                     })
+            // A transfer result must identify the requested NEW database before its credentials
+            // can reach wp-config. Empty or source credentials never authorize URL writes.
+            if (string.Equals(transfer.TargetDatabase, targetDb, StringComparison.Ordinal)
+                && !string.Equals(transfer.TargetDatabase, srcDbName, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(transfer.UserName)
+                && !string.IsNullOrEmpty(transfer.Password))
             {
-                if (TryReplaceDefine(targetConfig, anahtar, deger, out var sonraki, out var durum))
+                var targetConfig = await File.ReadAllTextAsync(targetConfigPath, cancellationToken);
+                var expected = new[] { ("DB_NAME", transfer.TargetDatabase), ("DB_USER", transfer.UserName),
+                    ("DB_PASSWORD", transfer.Password), ("DB_HOST", "127.0.0.1") };
+                var writable = true;
+                foreach (var (key, value) in expected)
                 {
-                    targetConfig = sonraki;
+                    if (!TryReplaceDefine(targetConfig, key, value, out var rewritten, out _))
+                    {
+                        writable = false;
+                        break;
+                    }
+                    targetConfig = rewritten;
                 }
-                else
+                if (writable)
                 {
-                    yazilamayan.Add($"{anahtar}={durum}");
+                    await File.WriteAllTextAsync(targetConfigPath, targetConfig, cancellationToken);
+                    // Verify persisted content, including escaped credentials, rather than an
+                    // in-memory replacement. WP-CLI is never invoked on an unverified config.
+                    var persisted = await File.ReadAllTextAsync(targetConfigPath, cancellationToken);
+                    configYazildi = expected.All(pair => TryReadDefine(persisted, pair.Item1, out var value)
+                        && string.Equals(value, pair.Item2, StringComparison.Ordinal));
+                    databaseIsolated = configYazildi;
                 }
-            }
-
-            if (yazilamayan.Count == 0)
-            {
-                await File.WriteAllTextAsync(targetConfigPath, targetConfig, cancellationToken);
-
-                // PAROLA YAZILMAZ: yalnız hangi DB'ye ve hangi kullanıcıya bağlandığı. Sorun
-                // ayıklamak için gereken bilgi budur; parola gerekmez.
-                logger?.LogInformation(
-                    "Klon wp-config yenilendi: {Hedef} artik {Veritabani} veritabanina {Kullanici} kullanicisiyla baglaniyor.",
-                    targetName,
-                    transfer.TargetDatabase,
-                    transfer.UserName);
-            }
-            else
-            {
-                // Ön denetim bu durumu elemiş olmalıydı; buraya ancak KOPYALANAN dosya kaynağınkinden
-                // farklıysa gelinir (kaynak iş sırasında değişti, robocopy kısmi kopyaladı). Dosya
-                // YARIM YAZILMAZ: klon kaynağın DB'sine bağlı kalır ve bayrak bunu söyler.
-                configYazildi = false;
-                logger?.LogError(
-                    "Klon wp-config'i YENILENEMEDI ({Sebep}); {Hedef} KAYNAGIN veritabanina baglaniyor olabilir. "
-                    + "Veritabani {Veritabani} olarak kopyalandi ama baglanti bilgisi yazilamadi.",
-                    string.Join(", ", yazilamayan),
-                    targetName,
-                    transfer.TargetDatabase);
             }
         }
-        else
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception)
         {
-            // SESSİZ ATLAMA ARTIK SESSİZ DEĞİL — bu dosyadaki en tehlikeli "sorun yok" hâliydi.
-            //
-            // wp-config kopyalanmadıysa (robocopy kısmi başarı, kaynakta simge bağlantı, yetki)
-            // klon ya HİÇ AÇILMAZ ya da daha kötüsü kaynağın konfigürasyonunu kullanmaya devam
-            // eder: staging'de yapılan her yazma CANLI veritabanına gider. Panel yine de
-            // "Klon tamamlandı" diyordu; bayrak o hükmü artık engelliyor.
-            configYazildi = false;
-            logger?.LogError(
-                "Klonda wp-config.php BULUNAMADI ({Yol}); hedef {Hedef} KAYNAGIN veritabanina isaret ediyor olabilir. Veritabani {Veritabani} olarak kopyalandi ama baglanti bilgisi yazilamadi.",
-                targetConfigPath,
-                targetName,
-                transfer.TargetDatabase);
+            logger?.LogError(exception, "Klon yapilandirmasi dogrulanamadi; {Hedef} kapali kaldi.", targetName);
+        }
+        if (databaseIsolated)
+        {
+            try
+            {
+                // db query runs before WordPress loads: an eval would bootstrap plugins and
+                // could already WRITE to the source database before we verify its identity.
+                // The single-token SQL is valid on Windows without shell quote interpretation;
+                // DATABASE() is independent of WordPress's configurable table prefix.
+                var identity = await hostingSettings.RunWpCliCommandAsync(targetName,
+                    "db query SELECT(DATABASE()) --skip-column-names", cancellationToken);
+                databaseIsolated = identity.ExitCode == 0
+                    && string.Equals(identity.Output.Trim(), transfer.TargetDatabase, StringComparison.Ordinal);
+                if (!databaseIsolated)
+                    logger?.LogError("Klon DB kimligi olculemedi veya hedefle eslesmedi: {Hedef}. Cikis {Code}. MySQL istemcisi/PATH ve baglantiyi kontrol edin.", targetName, identity.ExitCode);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception exception)
+            {
+                databaseIsolated = false;
+                logger?.LogError(exception, "Klon DB kimligi olculemedi; {Hedef} kapali kaldi.", targetName);
+            }
+        }
+        if (!databaseIsolated)
+        {
+            logger?.LogError("Klon DB ayrimi dogrulanamadi; {Hedef} kapali, URL degisikligi engellendi.", targetName);
         }
 
         // 5) URL arama-değiştir (hedef kökte wp-cli) → staging kendi adresinde çalışır.
-        var urlDegistirildi = await TryRewriteSiteUrlAsync(targetName, sourceUrl, targetUrl, cancellationToken);
+        var urlDegistirildi = databaseIsolated
+            && !string.IsNullOrWhiteSpace(sourceUrl)
+            && await TryRewriteSiteUrlAsync(targetName, sourceUrl, targetUrl, cancellationToken);
+        var siteStarted = false;
+        if (urlDegistirildi)
+        {
+            try
+            {
+                var started = await iisSiteService.StartSiteAsync(targetName, cancellationToken);
+                if (!string.Equals(started.State, "Started", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Clone did not enter Started state.");
+                var persistedStart = await iisSiteService.SetSiteAutoStartAsync(targetName, true, cancellationToken);
+                if (!persistedStart.AutoStart)
+                    throw new InvalidOperationException("Clone automatic startup could not be verified.");
+                siteStarted = true;
+            }
+            catch (Exception exception)
+            {
+                // A cancellation or partially committed start must not leave the clone running
+                // or eligible for reboot startup. Attempt both repairs even if one fails.
+                var rollbackErrors = new List<Exception>();
+                try
+                {
+                    var disabled = await iisSiteService.SetSiteAutoStartAsync(targetName, false, CancellationToken.None);
+                    if (disabled.AutoStart) throw new InvalidOperationException("Clone automatic startup remains enabled.");
+                }
+                catch (Exception error) { rollbackErrors.Add(error); }
+                try
+                {
+                    var stopped = await iisSiteService.StopSiteAsync(targetName, CancellationToken.None);
+                    if (!string.Equals(stopped.State, "Stopped", StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Clone stopped state could not be verified.");
+                }
+                catch (Exception error) { rollbackErrors.Add(error); }
+                if (rollbackErrors.Count > 0)
+                    throw new AggregateException("Clone startup failed; stopped state could not be guaranteed.", rollbackErrors.Prepend(exception));
+                logger?.LogError(exception, "Klon baslatilamadi; {Hedef} kalici olarak kapali tutuldu.", targetName);
+                if (exception is OperationCanceledException) throw;
+            }
+        }
 
         logger?.LogInformation(
             "WordPress klonlama bitti: {Kaynak} -> {Hedef} ({HedefAdres}). Adres degistirildi mi: {AdresDegisti}.",
@@ -439,7 +482,9 @@ add_action('init', function () {
             DatabaseUser = transfer.UserName,
             DatabasePassword = transfer.Password,
             UrlRewritten = urlDegistirildi,
-            ConfigRewritten = configYazildi
+            ConfigRewritten = configYazildi,
+            DatabaseIsolated = databaseIsolated,
+            SiteStarted = siteStarted
         };
     }
 
@@ -1432,7 +1477,9 @@ add_action('template_redirect', function () {
         dto.Plugins = ReadPlugins(root);
         dto.Themes = ReadThemes(root);
         dto.LatestVersion = latestVersion;
-        dto.UpdateAvailable = IsOlderVersion(dto.Version, latestVersion);
+        dto.VersionMeasured = IsComparableVersion(dto.Version);
+        dto.VersionComparisonMeasured = dto.VersionMeasured && IsComparableVersion(latestVersion);
+        dto.UpdateAvailable = dto.VersionComparisonMeasured && IsOlderVersion(dto.Version, latestVersion);
         dto.Security = BuildSecurity(root);
         if (!string.IsNullOrWhiteSpace(hostName))
         {
@@ -1644,7 +1691,7 @@ add_action('template_redirect', function () {
         {
             // Sürüm boş → IsOlderVersion false → "güncelleme yok". Yani ÖLÇEMEDİK, panelde
             // GÜVENDE gibi görünür. Tam olarak kapatılması istenen desen.
-            logger?.LogWarning(exception, "WordPress surumu OKUNAMADI: {Dosya}. Site 'guncel' gorunecek.", versionFile);
+            logger?.LogWarning(exception, "WordPress surumu OKUNAMADI: {Dosya}. Surum durumu olculemedi.", versionFile);
             return string.Empty;
         }
     }
@@ -1732,6 +1779,9 @@ add_action('template_redirect', function () {
     }
 
     // installed < latest mi (her ikisi de geçerli sürümse). Belirsizse false (güncelleme önerme).
+    private static bool IsComparableVersion(string value)
+        => !string.IsNullOrWhiteSpace(value) && Version.TryParse(value.Split('-', '+')[0], out _);
+
     private static bool IsOlderVersion(string installed, string latest)
     {
         if (string.IsNullOrWhiteSpace(installed) || string.IsNullOrWhiteSpace(latest))

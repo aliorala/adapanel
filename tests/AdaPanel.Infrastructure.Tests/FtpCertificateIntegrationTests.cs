@@ -3,8 +3,11 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Reflection;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Ftp;
+using AdaPanel.Core.Dtos.Sites;
+using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Ftp;
 using AdaPanel.Infrastructure.Options;
 using AdaPanel.Infrastructure.Support;
@@ -14,6 +17,142 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class FtpCertificateIntegrationTests
 {
+    [Fact]
+    public void SingleNameCertificateCannotReplaceTheSharedSanCertificate()
+    {
+        using var key = RSA.Create(2048);
+        var request = new CertificateRequest("CN=ftp.example.test", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        var san = new SubjectAlternativeNameBuilder(); san.AddDnsName("ftp.example.test"); request.CertificateExtensions.Add(san.Build());
+        using var cert = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(3));
+        Assert.True(FtpService.CertificateMatchesHosts(cert, ["ftp.example.test"]));
+        Assert.False(FtpService.CertificateMatchesHosts(cert, ["ftp.example.test", "site.example.test"]));
+    }
+
+    [Fact]
+    public async Task AddingDomainPreservesCommonEndpointAndProbesEveryAliasOnRenewal()
+    {
+        using var f = new Fixture();
+        await f.Apply();
+        var selectedHosts = Array.Empty<string>();
+        f.Service.CertificateSelector = (hosts, _) => { selectedHosts = hosts; return Task.FromResult(f.Selected); };
+        var result = await f.Service.ApplyCertificateAsync(new() { HostName = "new.example.test" }, _ => Task.CompletedTask);
+        Assert.Equal("ftp.example.test", result.HostName);
+        Assert.Equal(new[] { "ftp.example.test", "new.example.test" }, result.HostNames);
+        Assert.Equal(result.HostNames, selectedHosts);
+        Assert.Equal(3, f.Probes);
+        var renewed = await f.Service.SyncCertificateAsync(null);
+        Assert.Equal(result.HostNames, renewed!.HostNames);
+        Assert.Equal(5, f.Probes);
+        Assert.Equal(1, f.Writes);
+    }
+
+    [Fact]
+    public async Task RenewalEnrollsOnlyCanonicalNamesOfEnabledAccountSites()
+    {
+        using var f = new Fixture();
+        await f.Apply();
+        await f.Store.WriteAsync("config/ftp-users.json", new[]
+        {
+            new { userName = "active", siteName = "site.example.test", isEnabled = true },
+            new { userName = "disabled", siteName = "disabled.example.test", isEnabled = false }
+        });
+        var result = await f.Service.SyncCertificateAsync(null);
+        Assert.Equal(new[] { "ftp.example.test", "site.example.test" }, result!.HostNames);
+        Assert.DoesNotContain("unrelated.example.test", result.HostNames);
+        Assert.DoesNotContain("disabled.example.test", result.HostNames);
+    }
+
+    [Fact]
+    public async Task MissingSanIsIssuedOnceAndReselectedBeforeAnyBindingChange()
+    {
+        using var f = new Fixture();
+        var issued = 0;
+        f.Service.CertificateSelector = (_, _) => issued == 0
+            ? throw new AppException("ftp.certificate_not_found", 409, 409) : Task.FromResult(f.Selected);
+        f.Service.CertificateIssuer = (hosts, approve, _) =>
+        {
+            Assert.Equal(new[] { "ftp.example.test", "site.example.test" }, hosts);
+            Assert.Equal(0, f.Writes);
+            Assert.NotNull(approve);
+            issued++;
+            return Task.CompletedTask;
+        };
+        var result = await f.Service.ApplyCertificateAsync(new() { HostName = "ftp.example.test", HostNames = ["site.example.test"] }, _ => Task.CompletedTask);
+        Assert.True(result.CertificateVerified);
+        await f.Service.SyncCertificateAsync(null);
+        Assert.Equal(1, issued);
+    }
+
+    [Fact]
+    public async Task ClientCancellationAfterBindingRestoresThePreviousCertificate()
+    {
+        using var f = new Fixture();
+        await f.Apply();
+        using var client = new CancellationTokenSource();
+        f.Selected = f.Selected with { Thumbprint = "SAN" };
+        f.Service.CertificateProbe = (_, _, token) =>
+        {
+            client.Cancel();
+            token.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("Expected cancellation during verification.");
+        };
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => f.Service.ApplyCertificateAsync(
+            new() { HostName = "site.example.test" }, ct => { ct.ThrowIfCancellationRequested(); return Task.CompletedTask; }, client.Token));
+        Assert.Equal("NEW", f.Binding.Thumbprint);
+    }
+
+    [Fact]
+    public void AccountCertificateHostUsesTheSiteBindingWhenTheIisNameIsALabel()
+    {
+        var site = new AdaPanel.Core.Dtos.Sites.SiteDto { Name = "Customer site", Bindings = [
+            new() { Protocol = "http", HostName = "webmail.site.example" },
+            new() { Protocol = "https", HostName = "site.example" }] };
+        Assert.Equal("site.example", FtpService.AccountCertificateHost(site));
+    }
+
+    [Fact]
+    public async Task AliasProbeFailureRestoresCertificateAndDoesNotPublishNewNames()
+    {
+        using var f = new Fixture();
+        await f.Apply();
+        f.Selected = f.Selected with { Thumbprint = "SAN" };
+        f.Service.CertificateProbe = (host, thumb, _) => Task.FromResult(new FtpCertificateDto
+            { HostName = host, CertificateThumbprint = thumb, CertificateVerified = host != "site.example.test" });
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.ApplyCertificateAsync(
+            new() { HostName = "site.example.test" }, _ => Task.CompletedTask));
+        Assert.Equal("ftp.certificate_probe_failed", error.MessageKey);
+        Assert.Equal("NEW", f.Binding.Thumbprint);
+        Assert.Single((await f.Service.GetCertificateAsync()).HostNames);
+    }
+
+    [Fact]
+    public async Task IssuanceFailurePreservesBindingAndTrackedNames()
+    {
+        using var f = new Fixture();
+        await f.Apply();
+        f.Service.CertificateSelector = (_, _) => throw new AppException("ftp.certificate_not_found", 409, 409);
+        f.Service.CertificateIssuer = (_, _, _) => throw new AppException("ftp.certificate_acme_failed", 502, 502);
+        await Assert.ThrowsAsync<AppException>(() => f.Service.ApplyCertificateAsync(new() { HostName = "site.example.test" }, _ => Task.CompletedTask));
+        Assert.Equal("NEW", f.Binding.Thumbprint);
+        Assert.Equal(1, f.Writes);
+        Assert.Single((await f.Service.GetCertificateAsync()).HostNames);
+    }
+
+    [Fact]
+    public void SanAcmeCommandPreservesOtherBindingsAndUsesStableLetsEncryptRenewal()
+    {
+        var command = FtpService.BuildSanArguments(["ftp.example.test", "site.example.test"], "admin@example.test");
+        Assert.Contains("--host \"ftp.example.test,site.example.test\"", command);
+        Assert.Contains("--id AdaPanel-FTPS", command);
+        Assert.Contains("--installation none", command);
+        Assert.Contains("--keepexisting", command);
+        Assert.Contains("--validation selfhosting", command);
+        Assert.Contains("--baseuri https://acme-v02.api.letsencrypt.org/", command);
+        Assert.DoesNotContain("--installation iis", command);
+        Assert.Throws<AppException>(() => FtpService.BuildSanArguments(["example.test --installation script"], "admin@example.test"));
+        Assert.Throws<AppException>(() => FtpService.BuildSanArguments(["example.test"], "admin@example.test --script bad"));
+    }
+
     [Theory]
     [InlineData("ftp://example.test")]
     [InlineData("example.test:21")]
@@ -253,10 +392,11 @@ public sealed class FtpCertificateIntegrationTests
         {
             var options = Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = root });
             Store = new JsonFileStore(options);
-            Service = new FtpService(null!, Store, null!, options)
+            var iis = DispatchProxy.Create<IIisSiteService, SiteProxy>();
+            Service = new FtpService(iis, Store, null!, options)
             {
                 CertificateServiceReady = _ => Task.FromResult(true),
-                CertificateSelector = (host, _) => { SelectedHost = host; return Task.FromResult(Selected); },
+                CertificateSelector = (hosts, _) => { SelectedHost = hosts[0]; return Task.FromResult(Selected); },
                 CertificateProbe = (host, thumb, _) => { Probes++; return Task.FromResult(new FtpCertificateDto
                     { HostName = host, CertificateThumbprint = thumb, CertificateVerified = ProbeWorks, CertificateDetail = ProbeWorks ? "verified" : "AUTH TLS rejected 502" }); },
                 NativeScript = (script, strict, _) =>
@@ -278,5 +418,16 @@ public sealed class FtpCertificateIntegrationTests
         }
         internal Task<FtpCertificateDto> Apply() => Service.ApplyCertificateAsync(new() { HostName = "ftp.example.test" }, _ => Task.CompletedTask);
         public void Dispose() { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    public class SiteProxy : DispatchProxy
+    {
+        protected override object? Invoke(MethodInfo? method, object?[]? args)
+        {
+            if (method!.Name != nameof(IIisSiteService.GetSiteAsync)) throw new NotSupportedException();
+            return Task.FromResult(new SiteDto { Name = (string)args![0]!, Bindings =
+                [new SiteBindingDto { Protocol = "http", HostName = (string)args[0]! },
+                 new SiteBindingDto { Protocol = "https", HostName = "unrelated.example.test" }] });
+        }
     }
 }

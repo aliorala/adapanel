@@ -378,6 +378,9 @@ public sealed class BillingIntegrationTests
         var rapor = await duzenek.Servis.BuildUsageReportAsync();
 
         Assert.Equal("saglam", Assert.Single(rapor.Accounts).UserName);
+        Assert.Equal(1, rapor.FailedAccountCount);
+        var settings = await duzenek.Servis.GetSettingsAsync();
+        Assert.Contains(settings.RecentCalls, call => call.Action == "usage" && call.Outcome == "partial");
     }
 
     [Fact]

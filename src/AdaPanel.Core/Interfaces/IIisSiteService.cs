@@ -1,4 +1,4 @@
-using AdaPanel.Core.Dtos.Sites;
+﻿using AdaPanel.Core.Dtos.Sites;
 
 namespace AdaPanel.Core.Interfaces;
 
@@ -23,6 +23,9 @@ public interface IIisSiteService
     Task DeleteSiteAsync(string siteName, CancellationToken cancellationToken = default);
 
     Task<SiteDto> StartSiteAsync(string siteName, CancellationToken cancellationToken = default);
+
+    Task<SiteDto> SetSiteAutoStartAsync(string siteName, bool autoStart, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Persistent IIS startup configuration is required.");
 
     Task<SiteDto> StopSiteAsync(string siteName, CancellationToken cancellationToken = default);
 

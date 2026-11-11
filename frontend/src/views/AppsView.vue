@@ -264,7 +264,7 @@
             </div>
             <div>
               <dt>{{ t("panel.apps.managedRuntime") }}</dt>
-              <dd>{{ currentConfiguration.managedRuntimeDisabled ? t("panel.apps.noManagedCode") : t("panel.apps.managedCodePresent") }}</dd>
+              <dd>{{ currentConfiguration.managedRuntimeDisabled == null ? t("panel.apps.runtimeUnknown") : t(currentConfiguration.managedRuntimeDisabled ? "panel.apps.noManagedCode" : "panel.apps.managedCodePresent") }}</dd>
             </div>
           </dl>
         </details>

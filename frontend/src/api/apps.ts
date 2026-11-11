@@ -20,7 +20,7 @@ export type AppRuntimeSiteConfiguration = {
   logsDirectory: string;
   isEnabled: boolean;
   hasHttpPlatformHandler: boolean;
-  managedRuntimeDisabled: boolean;
+  managedRuntimeDisabled: boolean | null;
   environmentVariables: string[];
 };
 

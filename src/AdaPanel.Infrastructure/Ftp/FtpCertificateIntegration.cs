@@ -30,7 +30,8 @@ public sealed partial class FtpService
         public int ControlPolicy { get; set; }
         public int DataPolicy { get; set; }
     }
-    internal Func<string, CancellationToken, Task<FtpCertificateCandidate>> CertificateSelector { get; set; } = FindCertificateAsync;
+    internal Func<string[], CancellationToken, Task<FtpCertificateCandidate>> CertificateSelector { get; set; } = FindCertificateAsync;
+    internal Func<string[], Func<CancellationToken, Task>?, CancellationToken, Task>? CertificateIssuer { get; set; }
     internal Func<CancellationToken, Task<bool>>? CertificateServiceReady { get; set; }
     internal Func<string, string, CancellationToken, Task<FtpCertificateDto>> CertificateProbe { get; set; } = FtpTlsProbe.ProbeAsync;
 
@@ -42,7 +43,7 @@ public sealed partial class FtpService
         return host;
     }
 
-    private static Task<FtpCertificateCandidate> FindCertificateAsync(string host, CancellationToken token)
+    private static Task<FtpCertificateCandidate> FindCertificateAsync(string[] hosts, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         var candidates = new List<FtpCertificateCandidate>();
@@ -56,7 +57,7 @@ public sealed partial class FtpService
                 using (certificate)
                 {
                     token.ThrowIfCancellationRequested();
-                    if (!IsUsableCertificate(certificate, host)) continue;
+                    if (!CertificateMatchesHosts(certificate, hosts) || !IsUsableCertificate(certificate, hosts[0])) continue;
                     candidates.Add(new(certificate.Thumbprint, storeName, certificate.Subject, certificate.NotAfter.ToUniversalTime()));
                 }
             }
@@ -65,6 +66,9 @@ public sealed partial class FtpService
             ?? throw new AppException("ftp.certificate_not_found", 409, 409,
                 "No trusted, unexpired server certificate with a private key and matching SAN exists in LocalMachine My/WebHosting. Obtain a certificate for the FTPS name first."));
     }
+
+    internal static bool CertificateMatchesHosts(X509Certificate2 certificate, string[] hosts) =>
+        hosts.Length > 0 && hosts.All(host => certificate.MatchesHostname(host, true, false));
 
     internal static bool IsUsableCertificate(X509Certificate2 certificate, string host)
     {
@@ -93,7 +97,7 @@ public sealed partial class FtpService
             || !string.Equals(state.CertificateStoreName, binding.StoreName, StringComparison.OrdinalIgnoreCase))
             return new FtpCertificateDto { HostName = state.HostName, CertificateThumbprint = binding.Thumbprint,
                 CertificateStoreName = binding.StoreName, CertificateVerified = false, CertificateDetail = "The FTP binding differs from the tracked certificate." };
-        var measured = await CertificateProbe(state.HostName, binding.Thumbprint, cancellationToken);
+        var measured = await ProbeCertificateHostsAsync(state.HostName, TrackedHosts(state), binding.Thumbprint, cancellationToken);
         measured.CertificateStoreName = binding.StoreName;
         return measured;
     }
@@ -103,8 +107,9 @@ public sealed partial class FtpService
     {
         ArgumentNullException.ThrowIfNull(beforeMutation);
         var host = NormalizeCertificateHost(request.HostName);
+        var hosts = (request.HostNames ?? []).Select(NormalizeCertificateHost).Prepend(host).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         return InfrastructureLock.RunExclusiveAsync(InfrastructureLockKey,
-            () => ApplyCertificateCoreAsync(host, beforeMutation, cancellationToken), cancellationToken);
+            () => ApplyCertificateCoreAsync(host, hosts, beforeMutation, cancellationToken), cancellationToken);
     }
 
     public Task<FtpCertificateDto?> SyncCertificateAsync(Func<CancellationToken, Task>? beforeMutation,
@@ -113,17 +118,29 @@ public sealed partial class FtpService
         await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
         var state = await fileStore.ReadAsync(TlsStatePath, new FtpTlsState(), cancellationToken);
         if (string.IsNullOrWhiteSpace(state.HostName)) return null;
-        return await ApplyCertificateCoreAsync(NormalizeCertificateHost(state.HostName), beforeMutation, cancellationToken);
+        return await ApplyCertificateCoreAsync(NormalizeCertificateHost(state.HostName), await AccountCertificateHostsAsync(cancellationToken), beforeMutation, cancellationToken);
     }, cancellationToken);
 
-    private async Task<FtpCertificateDto> ApplyCertificateCoreAsync(string host, Func<CancellationToken, Task>? beforeMutation, CancellationToken token)
+    private async Task<FtpCertificateDto> ApplyCertificateCoreAsync(string host, string[] requestedHosts, Func<CancellationToken, Task>? beforeMutation, CancellationToken token)
     {
         await ApproveInfrastructureAsync(beforeMutation, token);
         var ready = CertificateServiceReady is { } readyProbe ? await readyProbe(token) : (await GetServerStatusAsync(token)).IsConfigured;
         await ApproveInfrastructureAsync(beforeMutation, token);
         if (!ready) throw new AppException("ftp.certificate_service_unverified", 409, 409,
             "The running port 21 listener could not be verified as the panel IIS FTP service. No certificate was changed.");
-        var selected = await CertificateSelector(host, token);
+        var state = await fileStore.ReadAsync(TlsStatePath, new FtpTlsState(), token);
+        // The existing common endpoint stays the primary name during a SAN migration.
+        host = string.IsNullOrWhiteSpace(state.HostName) ? host : NormalizeCertificateHost(state.HostName);
+        var hosts = TrackedHosts(state).Concat(requestedHosts).Append(host).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (hosts.Length > 100) throw new AppException("ftp.certificate_host_limit", 409, 409, "The shared FTPS certificate supports at most 100 DNS names.");
+        FtpCertificateCandidate selected;
+        try { selected = await CertificateSelector(hosts, token); }
+        catch (AppException error) when (error.MessageKey == "ftp.certificate_not_found")
+        {
+            if (CertificateIssuer is { } issue) await issue(hosts, beforeMutation, token);
+            else await IssueSanCertificateAsync(hosts, beforeMutation, token);
+            selected = await CertificateSelector(hosts, token);
+        }
         await ApproveInfrastructureAsync(beforeMutation, token);
         var previous = await ReadCertificateBindingAsync(token);
         await ApproveInfrastructureAsync(beforeMutation, token);
@@ -146,7 +163,7 @@ public sealed partial class FtpService
                 || !string.Equals(binding.StoreName, selected.StoreName, StringComparison.OrdinalIgnoreCase)
                 || binding.ControlPolicy != previous.ControlPolicy || binding.DataPolicy != previous.DataPolicy)
                 throw new AppException("ftp.certificate_binding_failed", 500, 500, "Certificate binding/policy read-back did not match; no success was recorded.");
-            var measured = await CertificateProbe(host, selected.Thumbprint, token);
+            var measured = await ProbeCertificateHostsAsync(host, hosts, selected.Thumbprint, token);
             await ApproveInfrastructureAsync(beforeMutation, token);
             if (measured.CertificateVerified != true)
                 throw new AppException("ftp.certificate_probe_failed", 502, 502, measured.CertificateDetail ?? "Strict AUTH TLS verification failed.");
@@ -156,6 +173,7 @@ public sealed partial class FtpService
             await fileStore.UpdateAsync(TlsStatePath, new FtpTlsState(), current =>
             {
                 current.HostName = host;
+                current.HostNames = hosts;
                 current.CertificateThumbprint = selected.Thumbprint;
                 current.CertificateStoreName = selected.StoreName;
                 return current;
@@ -168,14 +186,15 @@ public sealed partial class FtpService
             try
             {
                 // Rollback is a native mutation too: expired/revoked authority cannot perform it.
-                await ApproveInfrastructureAsync(beforeMutation, token);
-                var actual = await ReadCertificateBindingAsync(token);
+                using var recovery = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+                await ApproveInfrastructureAsync(beforeMutation, recovery.Token);
+                var actual = await ReadCertificateBindingAsync(recovery.Token);
                 if ((!string.Equals(actual.Thumbprint, previous.Thumbprint, StringComparison.OrdinalIgnoreCase)
                         && !string.Equals(actual.Thumbprint, selected.Thumbprint, StringComparison.OrdinalIgnoreCase))
                     || (!string.Equals(actual.StoreName, previous.StoreName, StringComparison.OrdinalIgnoreCase)
                         && !string.Equals(actual.StoreName, selected.StoreName, StringComparison.OrdinalIgnoreCase)))
                     throw new IOException("FTP binding was changed by another administrator; rollback did not overwrite it.");
-                await WriteCertificateBindingAsync(previous.Thumbprint, previous.StoreName, actual, beforeMutation, token);
+                await WriteCertificateBindingAsync(previous.Thumbprint, previous.StoreName, actual, beforeMutation, recovery.Token);
             }
             catch (Exception rollback)
             { throw new AppException("ftp.certificate_rollback_failed", 500, 500,

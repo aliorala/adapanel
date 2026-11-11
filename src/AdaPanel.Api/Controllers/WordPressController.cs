@@ -1,4 +1,4 @@
-using AdaPanel.Api.Security;
+﻿using AdaPanel.Api.Security;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Sites;
@@ -215,8 +215,9 @@ public sealed class WordPressController(
         // yazar. İki durum aynı anda olabilir ve kullanıcıya önce ağır olan söylenir.
         return Ok(ApiResponse<WordPressCloneResultDto>.Ok(
             result,
-            !result.ConfigRewritten ? "wp.clone_config_not_written"
+            !result.ConfigRewritten || !result.DatabaseIsolated ? "wp.clone_config_not_written"
             : !result.UrlRewritten ? "wp.clone_url_not_replaced"
+            : !result.SiteStarted ? "wp.clone_not_started"
             : "wp.clone_done"));
     }
 

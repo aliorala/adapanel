@@ -42,8 +42,14 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
             LogPath = logsDirectory
         };
 
-        if (!Directory.Exists(logsDirectory))
+        FileInfo[] candidates;
+        try
         {
+            candidates = new DirectoryInfo(logsDirectory).GetFiles("*.log*", SearchOption.TopDirectoryOnly);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            result.LogDirectoryMissing = true;
             return result;
         }
 
@@ -55,8 +61,7 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
         // Dosya biciminin nasil acilacagina UZANTIYA gore degil ICERIGE gore karar veriliyor
         // (SeoLogFileSet.OpenText -> BackupDumpCompression.DetectFormat), boylece elle ".gz"
         // yapilmis bir gunluk de okunur.
-        var files = new DirectoryInfo(logsDirectory)
-            .GetFiles("*.log*", SearchOption.TopDirectoryOnly)
+        var files = candidates
             .Where(file => file.LastWriteTimeUtc.Date >= cutoff)
             .OrderByDescending(file => file.LastWriteTimeUtc)
             .ToArray();

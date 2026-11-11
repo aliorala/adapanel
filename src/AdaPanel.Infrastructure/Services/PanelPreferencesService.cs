@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Text.Json.Nodes;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -15,6 +17,7 @@ public sealed class PanelPreferencesService(
     JsonFileStore fileStore,
     IOptions<PanelRuntimeOptions> runtimeOptions) : IPanelPreferencesService
 {
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> SaveLocks = new(StringComparer.OrdinalIgnoreCase);
     private const string PreferencesPath = "config/panel-preferences.json";
     private const string RuntimeSettingsPath = "config/runtime-settings.json";
     private readonly PanelRuntimeOptions defaults = runtimeOptions.Value;
@@ -45,6 +48,14 @@ public sealed class PanelPreferencesService(
     }
 
     public async Task<PanelPreferencesDto> UpdateAsync(UpdatePanelPreferencesRequest request, CancellationToken cancellationToken = default)
+    {
+        var gate = SaveLocks.GetOrAdd(fileStore.ResolvePath(PreferencesPath), _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken);
+        try { return await UpdateCoreAsync(request, cancellationToken); }
+        finally { gate.Release(); }
+    }
+
+    private async Task<PanelPreferencesDto> UpdateCoreAsync(UpdatePanelPreferencesRequest request, CancellationToken cancellationToken)
     {
         var previous = await GetAsync(cancellationToken);
         var settings = new PanelPreferencesDto
@@ -82,26 +93,59 @@ public sealed class PanelPreferencesService(
 
         Directory.CreateDirectory(Environment.ExpandEnvironmentVariables(settings.DefaultSiteRoot));
         Directory.CreateDirectory(Environment.ExpandEnvironmentVariables(settings.DefaultBackupRoot));
-        await fileStore.UpdateAsync(PreferencesPath, CreateDefaults(), existing =>
+        JsonObject? previousRuntime = null;
+        JsonObject? expectedRuntime = null;
+        var runtimePublished = false;
+        try
         {
-            // Public access owns this field and may have published a new hostname since
-            // the initial read. Preserve it under the same gate as that publisher.
-            settings.PanelHostName = existing.PanelHostName;
-            return settings;
-        }, cancellationToken);
-        await fileStore.WriteAsync(
-            RuntimeSettingsPath,
-            new RuntimeSettingsDocument
+            await fileStore.UpdateAsync(PreferencesPath, CreateDefaults(), existing =>
             {
-                Panel = new PanelRuntimeSettings
+                settings.PanelHostName = existing.PanelHostName;
+                return settings;
+            }, async token =>
+            {
+                if (runtimePublished) return;
+                await fileStore.UpdateAsync(RuntimeSettingsPath, new JsonObject(), document =>
                 {
-                    PreferredHttpsPort = settings.PreferredHttpsPort,
-                    AllowHttpFallback = settings.AllowHttpFallback,
-                    LoginLockoutMinutes = settings.LoginLockoutMinutes,
-                    DefaultLanguage = settings.DefaultLanguage
-                }
-            },
-            cancellationToken);
+                    previousRuntime = document.DeepClone().AsObject();
+                    var panelKey = FindKey(document, "Panel");
+                    var panel = document[panelKey] switch
+                    {
+                        null => (JsonObject)(document[panelKey] = new JsonObject()),
+                        JsonObject section => section,
+                        _ => throw new InvalidDataException("Invalid Panel section in runtime-settings.json.")
+                    };
+                    panel[FindKey(panel, "PreferredHttpsPort")] = settings.PreferredHttpsPort;
+                    panel[FindKey(panel, "AllowHttpFallback")] = settings.AllowHttpFallback;
+                    panel[FindKey(panel, "LoginLockoutMinutes")] = settings.LoginLockoutMinutes;
+                    panel[FindKey(panel, "DefaultLanguage")] = settings.DefaultLanguage;
+                    expectedRuntime = document.DeepClone().AsObject();
+                    return document;
+                }, token);
+                runtimePublished = true;
+            }, cancellationToken);
+        }
+        catch (Exception saveFailure) when (previousRuntime is not null && expectedRuntime is not null)
+        {
+            try
+            {
+                var actual = await fileStore.ReadAsync(RuntimeSettingsPath, new JsonObject(), CancellationToken.None);
+                var published = await fileStore.ReadAsync(PreferencesPath, CreateDefaults(), CancellationToken.None);
+                // Public access owns the hostname and can update it after the preferences write.
+                settings.PanelHostName = published.PanelHostName;
+                if (System.Text.Json.JsonSerializer.Serialize(settings) == System.Text.Json.JsonSerializer.Serialize(published)
+                    && RuntimeFieldsMatch(actual, expectedRuntime))
+                    return settings;
+                if (!RuntimeFieldsMatch(actual, previousRuntime))
+                    await fileStore.UpdateAsync(RuntimeSettingsPath, new JsonObject(),
+                        current => RestoreRuntimeFields(current, previousRuntime, expectedRuntime), CancellationToken.None);
+            }
+            catch (Exception rollbackFailure)
+            {
+                throw new AggregateException("Panel settings could not be saved or rolled back.", saveFailure, rollbackFailure);
+            }
+            throw;
+        }
         return settings;
     }
 
@@ -240,19 +284,37 @@ public sealed class PanelPreferencesService(
             ?.ToString() ?? Environment.MachineName;
     }
 
-    private sealed class RuntimeSettingsDocument
+    private static string FindKey(JsonObject section, string name) =>
+        section.Select(entry => entry.Key).FirstOrDefault(key => string.Equals(key, name, StringComparison.OrdinalIgnoreCase)) ?? name;
+
+    private static readonly string[] RuntimeFields = ["PreferredHttpsPort", "AllowHttpFallback", "LoginLockoutMinutes", "DefaultLanguage"];
+
+    private static JsonObject RuntimePanel(JsonObject document) =>
+        document[FindKey(document, "Panel")] as JsonObject ?? new JsonObject();
+
+    private static bool RuntimeFieldsMatch(JsonObject left, JsonObject right)
     {
-        public PanelRuntimeSettings Panel { get; set; } = new();
+        var a = RuntimePanel(left);
+        var b = RuntimePanel(right);
+        return RuntimeFields.All(field => JsonNode.DeepEquals(a[FindKey(a, field)], b[FindKey(b, field)]));
     }
 
-    private sealed class PanelRuntimeSettings
+    private static JsonObject RestoreRuntimeFields(JsonObject document, JsonObject before, JsonObject expected)
     {
-        public string DefaultLanguage { get; set; } = "tr";
-
-        public int PreferredHttpsPort { get; set; }
-
-        public bool AllowHttpFallback { get; set; }
-
-        public int LoginLockoutMinutes { get; set; }
+        if (RuntimeFieldsMatch(document, before)) return document;
+        if (!RuntimeFieldsMatch(document, expected))
+            throw new IOException("The runtime settings changed during recovery. Concurrent edits were preserved.");
+        var current = RuntimePanel(document);
+        var original = RuntimePanel(before);
+        foreach (var field in RuntimeFields)
+        {
+            var key = FindKey(current, field);
+            if (original.TryGetPropertyValue(FindKey(original, field), out var value))
+                current[key] = value?.DeepClone();
+            else current.Remove(key);
+        }
+        var panelKey = FindKey(document, "Panel");
+        if (current.Count == 0 && !before.ContainsKey(FindKey(before, "Panel"))) document.Remove(panelKey);
+        return document;
     }
 }

@@ -1,4 +1,4 @@
-namespace AdaPanel.Core.Dtos.Sites;
+﻿namespace AdaPanel.Core.Dtos.Sites;
 
 /// <summary>panel WordPress Toolkit benzeri: bir sitedeki WordPress kurulumunun durumu.</summary>
 public sealed class WordPressSiteDto
@@ -8,6 +8,10 @@ public sealed class WordPressSiteDto
     public bool IsWordPress { get; set; }
 
     public string Version { get; set; } = string.Empty;
+
+    public bool VersionMeasured { get; set; }
+
+    public bool VersionComparisonMeasured { get; set; }
 
     public string Path { get; set; } = string.Empty;
 
@@ -152,6 +156,10 @@ public sealed class WordPressHardenResultDto
 /// <summary>Klon sonucu: oluşan hedef site + (uygulamanın bağlandığı) yeni veritabanı bilgileri.</summary>
 public sealed class WordPressCloneResultDto
 {
+    public bool DatabaseIsolated { get; set; }
+
+    public bool SiteStarted { get; set; }
+
     public string TargetSiteName { get; set; } = string.Empty;
 
     public string TargetUrl { get; set; } = string.Empty;

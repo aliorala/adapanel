@@ -15,6 +15,8 @@ public sealed class WebStatisticsDto
 
     public bool HasData { get; set; }
 
+    public bool LogDirectoryMissing { get; set; }
+
     /// <summary>Reading stopped at the record budget; totals cover only the records read.</summary>
     public bool ScanLimitReached { get; set; }
 

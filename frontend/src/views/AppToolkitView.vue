@@ -86,8 +86,9 @@
                üçüncü bir kez aynı şeyi söylüyordu. -->
           <div class="wp-status">
             <span class="status-pill">WordPress {{ wp.version || "?" }}</span>
-            <span v-if="wp.updateAvailable" class="status-pill warn">{{ t("panel.wpkit.updateAvailable", { v: wp.latestVersion }) }}</span>
-            <span v-else class="status-pill ok">{{ t("panel.wpkit.upToDate") }}</span>
+            <span v-if="!wp.versionMeasured" class="status-pill warn">{{ t("panel.software.installedVersionUnknown") }}</span>
+            <span v-else-if="wp.updateAvailable" class="status-pill warn">{{ t("panel.wpkit.updateAvailable", { v: wp.latestVersion }) }}</span>
+            <span v-else-if="wp.versionComparisonMeasured" class="status-pill ok">{{ t("panel.wpkit.upToDate") }}</span>
             <a v-if="wp.adminUrl" :href="wp.adminUrl" target="_blank" rel="noopener" class="wp-admin-link">{{ t("panel.wpkit.openAdmin") }} ↗</a>
           </div>
 
@@ -212,7 +213,8 @@
             </div>
             <small class="hint">{{ t("panel.wpkit.cloneHint") }}</small>
             <div v-if="wpCloneResult" class="notice wp-cred" role="status">
-              <a :href="wpCloneResult.targetUrl" target="_blank" rel="noopener">{{ wpCloneResult.targetUrl }}</a>
+              <a v-if="wpCloneResult.siteStarted" :href="wpCloneResult.targetUrl" target="_blank" rel="noopener">{{ wpCloneResult.targetUrl }}</a>
+              <span v-else>{{ wpCloneResult.targetUrl }}</span>
               · DB: <code>{{ wpCloneResult.targetDatabase }}</code>
               · {{ t("panel.wpkit.cloneUser") }}: <code>{{ wpCloneResult.databaseUser }}</code>
               · {{ t("panel.wpkit.clonePass") }}: <code>{{ wpCloneResult.databasePassword }}</code>
@@ -542,8 +544,9 @@ async function wpDoClone() {
       targetHostName: wpClone.targetHostName,
     });
     wpCloneResult.value = klon.sonuc;
-    const klonYarim = klon.mesajAnahtari !== "" && klon.mesajAnahtari !== "wp.clone_done";
-    showWpNotice(klonYarim ? t(klon.mesajAnahtari) : t("panel.wpkit.cloneDone"), klonYarim);
+    const klonYarim = !klon.sonuc.databaseIsolated || !klon.sonuc.urlRewritten || !klon.sonuc.siteStarted
+      || (klon.mesajAnahtari !== "" && klon.mesajAnahtari !== "wp.clone_done");
+    showWpNotice(klonYarim ? t(klon.mesajAnahtari || "wp.clone_not_started") : t("panel.wpkit.cloneDone"), klonYarim);
   } catch (error) {
     showWpNotice(resolveApiMessage(error), true);
   } finally {

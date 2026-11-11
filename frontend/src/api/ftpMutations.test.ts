@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { apiClient, invalidateSessionRequests } from './client';
-import { createFtpUser, setFtpPassword, deleteFtpUser, setFtpTls } from './ftp';
+import { applyFtpCertificate, createFtpUser, setFtpPassword, deleteFtpUser, setFtpTls } from './ftp';
 import { UserFacingError } from '../utils/apiError';
 
 const original = apiClient.defaults.adapter;
@@ -19,6 +19,14 @@ const routes=[
   {name:'delete',run:()=>deleteFtpUser(payload.userName),valid:{userName:payload.userName}},
   {name:'tls',run:()=>setFtpTls(true),valid:{requireSsl:true,verified:true}}
 ];
+it('accepts a SAN result retaining the common endpoint and every requested alias', async()=>{
+ body={success:true,data:{hostName:'shared.test',hostNames:['shared.test','site.test'],certificateThumbprint:'SAN',certificateVerified:true}};
+ await expect(applyFtpCertificate('site.test, shared.test')).resolves.toMatchObject({hostName:'shared.test'});
+});
+it('rejects a SAN success that omitted one requested domain', async()=>{
+ body={success:true,data:{hostName:'shared.test',hostNames:['shared.test'],certificateThumbprint:'SAN',certificateVerified:true}};
+ await expect(applyFtpCertificate('shared.test, site.test')).rejects.toEqual(new UserFacingError('panel.ftp.resultUnconfirmed'));
+});
 for(const route of routes){
   it.each(['failed-envelope','missing-success','missing-data','wrong-identity'])(`${route.name} rejects %s instead of claiming success`,async kind=>{
     const wrong=route.name==='tls'?{requireSsl:false,verified:true}:{...route.valid,userName:'other_ftp'};

@@ -114,6 +114,7 @@ export async function setFtpPassword(userName: string, password: string) {
 
 export type FtpCertificate = {
   hostName?: string;
+  hostNames?: string[];
   certificateThumbprint?: string;
   certificateSubject?: string;
   certificateNotAfterUtc?: string | null;
@@ -124,13 +125,17 @@ export type FtpCertificate = {
 
 function isCertificate(value: unknown): value is FtpCertificate {
   return record(value) && ['hostName', 'certificateThumbprint', 'certificateSubject', 'certificateNotAfterUtc', 'certificateStoreName', 'certificateDetail'].every(key => value[key] == null || typeof value[key] === 'string')
+    && (value.hostNames == null || (Array.isArray(value.hostNames) && value.hostNames.every(host => typeof host === 'string')))
     && (value.certificateVerified == null || typeof value.certificateVerified === 'boolean');
 }
 
 export async function applyFtpCertificate(hostName: string): Promise<FtpCertificate> {
-  const response = await apiClient.post<ApiEnvelope<FtpCertificate>>("/ftp/certificate", { hostName });
+  const hostNames = hostName.split(',').map(host => host.trim()).filter(Boolean);
+  const primary = hostNames[0] ?? '';
+  const response = await apiClient.post<ApiEnvelope<FtpCertificate>>("/ftp/certificate", { hostName: primary, ...(hostNames.length > 1 ? { hostNames } : {}) });
   return measured(response.data, (value): value is FtpCertificate => isCertificate(value)
-    && (value.certificateVerified !== true || (sameIdentity(value.hostName, hostName) && Boolean(value.certificateThumbprint?.trim()))));
+    && (value.certificateVerified !== true || ((sameIdentity(value.hostName, primary) || value.hostNames?.some(host => sameIdentity(host, primary)) === true) && Boolean(value.certificateThumbprint?.trim())
+      && hostNames.every(host => sameIdentity(value.hostName, host) || value.hostNames?.some(accepted => sameIdentity(accepted, host)) === true))));
 }
 
 export type FtpTlsStatus = FtpCertificate & {

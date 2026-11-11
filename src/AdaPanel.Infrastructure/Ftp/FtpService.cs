@@ -24,7 +24,8 @@ public sealed partial class FtpService(
     IPanelPreferencesService panelPreferencesService,
     IOptions<PanelRuntimeOptions> runtimeOptions,
     ILogger<FtpService>? logger = null,
-    IConcurrencyLock? serverConcurrency = null) : IFtpService
+    IConcurrencyLock? serverConcurrency = null,
+    AdaPanel.Data.Persistence.AdaPanelDbContext? ftpCertificateDb = null) : IFtpService
 {
     // Shared by ensure, TLS updates and account creation's infrastructure preparation.
     internal IConcurrencyLock InfrastructureLock { get; } = serverConcurrency ?? new ConcurrencyLock();
@@ -470,6 +471,7 @@ public sealed partial class FtpService(
     {
         public bool RequireSsl { get; set; }
         public string? HostName { get; set; }
+        public string[] HostNames { get; set; } = [];
         public string? CertificateThumbprint { get; set; }
         public string? CertificateStoreName { get; set; }
         [System.Text.Json.Serialization.JsonExtensionData]
@@ -595,6 +597,9 @@ public sealed partial class FtpService(
         // fast path is deliberately unmeasured and remains valid; optional TLS stays optional.
         if (infrastructure.Failed)
             throw new AppException("ftp.site_configuration_failed", 500, 500, infrastructure.Detail);
+
+        // Enroll only this approved site's canonical DNS name; existing shared aliases remain.
+        await EnsureSiteCertificateAsync(request.SiteName, Approve, cancellationToken);
 
         // BU ÇAĞRI hesabı gerçekten AÇTI mı? Geri alma yalnız BUNA bakar (gerekçe: RollbackCreateAsync).
         var hesabiBuCagriActi = false;

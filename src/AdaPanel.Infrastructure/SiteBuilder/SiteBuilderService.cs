@@ -1,6 +1,7 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.SiteBuilder;
 using AdaPanel.Core.Interfaces;
@@ -186,41 +187,82 @@ public sealed class SiteBuilderService(
                 StringComparer.OrdinalIgnoreCase);
 
             var written = new List<string>();
+            var recovery = CreatePublishRecoveryDirectory(root);
+            var snapshots = new List<PublishSnapshot>();
+            SiteBuilderProjectDto? metadataBefore = null;
+            DateTime? attemptedPublishedAt = null;
+            var orphans = new List<string>();
+            try
+            {
+                // Snapshot every destination before the first public file changes. Unknown or
+                // unreadable existing files abort publication rather than becoming empty backups.
+                foreach (var relative in decision.FilesToWrite)
+                {
+                    var target = SiteBuilderPathGuard.ResolveWriteTarget(root, relative);
+                    SiteBuilderPathGuard.EnsureUsableRoot(root);
+                    if (Directory.Exists(target)) throw new IOException("Publish target is a directory: " + relative);
+                    var backup = Path.Combine(recovery, snapshots.Count.ToString() + ".backup");
+                    var existed = false;
+                    try
+                    {
+                        await using var input = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read);
+                        await using var output = new FileStream(backup, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                        await input.CopyToAsync(output, cancellationToken);
+                        existed = true;
+                    }
+                    catch (FileNotFoundException) { }
+                    catch (DirectoryNotFoundException) { }
+                    snapshots.Add(new PublishSnapshot(relative, backup, existed) { OriginalHash = existed ? await HashFileAsync(backup, cancellationToken) : null });
+                }
 
             foreach (var relative in decision.FilesToWrite)
             {
                 var target = SiteBuilderPathGuard.ResolveWriteTarget(root, relative);
                 EnsureParentDirectory(root, target);
 
+                var snapshot = snapshots.First(item => item.Relative == relative);
                 if (pagesByPath.TryGetValue(relative, out var html))
                 {
-                    await WriteTextAsync(target, html, cancellationToken);
+                    snapshot.PublishedHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(html)));
+                    await WriteTextAsync(root, target, html, cancellationToken);
                 }
                 else if (string.Equals(relative, SiteBuilderLayout.StyleFile, StringComparison.OrdinalIgnoreCase))
                 {
-                    await WriteTextAsync(target, rendered.Css, cancellationToken);
+                    snapshot.PublishedHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rendered.Css)));
+                    await WriteTextAsync(root, target, rendered.Css, cancellationToken);
                 }
                 else
                 {
-                    await CopyImageAsync(site.Name, relative, target, cancellationToken);
+                    snapshot.PublishedHash = await HashFileAsync(ResolveImagePath(site.Name, relative[(relative.LastIndexOf('/') + 1)..]), cancellationToken);
+                    await CopyImageAsync(site.Name, relative, root, target, cancellationToken);
                 }
 
+                // The digest is a rollback ownership check. A later external edit must never
+                // be overwritten by restoration of our older snapshot.
+                if (!string.Equals(await HashFileAsync(target, CancellationToken.None), snapshot.PublishedHash, StringComparison.Ordinal))
+                    throw new IOException("Published file verification failed: " + relative);
                 written.Add(relative);
             }
 
             // ÖKSÜZLER: bu yayında artık üretilmeyen ama diskte duran kurucu dosyaları. Silinmez,
             // sayılır ve kullanıcıya döner (gerekçe: SiteBuilderPublishPlanner.Orphans).
-            var orphans = SiteBuilderPublishPlanner
+            orphans = SiteBuilderPublishPlanner
                 .Orphans(project.ManagedFiles, writes)
                 .Where(relative => TargetExists(root, relative))
                 .ToList();
 
             var publishedAt = DateTime.UtcNow;
+            attemptedPublishedAt = publishedAt;
             await fileStore.UpdateAsync(
                 ProjectPath(site.Name),
                 project,
                 current =>
                 {
+                    // Capture the latest metadata under JsonFileStore's own writer lock.
+                    // Only publication fields are restored, preserving later design edits.
+                    var originalJson = JsonSerializer.Serialize(current);
+                    File.WriteAllText(Path.Combine(recovery, "metadata.backup"), originalJson, new UTF8Encoding(false));
+                    metadataBefore = JsonSerializer.Deserialize<SiteBuilderProjectDto>(originalJson)!;
                     current.Published = true;
                     current.PublishedAtUtc = publishedAt;
                     current.PublishedPath = root;
@@ -245,6 +287,89 @@ public sealed class SiteBuilderService(
                 },
                 cancellationToken);
 
+            }
+            catch (Exception)
+            {
+                var unresolved = new List<string>();
+                if (metadataBefore is not null)
+                {
+                    try
+                    {
+                        var current = await fileStore.ReadAsync<SiteBuilderProjectDto?>(ProjectPath(site.Name), null, CancellationToken.None);
+                        if (current is null)
+                            await fileStore.WriteAsync(ProjectPath(site.Name), metadataBefore, CancellationToken.None);
+                        else if (current.PublishedAtUtc == attemptedPublishedAt && current.PublishedPath == root)
+                        {
+                            try
+                            {
+                                await fileStore.UpdateAsync(ProjectPath(site.Name), metadataBefore, latest =>
+                                {
+                                    if (latest.PublishedAtUtc != attemptedPublishedAt || latest.PublishedPath != root)
+                                        throw new IOException("Publication metadata changed during rollback.");
+                                    latest.Published = metadataBefore.Published;
+                                    latest.PublishedAtUtc = metadataBefore.PublishedAtUtc;
+                                    latest.PublishedPath = metadataBefore.PublishedPath;
+                                    latest.ManagedFiles = metadataBefore.ManagedFiles.ToList();
+                                    return latest;
+                                }, CancellationToken.None);
+                            }
+                            catch
+                            {
+                                // An atomic replacement may commit and then report failure.
+                                // Verify actual state before declaring restoration failed.
+                                var actual = await fileStore.ReadAsync<SiteBuilderProjectDto?>(ProjectPath(site.Name), null, CancellationToken.None);
+                                if (actual is null || actual.Published != metadataBefore.Published
+                                    || actual.PublishedAtUtc != metadataBefore.PublishedAtUtc
+                                    || actual.PublishedPath != metadataBefore.PublishedPath
+                                    || !actual.ManagedFiles.SequenceEqual(metadataBefore.ManagedFiles)) throw;
+                            }
+                        }
+                    }
+                    catch (Exception restoreError)
+                    {
+                        unresolved.Add(ProjectPath(site.Name));
+                        logger.LogError(restoreError, "Site kurucu yayin kaydi geri alinamadi: {Site}", site.Name);
+                    }
+                }
+                foreach (var snapshot in snapshots.Where(item => item.PublishedHash is not null).Reverse())
+                {
+                    try
+                    {
+                        SiteBuilderPathGuard.EnsureUsableRoot(root);
+                        var target = SiteBuilderPathGuard.ResolveWriteTarget(root, snapshot.Relative);
+                        if (!File.Exists(target) && !snapshot.Existed) continue;
+                        var currentHash = await HashFileAsync(target, CancellationToken.None);
+                        if (string.Equals(currentHash, snapshot.OriginalHash, StringComparison.Ordinal)) continue;
+                        if (!string.Equals(currentHash, snapshot.PublishedHash, StringComparison.Ordinal))
+                            throw new IOException("Destination changed after publication.");
+                        if (snapshot.Existed)
+                            await RestorePublishFileAsync(root, target, snapshot.Backup, snapshot.PublishedHash!);
+                        else
+                        {
+                            // Recheck immediately before deletion as well as before hashing.
+                            SiteBuilderPathGuard.ResolveWriteTarget(root, snapshot.Relative);
+                            if (!string.Equals(await HashFileAsync(target, CancellationToken.None), snapshot.PublishedHash, StringComparison.Ordinal))
+                                throw new IOException("Destination changed during rollback.");
+                            File.Delete(target);
+                        }
+                    }
+                    catch (Exception restoreError)
+                    {
+                        unresolved.Add(snapshot.Relative);
+                        logger.LogError(restoreError, "Site kurucu geri alma basarisiz: {Site} {File}", site.Name, snapshot.Relative);
+                    }
+                }
+                if (unresolved.Count > 0)
+                {
+                    // Keep private recovery bytes for manual repair; never return publish success.
+                    throw new AppException("sitebuilder.publish_rollback_incomplete", 500, 500,
+                        "Files requiring recovery: " + string.Join(", ", unresolved) + ". Recovery: " + recovery);
+                }
+                TryDeleteRecoveryDirectory(recovery);
+                throw;
+            }
+            TryDeleteRecoveryDirectory(recovery);
+
             logger.LogInformation(
                 "Site kurucu yayini tamamlandi: {Site} -> {Path} ({Count} dosya, {Pages} sayfa, {Orphans} oksuz)",
                 site.Name,
@@ -261,7 +386,7 @@ public sealed class SiteBuilderService(
                 OverwrittenFiles = decision.Conflicts.ToList(),
                 OrphanFiles = orphans,
                 PageCount = rendered.Pages.Count,
-                PublishedAtUtc = publishedAt,
+                PublishedAtUtc = attemptedPublishedAt!.Value,
                 PreviewUrl = BuildSiteUrl(site)
             };
         }
@@ -649,13 +774,87 @@ public sealed class SiteBuilderService(
         SiteBuilderPathGuard.EnsureNoReparsePointOnPath(root, parent);
     }
 
-    /// <summary>Atomik yazım: önce geçici dosya, sonra taşı. Yarıda kesilen yayın yarım sayfa bırakmaz.</summary>
-    private static async Task WriteTextAsync(string target, string content, CancellationToken cancellationToken)
+    private sealed class PublishSnapshot(string relative, string backup, bool existed)
     {
-        var temporary = target + ".adatmp";
+        public string Relative { get; } = relative;
+        public string Backup { get; } = backup;
+        public bool Existed { get; } = existed;
+        public string? PublishedHash { get; set; }
+        public string? OriginalHash { get; set; }
+    }
+
+    private string CreatePublishRecoveryDirectory(string publishRoot)
+    {
+        var path = fileStore.ResolvePath("config/sitebuilder-recovery/" + Guid.NewGuid().ToString("N"));
+        if (PathContainment.IsRootOrInside(publishRoot, path) || PathContainment.IsRootOrInside(path, publishRoot))
+            throw new AppException("sitebuilder.target_invalid", 409, 409, "Recovery storage overlaps the public site root.");
+        var volumeRoot = Path.GetPathRoot(path)!;
+        SiteBuilderPathGuard.EnsureNoReparsePointOnPath(volumeRoot, path);
+        Directory.CreateDirectory(path);
+        SiteBuilderPathGuard.EnsureNoReparsePointOnPath(volumeRoot, path);
+        return path;
+    }
+
+    private static async Task<string> HashFileAsync(string path, CancellationToken cancellationToken)
+    {
+        await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return Convert.ToHexString(await SHA256.HashDataAsync(input, cancellationToken));
+    }
+
+    private static async Task RestorePublishFileAsync(string root, string target, string backup, string expectedHash)
+    {
+        var temp = target + ".restore-" + Guid.NewGuid().ToString("N");
         try
         {
-            await File.WriteAllTextAsync(temporary, content, new UTF8Encoding(false), cancellationToken);
+            SiteBuilderPathGuard.EnsureUsableRoot(root);
+            SiteBuilderPathGuard.EnsureNoReparsePointOnPath(root, temp);
+            SiteBuilderPathGuard.EnsureNoReparsePointOnPath(Path.GetPathRoot(backup)!, backup);
+            await using (var input = File.OpenRead(backup))
+            await using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                await input.CopyToAsync(output, CancellationToken.None);
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    SiteBuilderPathGuard.EnsureUsableRoot(root);
+                    SiteBuilderPathGuard.EnsureNoReparsePointOnPath(root, target);
+                    if (!string.Equals(await HashFileAsync(target, CancellationToken.None), expectedHash, StringComparison.Ordinal))
+                        throw new IOException("Destination changed during restoration.");
+                    File.Move(temp, target, overwrite: true);
+                    return;
+                }
+                catch (IOException) when (attempt < 3)
+                {
+                    await Task.Delay(25 * (attempt + 1), CancellationToken.None);
+                }
+            }
+        }
+        finally { TryDelete(temp); }
+    }
+
+    private void TryDeleteRecoveryDirectory(string path)
+    {
+        try
+        {
+            SiteBuilderPathGuard.EnsureNoReparsePointOnPath(Path.GetPathRoot(path)!, path);
+            Directory.Delete(path, recursive: true);
+        }
+        catch (Exception error) { logger.LogWarning(error, "Site kurucu kurtarma dosyalari temizlenemedi: {Path}", path); }
+    }
+
+    /// <summary>Atomik yazım: önce geçici dosya, sonra taşı. Yarıda kesilen yayın yarım sayfa bırakmaz.</summary>
+    private static async Task WriteTextAsync(string root, string target, string content, CancellationToken cancellationToken)
+    {
+        var temporary = target + ".adatmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            SiteBuilderPathGuard.EnsureUsableRoot(root);
+            SiteBuilderPathGuard.EnsureNoReparsePointOnPath(root, temporary);
+            await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            await using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
+                await writer.WriteAsync(content.AsMemory(), cancellationToken);
+            SiteBuilderPathGuard.EnsureNoReparsePointOnPath(root, target);
+            cancellationToken.ThrowIfCancellationRequested();
             File.Move(temporary, target, overwrite: true);
         }
         finally
@@ -664,7 +863,7 @@ public sealed class SiteBuilderService(
         }
     }
 
-    private async Task CopyImageAsync(string siteName, string relative, string target, CancellationToken cancellationToken)
+    private async Task CopyImageAsync(string siteName, string relative, string root, string target, CancellationToken cancellationToken)
     {
         var name = relative[(relative.LastIndexOf('/') + 1)..];
         var source = ResolveImagePath(siteName, name);
@@ -673,15 +872,19 @@ public sealed class SiteBuilderService(
             throw new AppException("sitebuilder.image_not_found", 404, 404);
         }
 
-        var temporary = target + ".adatmp";
+        var temporary = target + ".adatmp-" + Guid.NewGuid().ToString("N");
         try
         {
+            SiteBuilderPathGuard.EnsureUsableRoot(root);
+            SiteBuilderPathGuard.EnsureNoReparsePointOnPath(root, temporary);
             await using (var input = File.OpenRead(source))
-            await using (var output = File.Create(temporary))
+            await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
                 await input.CopyToAsync(output, cancellationToken);
             }
 
+            SiteBuilderPathGuard.EnsureNoReparsePointOnPath(root, target);
+            cancellationToken.ThrowIfCancellationRequested();
             File.Move(temporary, target, overwrite: true);
         }
         finally

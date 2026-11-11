@@ -72,19 +72,13 @@ internal sealed class HtaccessSwitchStore
         var state = new HtaccessSwitchState { Path = path };
         try
         {
-            if (!File.Exists(path))
-            {
-                return state;
-            }
-
+            var content = File.ReadAllText(path);
             state.FileExists = true;
-            state.Mode = HtaccessSwitchFile.Parse(File.ReadAllText(path));
+            state.Mode = HtaccessSwitchFile.Parse(content);
         }
-        catch
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
         {
-            // Panel tarafında da okunamama = KAPALI göster. Panelin "açık" deyip modülün kapalı
-            // olması, tam tersinden çok daha tehlikeli bir yalan olurdu.
-            state.Mode = HtaccessMode.Off;
+            return state;
         }
 
         return state;

@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Net;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -246,6 +246,16 @@ public sealed partial class WebAdministrationSiteService(
         {
             var site = FindSite(GetSitesCollection(serverManager), siteName);
             InvokeMethod(site, "Start");
+            return MapSite(site);
+        }, "sites.write_failed", cancellationToken);
+    }
+
+    public Task<SiteDto> SetSiteAutoStartAsync(string siteName, bool autoStart, CancellationToken cancellationToken = default)
+    {
+        return ExecuteWriteAsync(serverManager =>
+        {
+            var site = FindSite(GetSitesCollection(serverManager), siteName);
+            SetPropertyValue(site, "ServerAutoStart", autoStart);
             return MapSite(site);
         }, "sites.write_failed", cancellationToken);
     }

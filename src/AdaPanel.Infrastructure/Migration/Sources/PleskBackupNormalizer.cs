@@ -156,7 +156,7 @@ public sealed class PleskBackupNormalizer(IOptions<PanelRuntimeOptions> runtime,
                 await Payload(prefix + "/" + relative, item.Value); count++;
             }
             var empty = new List<string>();
-            foreach (var directory in inventory.Directories.Where(path => path.StartsWith(rootPrefix, StringComparison.Ordinal) && path != root && !inventory.Files.Keys.Any(file => file.StartsWith(path + "/", StringComparison.Ordinal))))
+            foreach (var directory in inventory.Directories.Where(path => path.StartsWith(rootPrefix, StringComparison.Ordinal) && path != root && !inventory.FilesUnder(path).Any()))
             {
                 var relative = directory[rootPrefix.Length..];
                 if (WindowsPath(relative)) empty.Add(relative);

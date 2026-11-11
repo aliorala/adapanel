@@ -7,6 +7,15 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class ComponentBootstrapperIntegrityTests
 {
+    [Theory]
+    [InlineData("win-acme.v2.4.1.2444.x64.pluggable.zip", true)]
+    [InlineData("win-acme.v2.2.9.1701.x64.trimmed.zip", true)]
+    [InlineData("win-acme.v2.4.1.2444.arm64.pluggable.zip", false)]
+    [InlineData("plugin.v2.4.1.2444.x64.pluggable.zip", false)]
+    [InlineData("win-acme.v2.4.1.2444.x64.pluggable.zip.sha256", false)]
+    public void WinAcmeDiscoveryRequiresTheOfficialX64ClientArchive(string name, bool accepted)
+        => Assert.Equal(accepted, ComponentBootstrapper.IsWinAcmeX64Package(name));
+
     [Fact]
     public void ParseSha256_ReadsPlainAndPrefixedDigests()
     {

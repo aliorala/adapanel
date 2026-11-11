@@ -18,6 +18,7 @@ export type WebStatistics = {
   generatedAtUtc: string;
   logPath: string;
   hasData: boolean;
+  logDirectoryMissing?: boolean;
   scanLimitReached?: boolean;
   totalRequests: number;
   uniqueVisitors: number;

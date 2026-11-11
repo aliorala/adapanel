@@ -18,10 +18,11 @@
         <div class="wp-tile">
           <span class="tile-label">{{ t("panel.wp.version") }}</span>
           <strong>{{ wp.version || "?" }}</strong>
-          <span v-if="wp.updateAvailable" class="status-pill warn wp-update-pill">
+          <span v-if="!wp.versionMeasured" class="status-pill warn wp-update-pill">{{ t("panel.software.installedVersionUnknown") }}</span>
+          <span v-else-if="wp.updateAvailable" class="status-pill warn wp-update-pill">
             {{ t("panel.wp.updateAvailable", { version: wp.latestVersion }) }}
           </span>
-          <span v-else-if="wp.latestVersion" class="status-pill ok wp-update-pill">{{ t("panel.wp.upToDate") }}</span>
+          <span v-else-if="wp.versionComparisonMeasured" class="status-pill ok wp-update-pill">{{ t("panel.wp.upToDate") }}</span>
         </div>
         <div class="wp-tile">
           <span class="tile-label">{{ t("panel.wp.maintenance") }}</span>

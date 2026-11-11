@@ -1,4 +1,4 @@
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Dtos.Databases;
@@ -385,6 +385,60 @@ public sealed class BackupCombinedRestoreSafetyTests
 
     // ---------------------------------------------------------------------------------------
 
+    [Theory]
+    [InlineData("io")]
+    [InlineData("service")]
+    [InlineData("wrong-404")]
+    public async Task Subscription_iis_read_failure_never_recreates_site_or_writes_archive_files(string failure)
+    {
+        using var area = new GeciciAlan();
+        var live = area.KlasorAc("live");
+        var index = Path.Combine(live, "index.html");
+        await File.WriteAllTextAsync(index, "ORIGINAL_LIVE_CONTENT");
+        var forbidden = Path.Combine(area.Kok, "would-create");
+        var zip = area.BirlesikYedekUret(new Dictionary<string, string>
+        {
+            ["sites/shop.example.com/config/site.json"] = System.Text.Json.JsonSerializer.Serialize(new SiteDto
+                { Name = "shop.example.com", PhysicalPath = forbidden, ApplicationRootPath = forbidden }),
+            ["sites/shop.example.com/files/index.html"] = "ARCHIVE_CONTENT"
+        }, new Dictionary<string, string>());
+        var proxy = System.Reflection.DispatchProxy.Create<IIisSiteService, FailingIisRead>();
+        var tracker = (FailingIisRead)(object)proxy;
+        tracker.Failure = failure switch
+        {
+            "io" => new IOException("SYNTHETIC_IIS_READ_FAILURE"),
+            "service" => new AppException("sites.read_failed", 503, 503),
+            _ => new AppException("unrelated.not_found", 404, 404)
+        };
+        var service = area.ServisKur(zip, live, new SahteVeritabaniServisi(_ => throw new InvalidOperationException()), proxy);
+        var records = await area.DosyaDeposu.ReadAsync("config/backups.json", Array.Empty<BackupRecordDto>());
+        records[0].Type = "subscription";
+        await area.DosyaDeposu.WriteAsync("config/backups.json", records);
+
+        var result = await service.RestoreAsync(new RestoreBackupRequest { BackupId = "b1" });
+
+        Assert.Equal("restored_with_errors", result.Status);
+        Assert.Contains(result.Warnings, warning => warning.MessageKey == "backup.site_target_unavailable");
+        Assert.Equal(1, tracker.Reads);
+        Assert.Equal(0, tracker.Writes);
+        Assert.False(Directory.Exists(forbidden));
+        Assert.Equal("ORIGINAL_LIVE_CONTENT", await File.ReadAllTextAsync(index));
+        Assert.Single(Directory.GetFiles(live, "*", SearchOption.AllDirectories));
+    }
+
+    public class FailingIisRead : System.Reflection.DispatchProxy
+    {
+        public Exception Failure { get; set; } = null!;
+        public int Reads { get; private set; }
+        public int Writes { get; private set; }
+        protected override object? Invoke(System.Reflection.MethodInfo? method, object?[]? args)
+        {
+            if (method!.Name == "GetSiteAsync") { Reads++; throw Failure; }
+            Writes++;
+            throw new InvalidOperationException("IIS mutation must not occur after an unverified read.");
+        }
+    }
+
     private sealed class GeciciAlan : IDisposable
     {
         public GeciciAlan()
@@ -423,7 +477,7 @@ public sealed class BackupCombinedRestoreSafetyTests
             return zipYolu;
         }
 
-        public BackupService ServisKur(string zipYolu, string siteKoku, IDatabaseService veritabani)
+        public BackupService ServisKur(string zipYolu, string siteKoku, IDatabaseService veritabani, IIisSiteService? sites = null)
         {
             DosyaDeposu.WriteAsync("config/backups.json", new[]
             {
@@ -440,7 +494,7 @@ public sealed class BackupCombinedRestoreSafetyTests
             }).GetAwaiter().GetResult();
 
             return new BackupService(
-                new SahteSiteServisi(siteKoku),
+                sites ?? new SahteSiteServisi(siteKoku),
                 veritabani,
                 null!,
                 null!,

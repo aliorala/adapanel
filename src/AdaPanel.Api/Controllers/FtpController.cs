@@ -88,6 +88,7 @@ public sealed class FtpController(
         {
             RequireSsl = requireSsl,
             HostName = certificate.HostName,
+            HostNames = certificate.HostNames,
             CertificateThumbprint = certificate.CertificateThumbprint,
             CertificateSubject = certificate.CertificateSubject,
             CertificateNotAfterUtc = certificate.CertificateNotAfterUtc,
@@ -105,7 +106,7 @@ public sealed class FtpController(
         var actor = new FtpActorAuthority(User);
         if (!actor.Principal.IsInRole("Administrator")) throw new AppException("auth.forbidden", 403, 403);
         await ValidateActorAsync(actor, cancellationToken);
-        var result = await ftpService.ApplyCertificateAsync(new ApplyFtpCertificateRequest { HostName = request.HostName },
+        var result = await ftpService.ApplyCertificateAsync(new ApplyFtpCertificateRequest { HostName = request.HostName, HostNames = request.HostNames ?? [] },
             token => ValidateActorAsync(actor, token), cancellationToken);
         await ValidateActorAsync(actor, cancellationToken);
         if (result.CertificateVerified != true) throw new AppException("ftp.certificate_probe_failed", 502, 502, result.CertificateDetail ?? string.Empty);
@@ -405,6 +406,7 @@ public sealed class FtpTlsRequest
 public sealed class FtpTlsStatusDto
 {
     public string? HostName { get; set; }
+    public string[] HostNames { get; set; } = [];
     public string? CertificateThumbprint { get; set; }
     public string? CertificateSubject { get; set; }
     public DateTime? CertificateNotAfterUtc { get; set; }

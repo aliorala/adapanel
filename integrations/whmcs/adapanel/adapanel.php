@@ -697,7 +697,13 @@ function adapanel_UsageUpdate(array $params)
     }
 
     $data = isset($sonuc['data']) && is_array($sonuc['data']) ? $sonuc['data'] : array();
-    $accounts = isset($data['accounts']) && is_array($data['accounts']) ? $data['accounts'] : array();
+    if (!isset($data['accounts']) || !is_array($data['accounts'])) {
+        logModuleCall('adapanel', 'UsageUpdate', '', 'Invalid accounts response');
+        return array('success' => false, 'updated' => 0, 'error' => 'Invalid accounts response');
+    }
+    $accounts = $data['accounts'];
+    $failedReads = max(0, (int) ($data['failedAccountCount'] ?? 0));
+    $failedWrites = 0;
     $serverId = (int) ($params['serverid'] ?? 0);
 
     $guncellenen = 0;
@@ -737,11 +743,16 @@ function adapanel_UsageUpdate(array $params)
                 ->update($degerler);
         } catch (Exception $exception) {
             // Tek satirin yazilamamasi turu durdurmamali; digerleri guncellenmeye devam eder.
+            $failedWrites++;
             logModuleCall('adapanel', 'UsageUpdate', $userName, $exception->getMessage(), $exception->getTraceAsString());
         }
     }
 
-    return array('success' => true, 'updated' => $guncellenen);
+    if ($failedReads || $failedWrites) {
+        logModuleCall('adapanel', 'UsageUpdate', '', "Failed account reads: $failedReads, failed writes: $failedWrites");
+    }
+    return array('success' => $failedReads === 0 && $failedWrites === 0, 'updated' => $guncellenen,
+        'failedReads' => $failedReads, 'failedWrites' => $failedWrites);
 }
 
 // --- kucuk yardimcilar ---

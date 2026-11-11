@@ -122,7 +122,7 @@
         <label><span>{{ t('panel.ftp.certHost') }}</span><input v-model="certificateHost" :disabled="certificateBusy || locked" autocomplete="off" autocapitalize="none" spellcheck="false" /></label>
         <div class="row-actions"><button class="compact" v-bind="writeGate(certificateBusy || !certificateHost.trim())" @click="saveCertificate">{{ t(certificateSaving ? 'panel.ftp.certApplying' : 'panel.ftp.certApply') }}</button></div>
         <dl v-if="certificate?.certificateThumbprint" class="ftp-account-identity">
-          <div><dt>{{ t('panel.ftp.certHost') }}</dt><dd>{{ certificate.hostName }}</dd></div>
+          <div><dt>{{ t('panel.ftp.certHost') }}</dt><dd>{{ certificate.hostNames?.length ? certificate.hostNames.join(', ') : certificate.hostName }}</dd></div>
           <div><dt>{{ t('panel.ftp.certSubject') }}</dt><dd>{{ certificate.certificateSubject || '—' }}</dd></div>
           <div><dt>{{ t('panel.ftp.certThumbprint') }}</dt><dd>{{ certificate.certificateThumbprint }}</dd></div>
           <div><dt>{{ t('panel.ftp.certExpiry') }}</dt><dd>{{ formatCreatedAt(certificate.certificateNotAfterUtc || '') }}</dd></div>
@@ -551,7 +551,7 @@ async function loadTls() {
     tlsAttempted.value = result.verified != null;
     tlsDetails.value = result.detail ?? '';
     certificate.value = result;
-    certificateHost.value = result.hostName ?? '';
+    certificateHost.value = result.hostNames?.length ? result.hostNames.join(', ') : result.hostName ?? '';
     tlsLoaded.value = true;
     tlsLoad.clear();
   } catch (error) {

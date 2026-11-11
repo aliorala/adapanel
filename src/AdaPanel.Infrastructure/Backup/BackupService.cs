@@ -6440,14 +6440,25 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                     continue;
                 }
 
-                siteKokleri[siteAdi] = kok;
                 Directory.CreateDirectory(kok);
+                siteKokleri[siteAdi] = kok;
                 continue;
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            catch (AppException exception) when (exception.HttpStatusCode == 404 && exception.MessageKey == "sites.site_not_found")
             {
                 // Site yok: arşivdeki yapılandırmadan yeniden kurmayı dene.
                 logger?.LogInformation(exception, "Abonelik geri yuklemesi: {Site} IIS'te yok, arsivden kurulacak.", siteAdi);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger?.LogWarning(exception, "Abonelik geri yuklemesi: {Site} hedefi dogrulanamadi.", siteAdi);
+                warnings.Add(new BackupRestoreWarningDto
+                {
+                    MessageKey = "backup.site_target_unavailable",
+                    Target = siteAdi,
+                    Detail = exception.Message
+                });
+                continue;
             }
 
             var kuruldu = await TryRecreateSiteFromArchiveAsync(archive, siteAdi, warnings, cancellationToken);
@@ -6496,11 +6507,6 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             // Panel yedeğindeki tam-sunucu DR yoluyla AYNI kanıtlanmış plan (HTTPS bağlamaları
             // bilerek kurulmaz; sertifika makineye bağlıdır ve SSL ekranından yeniden verilir).
             var (create, extraBindings) = IisSnapshotRestore.ToProvisioningPlan(site);
-            if (!string.IsNullOrWhiteSpace(create.PhysicalPath))
-            {
-                Directory.CreateDirectory(create.PhysicalPath);
-            }
-
             await iisSiteService.CreateSiteAsync(create, cancellationToken);
             foreach (var binding in extraBindings)
             {

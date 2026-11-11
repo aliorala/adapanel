@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Databases;
@@ -1360,36 +1360,103 @@ internal sealed partial class DatabaseService(
         }
     }
 
-    private static async Task<CommandResult> ImportMsSqlAsync(
+    internal static async Task<CommandResult> ImportMsSqlAsync(
         DatabaseConnectionProfile profile,
         string databaseName,
         string sourcePath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<string, string, IReadOnlyDictionary<string, object>, bool, CancellationToken, Task<object?>>? executeSql = null)
     {
         if (string.IsNullOrWhiteSpace(databaseName))
-        {
             throw new AppException("database.name_required", 400, 400);
-        }
 
+        // The normal ImportDumpAsync path and isolated tests use this same orchestration.
+        // Each command gets a fresh master connection: RESTORE can invalidate its connection.
+        executeSql ??= RunSqlAsync;
+        var master = BuildMsSqlConnectionString(profile, "master");
+        var identifier = new SqlCommandBuilder().QuoteIdentifier(databaseName);
+        var parameters = new Dictionary<string, object> { ["@database"] = databaseName };
+        const string readState = "SELECT CONCAT(user_access_desc, '|', state_desc) FROM sys.databases WHERE name = @database";
+        var accessMode = "";
+        var restoreStarted = false;
+        Exception? restoreFailure = null;
+        Exception? cleanupFailure = null;
         try
         {
-            await using var connection = new SqlConnection(BuildMsSqlConnectionString(profile, "master"));
-            await connection.OpenAsync(cancellationToken);
-            await using var command = connection.CreateCommand();
-            command.CommandTimeout = 0;
-            command.CommandText = $"""
-                IF DB_ID(N'{databaseName.Replace("'", "''")}') IS NOT NULL
-                    ALTER DATABASE [{databaseName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-                RESTORE DATABASE [{databaseName}] FROM DISK = @path WITH REPLACE, RECOVERY;
-                ALTER DATABASE [{databaseName}] SET MULTI_USER;
-                """;
-            command.Parameters.AddWithValue("@path", sourcePath);
-            await command.ExecuteNonQueryAsync(cancellationToken);
-            return new CommandResult { ExitCode = 0 };
+            accessMode = (await executeSql(master,
+                "SELECT user_access_desc FROM sys.databases WHERE name = @database", parameters, true, cancellationToken)) as string ?? "";
+            if (accessMode is not ("" or "MULTI_USER" or "RESTRICTED_USER" or "SINGLE_USER"))
+                throw new InvalidDataException("SQL Server returned an unknown database access mode.");
+
+            // Mark before ALTER: it can take effect and then lose its response or be cancelled.
+            restoreStarted = true;
+            if (accessMode is "MULTI_USER" or "RESTRICTED_USER")
+                await executeSql(master, $"ALTER DATABASE {identifier} SET SINGLE_USER WITH ROLLBACK IMMEDIATE",
+                    parameters, false, cancellationToken);
+            await executeSql(master, $"RESTORE DATABASE {identifier} FROM DISK = @path WITH REPLACE, RECOVERY",
+                new Dictionary<string, object> { ["@path"] = sourcePath }, false, cancellationToken);
         }
-        catch (SqlException exception)
+        catch (Exception exception)
         {
-            return new CommandResult { ExitCode = exception.Number, StandardError = exception.Message };
+            restoreFailure = exception;
+        }
+
+        if (restoreStarted)
+        {
+            try
+            {
+                var expected = accessMode.Length == 0 ? "MULTI_USER" : accessMode;
+                var actual = (await executeSql(master, readState, parameters, true, CancellationToken.None)) as string;
+                if (string.IsNullOrWhiteSpace(actual))
+                {
+                    if (accessMode.Length > 0 || restoreFailure is null)
+                        throw new InvalidDataException("SQL Server database is missing after restore.");
+                }
+                else
+                {
+                    if (!actual.StartsWith(expected + "|", StringComparison.Ordinal))
+                    {
+                        await executeSql(master, $"ALTER DATABASE {identifier} SET {expected} WITH ROLLBACK IMMEDIATE",
+                            parameters, false, CancellationToken.None);
+                        actual = (await executeSql(master, readState, parameters, true, CancellationToken.None)) as string;
+                    }
+                    if (!string.Equals(actual, expected + "|ONLINE", StringComparison.Ordinal))
+                        throw new InvalidDataException("SQL Server database access mode or ONLINE state could not be verified.");
+                }
+            }
+            catch (Exception exception)
+            {
+                cleanupFailure = exception;
+            }
+        }
+
+        if (restoreFailure is not null)
+        {
+            if (cleanupFailure is not null)
+                restoreFailure.Data["MsSqlAccessModeCleanupFailure"] = cleanupFailure.Message;
+            if (restoreFailure is SqlException sqlFailure)
+                return new CommandResult { ExitCode = sqlFailure.Number == 0 ? 1 : sqlFailure.Number,
+                    StandardError = sqlFailure.Message + (cleanupFailure is null ? "" : " Database access mode could not be restored: " + cleanupFailure.Message) };
+            // Preserve cancellation and the actual restore error, including its stack/identity.
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(restoreFailure).Throw();
+        }
+        if (cleanupFailure is not null)
+            return new CommandResult { ExitCode = 1,
+                StandardError = "Database access mode could not be restored: " + cleanupFailure.Message };
+        return new CommandResult { ExitCode = 0 };
+
+        static async Task<object?> RunSqlAsync(string connectionString, string sql,
+            IReadOnlyDictionary<string, object> values, bool scalar, CancellationToken token)
+        {
+            await using var connection = new SqlConnection(connectionString);
+            await connection.OpenAsync(token);
+            await using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.CommandTimeout = sql.StartsWith("RESTORE ", StringComparison.Ordinal) ? 0 : 60;
+            foreach (var (name, value) in values) command.Parameters.AddWithValue(name, value);
+            if (scalar) return await command.ExecuteScalarAsync(token);
+            await command.ExecuteNonQueryAsync(token);
+            return null;
         }
     }
 

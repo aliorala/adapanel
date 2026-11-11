@@ -50,7 +50,11 @@
         </label>
         <label v-if="form.taskType === 'url'" class="span-2">
           <span class="field-label">{{ t("panel.tasks.url") }}</span>
-          <input v-model.trim="form.url" :placeholder="t('panel.tasks.urlPlaceholder')" spellcheck="false" />
+          <template v-if="protectedEditUrl">
+            <span>{{ taskUrlDisplay(form.url) }}</span>
+            <button type="button" class="ghost compact" @click="replaceTaskUrl">{{ t("panel.tasks.replaceUrl") }}</button>
+          </template>
+          <input v-else v-model.trim="form.url" :placeholder="t('panel.tasks.urlPlaceholder')" spellcheck="false" autocomplete="off" />
           <small class="field-hint">{{ t("panel.tasks.urlHint") }}</small>
         </label>
 
@@ -82,13 +86,21 @@
 
         <label v-if="form.taskType !== 'url'">
           <span class="field-label">{{ commandFieldLabel }}</span>
-          <input v-model.trim="form.command" :placeholder="commandFieldPlaceholder" spellcheck="false" />
+          <template v-if="editingName && protectingCommand">
+            <span>{{ taskCommandDisplay(form.command) }}</span>
+            <button type="button" class="ghost compact" @click="form.command = ''; protectingCommand = false">{{ t("panel.tasks.replaceValue") }}</button>
+          </template>
+          <input v-else v-model.trim="form.command" :placeholder="commandFieldPlaceholder" spellcheck="false" />
           <small v-if="form.taskType === 'php'" class="field-hint">{{ t("panel.tasks.phpHint") }}</small>
           <small v-else-if="form.taskType === 'script'" class="field-hint">{{ t("panel.tasks.scriptHint") }}</small>
         </label>
         <label v-if="form.taskType !== 'url'">
           <span class="field-label">{{ t("panel.tasks.arguments") }}</span>
-          <input v-model="form.arguments" />
+          <template v-if="editingName && protectingArguments">
+            <span>{{ taskCommandDisplay(form.arguments) }}</span>
+            <button type="button" class="ghost compact" @click="form.arguments = ''; protectingArguments = false">{{ t("panel.tasks.replaceValue") }}</button>
+          </template>
+          <input v-else v-model="form.arguments" />
           <small class="field-hint">{{ t("panel.tasks.argumentsHint") }}</small>
         </label>
 
@@ -214,8 +226,8 @@
         <!-- Komut tek parça uzun bir yol olur; okunması için tek aralıklı yazı tipi, taşmaması
              için hücre içinde kırılıyor (.data-row > * kuralı). -->
         <span class="cell-main cell-command">
-          <strong>{{ item.taskType === "url" ? item.url || item.arguments : item.command }}</strong>
-          <small>{{ item.taskType === "url" ? "-" : item.arguments || "-" }}</small>
+          <strong>{{ item.taskType === "url" ? taskUrlDisplay(item.url || item.arguments) : taskCommandDisplay(item.command) }}</strong>
+          <small>{{ item.taskType === "url" ? "-" : taskCommandDisplay(item.arguments || "-") }}</small>
         </span>
 
         <!-- Zamanlama + SONRAKİ çalışma birlikte: ikisi aynı sorunun parçası ("bu ne zaman
@@ -353,6 +365,7 @@
 </template>
 
 <script setup lang="ts">
+import { taskCommandDisplay, taskUrlDisplay } from "../utils/taskUrlDisplay";
 import { computed, onMounted, reactive, ref, watch, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { createScheduledTask, deleteScheduledTask, getScheduledTasks, addPythonToMachinePath, getScheduledTaskOutput, getScheduledTaskStatus, getTaskEnvironment, runScheduledTask, setScheduledTaskEnabled, stopScheduledTask, type ScheduledTask, type ScheduledTaskOutput, type TaskEnvironment } from "../api/cron";
@@ -561,6 +574,15 @@ async function refresh() {
  * anılır, ayrı bir kimlik yoktur.
  */
 const editingName = ref("");
+const protectingOriginalUrl = ref(false);
+const protectingCommand = ref(false);
+const protectingArguments = ref(false);
+const protectedEditUrl = computed(() => Boolean(editingName.value && protectingOriginalUrl.value && form.taskType === "url"));
+
+function replaceTaskUrl() {
+  form.url = "";
+  protectingOriginalUrl.value = false;
+}
 let draftRevision = 0;
 let draftGeneration = 0;
 watch([form, editingName, formOpen, scriptScope], () => { draftRevision++; }, { deep: true, flush: "sync" });
@@ -574,6 +596,9 @@ watch([form, editingName, formOpen, scriptScope], () => { draftRevision++; }, { 
  */
 function editTask(item: ScheduledTask) {
   draftGeneration++;
+  protectingOriginalUrl.value = item.taskType === "url" && taskUrlDisplay(item.url) !== item.url;
+  protectingCommand.value = taskCommandDisplay(item.command || "") !== (item.command || "");
+  protectingArguments.value = taskCommandDisplay(item.arguments || "") !== (item.arguments || "");
   editingName.value = item.name;
   Object.assign(form, {
     name: item.name,
@@ -672,7 +697,7 @@ async function removeTask(name: string) {
   const task = tasks.value.find((item) => item.name === name);
   const impact = [`${t("panel.tasks.name")}: ${name}`];
   if (task?.command) {
-    impact.push(`${t("panel.tasks.command")}: ${task.command}`);
+    impact.push(`${t("panel.tasks.command")}: ${taskCommandDisplay(task.command)}`);
   }
 
   // Normal onay: tek bir zamanlanmış görev silinir, veri/dosya kaybı yok → ad yazdırmaya gerek yok.
