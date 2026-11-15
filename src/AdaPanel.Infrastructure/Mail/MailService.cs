@@ -3037,6 +3037,8 @@ public sealed partial class MailService(
     }
 
     internal Func<string, string, CancellationToken, Task<CommandResult>>? AcmeProcessRunner { get; init; }
+    internal Func<IReadOnlyCollection<string>, CancellationToken, Task> AcmeHttpPreflight { get; init; } =
+        Ssl.AcmeHttpPreflight.VerifySelfHostingAsync;
 
     internal async Task<bool> TryIssueWithWinAcmeAsync(
         string domain,
@@ -3106,11 +3108,18 @@ public sealed partial class MailService(
             ? "https://acme-staging-v02.api.letsencrypt.org/"
             : "https://acme-v02.api.letsencrypt.org/";
         var args =
-            $"--target iis --siteid {site.Id} --host \"{hostName.Trim()}\" --installation none " +
+            $"--target iis --siteid {site.Id} --host \"{hostName.Trim()}\" --validation selfhosting --installation none " +
             $"--store pemfiles --pemfilespath \"{pemDirectory}\" " +
             $"--emailaddress \"{contactEmail.Trim()}\" --accepttos --baseuri {baseUri}";
-        var result = await (AcmeProcessRunner is { } runner ? runner(wacs, args, cancellationToken)
-            : ProcessRunner.RunAsync(wacs, args, cancellationToken: cancellationToken));
+        var result = await Ssl.AcmeHttpPreflight.ExclusiveAsync(async () =>
+        {
+            await AcmeHttpPreflight([hostName.Trim()], cancellationToken);
+            var latest = ResolveManagedIdentitySite(await iisSiteService.GetSitesAsync(cancellationToken), domain, hostName);
+            if (latest.Id != site.Id || !HasMailHttpBinding(latest, hostName))
+                throw new AppException("mail.certificate_acme_failed", 409, 409, "The IIS validation site changed during the external HTTP-01 probe.");
+            return await (AcmeProcessRunner is { } runner ? runner(wacs, args, cancellationToken)
+                : ProcessRunner.RunAsync(wacs, args, cancellationToken: cancellationToken));
+        }, cancellationToken);
         if (!result.Success || !Directory.EnumerateFiles(pemDirectory, "*-key.pem").Any())
             throw new AppException("mail.certificate_acme_failed", 502, 502, WinAcmeFailureDetails(result));
         return true;

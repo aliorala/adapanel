@@ -22,6 +22,7 @@ public sealed partial class MailEnableWebmail
         string Identity, int Port, string BindingInformation, string Thumbprint, string PreviousThumbprint,
         string PendingThumbprint, string Status, string Revision);
     internal Func<string, string?, StoredCertificate?> StoreCertificateLookup { get; init; } = FindCertificate;
+    internal Func<IReadOnlyCollection<string>, CancellationToken, Task> HttpPreflightAsync { get; init; } = AcmeHttpPreflight.VerifySelfHostingAsync;
     internal Func<string, string, CancellationToken, Task<CommandResult>> IssueCommand { get; init; } =
         (exe, args, token) => ProcessRunner.RunAsync(exe, args, cancellationToken: token, timeout: TimeSpan.FromMinutes(10));
     internal Func<string, CancellationToken, Task<CommandResult>> BindingCommand { get; init; } = ProcessRunner.RunPowerShellAsync;
@@ -140,7 +141,13 @@ public sealed partial class MailEnableWebmail
             if (string.IsNullOrWhiteSpace(executable) || !File.Exists(executable)) throw Failure("win-acme is not installed.");
             await Approve(token);
             var arguments = IssuanceArguments(host, contact);
-            var issued = await IssueCommand(executable, arguments, token);
+            var issued = await AcmeHttpPreflight.ExclusiveAsync(async () =>
+            {
+                await Approve(token);
+                await HttpPreflightAsync([host], token);
+                await Approve(token);
+                return await IssueCommand(executable, arguments, token);
+            }, token);
             token.ThrowIfCancellationRequested();
             if (!issued.Success) throw Failure("win-acme self-hosting issuance failed.");
             certificate = StoreCertificateLookup(host, null);

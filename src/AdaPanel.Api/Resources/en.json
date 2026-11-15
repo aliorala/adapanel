@@ -325,6 +325,10 @@
   "mail.invalid_domain": "Enter a valid mail domain and its mail hostname.",
   "mail.certificate_invalid": "The certificate was not applied: hostname, validity, private key or trust chain could not be verified. Check the complete intermediate chain and matching private key.",
   "ssl.issue_failed_existing_preserved": "Certificate issuance failed. Self-signed fallback was stopped to preserve the existing HTTPS certificate.",
+  "ssl.http01_preflight_failed": "The HTTP-01 challenge could not be verified from an external network.",
+  "ssl.renewal_managed_externally": "This host has an existing win-acme renewal with different options. Review the source and installation steps of that renewal.",
+  "ssl.renewal_verification_failed": "The win-acme renewal configuration, certificate or IIS binding could not be verified.",
+  "ssl.issue_binding_verification_failed": "The certificate was found but its use on the requested IIS HTTPS binding could not be verified.",
   "ssl.certificate_server_auth_required": "This certificate does not permit server authentication. Select a certificate suitable for HTTPS.",
   "mail.certificate_files_unreadable": "The PEM files are missing, incomplete or locked. Wait for renewal to finish, then retry. Keep the certificate, key and chain files with the same name prefix together. The mail certificate was not changed."
 }

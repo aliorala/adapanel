@@ -48,6 +48,15 @@ public sealed class MailAcmeDiagnosticsTests
     }
 
     [Fact]
+    public async Task FailedExternalProofNeverInvokesIssuer()
+    {
+        using var f = new Fixture { Failure = "external-probe" };
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.TryIssueWithWinAcmeAsync("example.test", "mail.example.test", "contact@example.test", false, f.Pem, default));
+        Assert.Equal("ssl.http01_preflight_failed", error.MessageKey);
+        Assert.Equal(0, f.Executions);
+    }
+
+    [Fact]
     public async Task IssuerExitCodeAndSanitizedStdoutStderrSurviveFailure()
     {
         using var f = new Fixture { Failure = "process" };
@@ -129,6 +138,12 @@ public sealed class MailAcmeDiagnosticsTests
             Service = new(area.DosyaDeposu, protector, null!, iis, null!, db,
                 new StalwartRuntime(area.DosyaDeposu, protector, db, new SahteIstemciFabrikasi(new SahteBulut())), NullLogger<MailService>.Instance)
             {
+                AcmeHttpPreflight = (hosts, _) =>
+                {
+                    Assert.Equal("mail.example.test", Assert.Single(hosts));
+                    if (Failure == "external-probe") throw new AppException("ssl.http01_preflight_failed");
+                    return Task.CompletedTask;
+                },
                 AcmeProcessRunner = (_, args, _) =>
                 {
                     Arguments = args; Executions++;

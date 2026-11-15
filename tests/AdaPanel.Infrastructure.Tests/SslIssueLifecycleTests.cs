@@ -101,7 +101,36 @@ public sealed class SslIssueLifecycleTests
         Assert.Equal(f.Name, result.SiteName); Assert.Equal(f.Name, result.HostName);
         Assert.True(result.IsCertificateBound); Assert.True(result.IsPresentInStore);
         Assert.Equal(1, f.Acme); Assert.Equal(1, f.Persists); Assert.Equal(1, f.Bindings);
-        Assert.Single(f.Audits); Assert.Single(await f.Records()); await f.ChangeSite("id");
+        Assert.Single(f.Audits); var saved = Assert.Single(await f.Records());
+        Assert.Equal("fixture", saved.ManagedRenewalId); Assert.Equal(f.Site.Id, saved.ManagedRenewalSiteId);
+        Assert.False(saved.ManagedRenewalStaging); await f.ChangeSite("id");
+    }
+    [Theory, InlineData("missing"), InlineData("thumbprint"), InlineData("san")]
+    public async Task SuccessfulProcessCannotPublishAnUnverifiedRenewal(string fault)
+    {
+        using var f = await Fixture.Create(); f.RenewalFault = fault;
+        var error = Assert.IsType<AppException>(await Capture(() => f.Invoke()));
+        Assert.Equal("ssl.renewal_verification_failed", error.MessageKey);
+        Assert.Equal(1, f.Acme); Assert.Equal(0, f.Persists); Assert.Equal(0, f.Bindings);
+        await f.Unpublished();
+    }
+    [Theory, InlineData("missing", false), InlineData("site", false), InlineData("host", false), InlineData("thumbprint", false), InlineData("catchall", false), InlineData("missing", true), InlineData("site", true), InlineData("host", true), InlineData("thumbprint", true)]
+    public async Task IssuedCertificateWithoutTheExactIisBindingDoesNotPublishSuccess(string fault, bool wildcard)
+    {
+        using var f = await Fixture.Create(UserRole.Administrator); f.BindingFault = fault; f.Request.Wildcard = wildcard;
+        var error = Assert.IsType<AppException>(await Capture(() => f.Invoke()));
+        Assert.Equal("ssl.issue_binding_verification_failed", error.MessageKey);
+        Assert.Equal(1, f.Acme); Assert.Equal(1, f.Persists); await f.Unpublished();
+    }
+
+    [Fact]
+    public async Task OneCorrectIpBindingCannotHideAnotherServingTheWrongCertificate()
+    {
+        using var f = await Fixture.Create();
+        f.BindingFault = "conflicting-ip";
+        var error = Assert.IsType<AppException>(await Capture(() => f.Invoke()));
+        Assert.Equal("ssl.issue_binding_verification_failed", error.MessageKey);
+        await f.Unpublished();
     }
     [Fact]
     public async Task DirectOperatorCallCannotBypassTheControllerRoleBoundary()
@@ -284,11 +313,16 @@ public sealed class SslIssueLifecycleTests
                 Fake<IMailService>((method, args) => method.Name == "SyncWebCertificateAsync"
                     ? f.SyncMail(args) : throw new InvalidOperationException(method.Name)))
             {
+                HttpPreflightAsync = (_, _) => Task.CompletedTask,
+                RenewalRecordsAsync = (_, _, _) => Task.FromResult<IReadOnlyList<System.Text.Json.JsonElement>>(
+                    f.issued && f.RenewalFault != "missing" && f.certificates.Count > 0 ? [f.RenewalRecord()] : []),
                 IssueCommand = async (_, _, token) =>
                 {
                     f.Acme++; await f.Pause("acme", token); f.issued = !f.AcmeFails;
+                    if (f.issued) f.Certificate();
                     await f.Boundary("acme"); return new CommandResult { ExitCode = f.AcmeFails ? 1 : 0, StandardOutput = "fixture", StandardError = "" };
                 },
+                RenewalCertificateLookup = thumb => f.certificates.LastOrDefault(cert => cert.Thumbprint == thumb) is { } cert ? new X509Certificate2(cert) : null,
                 IssueCertificateLookup = _ => f.issued || f.UseExistingCertificate ? f.Certificate() : null,
                 IssueFallbackCertificate = (_, _) => { f.Fallbacks++; return f.Certificate(); },
                 PersistIssuedCertificate = cert =>
@@ -318,10 +352,14 @@ public sealed class SslIssueLifecycleTests
             await f.Area.DosyaDeposu.WriteAsync("config/ssl.json", new[] { new SslCertificateDto { SiteName = f.Name, HostName = f.Name, Port = 443, Thumbprint = "previous-working-certificate" } }, f.Token);
             f.original = await File.ReadAllBytesAsync(f.Area.DosyaDeposu.ResolvePath("config/ssl.json")); return f;
         }
+        internal string? RenewalFault;
+        internal string? BindingFault;
         private X509Certificate2 Certificate()
         {
             using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
             var request = new CertificateRequest("CN=" + Name, key, HashAlgorithmName.SHA256);
+            var san = new SubjectAlternativeNameBuilder(); san.AddDnsName(RenewalFault == "san" ? "other.test" : Name); san.AddDnsName(RenewalFault == "san" ? "*.other.test" : "*." + Name);
+            request.CertificateExtensions.Add(san.Build());
             using var publicCertificate = NonSelfSigned
                 ? request.Create(new X500DistinguishedName("CN=Isolated fixture issuer"), X509SignatureGenerator.CreateForECDsa(key),
                     DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(10), RandomNumberGenerator.GetBytes(16)) : null;
@@ -330,7 +368,22 @@ public sealed class SslIssueLifecycleTests
                 : publicCertificate.CopyWithPrivateKey(key);
             var cert = new X509Certificate2(originalCertificate.Export(X509ContentType.Pfx), (string?)null,
                 X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable);
-            certificates.Add(cert); return cert;
+            certificates.Add(cert); if (UseExistingCertificate && !issued) thumbprint = cert.Thumbprint; return cert;
+        }
+        private System.Text.Json.JsonElement RenewalRecord()
+        {
+            var wildcard = Request.Wildcard;
+            var source = wildcard
+                ? new { Plugin = SslRenewalVerification.ManualSource, AlternativeNames = new[] { "*." + Name, Name } } as object
+                : new { Plugin = SslRenewalVerification.IisSource, IncludeHosts = new[] { Name }, IncludeSiteIds = new[] { Site.Id } };
+            var validation = wildcard
+                ? new { Plugin = SslRenewalVerification.DnsScript, Script = Area.DosyaDeposu.ResolvePath("tools/acme-dns01.ps1") } as object
+                : new { Plugin = SslRenewalVerification.SelfHosting };
+            return System.Text.Json.JsonSerializer.SerializeToElement(new {
+                Id = "fixture", TargetPluginOptions = source, ValidationPluginOptions = validation,
+                InstallationPluginOptions = new[] { new { Plugin = SslRenewalVerification.IisInstallation, SiteId = Site.Id } },
+                History = new[] { new { Success = true, OrderResults = new[] { new { Success = true, Thumbprint = RenewalFault == "thumbprint" ? "FOREIGN" : certificates.Last().Thumbprint } } } }
+            });
         }
         private async Task SyncMail(object?[] args)
         {
@@ -368,8 +421,15 @@ public sealed class SslIssueLifecycleTests
         private async Task<IReadOnlyCollection<IisHttpsBinding>?> ReadBindings(CancellationToken token)
         {
             await Boundary("inventory");
-            return [new IisHttpsBinding { SiteName = Name, BindingInformation = "*:443:" + Name,
-                Thumbprint = thumbprint.Length == 0 ? ExistingBindingThumbprint : thumbprint,
+            if (BindingFault == "missing") return null;
+            if (BindingFault == "conflicting-ip") return
+            [
+                new() { SiteName = Name, BindingInformation = "192.0.2.1:443:" + Name, Thumbprint = thumbprint, CertificateReadable = true },
+                new() { SiteName = Name, BindingInformation = "192.0.2.2:443:" + Name, Thumbprint = "FOREIGN", CertificateReadable = true }
+            ];
+            return [new IisHttpsBinding { SiteName = BindingFault == "site" ? "other-site" : Name,
+                BindingInformation = "*:443:" + (BindingFault == "host" ? "other.test" : BindingFault == "catchall" ? "" : Name),
+                Thumbprint = BindingFault == "thumbprint" ? "FOREIGN" : thumbprint.Length == 0 ? ExistingBindingThumbprint : thumbprint,
                 CertificateReadable = !BindingUnreadable, StoreName = "My" }];
         }
         public async Task ChangeActor(string change)

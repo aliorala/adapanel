@@ -395,6 +395,7 @@ public sealed class MailEnableWebmailProvisioningTests
                 StoreCertificateLookup=(host,preferred)=>!HasCertificate?null:preferred is null?new(Thumb,DateTime.UtcNow.AddDays(90)):
                     Sites.SelectMany(s=>s.Bindings).Any(b=>b.Host==host&&b.Thumbprint.Equals(preferred,StringComparison.OrdinalIgnoreCase))?new(preferred,DateTime.UtcNow.AddDays(30)):null,
                 ExecutableLookup=_=>Task.FromResult(Failure=="missing-wacs"?"":Wacs),
+                HttpPreflightAsync=(hosts,_)=> { Assert.Single(hosts); return Task.CompletedTask; },
                 IssueCommand=(_,args,_)=> {
                     Issues++; IssuedArguments=args; Assert.Contains("--installation none",args); Assert.Contains("--validation selfhosting",args); Assert.Contains("--keepexisting",args);
                     if(Failure!="no-issued-certificate") HasCertificate=true;

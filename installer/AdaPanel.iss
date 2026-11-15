@@ -1,6 +1,6 @@
 #define MyAppName "AdaPanel"
 #ifndef MyAppVersion
-#define MyAppVersion "0.8.153"
+#define MyAppVersion "0.8.154"
 #endif
 #define MyAppPublisher "AdaPanel"
 #define MyAppExeName "AdaPanel.Api.exe"
@@ -55,6 +55,8 @@ Source: "adapanel.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\components.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\scripts\enable-iis-features.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\initialize-panel-certificate.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\scripts\win-acme-nginx-reload.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\scripts\win-acme-nginx-reload.md"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\install-service.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\configure-firewall.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\harden-adapanel.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion

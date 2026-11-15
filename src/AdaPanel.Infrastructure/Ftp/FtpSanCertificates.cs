@@ -85,7 +85,13 @@ public sealed partial class FtpService
             : Directory.EnumerateFiles(component.InstallDir, "wacs.exe", SearchOption.AllDirectories).FirstOrDefault();
         if (executable is null) throw new AppException("ftp.certificate_acme_missing", 409, 409, "Install win-acme and configure the ACME contact email before requesting the shared FTPS certificate.");
         await ApproveInfrastructureAsync(approve, token);
-        var result = await ProcessRunner.RunAsync(executable, args, timeout: TimeSpan.FromMinutes(10), cancellationToken: token);
+        var result = await AcmeHttpPreflight.ExclusiveAsync(async () =>
+        {
+            await ApproveInfrastructureAsync(approve, token);
+            await AcmeHttpPreflight.VerifySelfHostingAsync(hosts, token);
+            await ApproveInfrastructureAsync(approve, token);
+            return await ProcessRunner.RunAsync(executable, args, timeout: TimeSpan.FromMinutes(10), cancellationToken: token);
+        }, token);
         await ApproveInfrastructureAsync(approve, token);
         if (!result.Success) throw new AppException("ftp.certificate_acme_failed", 502, 502,
             "Shared FTPS certificate issuance failed. Existing FTP binding was preserved. Check ACME HTTP-01/DNS reachability and win-acme logs.");

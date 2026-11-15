@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.153",
-  "name": "0.8.153 — FTPS, güvenli site klonlama ve yedek geri yükleme",
-  "body": "## 0.8.153\n\nFTP hizmeti birden fazla alan adını kapsayan sertifikaları destekler. Sertifika uygulama ve yenileme sırasında kayıtlı adlar doğrulanır.\n\nWordPress klonları, bağımsız veritabanı bağlantısı ve site adresi doğrulanana kadar kapalı tutulur. Kurulu sürüm okunamadığında panel bunu gösterir.\n\nSite Kurucu, dosya yayını veya yayın kaydı kesildiğinde önceki dosyaları geri yükler. WHMCS kullanım raporları eksik hesapları ve yazma hatalarını bildirir. Abonelik yedeği geri yüklenirken okunamayan IIS sitesi yeniden oluşturulmaz.\n\nZamanlanmış görev ekranı bağlantılardaki gizli değerleri maskeler. ACME istemcisinin güncel Windows paketinin keşfi ve doğrulanmış indirme kaynağı düzeltildi. Panel ayarlarının kaydı ve site çalışma durumu ölçümleri iyileştirildi.\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
+  "tag_name": "0.8.154",
+  "name": "0.8.154 — ACME doğrulaması, sertifika yenileme ve e-posta iyileştirmeleri",
+  "body": "## 0.8.154\n\nACME HTTP-01 sertifika işlemleri artık ön doğrulama ve eşgüdümlü meydan okuma kontrolleri yapıyor. Panel tarafından yönetilen yenilemelerin sahipliği izleniyor; yeni sertifikanın hedef IIS bağlarında kullanıldığı doğrulanıyor.\n\nFTPS ve MailEnable webmail sertifika talepleri de ön doğrulamadan geçiyor. Başarısız taleplerde mevcut FTP sertifika bağlaması korunuyor. Yenileme tanılama ve hata raporları iyileştirildi.\n\nHarici TLS sonlandıran Nginx kurulumları için, mevcut win-acme yenileme kaydına bağlanabilen güvenli bir test ve graceful reload betiği eklendi. Betik sertifika/anahtar taşımaz ve Nginx yapılandırma dökümünü loglamaz.\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
 }

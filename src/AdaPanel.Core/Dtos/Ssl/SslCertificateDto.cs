@@ -26,6 +26,13 @@ public sealed class SslCertificateDto
     /// </summary>
     public string Source { get; set; } = string.Empty;
 
+    // Issuance ownership is published atomically with the certificate. Imported and
+    // legacy discovered certificates deliberately have no panel-managed renewal id.
+    public string? ManagedRenewalId { get; set; }
+    public long? ManagedRenewalSiteId { get; set; }
+    public bool ManagedRenewalStaging { get; set; }
+
+
     /// <summary>
     /// Sitede gerçekten bir HTTPS bağlaması var mı. <c>null</c> = ÖLÇÜLEMEDİ.
     /// <para>

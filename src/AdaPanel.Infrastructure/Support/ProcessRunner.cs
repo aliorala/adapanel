@@ -83,6 +83,10 @@ internal static class ProcessRunner
         }
 
         ConfigureWindowsPowerShellEnvironment(startInfo);
+        // win-acme derives some option names using CurrentCulture. Set this on the
+        // child after inheriting its environment, before the .NET runtime starts.
+        if (Path.GetFileName(fileName).Equals("wacs.exe", StringComparison.OrdinalIgnoreCase))
+            startInfo.Environment["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1";
 
         using var process = new Process
         {
