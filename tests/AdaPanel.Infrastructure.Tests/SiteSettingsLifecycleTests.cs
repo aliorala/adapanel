@@ -5,6 +5,7 @@ using AdaPanel.Api.Controllers;
 using AdaPanel.Api.Security;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
+using AdaPanel.Core.Dtos.Php;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Dtos.Waf;
 using AdaPanel.Core.Entities;
@@ -273,6 +274,7 @@ public sealed class SiteSettingsLifecycleTests
             Assert.Equal(1, f.ProbeCalls);
         }
         else Assert.Equal(1, f.Published);
+        Assert.Equal(route == "root" ? 1 : 0, f.LoggingCalls);
     }
 
     [Theory]
@@ -293,6 +295,17 @@ public sealed class SiteSettingsLifecycleTests
 
     private static async Task<Exception?> Capture(Func<Task> action)
     { try { await action(); return null; } catch (Exception error) { return error; } }
+
+    [Fact]
+    public async Task Document_root_change_reports_logging_failure_for_the_new_root()
+    {
+        using var f = await Fixture.Create();
+        f.LoggingStatus = "failed";
+        var result = await f.Provisioning.SetDocumentRootAsync(f.Name, f.RequestedPath);
+        Assert.Equal(f.RequestedPath, result.PhysicalPath);
+        Assert.Equal("failed", result.PhpErrorLogging?.Status);
+        Assert.Equal(1, f.LoggingCalls);
+    }
 
     private sealed class Fixture : IDisposable
     {
@@ -318,6 +331,8 @@ public sealed class SiteSettingsLifecycleTests
         public WebAdministrationSiteService Native { get; }
         public SiteProvisioningService Provisioning { get; private set; } = null!;
         public int Commits, Published, AclCalls, WafCalls, PhpCalls, ProbeCalls;
+        public int LoggingCalls;
+        public string LoggingStatus = "unverified";
         public List<string> Audits { get; } = [];
         public Func<Task>? BeforeService;
         public Action? AfterCommit;
@@ -356,7 +371,16 @@ public sealed class SiteSettingsLifecycleTests
             });
             var audit = Fake<IAuditService>((method, args) => { f.Audits.Add(method.Name); return Task.CompletedTask; });
             f.Provisioning = new SiteProvisioningService(f.Native, Fake<IComponentBootstrapper>(), Fake<IPhpService>((method, _) =>
-                { if (method.Name != "EnsureSiteIsolationAsync") throw new InvalidOperationException(method.Name); f.PhpCalls++; return Task.CompletedTask; }),
+                {
+                    if (method.Name == nameof(IPhpService.EnsureSiteErrorLoggingAsync))
+                    {
+                        Assert.Equal(f.RequestedPath, f.Current.PhysicalPath);
+                        f.LoggingCalls++;
+                        return Task.FromResult(new PhpErrorLoggingDto { Status = f.LoggingStatus, Detail = "fixture: no real IIS probe" });
+                    }
+                    if (method.Name != nameof(IPhpService.EnsureSiteIsolationAsync)) throw new InvalidOperationException(method.Name);
+                    f.PhpCalls++; return Task.CompletedTask;
+                }),
                 Fake<IAspNetService>(), Fake<IAppRuntimeService>(), Fake<ISiteDefaultsService>(),
                 Fake<IWafService>((method, _) =>
                 { if (method.Name != "ApplyFolderAclAsync") throw new InvalidOperationException(method.Name); f.WafCalls++; return Task.FromResult(new SiteSecurityConfigurationDto()); }),

@@ -40,6 +40,8 @@ public sealed class SiteProvisioningMigrationStarterTests
         Assert.Equal(0, fixture.UnexpectedCalls); Assert.Equal(0, fixture.DeleteCalls);
         Assert.Equal(1, fixture.PermissionCommands); Assert.Equal(1, fixture.WafCalls); Assert.Equal(1, fixture.PhpIsolationCalls);
         Assert.Equal(ExpectedHandler(profile), fixture.RuntimeCalls.SingleOrDefault() ?? "none");
+        Assert.Equal(0, fixture.LoggingCalls);
+        Assert.Null(site.PhpErrorLogging);
     }
 
     [Theory]
@@ -54,11 +56,18 @@ public sealed class SiteProvisioningMigrationStarterTests
     public async Task Normal_hosting_keeps_its_runtime_starter_and_default_provisioning_behavior(string profile, string starter)
     {
         using var fixture = new Fixture(importedContent: false);
-        await fixture.Provision(profile, migration: false);
+        var site = await fixture.Provision(profile, migration: false);
         Assert.Equal(1, fixture.DefaultsCalls); Assert.Equal(0, fixture.UnexpectedCalls);
         if (starter.Length > 0) Assert.True(File.Exists(Path.Combine(fixture.SiteRoot, starter)), "Expected normal hosting starter: " + starter);
         if (profile is "auto" or "mixed") Assert.True(File.Exists(Path.Combine(fixture.SiteRoot, "php-info.php")));
         Assert.Equal(ExpectedHandler(profile), fixture.RuntimeCalls.SingleOrDefault() ?? "none");
+        var hasPhp = profile is "php" or "auto" or "mixed";
+        Assert.Equal(hasPhp ? 1 : 0, fixture.LoggingCalls);
+        if (hasPhp)
+        {
+            Assert.Equal("unverified", site.PhpErrorLogging?.Status);
+            Assert.True(fixture.Events.IndexOf("logging") > fixture.Events.IndexOf("final-permission"));
+        }
     }
 
     [Fact]
@@ -86,6 +95,17 @@ public sealed class SiteProvisioningMigrationStarterTests
     private static string ExpectedHandler(string profile) => profile switch
     { "auto" or "mixed" => "mixed", "static" => "none", _ => profile };
 
+    [Fact]
+    public async Task Logging_failure_is_returned_to_create_screen_without_false_success()
+    {
+        using var fixture = new Fixture(false) { LoggingStatus = "failed" };
+        var site = await fixture.Provision("php", migration: false);
+        Assert.Equal("failed", site.PhpErrorLogging?.Status);
+        Assert.Equal("fixture logging could not be verified", site.PhpErrorLogging?.Detail);
+        Assert.Equal(0, fixture.DeleteCalls);
+        Assert.True(fixture.Events.IndexOf("logging") > fixture.Events.IndexOf("final-permission"));
+    }
+
     private sealed class Fixture : IDisposable
     {
         internal readonly string Root = Path.Combine(Path.GetTempPath(), "ada-migration-starter-" + Guid.NewGuid().ToString("N"));
@@ -95,6 +115,9 @@ public sealed class SiteProvisioningMigrationStarterTests
         internal bool PhpInstalled = true;
         internal SiteDto? Current;
         internal readonly List<string> RuntimeCalls = [];
+        internal readonly List<string> Events = [];
+        internal int LoggingCalls;
+        internal string LoggingStatus = "unverified";
         internal int DefaultsCalls, PermissionCommands, WafCalls, PhpIsolationCalls, DeleteCalls, UnexpectedCalls;
         private readonly SiteProvisioningService service;
         internal Fixture(bool importedContent)
@@ -134,6 +157,7 @@ public sealed class SiteProvisioningMigrationStarterTests
             {
                 nameof(IPhpService.SetSitePhpVersionAsync) => SetPhp((SetSitePhpVersionRequest)args![1]!),
                 nameof(IPhpService.EnsureSiteIsolationAsync) => Isolate(),
+                nameof(IPhpService.EnsureSiteErrorLoggingAsync) => Logging(),
                 _ => throw Unexpected(method.Name)
             });
             var asp = Fake<IAspNetService>((method, args) => method.Name switch
@@ -154,7 +178,7 @@ public sealed class SiteProvisioningMigrationStarterTests
             var waf = Fake<IWafService>((method, _) => method.Name == nameof(IWafService.ApplyFolderAclAsync) ? Waf() : throw Unexpected(method.Name));
             service = new SiteProvisioningService(sites, components, php, asp, app, defaults, waf, NullLogger<SiteProvisioningService>.Instance, gates)
             {
-                RunPermissionCommand = (_, _, token) => { token.ThrowIfCancellationRequested(); PermissionCommands++; return Task.FromResult(new CommandResult { ExitCode = 0 }); },
+                RunPermissionCommand = (_, _, token) => { token.ThrowIfCancellationRequested(); PermissionCommands++; Events.Add("final-permission"); return Task.FromResult(new CommandResult { ExitCode = 0 }); },
                 ProbePermission = (_, _) => new(FolderWriteAccessProbe.Access.Granted, "fixture measurement"),
                 PublishPhpEntry = _ => throw Unexpected("PublishPhpEntry"),
                 PublishFrameworkRewrite = _ => throw Unexpected("PublishFrameworkRewrite")
@@ -168,7 +192,9 @@ public sealed class SiteProvisioningMigrationStarterTests
         private Task Delete() => SiteMutationGuard.RunMutationAsync(gates, Name, creating: false, () =>
         { DeleteCalls++; Current = null; return Task.FromResult(0); }, default);
         private Task<SitePhpAssignmentDto> SetPhp(SetSitePhpVersionRequest request)
-        { Assert.Equal("php-8.3", request.ComponentId); RuntimeCalls.Add("php"); return Task.FromResult(new SitePhpAssignmentDto { SiteName = Name, ComponentId = request.ComponentId }); }
+        { Assert.Equal("php-8.3", request.ComponentId); Assert.True(request.DeferErrorLogging); RuntimeCalls.Add("php"); return Task.FromResult(new SitePhpAssignmentDto { SiteName = Name, ComponentId = request.ComponentId }); }
+        private Task<PhpErrorLoggingDto> Logging()
+        { LoggingCalls++; Events.Add("logging"); return Task.FromResult(new PhpErrorLoggingDto { Status = LoggingStatus, Detail = "fixture logging could not be verified" }); }
         private Task Isolate() { PhpIsolationCalls++; return Task.CompletedTask; }
         private Task<AspSiteConfigurationDto> Asp(string profile, object request)
         {

@@ -95,7 +95,6 @@
   "panel.mail.relayRecover": "Önceki ayarları geri yükle",
   "panel.mail.relayRecoverConfirm": "Yarım kalan işlemden önceki röle ayarları geri yüklensin mi?",
   "panel.mail.relayRecoverImpact": "SMTP hizmeti yeniden başlatılabilir. Yeni röle ayarı uygulanmaz; önceki yönlendirme ve kimlik bilgileri korunur.",
-
   "mail.relay_unmeasured_route": "Mevcut relay hedefi eksiksiz okunamadı. Çalışan yönlendirme değiştirilmedi.",
   "mail.relay_tls_failed": "Relay bağlantısı, STARTTLS veya sertifika doğrulaması başarısız. Ayarlar kaydedilmedi.",
   "mail.relay_rollback_failed": "Relay değişikliği başarısız ve önceki ayarlar tam geri yüklenemedi. SMTP hizmeti ve relay ayarlarını kontrol edin.",
@@ -6689,5 +6688,18 @@
   "panel.fullMigration.state.not_started": "Başlatılmadı",
   "migration.dns_management_format_unsupported": "Bir DNS kaydı mevcut panelin okuma ve yönetim biçimiyle uyumlu değil. DNS aktarımını seçimden çıkarın veya kaydı elle değerlendirin; özgün paket korunur.",
   "migration.database_rename_unsupported": "Kaynak döküm veritabanı adına bağlı SQL içerebilir. Bu göç akışında veritabanı adı korunur; isim değiştirerek içe aktarma desteklenmiyor.",
-  "panel.fullMigration.databaseNamePreserved": "Veritabanının adı korunur. Hedefte aynı ad varsa aktarım engellenir; mevcut veritabanı silinmez veya üzerine yazılmaz."
+  "panel.fullMigration.databaseNamePreserved": "Veritabanının adı korunur. Hedefte aynı ad varsa aktarım engellenir; mevcut veritabanı silinmez veya üzerine yazılmaz.",
+  "panel.php.productionErrors": "Üretim sitelerinde display_errors kapalı tutulur; hatalar günlük dosyasına yazılır.",
+  "panel.php.loggingPath": "Günlük yolu",
+  "panel.php.loggingCacheHint": "PHP önbelleği nedeniyle sonuç bekleniyor. {seconds} saniye sonra yeniden doğrulayın.",
+  "php.logging.verified": "Gerçek PHP isteğiyle günlük yazımı doğrulandı.",
+  "php.logging.unverified": "Ayarlar kaydedildi; PHP günlük yazımı henüz doğrulanmadı. Günlük durumunu inceleyin.",
+  "panel.php.loggingManaged": "Saatlik kontrolde 50 MiB üzerindeki günlük arşivlenir. Arşivler süresiz saklanır; otomatik silinmez. Bu bir disk kotası değildir.",
+  "panel.php.loggingCustom": "Bu günlük panel tarafından arşivlenmez; mevcut kayıtlar korunur.",
+  "panel.php.loggingVerify": "Günlük yazımını yeniden doğrula",
+  "panel.php.loggingVerifying": "Günlük yazımı doğrulanıyor…",
+  "panel.php.loggingVerified": "Günlük yazımı doğrulandı",
+  "panel.php.loggingFailed": "Günlük yazımı doğrulanamadı",
+  "panel.php.loggingPending": "Günlük yazımı doğrulaması bekleniyor",
+  "panel.php.loggingUnverified": "Günlük yazımı doğrulanmadı"
 }

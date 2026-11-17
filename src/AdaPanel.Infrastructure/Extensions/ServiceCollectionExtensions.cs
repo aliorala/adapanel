@@ -118,6 +118,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDnsInspectionService>(provider => (Dns.DnsService)provider.GetRequiredService<IDnsService>());
         services.AddScoped<IRdnsService, Dns.RdnsService>();
         services.AddScoped<IPhpService, Php.PhpService>();
+        services.AddScoped<Php.PhpSiteLogMaintenance>();
         services.AddScoped<IAspNetService, AspNet.AspNetService>();
         services.AddScoped<IAppRuntimeService, AppRuntimes.AppRuntimeService>();
         services.AddScoped<IAppRuntimeInventoryService, AppRuntimes.AppRuntimeInventoryService>();

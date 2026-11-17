@@ -2,6 +2,7 @@ namespace AdaPanel.Core.Dtos.Sites;
 
 public sealed class SiteDto
 {
+    public AdaPanel.Core.Dtos.Php.PhpErrorLoggingDto? PhpErrorLogging { get; set; }
     public long Id { get; init; }
 
     public string Name { get; init; } = string.Empty;

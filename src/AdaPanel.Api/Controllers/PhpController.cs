@@ -98,7 +98,7 @@ public sealed class PhpController(
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
 
-        var notice = assignment.HandlerOrderNoticeKey;
+        var notice = assignment.ErrorLogging?.Status != "verified" ? "php.logging.unverified" : assignment.HandlerOrderNoticeKey;
         return Ok(ApiResponse<SitePhpAssignmentDto>.Ok(
             assignment,
             notice.Length > 0 ? notice : "php.assignment.success"));
@@ -144,7 +144,16 @@ public sealed class PhpController(
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
 
-        return Ok(ApiResponse<SitePhpSettingsDto>.Ok(settings, "php.settings.success"));
+        return Ok(ApiResponse<SitePhpSettingsDto>.Ok(settings,
+            settings.ErrorLogging?.Status == "verified" ? "php.settings.success" : "php.logging.unverified"));
+    }
+
+    [HttpPost("/api/v1/sites/{siteName}/php/logging/verify")]
+    public async Task<ActionResult<ApiResponse<PhpErrorLoggingDto>>> VerifySiteLoggingAsync(string siteName, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        var result = await phpService.VerifySiteErrorLoggingAsync(siteName, cancellationToken);
+        return Ok(ApiResponse<PhpErrorLoggingDto>.Ok(result, result.Status == "verified" ? "php.logging.verified" : "php.logging.unverified"));
     }
 
     // GENEL php.ini ayarları (phpMyAdmin/Adminer dahil tüm PHP araçlarının limitleri). Server-level → admin-only.

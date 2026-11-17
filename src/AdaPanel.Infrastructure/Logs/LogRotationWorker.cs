@@ -53,6 +53,9 @@ public sealed class LogRotationWorker(
                 {
                     logger.LogInformation("Log dondurme turu tamamlandi.");
                 }
+                // Separate policy: only newly panel-managed PHP logs are archived at 50 MiB.
+                // Existing/custom logs and every archive are retained, never auto-deleted here.
+                await scope.ServiceProvider.GetRequiredService<Php.PhpSiteLogMaintenance>().RunAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

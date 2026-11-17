@@ -27,6 +27,29 @@ public sealed class PhpService(
     IIisSiteService iisSiteService,
     ILogger<PhpService> logger) : IPhpService
 {
+    internal PhpSiteLogConfiguration? SiteLogConfiguration { get; init; }
+    internal Func<IDisposable> SiteAssignmentManagerFactory { get; init; } = CreateServerManager;
+    internal PhpSiteLogProbe SiteLogProbe { get; init; } = new();
+    private PhpSiteLogConfiguration LoggingConfiguration => SiteLogConfiguration ?? new(new PhpSiteLogHttpProtection(concurrencyLock).EnsureAsync);
+
+    public async Task<PhpErrorLoggingDto> EnsureSiteErrorLoggingAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        // Panel-owned Roundcube/phpMyAdmin/Adminer manage their own private logs and .user.ini.
+        // Match the existing isolation exemption; tenant setup must not rewrite these tools.
+        if (siteName.StartsWith(AdaPanel.Infrastructure.Iis.ManagedAppPoolName.Prefix, StringComparison.OrdinalIgnoreCase))
+            return new PhpErrorLoggingDto { Detail = "Panel araç sitesinin günlüğü kendi bileşeni tarafından yönetiliyor." };
+        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        var plan = await LoggingConfiguration.PrepareAsync(site, cancellationToken);
+        return await SiteLogProbe.VerifyAsync(site, plan, cancellationToken);
+    }
+
+    public async Task<PhpErrorLoggingDto> VerifySiteErrorLoggingAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        var plan = await LoggingConfiguration.InspectAsync(site, cancellationToken);
+        return await SiteLogProbe.VerifyAsync(site, plan, cancellationToken);
+    }
+
     internal Func<CancellationToken, Task> RefreshPhpProcessesAsync { get; init; } = async token =>
         await AdaPanel.Infrastructure.Support.ProcessRunner.RunAsync("taskkill.exe", "/f /im php-cgi.exe", cancellationToken: token);
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
@@ -365,7 +388,7 @@ public sealed class PhpService(
             var assignment = await concurrencyLock.RunExclusiveAsync(() =>
             {
                 bool basaKondu;
-                using (var serverManager = CreateServerManager())
+                using (var serverManager = SiteAssignmentManagerFactory())
                 {
                     EnsureSiteExists(serverManager, siteName);
                     EnsureFastCgiApplication(serverManager, executablePath);
@@ -379,7 +402,7 @@ public sealed class PhpService(
                 var siralama = HandlerOrderMeasurement.Olculemedi(basaKondu);
                 try
                 {
-                    using var freshServerManager = CreateServerManager();
+                    using var freshServerManager = SiteAssignmentManagerFactory();
                     siralama = HandlerOrderMeasurement.Olc(
                         IisAccess.SnapshotHandlers(IisAccess.GetHandlersCollection(freshServerManager, siteName)),
                         handlerName,
@@ -419,6 +442,8 @@ public sealed class PhpService(
                 logger.LogWarning(isolationException, "Site PHP izolasyonu yazılamadı (en iyi çaba): {Site}", siteName);
             }
 
+            if (!request.DeferErrorLogging)
+                assignment.ErrorLogging = await EnsureSiteErrorLoggingAsync(siteName, cancellationToken);
             return assignment;
         }
         catch (AppException)
@@ -461,6 +486,7 @@ public sealed class PhpService(
         // İZOLASYON DURUMU .user.ini'DEN OKUNMAZ. Tek kaynak paylaşılan php.ini'deki [PATH=] bloğudur;
         // .user.ini kiracının silebildiği bir dosyadır, oradan okumak "açık" diye yalan söyleyebilirdi.
         dto.OpenBasedirEnabled = await IsSiteIsolatedAsync(site.Name, cancellationToken);
+        dto.ErrorLogging = PhpSiteLogProbe.Describe(await LoggingConfiguration.InspectAsync(site, cancellationToken));
         return dto;
     }
 
@@ -619,6 +645,7 @@ public sealed class PhpService(
             }
 
             var iniPath = Path.Combine(site.PhysicalPath, ".user.ini");
+            PhpSiteLogConfiguration.EnsureSafePath(iniPath);
             using var iniLease = await PhpIniFile.EnterAsync(iniPath, cancellationToken);
             if (File.Exists(iniPath))
             {
@@ -652,12 +679,17 @@ public sealed class PhpService(
         }
 
         var iniPath = Path.Combine(site.PhysicalPath, ".user.ini");
+        PhpSiteLogConfiguration.EnsureSafePath(iniPath);
         using var iniLease = await PhpIniFile.EnterAsync(iniPath, cancellationToken);
         var lines = File.Exists(iniPath)
             ? await File.ReadAllLinesAsync(iniPath, cancellationToken)
             : ["; AdaPanel - site PHP ayarları (.user.ini, per-dizin)"];
         // Panelin beş alanı güncellenir; uygulamanın oturum, bootstrap ve özel ayarları korunur.
-        await PhpIniFile.PublishLinesAsync(iniPath, UpdateIniSettings(lines, request), cancellationToken);
+        var siteLines = UpdateIniSettings(lines, request);
+        // Tenant sites stay in production mode even if logging setup subsequently fails.
+        SetIniDirective(siteLines, "display_errors", "Off");
+        PhpSiteLogConfiguration.EnsureSafePath(iniPath);
+        await PhpIniFile.PublishLinesAsync(iniPath, siteLines, cancellationToken);
         iniLease.Dispose();
 
         // İZOLASYON: istek bunu SÖYLEMİYORSA (null) mevcut durum KORUNUR.
@@ -694,7 +726,10 @@ public sealed class PhpService(
         // yükselt ki uzun işlemler (büyük import vb.) "500 timeout (0x80070102)" vermesin. Raise-only, global FastCGI.
         await RaiseFastCgiTimeoutAsync(FastCgiSecondsFor(request.MaxExecutionTime), cancellationToken);
 
-        return await GetSitePhpSettingsAsync(siteName, cancellationToken);
+        var logging = await EnsureSiteErrorLoggingAsync(siteName, cancellationToken);
+        var result = await GetSitePhpSettingsAsync(siteName, cancellationToken);
+        result.ErrorLogging = logging;
+        return result;
     }
 
     public async Task<SitePhpSettingsDto> GetGlobalPhpSettingsAsync(CancellationToken cancellationToken = default)

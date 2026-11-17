@@ -60,6 +60,10 @@ public sealed class SiteProvisioningService(
             if (!request.MigrationFreshOnly)
                 _ = await siteDefaultsService.EnsureDefaultsAsync(site, cancellationToken);
             await GrantSiteWritableAsync(site, cancellationToken);
+            // Auto uses mixed handlers and bypasses SetSitePhpVersionAsync. Verify only after
+            // the final pool ACLs are in place; a partial outcome must reach the create screen.
+            if (!request.MigrationFreshOnly && (profile is "php" or "auto" or "mixed") && site.PhpErrorLogging?.Status != "failed")
+                site.PhpErrorLogging = await phpService.EnsureSiteErrorLoggingAsync(site.Name, cancellationToken);
             await target.RunAsync(_ => Task.CompletedTask, cancellationToken);
             return site;
         }
@@ -188,6 +192,18 @@ public sealed class SiteProvisioningService(
 
         cancellationToken.ThrowIfCancellationRequested();
         await IsolateSiteAsync(site, cancellationToken);
+        try
+        {
+            var root = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
+            var marker = Path.Combine(root, Php.PhpSiteLogConfiguration.DirectoryName, Php.PhpSiteLogConfiguration.ManagedMarker);
+            if (File.Exists(marker) && !Php.PhpSiteLogConfiguration.RestoreManagedMarkerAfterAclRepair(root))
+                throw new IOException("Mevcut PHP günlük yönetim işareti güvenilir biçimde onarılamadı.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            site.PhpErrorLogging = new PhpErrorLoggingDto { Status = "failed", Detail = "PHP günlük arşivleme işaretinin izinleri onarılamadı: " + ex.Message };
+            logger.LogWarning(ex, "PHP günlük yönetim işareti korunamadı: {Site}", site.Name);
+        }
     }
 
     /// <summary>
@@ -315,6 +331,8 @@ public sealed class SiteProvisioningService(
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        // A document-root change must not silently leave PHP writing to the shared runtime.
+        site.PhpErrorLogging = await phpService.EnsureSiteErrorLoggingAsync(site.Name, cancellationToken);
         return site;
     }
 
@@ -397,6 +415,11 @@ public sealed class SiteProvisioningService(
             : ProbePermission(site.PhysicalPath, principal);
 
         var sonuc = BuildRepairResult(site, principal, olcum);
+        if (site.PhpErrorLogging is { Status: "failed" } logFailure)
+        {
+            sonuc.State = SitePermissionRepairResultDto.StateUnmeasured;
+            sonuc.Detail += " " + logFailure.Detail;
+        }
 
         if (!sonuc.IsGranted)
         {
@@ -522,7 +545,7 @@ public sealed class SiteProvisioningService(
                 if (!request.MigrationFreshOnly) WritePhpStarter(site);
                 await phpService.SetSitePhpVersionAsync(
                     site.Name,
-                    new SetSitePhpVersionRequest { ComponentId = componentId },
+                    new SetSitePhpVersionRequest { ComponentId = componentId, DeferErrorLogging = true },
                     cancellationToken);
                 return;
             }

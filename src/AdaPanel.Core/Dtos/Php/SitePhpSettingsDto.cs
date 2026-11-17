@@ -8,6 +8,7 @@ namespace AdaPanel.Core.Dtos.Php;
 /// </summary>
 public sealed class SitePhpSettingsDto
 {
+    public PhpErrorLoggingDto? ErrorLogging { get; set; }
     public string SiteName { get; set; } = string.Empty;
 
     public string MemoryLimit { get; set; } = "256M";

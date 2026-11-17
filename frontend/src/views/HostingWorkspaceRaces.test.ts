@@ -118,6 +118,15 @@ it("preserves normal read and settings-save behavior", async () => {
   expect(updateSiteHostingSettings).toHaveBeenCalledWith("a.test", expect.objectContaining({ redirectUrl: "https://target.test", defaultDocuments: ["index.php"] }));
   expect(state.notice).toBe("panel.hosting.saved"); expect(state.busy).toBe(false);
 });
+
+it("surfaces unverified PHP logging after a document-root update", async () => {
+  const state = await mount(); state.documentRoot = "C:/sites/a/public";
+  vi.spyOn(useSitesStore(), "fetchSites").mockResolvedValue([]);
+  vi.mocked(updateDocumentRoot).mockResolvedValue({phpErrorLogging:{status:"failed",detail:"PHP write denied"}} as Awaited<ReturnType<typeof updateDocumentRoot>>);
+  await state.saveDocumentRoot();
+  expect(state.notice).toBe("PHP write denied");
+  expect(state.notice).not.toBe("panel.hosting.documentRootSaved");
+});
 it("does not apply a response from before leaving and returning to the same site", async () => {
   const state = await mount(), pending = deferred<SiteHostingSettings>(); vi.mocked(updateSiteHostingSettings).mockReturnValueOnce(pending.promise);
   const saving = state.save(); await selectSite("b.test"); await selectSite("a.test"); state.errorPagesText = "404 /new-visit.html";

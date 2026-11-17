@@ -395,7 +395,8 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         }, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         await WriteAuditAsync("sites.document_root.updated", siteName, cancellationToken, ayrinti: site.PhysicalPath);
-        return Ok(ApiResponse<SiteDto>.Ok(site, "sites.document_root.updated"));
+        return Ok(ApiResponse<SiteDto>.Ok(site, site.PhpErrorLogging?.Status == "verified"
+            ? "sites.document_root.updated" : "php.logging.unverified"));
     }
 
     private async Task<bool> IsDocumentRootAllowedAsync(SiteDto current, string requested, CancellationToken token)
@@ -709,6 +710,8 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         await WriteAuditAsync("sites.create.completed", site.Name, cancellationToken);
 
         var result = new SiteCreationResultDto { Site = site };
+        if (site.PhpErrorLogging is { Status: not "verified" } logging)
+            result.Warnings.Add("PHP: " + logging.Detail);
 
         // ALT ALAN ADI: yeni site başka bir yönetilen sitenin ALTINDAysa, üst bölgeye A kaydı düşer.
         //

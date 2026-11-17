@@ -5,6 +5,11 @@ namespace AdaPanel.Core.Interfaces;
 
 public interface IPhpService
 {
+    Task<PhpErrorLoggingDto> EnsureSiteErrorLoggingAsync(string siteName, CancellationToken cancellationToken = default)
+        => Task.FromResult(new PhpErrorLoggingDto { Detail = "PHP günlük yazımı doğrulanmadı." });
+
+    Task<PhpErrorLoggingDto> VerifySiteErrorLoggingAsync(string siteName, CancellationToken cancellationToken = default)
+        => Task.FromResult(new PhpErrorLoggingDto { Detail = "PHP günlük yazımı doğrulanmadı." });
     Task<IReadOnlyCollection<PhpVersionDto>> GetInstalledVersionsAsync(CancellationToken cancellationToken = default);
 
     Task<ComponentInstallResultDto> InstallVersionAsync(

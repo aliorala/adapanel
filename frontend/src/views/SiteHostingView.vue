@@ -807,12 +807,15 @@ async function save() {
 async function saveDocumentRoot() {
   const path = documentRoot.value.trim();
   if (!path) return;
+  let loggingWarning = "";
   await mutate(async context => {
-    await updateDocumentRoot(context.site, path);
+    const saved = await updateDocumentRoot(context.site, path);
     if (!context.current()) return;
+    if (saved?.phpErrorLogging?.status !== "verified")
+      loggingWarning = saved?.phpErrorLogging?.detail || t("panel.php.loggingUnverified");
     await sitesStore.fetchSites();
   }, () => {
-    showNotice(t("panel.hosting.documentRootSaved"), false);
+    showNotice(loggingWarning || t("panel.hosting.documentRootSaved"), !!loggingWarning);
   });
 }
 

@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.154",
-  "name": "0.8.154 — ACME doğrulaması, sertifika yenileme ve e-posta iyileştirmeleri",
-  "body": "## 0.8.154\n\nACME HTTP-01 sertifika işlemleri artık ön doğrulama ve eşgüdümlü meydan okuma kontrolleri yapıyor. Panel tarafından yönetilen yenilemelerin sahipliği izleniyor; yeni sertifikanın hedef IIS bağlarında kullanıldığı doğrulanıyor.\n\nFTPS ve MailEnable webmail sertifika talepleri de ön doğrulamadan geçiyor. Başarısız taleplerde mevcut FTP sertifika bağlaması korunuyor. Yenileme tanılama ve hata raporları iyileştirildi.\n\nHarici TLS sonlandıran Nginx kurulumları için, mevcut win-acme yenileme kaydına bağlanabilen güvenli bir test ve graceful reload betiği eklendi. Betik sertifika/anahtar taşımaz ve Nginx yapılandırma dökümünü loglamaz.\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
+  "tag_name": "0.8.155",
+  "name": "0.8.155 — PHP siteleri için güvenilir hata günlükleri",
+  "body": "## 0.8.155\n\nPHP sitelerinde hata günlükleri siteye özel, uygulama havuzuna yazılabilir ve HTTP erişimine kapalı bir konumda yapılandırılır. Mevcut .user.ini ayarları ve uygun özel günlük yolları korunur; üretimde display_errors kapalı tutulur.\n\nDoğrulama, gerçek PHP isteğiyle etkin ayarları ve benzersiz bir deneme kaydının dosyadan okunmasını kontrol eder. Yetki, önbellek veya HTTP koruması doğrulanamadığında durum açıkça gösterilir; yalnız error_log() dönüşü başarı sayılmaz.\n\nPanelin oluşturduğu günlükler saatlik kontrolde 50 MiB üzerinde arşivlenir. Mevcut kayıtlar otomatik silinmez; özel günlükler bu arşivleme politikasına alınmaz.\n\n---\n\nWindows x64 kurulumu: **AdaPanelSetup.exe**."
 }

@@ -95,7 +95,6 @@
   "panel.mail.relayRecover": "Restore previous settings",
   "panel.mail.relayRecoverConfirm": "Restore the relay settings from before the interrupted change?",
   "panel.mail.relayRecoverImpact": "SMTP may restart. No new relay configuration is applied; previous routing and credentials are preserved.",
-
   "mail.relay_unmeasured_route": "The existing relay route could not be fully measured. Existing routing was preserved.",
   "mail.relay_tls_failed": "Relay connection, STARTTLS or certificate validation failed. Settings were not saved.",
   "mail.relay_rollback_failed": "Relay update failed and previous settings could not be fully restored. Check SMTP service and relay configuration.",
@@ -6689,5 +6688,18 @@
   "panel.fullMigration.state.not_started": "Not started",
   "migration.dns_management_format_unsupported": "A DNS record is incompatible with the panel's current read and management format. Exclude DNS from this migration or review the record manually; the original package is preserved.",
   "migration.database_rename_unsupported": "The source dump may contain database-qualified SQL. This migration preserves database names; importing under a different name is not supported.",
-  "panel.fullMigration.databaseNamePreserved": "The database name is preserved. If it already exists, transfer is blocked without deleting or overwriting it."
+  "panel.fullMigration.databaseNamePreserved": "The database name is preserved. If it already exists, transfer is blocked without deleting or overwriting it.",
+  "panel.php.productionErrors": "Production sites keep display_errors off; errors are written to a log file.",
+  "panel.php.loggingPath": "Log path",
+  "panel.php.loggingCacheHint": "Waiting for the PHP cache. Verify again after {seconds} seconds.",
+  "php.logging.verified": "Log writing was verified through a real PHP request.",
+  "php.logging.unverified": "Settings were saved; PHP log writing has not been verified. Review the log status.",
+  "panel.php.loggingManaged": "Hourly checks archive logs over 50 MiB. Archives are retained indefinitely and never automatically deleted. This is not a disk quota.",
+  "panel.php.loggingCustom": "This log is not archived by the panel; existing records are preserved.",
+  "panel.php.loggingVerify": "Verify log writing again",
+  "panel.php.loggingVerifying": "Verifying log writing…",
+  "panel.php.loggingVerified": "Log writing verified",
+  "panel.php.loggingFailed": "Log writing verification failed",
+  "panel.php.loggingPending": "Log writing verification pending",
+  "panel.php.loggingUnverified": "Log writing has not been verified"
 }
