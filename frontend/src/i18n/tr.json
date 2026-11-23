@@ -347,6 +347,7 @@
   "panel.account.confirm2fa": "2FA etkinleştir",
   "panel.account.start2fa": "2FA kurulumu başlat",
   "panel.account.disablePassword": "Mevcut şifre",
+  "panel.account.currentPasswordRequired": "Mevcut şifre (iki adımlı doğrulamayı kurmak veya değiştirmek için gerekli)",
   "panel.account.disable2fa": "2FA kapat",
   "panel.account.started": "2FA kurulumu başlatıldı.",
   "panel.account.enabledMessage": "2FA etkinleştirildi.",

@@ -455,6 +455,7 @@ public sealed class AuthController(
         [FromBody] DisableTwoFactorRequest request,
         CancellationToken cancellationToken)
     {
+        EnsureNotImpersonatingForTwoFactor();
         var sourceActor = CookieSessionValidator.CaptureSourceActor(User);
         var sourceSessionId = User.FindFirstValue(SessionRevocationStore.SessionIdClaim) ?? string.Empty;
         var user = await authService.DisableTwoFactorAsync(

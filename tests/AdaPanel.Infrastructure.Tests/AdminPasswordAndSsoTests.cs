@@ -720,7 +720,7 @@ public sealed class AdminPasswordAndSsoTests
     }
 
     /// <summary>Çerez doğrulayıcısı reddettiğinde SignOutAsync çağırır; burada sessizce yutulur.</summary>
-    private sealed class SessizKimlikServisi : IAuthenticationService
+    internal sealed class SessizKimlikServisi : IAuthenticationService
     {
         public Task<AuthenticateResult> AuthenticateAsync(HttpContext context, string? scheme) => throw new NotSupportedException();
         public Task ChallengeAsync(HttpContext context, string? scheme, AuthenticationProperties? properties) => throw new NotSupportedException();

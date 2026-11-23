@@ -135,7 +135,27 @@ public sealed class SubscriptionsController(
         // G22: askının KAYNAĞI saklanır. Bayi askısı "reseller", yönetici askısı "manual" yazılır;
         // bayi yalnız KENDİ askısını kaldırabilir (bkz. ResumeAsync). Var olan "manual" kayıtlar
         // yönetici askısı sayılır (kapalı tarafta hata).
-        await enforcement.SuspendAsync(userId, CustomerAccess.IsReseller(User) ? "reseller" : "manual", cancellationToken);
+        if (CustomerAccess.IsReseller(User))
+        {
+            // Zaten askıdaki kaydın sebebi EZİLMEZ: yönetici/otomatik askıyı bayi "reseller"e çevirip
+            // sonra kaldıramaz. Bayinin kendi askısı ise no-op.
+            var mevcut = await customerScopes.GetScopeAsync(userId, cancellationToken);
+            if (mevcut.IsSuspended)
+            {
+                if (!string.Equals(mevcut.SuspendReason, "reseller", StringComparison.Ordinal))
+                {
+                    throw new Core.Common.AppException("users.forbidden", 403, 403);
+                }
+            }
+            else
+            {
+                await enforcement.SuspendAsync(userId, "reseller", cancellationToken);
+            }
+        }
+        else
+        {
+            await enforcement.SuspendAsync(userId, "manual", cancellationToken);
+        }
 
         return Ok(ApiResponse<SubscriptionUsageDto>.Ok(
             await enforcement.GetUsageAsync(userId, cancellationToken),

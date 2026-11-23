@@ -347,6 +347,7 @@
   "panel.account.confirm2fa": "Enable 2FA",
   "panel.account.start2fa": "Start 2FA setup",
   "panel.account.disablePassword": "Current password",
+  "panel.account.currentPasswordRequired": "Current password (required to set up or change two-factor authentication)",
   "panel.account.disable2fa": "Disable 2FA",
   "panel.account.started": "2FA setup has started.",
   "panel.account.enabledMessage": "2FA enabled.",

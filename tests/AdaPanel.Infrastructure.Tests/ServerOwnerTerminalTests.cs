@@ -469,7 +469,7 @@ public sealed class ServerOwnerTerminalTests
             new ResellerSiteAssignmentTests.KullanilmayanZamanlayici(),
             new ResellerSiteAssignmentTests.KullanilmayanCascade(),
             new ThrowingApiTokenService(),
-            new SabitSunucuSahibiServisi(sahipId));
+            new SabitSunucuSahibiServisi(sahipId), null!);
 
         public async Task SahipligiSabitleAsync(Guid userId) =>
             await DosyaDeposu.WriteAsync(

@@ -336,7 +336,7 @@ public sealed partial class QueuedDatabaseActorLifecycleTests
                 new AuditService(db, Scopes, files), sites, Ownership,
                 Fake<ISchedulerService>((m, _) => m.Name == "GetTasksAsync" ? Tasks() : throw new NotSupportedException(m.Name)),
                 Fake<ISiteCascadeDeletionService>((m, _) => throw new NotSupportedException(m.Name)), Fake<IApiTokenService>((m, _) => throw new NotSupportedException(m.Name)),
-                Fake<IServerOwnerService>((m, _) => m.Name == "IsServerOwnerAsync" ? Task.FromResult(false) : throw new NotSupportedException(m.Name)));
+                Fake<IServerOwnerService>((m, _) => m.Name == "IsServerOwnerAsync" ? Task.FromResult(false) : throw new NotSupportedException(m.Name)), null!);
         }
         private async Task<IReadOnlyCollection<ScheduledTaskDto>> Tasks()
         {

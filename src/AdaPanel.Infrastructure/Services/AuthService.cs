@@ -118,8 +118,19 @@ public sealed class AuthService(
         // dahil hiçbir deneme doğrulanmaz; yanıt yanlış parolayla AYNI (numaralandırma yok).
         if (AccountAttemptThrottle.IsBlocked(user.Id))
         {
-            await auditService.WriteAsync("auth.login.throttled", "auth", $"Login attempts for '{user.UserName}' throttled.", user.Id, ipAddress, cancellationToken);
-            await bruteForceProtection.RegisterFailedAttemptAsync(ipAddress, cancellationToken);
+            // Parola YİNE DOĞRULANIR (zamanlama ve yanıt aynı kalsın). IP sayacı YALNIZ yanlış
+            // parolada artar: doğru parola IP hatası sayılsaydı sahip, saldırganın doldurduğu tavan
+            // yüzünden kendi IP'sini güvenlik duvarında engelletirdi.
+            if (passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password) == PasswordVerificationResult.Failed)
+            {
+                await auditService.WriteAsync("auth.login.failed", "auth", $"Invalid password provided for '{user.UserName}' (account throttled).", user.Id, ipAddress, cancellationToken);
+                await bruteForceProtection.RegisterFailedAttemptAsync(ipAddress, cancellationToken);
+            }
+            else
+            {
+                await auditService.WriteAsync("auth.login.throttled", "auth", $"Login for '{user.UserName}' refused: account attempt ceiling reached.", user.Id, ipAddress, cancellationToken);
+            }
+
             throw new InvalidOperationException("auth.invalid_credentials");
         }
 
@@ -479,8 +490,9 @@ public sealed class AuthService(
         using var lease = await EnterTwoFactorAsync(userId, cancellationToken);
         var user = await GetFreshTwoFactorUserAsync(userId, cancellationToken, beforeMutation);
         var passwordResult = passwordHasher.VerifyHashedPassword(user, user.PasswordHash, password);
-        if (passwordResult == PasswordVerificationResult.Failed)
+        if (AccountAttemptThrottle.IsBlocked(user.Id) || passwordResult == PasswordVerificationResult.Failed)
         {
+            if (passwordResult == PasswordVerificationResult.Failed) AccountAttemptThrottle.RegisterFailure(user.Id);
             throw new InvalidOperationException("auth.invalid_credentials");
         }
 
@@ -505,8 +517,9 @@ public sealed class AuthService(
         // MEVCUT parola şart. Aksi hâlde çalınmış bir oturum çerezi tek başına hesabı kalıcı olarak
         // devralmaya yeterdi: saldırgan parolayı değiştirir, gerçek sahibi dışarıda kalırdı.
         var verification = passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.CurrentPassword);
-        if (verification == PasswordVerificationResult.Failed)
+        if (AccountAttemptThrottle.IsBlocked(user.Id) || verification == PasswordVerificationResult.Failed)
         {
+            if (verification == PasswordVerificationResult.Failed) AccountAttemptThrottle.RegisterFailure(user.Id);
             throw new InvalidOperationException("auth.invalid_credentials");
         }
 

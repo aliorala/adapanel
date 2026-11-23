@@ -614,7 +614,7 @@ public sealed class UserDeletionHonestyTests
                 new BosZamanlayici(),
                 cascade,
                 new ThrowingApiTokenService(),
-                new SahipsizSunucuSahibiServisi());
+                new SahipsizSunucuSahibiServisi(), null!);
 
             return new Duzenek(baglanti, dbContext, servis, kapsam, cascade, dbSahiplik, denetim, musteri.Id);
         }

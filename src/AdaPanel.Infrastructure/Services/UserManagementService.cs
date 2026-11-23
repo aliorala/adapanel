@@ -30,7 +30,7 @@ public sealed class UserManagementService(
     ISiteCascadeDeletionService siteCascadeDeletion,
     IApiTokenService apiTokenService,
     IServerOwnerService serverOwnerService,
-    IResellerQuotaService? resellerQuotas = null) : IUserManagementService
+    IResellerQuotaService resellerQuotas) : IUserManagementService
 {
     /// <summary>Müşteri OLMAYAN satırların diski: ÖLÇÜLMÜŞ sıfır.</summary>
     /// <remarks>
@@ -285,6 +285,13 @@ public sealed class UserManagementService(
             throw new InvalidOperationException("users.duplicate_email");
         }
 
+        // Başka bir yöneticinin e-postasını değiştirmek (ardından "parolamı unuttum") hesabı devralmaktır.
+        if (user.Role == UserRole.Administrator && user.Id != actorUserId &&
+            !string.Equals(user.Email, normalizedEmail, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new AppException("users.forbidden", 403, 403);
+        }
+
         var newRole = actorIsReseller ? UserRole.Customer : Enum.Parse<UserRole>(request.Role, ignoreCase: true);
         var ownerId = actorIsReseller ? actorUserId : request.OwnerId;
         var willRemoveActiveAdmin = user.Role == UserRole.Administrator &&
@@ -334,6 +341,19 @@ public sealed class UserManagementService(
         // profesyonel paneller gibi abonelik askıya alma: aktiflik değişimini yakala (sonra sitelerini durdur/başlat).
         var wasActive = user.IsActive;
 
+        // Bayi yalnız KENDİ pasife aldığı müşteriyi açabilir (G22 ile aynı kural). Pasifin KAYNAĞI,
+        // müşterinin askı kaydındaki sebepte tutulur: bayi "reseller", yönetici "manual". Kaydı
+        // olmayan (eski) pasif hesabı bayi açamaz — kapalı tarafta hata.
+        var trackSuspensionSource = user.Role == UserRole.Customer && existingParent is null && wasActive != request.IsActive;
+        if (trackSuspensionSource && actorIsReseller && request.IsActive)
+        {
+            var askiKaydi = await customerScopeService.GetScopeAsync(user.Id, cancellationToken);
+            if (!askiKaydi.IsSuspended || !string.Equals(askiKaydi.SuspendReason, "reseller", StringComparison.Ordinal))
+            {
+                throw new AppException("users.forbidden", 403, 403);
+            }
+        }
+
         user.Email = normalizedEmail;
         user.PreferredLanguage = request.PreferredLanguage.Trim();
         user.Role = newRole;
@@ -367,6 +387,28 @@ public sealed class UserManagementService(
         var suspensionScope = existingParent is not null ? new CustomerScope([], 0, 0, 0, 0, 0) : scope;
         await ApplySuspensionStateAsync(user, suspensionScope, wasActive, actorUserId, ipAddress, cancellationToken);
 
+        if (trackSuspensionSource)
+        {
+            if (!request.IsActive)
+            {
+                var onceki = await customerScopeService.GetScopeAsync(user.Id, cancellationToken);
+                if (!onceki.IsSuspended)
+                {
+                    await customerScopeService.SuspendAsync(user.Id, actorIsReseller ? "reseller" : "manual", cancellationToken);
+                }
+            }
+            else
+            {
+                var onceki = await customerScopeService.GetScopeAsync(user.Id, cancellationToken);
+                if (onceki.IsSuspended && (actorIsReseller
+                    ? onceki.SuspendReason == "reseller"
+                    : onceki.SuspendReason == "manual"))
+                {
+                    await customerScopeService.ResumeAsync(user.Id, cancellationToken);
+                }
+            }
+        }
+
         var diskKullanimi = user.Role == UserRole.Customer
             ? await customerScopeService.GetDiskUsageMbAsync(user.Id, cancellationToken)
             : AboneliksizKullanim;
@@ -388,7 +430,7 @@ public sealed class UserManagementService(
     private async Task EnsureResellerQuotaAsync(bool actorIsReseller, UserRole role, Guid resellerId, Guid targetCustomerId,
         int maxSites, int maxDiskMb, CancellationToken cancellationToken)
     {
-        if (!actorIsReseller || role != UserRole.Customer || resellerQuotas is null)
+        if (!actorIsReseller || role != UserRole.Customer)
         {
             return;
         }

@@ -307,9 +307,11 @@ public static class CookieSessionValidator
             return;
         }
 
-        // 3b) 2FA durumu çerez verildikten sonra değişmiş mi (G35). Talep yoksa (eski çerez) geçilir.
+        // 3b) 2FA durumu çerez verildikten sonra değişmiş mi (G35). Talep YOKSA da reddedilir (oturum
+        //     kimliği kuralıyla aynı): aksi hâlde eski çerez kayan yenilemeyle talepsiz yaşardı.
+        //     Bedeli: bu sürüme geçildiğinde açık oturumlar bir kez düşer.
         var tfaDurumu = principal.FindFirst(TwoFactorStateClaim)?.Value;
-        if (tfaDurumu is not null && tfaDurumu != (kullanici.IsTwoFactorEnabled ? "1" : "0"))
+        if (tfaDurumu is null || tfaDurumu != (kullanici.IsTwoFactorEnabled ? "1" : "0"))
         {
             await ReddetAsync(context);
             return;

@@ -45,7 +45,7 @@
           <h4><span class="step-number">2</span>{{ t('panel.account.setupVerifyTitle') }}</h4>
           <p class="meta">{{ t('panel.account.setupVerifyHint') }}</p>
           <label class="stacked-field verification-field"><span class="field-label">{{ t('panel.account.verificationCode') }}</span><input v-model="twoFactorVerificationCode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" /></label>
-          <label class="stacked-field"><span class="field-label">{{ t('panel.account.disablePassword') }}</span><PasswordField v-model="twoFactorPassword" autocomplete="current-password" /></label>
+          <label class="stacked-field"><span class="field-label">{{ t('panel.account.currentPasswordRequired') }}</span><PasswordField v-model="twoFactorPassword" autocomplete="current-password" /></label>
           <div class="row-actions">
             <button type="submit" class="compact" :disabled="!canConfirmTwoFactor">{{ t(pendingOperation === 'confirm' ? 'panel.common.saving' : 'panel.account.confirm2fa') }}</button>
             <button type="button" class="secondary compact" :disabled="busy" @click="cancelSetup">{{ t('panel.common.cancel') }}</button>
@@ -54,7 +54,7 @@
       </div>
 
       <div v-else-if="accountConfirmed" class="two-factor-actions">
-        <label class="stacked-field"><span class="field-label">{{ t('panel.account.disablePassword') }}</span><PasswordField v-model="twoFactorPassword" autocomplete="current-password" /></label>
+        <label class="stacked-field"><span class="field-label">{{ t('panel.account.currentPasswordRequired') }}</span><PasswordField v-model="twoFactorPassword" autocomplete="current-password" /></label>
         <button v-if="!authStore.session?.user?.isTwoFactorEnabled" class="compact" :disabled="!canStartTwoFactor" @click="startTwoFactor">
           {{ t(pendingOperation === 'begin' ? 'panel.common.loading' : 'panel.account.start2fa') }}
         </button>

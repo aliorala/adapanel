@@ -177,9 +177,10 @@ it("does not overwrite another actor with an old account action result", async (
 it("keeps a new account operation reserved after an old reset operation finishes", async () => {
   const { auth } = await mount(), first = deferred<AxiosResponse>(), second = deferred<AxiosResponse>(); const requests: InternalAxiosRequestConfig[] = [];
   write = config => { requests.push(config); return requests.length === 1 ? first.promise : second.promise; };
-  const obsolete = auth.beginTwoFactorSetup().catch(error => error); await flush(); auth.$reset(); auth.session = session();
-  const latest = auth.beginTwoFactorSetup(); await flush(); first.resolve(response(requests[0]!, setup())); await obsolete;
-  await expect(auth.beginTwoFactorSetup()).rejects.toThrow(); expect(mutations()).toHaveLength(2); expect(auth.twoFactorSetup).toBeNull();
+  const obsolete = auth.beginTwoFactorSetup("FixturePassword!123").catch(error => error); await flush(); auth.$reset(); auth.session = session();
+  const latest = auth.beginTwoFactorSetup("FixturePassword!123"); await flush(); first.resolve(response(requests[0]!, setup())); await obsolete;
+  await expect(auth.beginTwoFactorSetup("FixturePassword!123")).rejects.toThrow(); expect(mutations()).toHaveLength(2); expect(auth.twoFactorSetup).toBeNull();
+  expect(JSON.parse(String(requests[0]!.data))).toEqual({ password: "FixturePassword!123" });
   second.resolve(response(requests[1]!, setup())); await latest; expect(auth.twoFactorSetup?.manualEntryKey).toBe(setup().manualEntryKey);
 });
 it("does not reread account status while a mutation is pending", async () => {
