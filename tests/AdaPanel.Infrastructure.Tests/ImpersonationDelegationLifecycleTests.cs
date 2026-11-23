@@ -302,7 +302,7 @@ public sealed class ImpersonationDelegationLifecycleTests
             await using var services = Services(db);
             var controller = Controller(db, services, Authentication.Principal!);
             return operation == "confirm"
-                ? (await controller.ConfirmTwoFactorSetupAsync(new VerifyTwoFactorRequest { Code = "123456" }, default)).Result!
+                ? (await controller.ConfirmTwoFactorSetupAsync(new VerifyTwoFactorRequest { Code = "123456", Password = Password }, default)).Result!
                 : (await controller.DisableTwoFactorAsync(new DisableTwoFactorRequest { Password = Password }, default)).Result!;
         }
 

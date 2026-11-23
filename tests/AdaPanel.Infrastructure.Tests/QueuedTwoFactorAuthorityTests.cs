@@ -285,9 +285,9 @@ public sealed class QueuedTwoFactorAuthorityTests
 
         internal async Task<IActionResult> Invoke(string operation, CancellationToken token) => operation switch
         {
-            "begin" => (await Controller.BeginTwoFactorSetupAsync(token)).Result!,
-            "confirm" => (await Controller.ConfirmTwoFactorSetupAsync(new VerifyTwoFactorRequest { Code = "123456" }, token)).Result!,
-            "regenerate" => (await Controller.RegenerateRecoveryCodesAsync(token)).Result!,
+            "begin" => (await Controller.BeginTwoFactorSetupAsync(new TwoFactorPasswordRequest { Password = Password }, token)).Result!,
+            "confirm" => (await Controller.ConfirmTwoFactorSetupAsync(new VerifyTwoFactorRequest { Code = "123456", Password = Password }, token)).Result!,
+            "regenerate" => (await Controller.RegenerateRecoveryCodesAsync(new TwoFactorPasswordRequest { Password = Password }, token)).Result!,
             "disable" => (await Controller.DisableTwoFactorAsync(new DisableTwoFactorRequest { Password = Password }, token)).Result!,
             _ => throw new InvalidOperationException(operation)
         };
