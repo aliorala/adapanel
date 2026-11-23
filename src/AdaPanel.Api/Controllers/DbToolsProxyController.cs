@@ -331,13 +331,6 @@ public sealed class DbToolsProxyController(
     }
 
     /// <summary>
-    /// Bir <c>Set-Cookie</c> başlığındaki <c>Path=</c> değerini vekil önekiyle değiştirir.
-    /// <para>
-    /// Path yoksa eklenir: PHP her zaman yazmayabilir ve o durumda tarayıcı yolu istekten türetir —
-    /// aracın alt yolları arasında çerez yine kaybolabilirdi.
-    /// </para>
-    /// </summary>
-    /// <summary>
     /// G15: <c>Cookie</c> başlığından PANELİN kimlik/CSRF çerezlerini atar; araca ait çerezler (phpMyAdmin,
     /// adminer_sid ...) kalır. Panel oturumu araç tarafından görülemez/sızdırılamaz.
     /// </summary>
@@ -357,6 +350,13 @@ public sealed class DbToolsProxyController(
         return string.Join("; ", kalan);
     }
 
+    /// <summary>
+    /// Bir <c>Set-Cookie</c> başlığındaki <c>Path=</c> değerini vekil önekiyle değiştirir.
+    /// <para>
+    /// Path yoksa eklenir: PHP her zaman yazmayabilir ve o durumda tarayıcı yolu istekten türetir —
+    /// aracın alt yolları arasında çerez yine kaybolabilirdi.
+    /// </para>
+    /// </summary>
     internal static string RewriteCookiePath(string setCookieValue, string pathPrefix)
     {
         if (string.IsNullOrWhiteSpace(setCookieValue))
