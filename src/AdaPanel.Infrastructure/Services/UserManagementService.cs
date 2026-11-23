@@ -387,25 +387,21 @@ public sealed class UserManagementService(
         var suspensionScope = existingParent is not null ? new CustomerScope([], 0, 0, 0, 0, 0) : scope;
         await ApplySuspensionStateAsync(user, suspensionScope, wasActive, actorUserId, ipAddress, cancellationToken);
 
+        // Yalnız BAYİNİN pasife alması askı kaydına "reseller" olarak yazılır (yöneticinin pasifi kayıt
+        // bırakmaz; bayi kaydı olmayan pasifi açamaz). Açılırken bayi kaydı temizlenir — yönetici
+        // açsa bile: aksi hâlde müşteri salt-okur askıda kalırdı.
         if (trackSuspensionSource)
         {
             if (!request.IsActive)
             {
-                var onceki = await customerScopeService.GetScopeAsync(user.Id, cancellationToken);
-                if (!onceki.IsSuspended)
+                if (actorIsReseller && !(await customerScopeService.GetScopeAsync(user.Id, cancellationToken)).IsSuspended)
                 {
-                    await customerScopeService.SuspendAsync(user.Id, actorIsReseller ? "reseller" : "manual", cancellationToken);
+                    await customerScopeService.SuspendAsync(user.Id, "reseller", cancellationToken);
                 }
             }
-            else
+            else if (await customerScopeService.GetScopeAsync(user.Id, cancellationToken) is { IsSuspended: true, SuspendReason: "reseller" })
             {
-                var onceki = await customerScopeService.GetScopeAsync(user.Id, cancellationToken);
-                if (onceki.IsSuspended && (actorIsReseller
-                    ? onceki.SuspendReason == "reseller"
-                    : onceki.SuspendReason == "manual"))
-                {
-                    await customerScopeService.ResumeAsync(user.Id, cancellationToken);
-                }
+                await customerScopeService.ResumeAsync(user.Id, cancellationToken);
             }
         }
 
