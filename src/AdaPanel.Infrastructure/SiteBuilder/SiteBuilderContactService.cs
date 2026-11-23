@@ -1,6 +1,7 @@
 using AdaPanel.Core.Dtos.SiteBuilder;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.SiteBuilder;
@@ -67,7 +68,9 @@ public sealed class SiteBuilderContactService(
     JsonFileStore fileStore,
     INotificationService notificationService,
     SiteBuilderContactRateLimiter rateLimiter,
-    ILogger<SiteBuilderContactService> logger) : ISiteBuilderContactService
+    ILogger<SiteBuilderContactService> logger,
+    AdaPanel.Data.Persistence.AdaPanelDbContext? db = null,
+    ICustomerScopeService? customerScopes = null) : ISiteBuilderContactService
 {
     public async Task<SiteBuilderContactResult> SubmitAsync(
         string siteKey,
@@ -96,6 +99,15 @@ public sealed class SiteBuilderContactService(
 
         var siteName = (project.SiteName ?? string.Empty).Trim();
 
+        // G21: alıcı tasarımı kaydeden kiracı tarafından seçilir; panel SMTP'si üzerinden RASTGELE bir
+        // adrese ileti yollatmak için kullanılamaz. Yalnız sitenin kendi alan adı ya da sahibinin
+        // (yoksa yöneticilerin) panel hesabı adresi kabul edilir.
+        if (!await IsRecipientAllowedAsync(siteName, recipient, cancellationToken))
+        {
+            logger.LogWarning("Site kurucu iletisim formu alicisi sahip dogrulamasindan gecmedi: {Site}", siteName);
+            return new SiteBuilderContactResult(SiteBuilderContactOutcome.NotAvailable, siteName);
+        }
+
         var validation = SiteBuilderContactForm.Validate(submission);
         if (validation.Value is null)
         {
@@ -113,7 +125,7 @@ public sealed class SiteBuilderContactService(
             return new SiteBuilderContactResult(validation.Outcome, siteName);
         }
 
-        if (!rateLimiter.TryAcquire(visitorIp, key, validation.Value.Email, DateTime.UtcNow))
+        if (!rateLimiter.TryAcquire(visitorIp, key, validation.Value.Email, DateTime.UtcNow, recipient))
         {
             logger.LogWarning(
                 "Site kurucu iletisim formu hiz sinirina takildi: {Site} ({Ip})",
@@ -144,6 +156,41 @@ public sealed class SiteBuilderContactService(
         }
 
         return new SiteBuilderContactResult(SiteBuilderContactOutcome.Sent, siteName);
+    }
+
+    /// <summary>Alıcı sitenin alan adındaysa kabul edilir.</summary>
+    internal static bool IsRecipientInSiteDomain(string siteName, string recipient)
+    {
+        var at = recipient.LastIndexOf('@');
+        if (at <= 0 || string.IsNullOrWhiteSpace(siteName)) return false;
+        var domain = recipient[(at + 1)..].Trim().TrimEnd('.').ToLowerInvariant();
+        var site = siteName.Trim().TrimEnd('.').ToLowerInvariant();
+        if (site.StartsWith("www.", StringComparison.Ordinal)) site = site[4..];
+        return domain == site || domain.EndsWith("." + site, StringComparison.Ordinal);
+    }
+
+    private async Task<bool> IsRecipientAllowedAsync(string siteName, string recipient, CancellationToken cancellationToken)
+    {
+        if (IsRecipientInSiteDomain(siteName, recipient)) return true;
+        if (db is null) return false;
+
+        try
+        {
+            Guid? ownerId = customerScopes is null
+                ? null
+                : await customerScopes.GetSiteOwnerUserIdAsync(siteName, cancellationToken);
+            var wanted = recipient.Trim().ToLowerInvariant();
+            var users = db.Users.AsNoTracking().Where(user => user.IsActive);
+            var emails = ownerId is { } id
+                ? await users.Where(user => user.Id == id).Select(user => user.Email).ToListAsync(cancellationToken)
+                : await users.Where(user => user.Role == AdaPanel.Core.Enums.UserRole.Administrator).Select(user => user.Email).ToListAsync(cancellationToken);
+            return emails.Any(email => string.Equals((email ?? string.Empty).Trim(), wanted, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Alici dogrulamasi okunamadi, gonderim reddedildi: {Site}", siteName);
+            return false;
+        }
     }
 
     /// <summary>

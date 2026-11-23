@@ -676,6 +676,8 @@ public sealed class SiteHostingSettingsService(
             trimmed = trimmed["wp ".Length..].Trim();
         }
 
+        ValidateWpCliCommand(trimmed);
+
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var workDir = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
         if (!File.Exists(Path.Combine(workDir, "wp-load.php")) && !File.Exists(Path.Combine(workDir, "wp-config.php")))
@@ -700,6 +702,67 @@ public sealed class SiteHostingSettingsService(
             Output = result.StandardOutput,
             Error = result.StandardError
         };
+    }
+
+    // G24: WP-CLI alt komut beyaz listesi. Metakarakter engeli tek başına yetmez: `eval`/`eval-file`/`shell`
+    // keyfî PHP, `--require`/`--exec` keyfî dosya/PHP yükler, `--path` başka dizine, `--ssh`/`--http`
+    // uzak hedefe çıkar. İlk jeton (alt komut) listede olmalı; genel bayraklar alt komuttan ÖNCE verilemez.
+    private static readonly HashSet<string> WpCliAllowedCommands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "plugin", "theme", "core", "user", "cache", "option", "search-replace", "cron", "rewrite", "db",
+        "transient", "language", "post", "comment", "menu", "widget", "sidebar", "site", "role", "cap",
+        "maintenance-mode", "media", "term", "taxonomy", "block", "help"
+    };
+
+    private static readonly HashSet<string> WpCliBlockedWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "eval", "eval-file", "shell", "package", "server", "cli", "scaffold", "config"
+    };
+
+    private static readonly string[] WpCliBlockedFlags = { "--path", "--require", "--exec", "--ssh", "--http", "--config", "--debug", "--prompt" };
+
+    private static readonly HashSet<string> WpCliOptionAllowed = new(StringComparer.OrdinalIgnoreCase) { "get", "update", "list", "add", "delete", "pluck" };
+
+    private static readonly HashSet<string> WpCliDbAllowed = new(StringComparer.OrdinalIgnoreCase) { "export", "check", "optimize", "repair", "size", "tables", "prefix" };
+
+    internal static void ValidateWpCliCommand(string command)
+    {
+        var tokens = command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0 || !WpCliAllowedCommands.Contains(tokens[0]))
+        {
+            throw new AppException("wpcli.invalid_command", 400, 400);
+        }
+
+        foreach (var token in tokens)
+        {
+            var bare = token.Trim('\'');
+            if (WpCliBlockedWords.Contains(bare))
+            {
+                throw new AppException("wpcli.invalid_command", 400, 400);
+            }
+
+            foreach (var flag in WpCliBlockedFlags)
+            {
+                if (bare.StartsWith(flag, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new AppException("wpcli.invalid_command", 400, 400);
+                }
+            }
+        }
+
+        if (tokens.Length > 1)
+        {
+            var sub = tokens[1];
+            if ((tokens[0].Equals("option", StringComparison.OrdinalIgnoreCase) && !WpCliOptionAllowed.Contains(sub)) ||
+                (tokens[0].Equals("db", StringComparison.OrdinalIgnoreCase) && !WpCliDbAllowed.Contains(sub)))
+            {
+                throw new AppException("wpcli.invalid_command", 400, 400);
+            }
+        }
+        else if (tokens[0].Equals("db", StringComparison.OrdinalIgnoreCase) || tokens[0].Equals("option", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new AppException("wpcli.invalid_command", 400, 400);
+        }
     }
 
     // wp-cli.phar yoksa ilk kullanımda resmi build'den indirir (panel WP Toolkit'in altında da wp-cli vardır).
