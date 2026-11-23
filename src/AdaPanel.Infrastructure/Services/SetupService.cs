@@ -22,7 +22,8 @@ public sealed partial class SetupService(
     IServiceScopeFactory scopeFactory,
     IOperationProgressService operationProgress,
     IOptions<PanelRuntimeOptions> runtimeOptions,
-    ILogger<SetupService> logger) : ISetupService
+    ILogger<SetupService> logger,
+    Microsoft.Extensions.Hosting.IHostApplicationLifetime? hostLifetime = null) : ISetupService
 {
     private readonly PanelRuntimeOptions runtimeOptions = runtimeOptions.Value;
 
@@ -114,7 +115,11 @@ public sealed partial class SetupService(
             operationProgress.Begin("setup.installing_recommended");
             installInProgress = true;
             var adminId = adminUser.Id;
-            _ = Task.Run(() => RunRecommendedInstallAsync(adminId, remoteIpAddress));
+            // Panel kapanırken (ApplicationStopping) kurulum iptal edilir; başıboş bir Task.Run
+            // süreç kapanırken yarım dosya bırakabilir ve hatası kimseye görünmezdi. Hatalar
+            // RunRecommendedInstallAsync içinde günlüğe ve ilerleme servisine yazılır.
+            var stopping = hostLifetime?.ApplicationStopping ?? CancellationToken.None;
+            _ = Task.Run(() => RunRecommendedInstallAsync(adminId, remoteIpAddress, stopping), stopping);
         }
 
         return new SetupResultDto
@@ -138,7 +143,7 @@ public sealed partial class SetupService(
     /// Önerilen bileşenleri arka planda kurar (kendi DI scope'u). Her adım canlı ilerleme
     /// servisine yazılır. İstek/istemci bağlantısından bağımsız tamamlanır.
     /// </summary>
-    private async Task RunRecommendedInstallAsync(Guid adminId, string? remoteIpAddress)
+    private async Task RunRecommendedInstallAsync(Guid adminId, string? remoteIpAddress, CancellationToken stopping)
     {
         try
         {
@@ -147,7 +152,7 @@ public sealed partial class SetupService(
             var phpService = scope.ServiceProvider.GetRequiredService<IPhpService>();
             var webDbClientService = scope.ServiceProvider.GetRequiredService<IWebDbClientService>();
 
-            var installResults = await componentBootstrapper.InstallDefaultsAsync(adminId, remoteIpAddress, CancellationToken.None);
+            var installResults = await componentBootstrapper.InstallDefaultsAsync(adminId, remoteIpAddress, stopping);
 
             foreach (var phpResult in installResults.Where(result =>
                          result.ComponentId.StartsWith("php-", StringComparison.OrdinalIgnoreCase) &&
@@ -156,7 +161,7 @@ public sealed partial class SetupService(
                 operationProgress.StartStep("setup.step.php_config");
                 try
                 {
-                    await phpService.RegisterFastCgiAsync(phpResult.ComponentId, CancellationToken.None);
+                    await phpService.RegisterFastCgiAsync(phpResult.ComponentId, stopping);
                     operationProgress.CompleteStep("setup.step.php_config", success: true);
                 }
                 catch (Exception exception)
@@ -173,7 +178,7 @@ public sealed partial class SetupService(
                 operationProgress.StartStep("setup.step.phpmyadmin");
                 try
                 {
-                    await webDbClientService.DeployPhpMyAdminAsync(CancellationToken.None);
+                    await webDbClientService.DeployPhpMyAdminAsync(stopping);
                     operationProgress.CompleteStep("setup.step.phpmyadmin", success: true);
                 }
                 catch (Exception exception)
