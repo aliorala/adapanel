@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using AdaPanel.Infrastructure.SiteBuilder;
 using AdaPanel.Infrastructure.Files;
 using AdaPanel.Infrastructure.Iis;
+using AdaPanel.Infrastructure.Support;
 
 namespace AdaPanel.Infrastructure.ReverseProxy;
 
@@ -18,7 +19,8 @@ public sealed partial class ReverseProxyService(
     IIisSiteService iisSiteService,
     IComponentBootstrapper componentBootstrapper,
     IConcurrencyLock concurrencyLock,
-    ILogger<ReverseProxyService> logger) : IReverseProxyService
+    ILogger<ReverseProxyService> logger,
+    Microsoft.AspNetCore.Http.IHttpContextAccessor? httpContextAccessor = null) : IReverseProxyService
 {
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
     private const string ServerManagerTypeName = "Microsoft.Web.Administration.ServerManager";
@@ -59,6 +61,13 @@ public sealed partial class ReverseProxyService(
     {
         var destinationUrl = NormalizeDestinationUrl(request.DestinationUrl);
         var mountPath = NormalizeMountPath(request.MountPath);
+
+        // G9: hedef kullanıcıdan gelir (beforeMutation = denetleyici/kullanıcı yolu); panelin kendi
+        // iç çağrıları (PanelPublicAccessService) bu aşırı yüklemeyi kullanmaz ve muaftır.
+        if (beforeMutation is not null)
+        {
+            await EnsureDestinationAllowedAsync(destinationUrl, cancellationToken);
+        }
 
         return await ConfigureAsync(siteName, ["url-rewrite", "iis-arr"], (site, serverManager, save) =>
         {
@@ -573,6 +582,47 @@ public sealed partial class ReverseProxyService(
             TrimProxyActionSuffix(actionUrl),
             mountPath,
             hasHtmlLinkRewrite);
+    }
+
+    internal OutboundAddressGuard.OutboundHostResolver DestinationResolver { get; set; } = OutboundAddressGuard.SystemResolver;
+
+    /// <summary>
+    /// G9: yönetici dışı çağıran için hedef iç ağ/metadata/özel adres olamaz. Geri döngü (Node/PHP
+    /// uygulaması gibi yerel arka uçlar için meşru kullanım) yalnız PANELİN KENDİ PORTU hariç serbesttir.
+    /// </summary>
+    private async Task EnsureDestinationAllowedAsync(string destinationUrl, CancellationToken cancellationToken)
+    {
+        var context = httpContextAccessor?.HttpContext;
+        if (context?.User.IsInRole("Administrator") == true)
+        {
+            return;
+        }
+
+        var uri = new Uri(destinationUrl);
+        var host = uri.DnsSafeHost;
+        var isLoopback = host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || (System.Net.IPAddress.TryParse(host, out var literal) && System.Net.IPAddress.IsLoopback(literal));
+
+        if (isLoopback)
+        {
+            var panelPort = context?.Connection.LocalPort ?? 0;
+            if (uri.Port == panelPort || uri.Port == new AdaPanel.Infrastructure.Options.PanelRuntimeOptions().PreferredHttpsPort)
+            {
+                throw new AppException("proxy.destination_forbidden", 403, 403);
+            }
+
+            return;
+        }
+
+        var blocked = await OutboundAddressGuard.FindBlockedHostAsync(
+            host,
+            DestinationResolver,
+            new OutboundTargetPolicy(AllowInternalTargets: false, BlockUnresolvedHost: false),
+            cancellationToken);
+        if (blocked is not null)
+        {
+            throw new AppException("proxy.destination_forbidden", 403, 403);
+        }
     }
 
     private static string NormalizeDestinationUrl(string destinationUrl)

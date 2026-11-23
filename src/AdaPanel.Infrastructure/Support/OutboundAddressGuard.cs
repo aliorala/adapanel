@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Sockets;
 
 namespace AdaPanel.Infrastructure.Support;
@@ -101,6 +101,20 @@ public static class OutboundAddressGuard
             // IPv4-EŞLEMELİ BİÇİMLER ÇÖZÜLÜR. "[::ffff:127.0.0.1]", "[::127.0.0.1]" ve 6to4
             // "[2002:7f00:1::]" birer IPv6 adresidir ama gittikleri yer 127.0.0.1'dir; eşlemeyi
             // açmadan bakan bir kontrol bunları "bilinmeyen IPv6" sayıp GEÇİRİRDİ.
+            // G30: Teredo (2001:0000::/32) ve yerel-kullanım NAT64 (64:ff9b:1::/48) tünel/çeviri
+            // önekleridir; genel internette meşru bir hedef olmaz, gömülü adres de karıştırılabilir
+            // (Teredo istemci adresi XOR'lu) — önek BÜTÜNÜYLE engellenir.
+            var raw = ip.GetAddressBytes();
+            if (raw[0] == 0x20 && raw[1] == 0x01 && raw[2] == 0x00 && raw[3] == 0x00)
+            {
+                return true;
+            }
+
+            if (raw[0] == 0x00 && raw[1] == 0x64 && raw[2] == 0xFF && raw[3] == 0x9B && raw[4] == 0x00 && raw[5] == 0x01)
+            {
+                return true;
+            }
+
             var embedded = ExtractEmbeddedIPv4(ip);
             if (embedded is not null)
             {
@@ -153,6 +167,20 @@ public static class OutboundAddressGuard
         if (bytes[0] == 0x20 && bytes[1] == 0x02)
         {
             return new IPAddress(bytes[2..6]);
+        }
+
+        // NAT64 (RFC 6052) 64:ff9b::/96: son 4 bayt IPv4 adresidir; DNS64 geçidi bunu gerçek IPv4'e
+        // çevirir, yani "64:ff9b::7f00:1" fiilen 127.0.0.1'dir.
+        if (bytes[0] == 0x00 && bytes[1] == 0x64 && bytes[2] == 0xFF && bytes[3] == 0x9B &&
+            bytes[4..12].All(value => value == 0))
+        {
+            return new IPAddress(bytes[12..]);
+        }
+
+        // ISATAP: ::5efe:a.b.c.d ya da ...:0200:5efe:a.b.c.d (arayüz kimliğinde gömülü IPv4).
+        if ((bytes[8] == 0x00 || bytes[8] == 0x02) && bytes[9] == 0x00 && bytes[10] == 0x5E && bytes[11] == 0xFE)
+        {
+            return new IPAddress(bytes[12..]);
         }
 
         // IPv4-uyumlu: ilk 12 bayt sıfır ve kalan sıfırdan farklı (::/128 ve ::1 buraya girmez).
