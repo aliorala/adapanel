@@ -213,7 +213,16 @@ public static class CookieSessionValidator
 
         foreach (var previous in identity.FindAll(CredentialStampClaim).ToList()) identity.RemoveClaim(previous);
         identity.AddClaim(new Claim(CredentialStampClaim, ComputeStamp(user.PasswordHash)));
+
+        // G35: 2FA açılıp kapanınca (kurtarma kodlarının değiştiği an) eski oturumlar düşsün diye
+        // 2FA durumu çereze yazılır. Parola damgasına katılmadı: o damgayı başka yetki denetçileri
+        // (Dosya/FTP/Site vb.) da hesaplıyor; burada yalnız çerez doğrulayıcısı karşılaştırır.
+        foreach (var previous in identity.FindAll(TwoFactorStateClaim).ToList()) identity.RemoveClaim(previous);
+        identity.AddClaim(new Claim(TwoFactorStateClaim, user.IsTwoFactorEnabled ? "1" : "0"));
     }
+
+    /// <summary>Çerezin verildiği andaki 2FA durumu ("1"/"0").</summary>
+    public const string TwoFactorStateClaim = "adapanel_tfa_state";
 
     /// <summary>Çerezin hâlâ gerçeğe karşılık gelip gelmediğini denetler.</summary>
     public static async Task OnValidatePrincipalAsync(CookieValidatePrincipalContext context)
@@ -293,6 +302,14 @@ public static class CookieSessionValidator
             !CryptographicOperations.FixedTimeEquals(
                 Encoding.UTF8.GetBytes(damga),
                 Encoding.UTF8.GetBytes(ComputeStamp(kullanici.PasswordHash))))
+        {
+            await ReddetAsync(context);
+            return;
+        }
+
+        // 3b) 2FA durumu çerez verildikten sonra değişmiş mi (G35). Talep yoksa (eski çerez) geçilir.
+        var tfaDurumu = principal.FindFirst(TwoFactorStateClaim)?.Value;
+        if (tfaDurumu is not null && tfaDurumu != (kullanici.IsTwoFactorEnabled ? "1" : "0"))
         {
             await ReddetAsync(context);
             return;

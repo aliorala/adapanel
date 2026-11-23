@@ -380,26 +380,31 @@ public sealed class AuthController(
     }
 
     [Authorize]
+    [EnableRateLimiting(PanelRateLimits.PasswordChange)]
     [HttpPost("2fa/begin")]
-    public async Task<ActionResult<ApiResponse<TwoFactorSetupDto>>> BeginTwoFactorSetupAsync(CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<TwoFactorSetupDto>>> BeginTwoFactorSetupAsync(
+        [FromBody] TwoFactorPasswordRequest request, CancellationToken cancellationToken)
     {
-        var result = await authService.BeginTwoFactorSetupAsync(User.GetRequiredUserId(), CaptureTwoFactorApproval(), cancellationToken);
+        EnsureNotImpersonatingForTwoFactor();
+        var result = await authService.BeginTwoFactorSetupAsync(User.GetRequiredUserId(), CaptureTwoFactorApproval(request?.Password ?? string.Empty), cancellationToken);
         return Ok(ApiResponse<TwoFactorSetupDto>.Ok(result));
     }
 
     [Authorize]
+    [EnableRateLimiting(PanelRateLimits.PasswordChange)]
     [HttpPost("2fa/confirm")]
     public async Task<ActionResult<ApiResponse<TwoFactorConfirmDto>>> ConfirmTwoFactorSetupAsync(
         [FromBody] VerifyTwoFactorRequest request,
         CancellationToken cancellationToken)
     {
+        EnsureNotImpersonatingForTwoFactor();
         var sourceActor = CookieSessionValidator.CaptureSourceActor(User);
         var sourceSessionId = User.FindFirstValue(SessionRevocationStore.SessionIdClaim) ?? string.Empty;
         var result = await authService.ConfirmTwoFactorSetupAsync(
             User.GetRequiredUserId(),
             request.Code,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
-            CaptureTwoFactorApproval(),
+            CaptureTwoFactorApproval(request.Password ?? string.Empty),
             cancellationToken);
 
         var authentication = await HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
@@ -410,12 +415,15 @@ public sealed class AuthController(
     }
 
     [Authorize]
+    [EnableRateLimiting(PanelRateLimits.PasswordChange)]
     [HttpPost("2fa/recovery-codes")]
-    public async Task<ActionResult<ApiResponse<RecoveryCodesDto>>> RegenerateRecoveryCodesAsync(CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<RecoveryCodesDto>>> RegenerateRecoveryCodesAsync(
+        [FromBody] TwoFactorPasswordRequest request, CancellationToken cancellationToken)
     {
+        EnsureNotImpersonatingForTwoFactor();
         var userId = User.GetRequiredUserId();
         var result = await authService.RegenerateRecoveryCodesAsync(userId,
-            HttpContext.Connection.RemoteIpAddress?.ToString(), CaptureTwoFactorApproval(), cancellationToken);
+            HttpContext.Connection.RemoteIpAddress?.ToString(), CaptureTwoFactorApproval(request?.Password ?? string.Empty), cancellationToken);
 
         // İZ YOKTU. Kurtarma kodları 2FA'yı ATLAMANIN yoludur: yenilemek eskilerini geçersiz kılar
         // ve YENİ bir geçerli küme üretir. Ele geçirilmiş bir oturum bunu tek adımda yaparak kalıcı
@@ -453,7 +461,7 @@ public sealed class AuthController(
             User.GetRequiredUserId(),
             request.Password,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
-            CaptureTwoFactorApproval(),
+            CaptureTwoFactorApproval(null),
             cancellationToken);
 
         var authentication = await HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
@@ -463,8 +471,24 @@ public sealed class AuthController(
         return Ok(ApiResponse<CurrentUserDto>.Ok(user, "auth.2fa.disabled"));
     }
 
-    private Func<PanelUser, CancellationToken, Task> CaptureTwoFactorApproval()
+    private static readonly Microsoft.AspNetCore.Identity.PasswordHasher<PanelUser> TwoFactorPasswordHasher = new();
+
+    /// <summary>
+    /// G12: kimliğe bürünme oturumu (yönetici, müşteri adına) ikinci adım kurulumunu/kurtarma
+    /// kodlarını DEĞİŞTİREMEZ — müşterinin hesabında kalıcı arka kapı bırakmanın yoluydu.
+    /// </summary>
+    private void EnsureNotImpersonatingForTwoFactor()
     {
+        if (!string.IsNullOrWhiteSpace(User.FindFirstValue("impersonator_id")) ||
+            !string.IsNullOrWhiteSpace(User.FindFirstValue("impersonator_name")))
+        {
+            throw new AppException("auth.forbidden", 403, 403, "auth.2fa.not_while_impersonating");
+        }
+    }
+
+    private Func<PanelUser, CancellationToken, Task> CaptureTwoFactorApproval(string? currentPassword)
+    {
+        // currentPassword == null: parola istenmeyen çağrı (disable kendi parolasını servis içinde doğrular).
         // Immutable request authority: a queued action must not adopt a newer password,
         // role or login session merely because the service reloaded the same user ID.
         var userId = User.GetRequiredUserId();
@@ -479,6 +503,18 @@ public sealed class AuthController(
                 string.IsNullOrWhiteSpace(stamp) || stamp != CookieSessionValidator.ComputeStamp(current.PasswordHash) ||
                 string.IsNullOrWhiteSpace(sessionId) || await sessionRevocations.IsRevokedAsync(sessionId, token))
                 throw new AppException("auth.unauthorized", 401, 401);
+            if (currentPassword is not null)
+            {
+                // Çalınmış çerez tek başına 2FA'yı kurup/yenileyemesin (G12). Yanlış parola hesabın
+                // sert deneme tavanını da besler.
+                if (AccountAttemptThrottle.IsBlocked(current.Id) || string.IsNullOrEmpty(currentPassword) ||
+                    TwoFactorPasswordHasher.VerifyHashedPassword(current, current.PasswordHash, currentPassword)
+                        == Microsoft.AspNetCore.Identity.PasswordVerificationResult.Failed)
+                {
+                    AccountAttemptThrottle.RegisterFailure(current.Id);
+                    throw new InvalidOperationException("auth.invalid_credentials");
+                }
+            }
             token.ThrowIfCancellationRequested();
         };
     }
