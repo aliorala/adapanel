@@ -53,26 +53,44 @@ public sealed class AutomationWorker(
             logger.LogWarning(exception, "Zamanlanmis gorev ayarlari acilista duzeltilemedi.");
         }
 
+        // M5: iki bağımsız döngü. Saatler süren yedek/SSL/log işi "uzun iş" döngüsünü meşgul
+        // ederken disk/SSL uyarısı, DNS bind nöbetçisi, ban temizliği ve izleme örneği "nöbetçi"
+        // döngüsünde dakikada bir akmaya devam eder. Her döngü kendi içinde seri olduğundan
+        // aynı iş türü asla üst üste binmez (tek-çalışma koruması); iptal ortak stoppingToken.
+        var watchdogs = RunLoopAsync("nobetci", (a, ct) => a.RunWatchdogsAsync(ct), stoppingToken);
+        var longJobs = RunLoopAsync("uzun-is", (a, ct) => a.RunLongJobsAsync(ct), stoppingToken);
+        await Task.WhenAll(watchdogs, longJobs);
+    }
+
+    private async Task RunLoopAsync(string name, Func<IAutomationService, CancellationToken, Task> run,
+        CancellationToken stoppingToken)
+    {
         using var timer = new PeriodicTimer(PollInterval);
 
-        do
+        try
         {
-            try
+            do
             {
-                await using var scope = scopeFactory.CreateAsyncScope();
-                var automation = scope.ServiceProvider.GetRequiredService<IAutomationService>();
-                await automation.RunDueJobsAsync(stoppingToken);
+                try
+                {
+                    await using var scope = scopeFactory.CreateAsyncScope();
+                    var automation = scope.ServiceProvider.GetRequiredService<IAutomationService>();
+                    await run(automation, stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception exception)
+                {
+                    // Bir tur başarısız olsa bile zamanlayıcı yaşamaya devam etmeli.
+                    logger.LogError(exception, "Otomasyon turu ({Loop}) beklenmedik bir hatayla sonuçlandı.", name);
+                }
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception exception)
-            {
-                // Bir tur başarısız olsa bile zamanlayıcı yaşamaya devam etmeli.
-                logger.LogError(exception, "Otomasyon turu beklenmedik bir hatayla sonuçlandı.");
-            }
+            while (await timer.WaitForNextTickAsync(stoppingToken));
         }
-        while (await timer.WaitForNextTickAsync(stoppingToken));
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+        }
     }
 }

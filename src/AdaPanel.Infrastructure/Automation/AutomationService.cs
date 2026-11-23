@@ -47,7 +47,8 @@ public sealed class AutomationService(
     IRunningJobService runningJobs,
     ILogger<AutomationService> logger,
     ISiteDatabaseLinkService? siteDatabaseLinks = null,
-    ICustomerScopeService? customerScopes = null) : IAutomationService
+    ICustomerScopeService? customerScopes = null,
+    AlertDeliveryFailureStore? alertFailures = null) : IAutomationService
 {
     private const string StatePath = "config/automation.json";
     private const string AlertCooldownPath = "config/automation-alerts.json";
@@ -219,7 +220,19 @@ public sealed class AutomationService(
         string.Equals(user?.Trim(), otherUser?.Trim(), StringComparison.Ordinal) &&
         string.Equals(region?.Trim(), otherRegion?.Trim(), StringComparison.Ordinal);
 
+    /// <summary>Eski tek-tur davranışı (testler ve tek seferlik çağrılar): önce nöbetçiler, sonra uzun işler.</summary>
     public async Task RunDueJobsAsync(CancellationToken cancellationToken = default)
+    {
+        await RunWatchdogsAsync(cancellationToken);
+        await RunLongJobsAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Kısa, sık nöbetçiler: brute-force temizliği, hata bildirimi, izleme örneği, disk/SSL uyarıları,
+    /// DNS bind nöbetçisi. Saatler süren yedeğin ARKASINDA beklememesi için worker bunları ayrı
+    /// döngüde çağırır.
+    /// </summary>
+    public async Task RunWatchdogsAsync(CancellationToken cancellationToken = default)
     {
         // Süresi dolmuş brute-force engellerini temizle. Paylaşılan kilit reentrant
         // olmadığından bu çağrı exclusive bloğun dışında kalmalı.
@@ -291,6 +304,11 @@ public sealed class AutomationService(
             logger.LogWarning(exception, "DNS bind nöbetçisi çalıştırılamadı.");
         }
 
+    }
+
+    /// <summary>Uzun süren işler: bileşen güncelleme kontrolü, otomatik yedek, SSL yenileme, log temizliği.</summary>
+    public async Task RunLongJobsAsync(CancellationToken cancellationToken = default)
+    {
         // Bileşen güncelleme kontrolü günde bir. KİLİDİN DIŞINDA çalışmalı: hem uzun süren ağ
         // istekleri hem de otomatik kurulum yüzünden. Kurulum (ör. Roundcube/phpMyAdmin) IIS sitesi
         // oluşturur, o da AYNI non-reentrant kilidi almaya çalışır → kilit içinde çağrılırsa panel
@@ -1336,6 +1354,16 @@ public sealed class AutomationService(
     /// Disk doluluk ve sertifika bitiş eşiklerini kontrol eder; aşım varsa e-posta/webhook
     /// uyarısı gönderir. Aynı uyarı için 24 saat tekrar gönderilmez (cooldown dosyası).
     /// </summary>
+    private async Task<Dictionary<string, AlertDeliveryFailure>> SafeReadFailuresAsync(CancellationToken cancellationToken)
+    {
+        try { return await alertFailures!.ReadAsync(cancellationToken); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Uyari teslim hatasi kayitlari okunamadi.");
+            return new Dictionary<string, AlertDeliveryFailure>();
+        }
+    }
+
     private async Task RunAlertChecksAsync(CancellationToken cancellationToken)
     {
         var state = await LoadAsync(cancellationToken);
@@ -1487,6 +1515,9 @@ public sealed class AutomationService(
         await AddBackupHealthAlertsAsync(state, alerts, now, cancellationToken);
 
         var changed = false;
+        var failures = alertFailures is null
+            ? new Dictionary<string, AlertDeliveryFailure>()
+            : await SafeReadFailuresAsync(cancellationToken);
         foreach (var (key, subject, body) in alerts)
         {
             if (cooldown.TryGetValue(key, out var last) && now - last < AlertCooldown)
@@ -1494,23 +1525,71 @@ public sealed class AutomationService(
                 continue;
             }
 
+            // Önceki denemeler başarısız olduysa geri çekilme süresi dolmadan tekrar denenmez
+            // (eskiden her dakika e-posta + webhook yeniden denenir ve kimse görmezdi).
+            if (failures.TryGetValue(key, out var failure) && failure.NextRetryUtc > now)
+            {
+                continue;
+            }
+
             var delivered = false;
+            var failureNotes = new List<string>();
             if (emailReady)
             {
                 try { await notificationService.SendEmailAsync(subject, body, cancellationToken); delivered = true; }
-                catch (Exception ex) { logger.LogWarning(ex, "Uyari e-postasi gonderilemedi: {Key}", key); }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Uyari e-postasi gonderilemedi: {Key}", key);
+                    failureNotes.Add($"email:{ex.GetType().Name}");
+                }
             }
 
             if (webhookReady)
             {
                 try { await notificationService.SendWebhookAsync("adapanel.alert", body, cancellationToken); delivered = true; }
-                catch (Exception ex) { logger.LogWarning(ex, "Uyari webhook gonderilemedi: {Key}", key); }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Uyari webhook gonderilemedi: {Key}", key);
+                    failureNotes.Add($"webhook:{ex.GetType().Name}");
+                }
             }
 
             if (delivered)
             {
                 cooldown[key] = now;
                 changed = true;
+            }
+
+            if (alertFailures is not null)
+            {
+                try
+                {
+                    if (delivered)
+                    {
+                        if (failures.Remove(key)) await alertFailures.ClearAsync([key], cancellationToken);
+                    }
+                    else
+                    {
+                        await alertFailures.RecordFailureAsync(key, $"{key} ({string.Join(", ", failureNotes)})", now, cancellationToken);
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger.LogWarning(ex, "Uyari teslim hatasi kaydi yazilamadi: {Key}", key);
+                }
+            }
+        }
+
+        // Koşulu geçmiş (artık üretilmeyen) uyarıların başarısızlık kayıtlarını temizle:
+        // yönetici çözülmüş bir sorun için "teslim edilemiyor" rozeti görmesin.
+        if (alertFailures is not null && failures.Count > 0)
+        {
+            var current = alerts.Select(item => item.Key).ToHashSet(StringComparer.Ordinal);
+            var gone = failures.Keys.Where(k => !current.Contains(k)).ToList();
+            try { await alertFailures.ClearAsync(gone, cancellationToken); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Eski uyari teslim hatasi kayitlari temizlenemedi.");
             }
         }
 

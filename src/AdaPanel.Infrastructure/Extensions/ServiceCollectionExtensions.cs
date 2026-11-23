@@ -88,6 +88,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IConcurrencyLock, ConcurrencyLock>();
         services.AddSingleton<IOperationProgressService, Services.OperationProgressService>();
         services.AddSingleton<JsonFileStore>();
+        services.AddSingleton<AdaPanel.Infrastructure.Automation.AlertDeliveryFailureStore>();
         // YANITI BEKLETMEMESİ gereken işlerin kuyruğu. SINGLETON olmak ZORUNDA: kuyruk süreç
         // genelinde tek olmalı, kapsamlı (scoped) kayıt her istekte YENİ ve BOŞ bir kuyruk üretir,
         // yani hiçbir iş çalıştıran işçiye ULAŞMAZDI (aynı gerekçe SessionRevocationStore'da).
