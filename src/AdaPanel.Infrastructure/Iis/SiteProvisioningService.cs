@@ -325,6 +325,7 @@ public sealed class SiteProvisioningService(
             PublishPhpEntry(site.PhysicalPath);
         }
         catch (OperationCanceledException) { throw; }
+        catch (AppException) { throw; }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Belge kökü web.config'i yazılamadı (en iyi çaba): {Site}", siteName);

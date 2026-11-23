@@ -408,6 +408,35 @@ public sealed class HtaccessPanelService
             }
         }
 
+        // Okuma yolunda da bağlantı reddedilir: kiracı site\x -> başka kiracının klasörü junction'ı
+        // kurup panelin (SYSTEM) onun .htaccess'ini okuyup rapora koymasını sağlayamaz. Kök,
+        // her ara dizin ve her seviyedeki .htaccess dosyası denetlenir.
+        var hedefDizin = goreli.Length > 0
+            ? Path.Combine(kok, goreli.Replace('/', Path.DirectorySeparatorChar))
+            : kok;
+        if (ReparseGuard.HasReparsePoint(kok, hedefDizin, includeRoot: true))
+        {
+            throw new AppException("htaccess.directory_outside_root",
+                details: "Yol bir bağlantı (junction/symlink) içeriyor; inceleme REDDEDİLDİ.");
+        }
+
+        var seviye = kok;
+        if (ReparseGuard.IsReparsePoint(Path.Combine(seviye, ".htaccess")))
+        {
+            throw new AppException("htaccess.directory_outside_root",
+                details: ".htaccess bir bağlantı; inceleme REDDEDİLDİ.");
+        }
+
+        foreach (var parca in goreli.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            seviye = Path.Combine(seviye, parca);
+            if (ReparseGuard.IsReparsePoint(Path.Combine(seviye, ".htaccess")))
+            {
+                throw new AppException("htaccess.directory_outside_root",
+                    details: ".htaccess bir bağlantı; inceleme REDDEDİLDİ.");
+            }
+        }
+
         return _motor.Inspect(kok, goreli);
     }
 

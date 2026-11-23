@@ -709,6 +709,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                     else
                     {
                         sourceRead = new FileStream(source.PhysicalPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                        FinalPathGuard.EnsureInside(sourceRead, source.SandboxRoot);
                         measuredBytes = sourceRead.Length;
                     }
                     original = OpenCompressionDestination(target.PhysicalPath, overwrite);
@@ -1613,6 +1614,8 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
         try
         {
+            // Açılan tutamacın GERÇEK yolu sandbox içinde mi (TOCTOU: denetimle açma arasında junction).
+            FinalPathGuard.EnsureInside(input, target.SandboxRoot);
             await ApprovePublicationAsync(target, beforeRead, cancellationToken);
             EnsureInsideSandbox(target);
             return (Path.GetFileName(target.PhysicalPath), "application/octet-stream", input);
@@ -1769,6 +1772,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             cancellationToken.ThrowIfCancellationRequested();
             EnsureNoReparsePoints(source.SandboxRoot, file.FullName);
             await using var input = OpenCompressionFile(file.FullName);
+            FinalPathGuard.EnsureInside(input, source.SandboxRoot);
             var entry = archive.CreateEntry(EntryName(file.FullName), CompressionLevel.Optimal);
             SetTimestamp(entry, file.LastWriteTime);
             await using var compressed = entry.Open();
@@ -1823,6 +1827,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         // Keep the measured archive open without write/delete sharing through quota and extraction.
         await using var input = new FileStream(archive.PhysicalPath, FileMode.Open, FileAccess.Read, FileShare.Read,
             81920, FileOptions.Asynchronous | FileOptions.RandomAccess);
+        FinalPathGuard.EnsureInside(input, archive.SandboxRoot);
         using var zip = OpenArchive(input);
         // Validate every header before effects; quota below accounts for each published
         // entry's net growth, including repeated names that replace an earlier entry.
@@ -2232,6 +2237,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         // retained archive and verifies actual entry length/CRC before each file is published.
         await using var input = new FileStream(archive.PhysicalPath, FileMode.Open, FileAccess.Read, FileShare.Read,
             81920, FileOptions.Asynchronous | FileOptions.RandomAccess);
+        FinalPathGuard.EnsureInside(input, archive.SandboxRoot);
         using var zip = OpenArchive(input);
         return MeasureArchiveContentBytes(zip, cancellationToken);
     }
@@ -2391,18 +2397,11 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         string sandboxRoot,
         string fullPath)
     {
-        var relativePath = Path.GetRelativePath(sandboxRoot, fullPath);
-        var currentPath = sandboxRoot;
-        foreach (var segment in relativePath.Split(
-                     Path.DirectorySeparatorChar,
-                     StringSplitOptions.RemoveEmptyEntries))
+        // Kökün KENDİSİ de denetlenir (site\x -> C:\ProgramData) ve hedefi silinmiş (dangling)
+        // bağlantı da reddedilir; ikisi de ReparseGuard'da.
+        if (ReparseGuard.HasReparsePoint(sandboxRoot, fullPath, includeRoot: true))
         {
-            currentPath = Path.Combine(currentPath, segment);
-            if ((File.Exists(currentPath) || Directory.Exists(currentPath)) &&
-                File.GetAttributes(currentPath).HasFlag(FileAttributes.ReparsePoint))
-            {
-                throw new AppException("files.path_outside_root", 400, 400);
-            }
+            throw new AppException("files.path_outside_root", 400, 400);
         }
     }
 

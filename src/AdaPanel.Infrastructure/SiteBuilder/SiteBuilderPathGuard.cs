@@ -127,20 +127,7 @@ public static class SiteBuilderPathGuard
     /// </summary>
     public static bool IsReparsePoint(string path)
     {
-        try
-        {
-            if (!File.Exists(path) && !Directory.Exists(path))
-            {
-                return false;
-            }
-
-            return File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
-        {
-            // ÖLÇEMEDİK. Bunu "bağlantı değil" saymak, denetimi sessizce kapatmak olurdu; yazma
-            // kapısında ölçemediğimiz şeye izin vermeyiz.
-            return true;
-        }
+        // Tek kaynak: ReparseGuard (hedefi silinmiş bağlantıyı da yakalar, ölçülemeyeni bağlantı sayar).
+        return ReparseGuard.IsReparsePoint(path);
     }
 }

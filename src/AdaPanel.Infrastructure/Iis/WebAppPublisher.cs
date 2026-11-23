@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using AdaPanel.Core.Common;
 
 namespace AdaPanel.Infrastructure.Iis;
 
@@ -8,11 +9,27 @@ namespace AdaPanel.Infrastructure.Iis;
 /// </summary>
 internal static class WebAppPublisher
 {
+    /// <summary>
+    /// Kök (ya da yazılacak/silinecek dosyalar) bağlantıysa true. Panel SYSTEM olarak yazdığı için
+    /// kiracının koyduğu bir junction, panelin diskte başka yere yazmasına yol açardı.
+    /// </summary>
+    internal static bool IsUnsafePublishRoot(string root) =>
+        ReparseGuard.IsReparsePoint(root)
+        || ReparseGuard.IsReparsePoint(Path.Combine(root, "web.config"))
+        || ReparseGuard.IsReparsePoint(Path.Combine(root, "index.html"))
+        || ReparseGuard.IsReparsePoint(Path.Combine(root, "index.php"));
+
     public static void EnsurePhpEntry(string root)
     {
         if (string.IsNullOrWhiteSpace(root))
         {
             return;
+        }
+
+        // Sessizce yutulmaz: çağıran bunu görür (SiteProvisioningService yeniden fırlatır).
+        if (IsUnsafePublishRoot(root))
+        {
+            throw new AppException("files.path_outside_root", 400, 400);
         }
 
         try
@@ -116,6 +133,11 @@ internal static class WebAppPublisher
             return;
         }
 
+        if (IsUnsafePublishRoot(root))
+        {
+            throw new AppException("files.path_outside_root", 400, 400);
+        }
+
         try
         {
             var webConfig = Path.Combine(root, "web.config");
@@ -148,7 +170,7 @@ internal static class WebAppPublisher
 
     internal static bool TryWriteFrontControllerRewrite(string root, bool moduleAvailable)
     {
-        if (string.IsNullOrWhiteSpace(root))
+        if (string.IsNullOrWhiteSpace(root) || IsUnsafePublishRoot(root))
         {
             return false;
         }

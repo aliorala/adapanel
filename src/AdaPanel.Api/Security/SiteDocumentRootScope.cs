@@ -60,7 +60,13 @@ public static class SiteDocumentRootScope
             kokler.AddRange(kiracininSiteKokleri.Where(kok => !string.IsNullOrWhiteSpace(kok)));
         }
 
+        // Sözcüksel kapsama YETMEZ: kiracı site\x -> C:\ProgramData junction'ı kurup kökü oraya
+        // çevirirse metin olarak "site içinde" kalır ama dosya yöneticisi (SYSTEM) tüm diski görür.
+        // Bu yüzden kökten istenen yola giden zincirin HİÇBİR parçası (istenen yolun kendisi dahil)
+        // bağlantı olamaz; hedefi silinmiş bağlantı da reddedilir. Kökün kendisi denetlenmez
+        // (yönetici kurulumu): istenen yol köke eşitse zincir boştur.
         return kokler.Count > 0
-            && kokler.Any(kok => PathContainment.IsRootOrInside(kok, istenenYol));
+            && kokler.Any(kok => PathContainment.IsRootOrInside(kok, istenenYol)
+                && !ReparseGuard.HasReparsePoint(kok, istenenYol, includeRoot: false));
     }
 }
