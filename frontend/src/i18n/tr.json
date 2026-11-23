@@ -3701,7 +3701,7 @@
   "terminal.owner_only": "Terminal yalnızca sunucu sahibine açıktır. Panel yöneticisi olmak sunucuda SYSTEM komutu çalıştırma yetkisi vermez.",
   "docker.owner_only": "Docker yalnızca sunucu sahibine açıktır. Panel yöneticisi olmak sunucunun konteyner motorunu yönetme yetkisi vermez.",
   "proxy.destination_forbidden": "Bu hedefe izin verilmiyor. İç ağ, özel, bağlantı-yerel ve panel hizmet adreslerine vekil yapılamaz.",
-  "git.unsafe_repository": "Sitenin .git girdisi bir dosya ya da bağlantı olduğu için kullanılamıyor. Kaldırın ya da sunucu sahibine başvurun.",
+  "git.unsafe_repository": "Sitenin .git girdisi ya da panel deposu kullanılamayan bir dosya/bağlantı içeriyor (gitfile, commondir, alternates). Kaldırın ya da sunucu sahibine başvurun.",
   "git.unsafe_config": "Depo yapılandırması izin verilmeyen ayarlar içeriyor; dağıtım reddedildi. Hiçbir şey silinmedi.",
   "terminal.working_directory_denied": "Terminal çalışma dizini panel, uygulama veya IIS site kökleri içinde olmalı.",
   "terminal.working_directory_missing": "Terminal çalışma dizini bulunamadı.",

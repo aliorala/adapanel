@@ -54,43 +54,74 @@ public sealed class GitPanelDizinTests
         return site;
     }
 
+    /// <summary>
+    /// Kiracının tehlikeli .git'i ARTIK ne kopyalanır ne kullanılır: web kökünden panel klasörüne TAŞINIR,
+    /// panel git dizini oluşturulmaz (sıfırdan init yapılacak), hiçbir sürücü çalışmaz.
+    /// </summary>
     [Theory]
     [InlineData("[filter \"evil\"]\n\tsmudge = cmd /c echo x > ISARET.txt\n\tprocess = cmd /c echo x > ISARET.txt")]
     [InlineData("[core]\n\tworktree = C:/Windows/Temp")]
     [InlineData("[core]\n\tfsmonitor = cmd /c echo x > ISARET.txt")]
     [InlineData("[http]\n\tcookieFile = C:/Windows/win.ini\n\tsaveCookies = true")]
     [InlineData("[include]\n\tpath = ../baska")]
-    [InlineData("[url \"http://evil/\"]\n\tinsteadOf = https://")]
-    public async Task Kiracinin_tehlikeli_git_ayari_tasinmayi_ve_dagitimi_REDDEDER(string ek)
+    public async Task Kiracinin_tehlikeli_git_dizini_KOPYALANMAZ_web_kokunden_tasinir(string ek)
     {
         var (servis, kok) = Servis();
         var site = KiraciDeposu(Path.Combine(kok, "site"), ek);
         var gitDir = servis.GitDirFor("site");
 
-        var hata = await Assert.ThrowsAsync<AppException>(() => servis.EnsureRepositoryLocationAsync(site, gitDir, CancellationToken.None));
+        var uyari = await servis.EnsureRepositoryLocationAsync(site, gitDir, CancellationToken.None);
 
-        Assert.Equal("git.unsafe_config", hata.MessageKey);
-        Assert.False(Directory.Exists(gitDir), "tehlikeli config panele taşındı");
-        Assert.True(Directory.Exists(Path.Combine(site, ".git")), "kiracının verisi silindi/taşındı");
+        Assert.Null(uyari);
+        Assert.False(Directory.Exists(gitDir), "kiracı deposu panel git dizinine kopyalandı");
+        Assert.False(Directory.Exists(Path.Combine(site, ".git")), ".git web kökünde kaldı");
+        var eski = Assert.Single(Directory.GetDirectories(Path.GetDirectoryName(gitDir)!, "site.tenant-old-*"));
+        Assert.True(Directory.Exists(Path.Combine(eski, "objects")), "geçmiş silinmiş");
         Assert.False(File.Exists(Path.Combine(site, "ISARET.txt")));
-        Assert.Empty(Directory.GetDirectories(Path.GetDirectoryName(gitDir)!, "*.migrating-*"));
+        Assert.Empty(Directory.GetDirectories(site, ".git*"));
     }
 
     [Fact]
-    public async Task Temiz_kiraci_deposu_panele_tasinir_gecmis_korunur_eskisi_silinmez()
+    public async Task Tasima_basarisizsa_URLdeki_jeton_silinir_ve_UYARI_doner()
     {
         var (servis, kok) = Servis();
-        var site = KiraciDeposu(Path.Combine(kok, "site"), "[remote \"origin\"]\n\turl = https://example.test/a.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*");
+        var site = KiraciDeposu(Path.Combine(kok, "site"),
+            "[remote \"origin\"]\n\turl = https://kullanici:GIZLIJETON@example.test/a.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*");
         var gitDir = servis.GitDirFor("site");
 
-        await servis.EnsureRepositoryLocationAsync(site, gitDir, CancellationToken.None);
+        // Açık tutulan bir dosya Directory.Move'u bozar (paylaşım ihlali).
+        using var kilit = new FileStream(Path.Combine(site, ".git", "HEAD"), FileMode.Open, FileAccess.Read, FileShare.None);
 
-        Assert.True(File.Exists(Path.Combine(gitDir, "HEAD")));
-        Assert.Contains("ilk", DuzGit(site, "--git-dir=" + gitDir, "log", "--format=%s"));
-        Assert.False(Directory.Exists(Path.Combine(site, ".git")), "eski .git yerinde kaldı");
-        var eski = Assert.Single(Directory.GetDirectories(site, ".git.adapanel-migrated-*"));
-        Assert.True(Directory.Exists(Path.Combine(eski, "objects")), "eski geçmiş silinmiş");
-        Assert.StartsWith(Path.Combine(kok, "veri", "git"), gitDir, StringComparison.OrdinalIgnoreCase);
+        var uyari = await servis.EnsureRepositoryLocationAsync(site, gitDir, CancellationToken.None);
+
+        Assert.NotNull(uyari);
+        Assert.Contains("WARNING", uyari);
+        var config = File.ReadAllText(Path.Combine(site, ".git", "config"));
+        Assert.DoesNotContain("GIZLIJETON", config);
+        Assert.Contains("https://example.test/a.git", config);
+    }
+
+    [Theory]
+    [InlineData("commondir", "../../baska")]
+    [InlineData("gitdir", "C:/baska")]
+    [InlineData("objects/info/alternates", "C:/baska/objects")]
+    [InlineData("objects/info/http-alternates", "http://evil/objects")]
+    public async Task Panel_git_dizininde_commondir_ya_da_alternates_varsa_REDDEDILIR(string dosya, string icerik)
+    {
+        var (servis, kok) = Servis();
+        var site = Path.Combine(kok, "site");
+        Directory.CreateDirectory(site);
+        var gitDir = servis.GitDirFor("site");
+        Directory.CreateDirectory(Path.GetDirectoryName(gitDir)!);
+        await GitDeploymentService.RunGitForTests("init", site, CancellationToken.None, gitDir, useWorkTree: false);
+        var hedef = Path.Combine(gitDir, dosya.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(hedef)!);
+        File.WriteAllText(hedef, icerik);
+
+        var hata = await Assert.ThrowsAsync<AppException>(() => servis.EnsureRepositoryLocationAsync(site, gitDir, CancellationToken.None));
+
+        Assert.Equal("git.unsafe_repository", hata.MessageKey);
+        Assert.False(File.Exists(Path.Combine(site, "ISARET.txt")));
     }
 
     [Fact]

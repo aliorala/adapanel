@@ -166,7 +166,7 @@ public sealed class GitDeploymentService(
         // (<DataRoot>\git\<site>.git, SYSTEM+Administrators). Kiracının .git/config'i (filter.*.smudge,
         // core.worktree, http.cookieFile ...) ve .gitattributes sürücüleri artık SYSTEM'e ulaşamaz.
         var gitDir = GitDirFor(siteName);
-        await EnsureRepositoryLocationAsync(path, gitDir, cancellationToken);
+        var locationWarning = await EnsureRepositoryLocationAsync(path, gitDir, cancellationToken);
 
         var isRepository = File.Exists(Path.Combine(gitDir, "HEAD"));
         CommandResult result;
@@ -222,7 +222,7 @@ public sealed class GitDeploymentService(
         {
             Success = success,
             Commit = commit,
-            Output = CombineOutput(result),
+            Output = string.Join(Environment.NewLine, new[] { CombineOutput(result), locationWarning ?? string.Empty }.Where(value => !string.IsNullOrWhiteSpace(value))),
             DeployedAtUtc = record.LastDeployUtc.Value,
             Deployment = ToDto(siteName, path, record)
         };
@@ -257,15 +257,20 @@ public sealed class GitDeploymentService(
         fileStore.ResolvePath($"git/{WindowsReservedNames.MakeSafe($"{SanitizeFileName(siteName)}.git")}");
 
     /// <summary>
-    /// Dağıtımdan ÖNCE: kiracı kökündeki <c>.git</c>'i denetler/panele TAŞIR ve panel git dizininin
-    /// yapılandırmasını izin listesinden geçirir. Sorun varsa dağıtım REDDEDİLİR; hiçbir şey silinmez.
+    /// Dağıtımdan ÖNCE. (1) Kiracı kökündeki <c>.git</c> KULLANILMAZ ve KOPYALANMAZ (commondir /
+    /// objects/info/alternates ile panel deposunu kiracı klasörüne bağlatıp SYSTEM'de sürücü
+    /// çalıştırmak mümkündü); web kökünden panel klasörüne TAŞINIR (silme yok) çünkü içindeki remote URL
+    /// jeton taşıyabilir ve web kökünde okunabilir. Panel git dizini her zaman sıfırdan kurulur.
+    /// (2) Panel git dizinindeki commondir/gitdir/alternates ve izin dışı config reddedilir.
+    /// Dönen metin (varsa) dağıtım çıktısına eklenecek uyarıdır.
     /// </summary>
-    internal async Task EnsureRepositoryLocationAsync(string path, string gitDir, CancellationToken cancellationToken)
+    internal async Task<string?> EnsureRepositoryLocationAsync(string path, string gitDir, CancellationToken cancellationToken)
     {
         await Task.CompletedTask;
+        string? warning = null;
         var tenantGit = Path.Combine(path, ".git");
 
-        // gitfile ya da reparse point: tenant .git'i başka bir yere bağlayabilir -> reddet.
+        // gitfile ya da reparse point: başka bir yere bağlayabilir -> reddet.
         if (File.Exists(tenantGit))
         {
             throw new AppException("git.unsafe_repository", 409, 409, "'.git' is a file (gitfile).");
@@ -278,16 +283,23 @@ public sealed class GitDeploymentService(
                 throw new AppException("git.unsafe_repository", 409, 409, "'.git' is a reparse point.");
             }
 
-            if (!Directory.Exists(gitDir))
-            {
-                MigrateTenantGitDirectory(tenantGit, gitDir);
-            }
+            warning = RelocateTenantGitDirectory(tenantGit, gitDir);
         }
 
         if (Directory.Exists(gitDir))
         {
+            foreach (var forbidden in new[] { "commondir", "gitdir", Path.Combine("objects", "info", "alternates"), Path.Combine("objects", "info", "http-alternates") })
+            {
+                if (File.Exists(Path.Combine(gitDir, forbidden)) || Directory.Exists(Path.Combine(gitDir, forbidden)))
+                {
+                    throw new AppException("git.unsafe_repository", 409, 409, $"'{forbidden}' is present in the repository directory.");
+                }
+            }
+
             ValidateGitDirectoryConfig(gitDir);
         }
+
+        return warning;
     }
 
     private static void ValidateGitDirectoryConfig(string gitDir)
@@ -301,49 +313,77 @@ public sealed class GitDeploymentService(
         }
     }
 
-    private void MigrateTenantGitDirectory(string tenantGit, string gitDir)
+    private static readonly Regex UserInfoInUrl = new(@"(?<=://)[^/@\s""]+@", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Eski kiracı <c>.git</c>'ini web kökünden <c>&lt;DataRoot&gt;\git\&lt;site&gt;.tenant-old-&lt;zaman&gt;</c> altına taşır.
+    /// Aynı birimde <see cref="Directory.Move"/>; farklı birimde kopyala, doğrula, sonra kaynağı sil.
+    /// Taşınamazsa kalan config'teki remote URL'lerin userinfo (jeton/parola) kısmı silinir ve uyarı döner.
+    /// </summary>
+    private string? RelocateTenantGitDirectory(string tenantGit, string gitDir)
     {
         var parent = Path.GetDirectoryName(gitDir)!;
-        Directory.CreateDirectory(parent);
-        // Ucuz ön denetim: tehlikeli config varsa hiçbir şey kopyalanmaz.
-        ValidateGitDirectoryConfig(tenantGit);
-        var staging = gitDir + ".migrating-" + Guid.NewGuid().ToString("N");
+        var name = Path.GetFileName(gitDir);
+        var baseName = name.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? name[..^4] : name;
+        var target = Path.Combine(parent, $"{baseName}.tenant-old-{DateTime.UtcNow:yyyyMMddHHmmssfff}");
+
         try
         {
-            // KOPYALA (taşıma değil): taşınan klasör kiracı ACL'ini korurdu; kopya, panelin sertleştirilmiş
-            // git klasöründen miras alır. Reparse point içeren ağaç reddedilir.
-            CopyTreeRejectingReparsePoints(tenantGit, staging);
-            ValidateGitDirectoryConfig(staging);
-            Directory.Move(staging, gitDir);
-        }
-        catch
-        {
-            // Yalnız PANELİN oluşturduğu geçici kopya temizlenir; kiracının .git'ine dokunulmaz.
-            try
+            Directory.CreateDirectory(parent);
+            var sameVolume = string.Equals(Path.GetPathRoot(Path.GetFullPath(tenantGit)), Path.GetPathRoot(Path.GetFullPath(target)), StringComparison.OrdinalIgnoreCase);
+            if (sameVolume)
             {
-                if (Directory.Exists(staging))
-                {
-                    // git nesne dosyaları salt okunurdur; silmeden önce öznitelik temizlenir.
-                    foreach (var file in Directory.EnumerateFiles(staging, "*", SearchOption.AllDirectories))
-                    {
-                        File.SetAttributes(file, FileAttributes.Normal);
-                    }
-
-                    Directory.Delete(staging, true);
-                }
+                Directory.Move(tenantGit, target);
             }
-            catch { /* en iyi çaba */ }
-            throw;
-        }
+            else
+            {
+                CopyTreeRejectingReparsePoints(tenantGit, target);
+                if (CountFiles(tenantGit) != CountFiles(target))
+                {
+                    throw new IOException("Copied tree does not match the source.");
+                }
 
-        // Eski .git yerinde yeniden adlandırılır (silme yok): artık kullanılmıyor, geçmiş korunuyor.
-        try
-        {
-            Directory.Move(tenantGit, tenantGit + ".adapanel-migrated-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss"));
+                foreach (var file in Directory.EnumerateFiles(tenantGit, "*", SearchOption.AllDirectories))
+                {
+                    File.SetAttributes(file, FileAttributes.Normal);
+                }
+
+                Directory.Delete(tenantGit, true);
+            }
+
+            logger.LogInformation("Kiracı .git web kökünden taşındı: {Source} -> {Target}", tenantGit, target);
+            return null;
         }
         catch (Exception exception)
         {
-            logger.LogWarning(exception, "Eski .git yeniden adlandırılamadı (kullanılmıyor): {Path}", tenantGit);
+            logger.LogWarning(exception, "Kiracı .git web kökünden taşınamadı: {Path}", tenantGit);
+            var sanitized = SanitizeRemoteUrls(Path.Combine(tenantGit, "config"));
+            return "WARNING: the old .git directory could not be moved out of the web root"
+                + (sanitized ? "; credentials in its remote URLs were removed" : "; its remote URLs could NOT be sanitized")
+                + ". Remove or protect the directory manually.";
+        }
+    }
+
+    private static int CountFiles(string directory) => Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).Count();
+
+    private static bool SanitizeRemoteUrls(string configPath)
+    {
+        try
+        {
+            if (!File.Exists(configPath)) return true;
+            var text = File.ReadAllText(configPath);
+            var cleaned = UserInfoInUrl.Replace(text, string.Empty);
+            if (!ReferenceEquals(cleaned, text) && cleaned != text)
+            {
+                File.SetAttributes(configPath, FileAttributes.Normal);
+                File.WriteAllText(configPath, cleaned);
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 
