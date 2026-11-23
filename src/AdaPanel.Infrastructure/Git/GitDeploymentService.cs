@@ -442,6 +442,13 @@ public sealed class GitDeploymentService(
                 ["GCM_INTERACTIVE"] = "never",
                 ["GIT_ASKPASS"] = "echo",
 
+                // G6: git SYSTEM olarak, kiracının YAZABİLDİĞİ dizinde koşar; .git/config'i kiracı
+                // düzenleyebilir. Kullanıcı/global yapılandırma okunmaz (SYSTEM profili zaten kiracının
+                // değil; yine de deterministik). Sistem yapılandırması BİLEREK açık bırakıldı: yalnız
+                // yönetici yazabilir ve Git for Windows'ta TLS arka ucu/CA yolu orada durur
+                // (GIT_CONFIG_NOSYSTEM=1 https depolarını sessizce kırabilir).
+                ["GIT_CONFIG_GLOBAL"] = "NUL",
+
                 // İKİNCİ VE BAĞIMSIZ KATMAN: git'in KENDİ taşıyıcı beyaz listesi. ValidateRepositoryUrl
                 // `ext::` biçimini reddediyor, ama o doğrulama yalnız ConfigureAsync'te çalışıyor —
                 // diskteki config/git/<site>.json bir kez kötü bir değerle yazıldıysa DeployAsync onu
@@ -479,7 +486,17 @@ public sealed class GitDeploymentService(
     /// </para>
     /// </remarks>
     internal static string BuildGitArguments(string arguments) =>
-        "-c http.followRedirects=false " + arguments;
+        "-c http.followRedirects=false " + HardeningArguments + arguments;
+
+    /// <summary>
+    /// G6: kiracının <c>.git/config</c> dosyasıyla kod çalıştırmasını kapatan komut satırı geçersiz
+    /// kılmaları (komut satırı depo içi yapılandırmadan yüksek önceliklidir). fsmonitor/hook/ssh/askpass
+    /// yürütücüleri etkisiz; <c>file</c> taşıyıcısı kapalı. Not: depodaki <c>filter.*</c> sürücüleri
+    /// bu yolla kapatılamaz (bakiye).
+    /// </summary>
+    internal const string HardeningArguments =
+        "-c core.fsmonitor=false -c core.hooksPath=NUL -c core.sshCommand=ssh " +
+        "-c protocol.file.allow=never -c core.askPass=echo -c credential.helper= ";
 
     /// <summary>
     /// Testlerin ÜRETİMDEKİ git çağrısını (aynı ortam değişkenleri + aynı ön yapılandırma ile)
