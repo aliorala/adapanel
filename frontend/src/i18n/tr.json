@@ -4395,6 +4395,7 @@
   "panel.subscription.reason.traffic": "Aylık trafik kotası dolduğu için askıya alındı. Yeni ay başladığında ya da plan yükseltildiğinde kendiliğinden açılır.",
   "panel.subscription.reason.expired": "Abonelik süresi dolduğu için askıya alındı. Bitiş tarihi ileri alındığında kendiliğinden açılır.",
   "panel.subscription.reason.manual": "Yönetici tarafından askıya alındı. Kendiliğinden açılmaz.",
+  "panel.subscription.reason.reseller": "Bayiniz tarafından askıya alındı. Bayiniz yeniden başlatabilir.",
   "panel.subscription.traffic": "Bu ayki trafik",
   "panel.subscription.sites": "Site",
   "panel.subscription.disk": "Disk",

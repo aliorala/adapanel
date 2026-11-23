@@ -4395,6 +4395,7 @@
   "panel.subscription.reason.traffic": "Suspended because the monthly traffic quota was used up. It resumes on its own at the start of a new month or when the plan is upgraded.",
   "panel.subscription.reason.expired": "Suspended because the subscription term ended. It resumes on its own once the end date is extended.",
   "panel.subscription.reason.manual": "Suspended by an administrator. It will not resume on its own.",
+  "panel.subscription.reason.reseller": "Suspended by your reseller. Your reseller can resume it.",
   "panel.subscription.traffic": "Traffic this month",
   "panel.subscription.sites": "Sites",
   "panel.subscription.disk": "Disk",

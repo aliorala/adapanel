@@ -132,7 +132,10 @@ public sealed class SubscriptionsController(
         // taşımıyordu. Yani tek bir eylem iki satır üretiyor, biri yalan söylüyordu. Servis artık
         // gerçek aktörü ve IP'yi HTTP bağlamından okuyor (SubscriptionEnforcementService.Aktor),
         // konuyu da aboneliğe bağlıyor; ikinci satır sahte bir çeşitlilikten başka bir şey olmazdı.
-        await enforcement.SuspendAsync(userId, "manual", cancellationToken);
+        // G22: askının KAYNAĞI saklanır. Bayi askısı "reseller", yönetici askısı "manual" yazılır;
+        // bayi yalnız KENDİ askısını kaldırabilir (bkz. ResumeAsync). Var olan "manual" kayıtlar
+        // yönetici askısı sayılır (kapalı tarafta hata).
+        await enforcement.SuspendAsync(userId, CustomerAccess.IsReseller(User) ? "reseller" : "manual", cancellationToken);
 
         return Ok(ApiResponse<SubscriptionUsageDto>.Ok(
             await enforcement.GetUsageAsync(userId, cancellationToken),
@@ -145,6 +148,17 @@ public sealed class SubscriptionsController(
     public async Task<ActionResult<ApiResponse<SubscriptionUsageDto>>> ResumeAsync(Guid userId, CancellationToken cancellationToken)
     {
         await EnsureManageableAsync(userId, cancellationToken);
+        if (CustomerAccess.IsReseller(User))
+        {
+            // Yönetici/otomatik (süre, trafik) askısını bayi kaldıramaz: aksi hâlde borcu nedeniyle
+            // askıya alınan müşteriyi bayi tek çağrıyla açardı.
+            var kapsam = await customerScopes.GetScopeAsync(userId, cancellationToken);
+            if (kapsam.IsSuspended && !string.Equals(kapsam.SuspendReason, "reseller", StringComparison.Ordinal))
+            {
+                throw new Core.Common.AppException("users.forbidden", 403, 403);
+            }
+        }
+
         // İkinci kayıt kaldırıldı; gerekçe SuspendAsync ile aynı (servis artık gerçek aktörü yazıyor).
         await enforcement.ResumeAsync(userId, cancellationToken);
 
