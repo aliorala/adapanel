@@ -1,7 +1,6 @@
 using AdaPanel.Core.Dtos.SiteBuilder;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.SiteBuilder;
@@ -69,8 +68,7 @@ public sealed class SiteBuilderContactService(
     INotificationService notificationService,
     SiteBuilderContactRateLimiter rateLimiter,
     ILogger<SiteBuilderContactService> logger,
-    AdaPanel.Data.Persistence.AdaPanelDbContext? db = null,
-    ICustomerScopeService? customerScopes = null) : ISiteBuilderContactService
+    SiteBuilderContactRecipientPolicy? recipientPolicy = null) : ISiteBuilderContactService
 {
     public async Task<SiteBuilderContactResult> SubmitAsync(
         string siteKey,
@@ -169,29 +167,8 @@ public sealed class SiteBuilderContactService(
         return domain == site || domain.EndsWith("." + site, StringComparison.Ordinal);
     }
 
-    private async Task<bool> IsRecipientAllowedAsync(string siteName, string recipient, CancellationToken cancellationToken)
-    {
-        if (IsRecipientInSiteDomain(siteName, recipient)) return true;
-        if (db is null) return false;
-
-        try
-        {
-            Guid? ownerId = customerScopes is null
-                ? null
-                : await customerScopes.GetSiteOwnerUserIdAsync(siteName, cancellationToken);
-            var wanted = recipient.Trim().ToLowerInvariant();
-            var users = db.Users.AsNoTracking().Where(user => user.IsActive);
-            var emails = ownerId is { } id
-                ? await users.Where(user => user.Id == id).Select(user => user.Email).ToListAsync(cancellationToken)
-                : await users.Where(user => user.Role == AdaPanel.Core.Enums.UserRole.Administrator).Select(user => user.Email).ToListAsync(cancellationToken);
-            return emails.Any(email => string.Equals((email ?? string.Empty).Trim(), wanted, StringComparison.OrdinalIgnoreCase));
-        }
-        catch (Exception exception)
-        {
-            logger.LogWarning(exception, "Alici dogrulamasi okunamadi, gonderim reddedildi: {Site}", siteName);
-            return false;
-        }
-    }
+    private Task<bool> IsRecipientAllowedAsync(string siteName, string recipient, CancellationToken cancellationToken) =>
+        (recipientPolicy ?? new SiteBuilderContactRecipientPolicy()).IsAllowedAsync(siteName, recipient, cancellationToken);
 
     /// <summary>
     /// Formun alıcısı: iletişim bölümü AÇIK, formu AÇIK ve adresi geçerliyse o adres; yoksa boş.

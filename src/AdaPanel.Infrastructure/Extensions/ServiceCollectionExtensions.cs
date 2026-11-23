@@ -193,6 +193,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IGitDeploymentService, Git.GitDeploymentService>();
         services.AddScoped<IWebStatisticsService, Statistics.WebStatisticsService>();
         services.AddScoped<SiteBuilder.ISiteBuilderService, SiteBuilder.SiteBuilderService>();
+        services.AddScoped<SiteBuilder.SiteBuilderContactRecipientPolicy>();
         services.AddScoped<SiteBuilder.ISiteBuilderContactService, SiteBuilder.SiteBuilderContactService>();
 
         // HIZ SINIRLAYICI SINGLETON OLMAK ZORUNDA: sayaçlar bellekte tutuluyor ve kapsamlı

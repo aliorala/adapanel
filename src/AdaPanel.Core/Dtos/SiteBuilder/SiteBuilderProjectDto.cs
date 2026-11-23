@@ -19,6 +19,9 @@ public sealed class SiteBuilderProjectDto
 {
     public string SiteName { get; set; } = string.Empty;
 
+    /// <summary>Kayıt yanıtında: form alıcısı doğrulanamıyorsa çeviri anahtarı (kalıcı değildir; boşsa uyarı yok).</summary>
+    public string ContactFormWarningKey { get; set; } = string.Empty;
+
     /// <summary>Şablon kimliği (katalogdan). Bilinmeyen değer varsayılana düşer.</summary>
     public string TemplateId { get; set; } = string.Empty;
 

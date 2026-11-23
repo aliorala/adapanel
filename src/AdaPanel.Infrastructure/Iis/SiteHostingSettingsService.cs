@@ -685,6 +685,18 @@ public sealed class SiteHostingSettingsService(
             throw new AppException("wpcli.not_wordpress", 409, 409);
         }
 
+        // G24 (tur 2): WP-CLI proje yapılandırmasını (wp-cli.yml / wp-cli.local.yml, çalışma dizininden yukarı)
+        // KENDİSİ okur ve `require:`/`path:`/`exec:`/`ssh:`/`http:` ile keyfî dosya yükletebilir ya da hedef
+        // değiştirebilir. Komut satırı denetimi bunu görmez; bu yüzden böyle bir dosya varsa çalıştırma REDDEDİLİR.
+        var configViolation = FindWpCliProjectConfigViolation(workDir);
+        if (configViolation is not null)
+        {
+            throw new AppException("wpcli.unsafe_config", 409, 409, configViolation);
+        }
+
+        // plugin/theme install, media import, core download: URL hedefleri iç ağa gidemez.
+        await EnsureWpCliUrlTargetsAllowedAsync(trimmed, OutboundAddressGuard.SystemResolver, cancellationToken);
+
         var phpPath = await ResolvePhpExecutableAsync(cancellationToken);
         var wpCli = await EnsureWpCliAsync(cancellationToken);
 
@@ -724,6 +736,80 @@ public sealed class SiteHostingSettingsService(
     private static readonly HashSet<string> WpCliOptionAllowed = new(StringComparer.OrdinalIgnoreCase) { "get", "update", "list", "add", "delete", "pluck" };
 
     private static readonly HashSet<string> WpCliDbAllowed = new(StringComparer.OrdinalIgnoreCase) { "export", "check", "optimize", "repair", "size", "tables", "prefix" };
+
+    private static readonly System.Text.RegularExpressions.Regex WpCliDangerousConfigKey = new(
+        @"^\s*-?\s*(require|path|exec|ssh|http|config|alias|url)\s*:",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Çalışma dizininden köke kadar wp-cli.yml / wp-cli.local.yml taranır; tehlikeli anahtar içeren ilk dosya döner.
+    /// Okunamayan dosya da (içeriği bilinemez) ihlal sayılır.
+    /// </summary>
+    internal static string? FindWpCliProjectConfigViolation(string workDir)
+    {
+        var directory = new DirectoryInfo(workDir);
+        while (directory is not null)
+        {
+            foreach (var name in new[] { "wp-cli.local.yml", "wp-cli.yml" })
+            {
+                var file = Path.Combine(directory.FullName, name);
+                if (!File.Exists(file)) continue;
+                try
+                {
+                    var match = WpCliDangerousConfigKey.Match(File.ReadAllText(file));
+                    if (match.Success)
+                    {
+                        return $"'{name}' defines '{match.Groups[1].Value.ToLowerInvariant()}:'";
+                    }
+                }
+                catch (Exception exception)
+                {
+                    return $"'{name}' could not be read ({exception.GetType().Name})";
+                }
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
+    }
+
+    /// <summary>URL alan alt komutlarda ("plugin install", "theme install", "media import", "core download|update") adresin konağı denetlenir.</summary>
+    internal static async Task EnsureWpCliUrlTargetsAllowedAsync(string command, OutboundAddressGuard.OutboundHostResolver resolver, CancellationToken cancellationToken)
+    {
+        var tokens = command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length < 2) return;
+        var fetches =
+            (tokens[0].Equals("plugin", StringComparison.OrdinalIgnoreCase) && tokens[1].Equals("install", StringComparison.OrdinalIgnoreCase)) ||
+            (tokens[0].Equals("theme", StringComparison.OrdinalIgnoreCase) && tokens[1].Equals("install", StringComparison.OrdinalIgnoreCase)) ||
+            (tokens[0].Equals("media", StringComparison.OrdinalIgnoreCase) && tokens[1].Equals("import", StringComparison.OrdinalIgnoreCase)) ||
+            (tokens[0].Equals("core", StringComparison.OrdinalIgnoreCase) && tokens[1] is "download" or "update");
+        if (!fetches) return;
+
+        foreach (var token in tokens.Skip(2))
+        {
+            var value = token.Trim('\'');
+            var equals = value.StartsWith("--", StringComparison.Ordinal) ? value.IndexOf('=') : -1;
+            if (equals >= 0) value = value[(equals + 1)..];
+            if (!value.Contains("://", StringComparison.Ordinal)) continue;
+
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            {
+                throw new AppException("wpcli.invalid_command", 400, 400);
+            }
+
+            var blocked = await OutboundAddressGuard.FindBlockedHostAsync(
+                uri.DnsSafeHost,
+                resolver,
+                new OutboundTargetPolicy(AllowInternalTargets: false, BlockUnresolvedHost: false),
+                cancellationToken);
+            if (blocked is not null)
+            {
+                throw new AppException("wpcli.url_forbidden", 403, 403);
+            }
+        }
+    }
 
     internal static void ValidateWpCliCommand(string command)
     {
