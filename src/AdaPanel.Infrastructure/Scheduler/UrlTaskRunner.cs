@@ -141,7 +141,31 @@ public static class UrlTaskRunner
     /// görev adresini KAYBEDERDİ.
     /// </remarks>
     public static (string Execute, string Arguments) BuildAction(string url, string? panelExecutable = null)
-        => (panelExecutable ?? ResolvePanelExecutable(), $"{Verb} \"{url.Trim()}\"");
+        => (panelExecutable ?? ResolvePanelExecutable(), $"{Verb} \"{SafeUrlArgument(url)}\"");
+
+    /// <summary>
+    /// G34: adres komut satırına tırnak içinde yazılır. Ham metin değil <c>Uri.AbsoluteUri</c> (kaçışlı,
+    /// kanonik) kullanılır ve tırnak içeren ya da http(s) olmayan adres reddedilir; aksi hâlde
+    /// <c>"</c> ile argüman listesi kapatılıp görev satırına ek argüman enjekte edilebilirdi.
+    /// </summary>
+    internal static string SafeUrlArgument(string url)
+    {
+        var trimmed = (url ?? string.Empty).Trim();
+        if (trimmed.Contains('"') ||
+            !Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new AdaPanel.Core.Common.AppException("cron.invalid_url", 400, 400);
+        }
+
+        var absolute = uri.AbsoluteUri;
+        if (absolute.Contains('"'))
+        {
+            throw new AdaPanel.Core.Common.AppException("cron.invalid_url", 400, 400);
+        }
+
+        return absolute;
+    }
 
     /// <summary>
     /// Panelin kendi yürütülebilirinin TAM yolu.
