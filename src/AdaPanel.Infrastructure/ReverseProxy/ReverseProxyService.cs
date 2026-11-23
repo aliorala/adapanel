@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using AdaPanel.Infrastructure.SiteBuilder;
 using AdaPanel.Infrastructure.Files;
 using AdaPanel.Infrastructure.Iis;
+using AdaPanel.Infrastructure.Support;
 
 namespace AdaPanel.Infrastructure.ReverseProxy;
 
@@ -18,7 +19,9 @@ public sealed partial class ReverseProxyService(
     IIisSiteService iisSiteService,
     IComponentBootstrapper componentBootstrapper,
     IConcurrencyLock concurrencyLock,
-    ILogger<ReverseProxyService> logger) : IReverseProxyService
+    ILogger<ReverseProxyService> logger,
+    Microsoft.AspNetCore.Http.IHttpContextAccessor? httpContextAccessor = null,
+    Microsoft.Extensions.Options.IOptions<AdaPanel.Infrastructure.Options.PanelRuntimeOptions>? runtimeOptions = null) : IReverseProxyService
 {
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
     private const string ServerManagerTypeName = "Microsoft.Web.Administration.ServerManager";
@@ -59,6 +62,13 @@ public sealed partial class ReverseProxyService(
     {
         var destinationUrl = NormalizeDestinationUrl(request.DestinationUrl);
         var mountPath = NormalizeMountPath(request.MountPath);
+
+        // G9: hedef kullanıcıdan gelir (beforeMutation = denetleyici/kullanıcı yolu); panelin kendi
+        // iç çağrıları (PanelPublicAccessService) bu aşırı yüklemeyi kullanmaz ve muaftır.
+        if (beforeMutation is not null)
+        {
+            await EnsureDestinationAllowedAsync(destinationUrl, cancellationToken);
+        }
 
         return await ConfigureAsync(siteName, ["url-rewrite", "iis-arr"], (site, serverManager, save) =>
         {
@@ -119,6 +129,12 @@ public sealed partial class ReverseProxyService(
         Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
         var normalizedRuleName = NormalizeCustomRuleName(request.Name);
+
+        // G9 ikizi: mutlak RewriteUrl de bir vekil hedefidir (ARR/Rewrite o adrese bağlanır).
+        if (beforeMutation is not null)
+        {
+            await EnsureRewriteTargetAllowedAsync(request.RewriteUrl, cancellationToken);
+        }
 
         return await ConfigureAsync(siteName, ["url-rewrite"], (site, serverManager, save) =>
         {
@@ -573,6 +589,101 @@ public sealed partial class ReverseProxyService(
             TrimProxyActionSuffix(actionUrl),
             mountPath,
             hasHtmlLinkRewrite);
+    }
+
+    internal OutboundAddressGuard.OutboundHostResolver DestinationResolver { get; set; } = OutboundAddressGuard.SystemResolver;
+
+    /// <summary>Yönetici dışı çağıranın geri döngüde ASLA hedefleyemeyeceği iç hizmet portları.</summary>
+    internal static readonly int[] InternalServicePorts =
+    [
+        25, 110, 143, 465, 587, 993, 995,   // posta
+        1433, 3306, 5432, 6379, 11211, 27017, 9200,   // veritabanı / önbellek / arama
+        8080,                               // Stalwart yönetim
+        8890,                               // yerel araç yüzeyi
+        8896, 8897                          // phpMyAdmin / webmail (dbtools)
+    ];
+
+    /// <summary>
+    /// G9: yönetici dışı çağıran için hedef iç ağ/metadata/özel adres olamaz. Geri döngü (kendi sitesinin
+    /// Node/PHP arka ucu) serbest, AMA panelin portları ve bilinen iç hizmet portları (veritabanı, posta,
+    /// Stalwart, dbtools) KESİN red. Not: panelde siteye kayıtlı sabit uygulama portu envanteri yok
+    /// (httpPlatformHandler portu dinamik), bu yüzden "yalnız siteye ait portlar" yerine kara liste kullanılır.
+    /// </summary>
+    private async Task EnsureDestinationAllowedAsync(string destinationUrl, CancellationToken cancellationToken)
+    {
+        var context = httpContextAccessor?.HttpContext;
+        if (context?.User.IsInRole("Administrator") == true)
+        {
+            return;
+        }
+
+        var uri = new Uri(destinationUrl);
+        var host = uri.DnsSafeHost;
+        var isLoopback = host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || (System.Net.IPAddress.TryParse(host, out var literal) && System.Net.IPAddress.IsLoopback(literal));
+
+        if (isLoopback)
+        {
+            var panelPorts = new HashSet<int>(InternalServicePorts)
+            {
+                runtimeOptions?.Value.PreferredHttpsPort ?? new AdaPanel.Infrastructure.Options.PanelRuntimeOptions().PreferredHttpsPort
+            };
+            if (context is not null)
+            {
+                panelPorts.Add(context.Connection.LocalPort);
+            }
+
+            if (panelPorts.Contains(uri.Port))
+            {
+                throw new AppException("proxy.destination_forbidden", 403, 403);
+            }
+
+            return;
+        }
+
+        var blocked = await OutboundAddressGuard.FindBlockedHostAsync(
+            host,
+            DestinationResolver,
+            new OutboundTargetPolicy(AllowInternalTargets: false, BlockUnresolvedHost: false),
+            cancellationToken);
+        if (blocked is not null)
+        {
+            throw new AppException("proxy.destination_forbidden", 403, 403);
+        }
+    }
+
+    /// <summary>Göreli RewriteUrl serbest; mutlak (http/https/ters-eğik-çizgisiz) olan hedef gibi denetlenir.</summary>
+    internal async Task EnsureRewriteTargetAllowedAsync(string rewriteUrl, CancellationToken cancellationToken)
+    {
+        var url = (rewriteUrl ?? string.Empty).Trim();
+        if (url.StartsWith("//", StringComparison.Ordinal))
+        {
+            url = "http:" + url;
+        }
+
+        var schemeEnd = url.IndexOf("://", StringComparison.Ordinal);
+        if (schemeEnd <= 0)
+        {
+            return;
+        }
+
+        // Ana makine adı bir geri-başvuru ({R:1}, {HTTP_HOST}) ise hedef ÖLÇÜLEMEZ: yönetici dışı için red.
+        var authorityEnd = url.IndexOfAny(['/', '?', '#'], schemeEnd + 3);
+        var authority = authorityEnd < 0 ? url[(schemeEnd + 3)..] : url[(schemeEnd + 3)..authorityEnd];
+        var isAdmin = httpContextAccessor?.HttpContext?.User.IsInRole("Administrator") == true;
+        if (authority.Contains('{') || authority.Contains('}'))
+        {
+            if (isAdmin) return;
+            throw new AppException("proxy.destination_forbidden", 403, 403);
+        }
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new AppException("proxy.invalid_destination_url", 400, 400);
+        }
+
+        await EnsureDestinationAllowedAsync(uri.GetLeftPart(UriPartial.Path), cancellationToken);
     }
 
     private static string NormalizeDestinationUrl(string destinationUrl)

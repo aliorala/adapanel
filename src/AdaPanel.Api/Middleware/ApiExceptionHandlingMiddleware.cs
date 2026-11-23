@@ -46,7 +46,10 @@ public sealed class ApiExceptionHandlingMiddleware(
                 ? StatusCodes.Status409Conflict
                 : StatusCodes.Status400BadRequest;
 
-            await WriteResponseAsync(context, statusCode, exception.Message);
+            // G27: ham iç mesaj istemciye sızdırılmaz. Servisler mesajı bir ÇEVİRİ ANAHTARI olarak
+            // fırlatır ("setup.already_initialized"); anahtar biçiminde değilse (yol, SQL, bilgi
+            // sızdıran serbest metin) genel anahtara düşülür. Ayrıntı günlükte durur.
+            await WriteResponseAsync(context, statusCode, IsMessageKey(exception.Message) ? exception.Message : "common.unexpected_error");
         }
         catch (AntiforgeryValidationException exception)
         {
@@ -68,6 +71,12 @@ public sealed class ApiExceptionHandlingMiddleware(
             await WriteResponseAsync(context, StatusCodes.Status500InternalServerError, "common.unexpected_error");
         }
     }
+
+    private static readonly System.Text.RegularExpressions.Regex MessageKeyPattern =
+        new(@"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$", System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    internal static bool IsMessageKey(string? message) =>
+        !string.IsNullOrEmpty(message) && message.Length <= 100 && MessageKeyPattern.IsMatch(message);
 
     /// <summary>
     /// Hatayı maskelenmiş kayda ARKA PLANDA yazar.

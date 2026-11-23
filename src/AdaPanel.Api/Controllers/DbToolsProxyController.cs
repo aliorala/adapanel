@@ -1,3 +1,4 @@
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -73,8 +74,25 @@ public sealed class DbToolsProxyController(
         {
             if (HopByHop.Contains(header.Key) ||
                 header.Key.StartsWith("Content-", StringComparison.OrdinalIgnoreCase) ||
-                header.Key.Equals("Accept-Encoding", StringComparison.OrdinalIgnoreCase))
+                header.Key.Equals("Accept-Encoding", StringComparison.OrdinalIgnoreCase) ||
+                // G15: panel kimlik bilgisi (Bearer anahtar, CSRF) aracın koduna/günlüğüne ULAŞMAZ.
+                header.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase) ||
+                header.Key.Equals("X-CSRF-TOKEN", StringComparison.OrdinalIgnoreCase))
             {
+                continue;
+            }
+
+            if (header.Key.Equals("Cookie", StringComparison.OrdinalIgnoreCase))
+            {
+                var authName = HttpContext.RequestServices
+                    .GetService<Microsoft.Extensions.Options.IOptions<AdaPanel.Infrastructure.Options.PanelRuntimeOptions>>()
+                    ?.Value.AuthCookieName;
+                var kalan = StripPanelCookies(header.Value.ToString(), authName);
+                if (kalan.Length > 0)
+                {
+                    message.Headers.TryAddWithoutValidation("Cookie", kalan);
+                }
+
                 continue;
             }
 
@@ -115,7 +133,15 @@ public sealed class DbToolsProxyController(
             Response.Headers.Remove("Content-Security-Policy");
         }
 
-        Response.Headers.Remove("X-Frame-Options");
+        // G15: araç panel kökeninde sunulur (ayrı köken kapsam dışı/bakiye). Çerçevelenme yalnız
+        // aynı kökenden; araç kendi CSP'sini göndermediyse frame-ancestors/nesne/base kısıtı eklenir.
+        Response.Headers["X-Frame-Options"] = "SAMEORIGIN";
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        Response.Headers["Referrer-Policy"] = "same-origin";
+        if (!backendHasCsp)
+        {
+            Response.Headers["Content-Security-Policy"] = PanelSecurityHeaders.DbToolsContentSecurityPolicy;
+        }
 
         // KALICI LAYOUT DÜZELTMESİ (kök-nedenden bağımsız): phpMyAdmin'in init JS'i (inline AJAX.fireOnload
         // bootstrap) bloklanır/çalışmazsa, içerik margin'i (body margin-left = nav genişliği) JS ile
@@ -302,6 +328,26 @@ public sealed class DbToolsProxyController(
                 // atlanabilir başlık (ör. korumalı) — yoksay
             }
         }
+    }
+
+    /// <summary>
+    /// G15: <c>Cookie</c> başlığından PANELİN kimlik/CSRF çerezlerini atar; araca ait çerezler (phpMyAdmin,
+    /// adminer_sid ...) kalır. Panel oturumu araç tarafından görülemez/sızdırılamaz.
+    /// </summary>
+    internal static string StripPanelCookies(string cookieHeader, string? authCookieName)
+    {
+        if (string.IsNullOrWhiteSpace(cookieHeader)) return string.Empty;
+        var panel = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "AdaPanel.Auth", "AdaPanel.AntiCsrf" };
+        if (!string.IsNullOrWhiteSpace(authCookieName)) panel.Add(authCookieName.Trim());
+        var kalan = cookieHeader.Split(';')
+            .Select(part => part.Trim())
+            .Where(part => part.Length > 0)
+            .Where(part =>
+            {
+                var ad = part.Split('=', 2)[0].Trim();
+                return !panel.Contains(ad) && !ad.StartsWith(".AspNetCore.Antiforgery", StringComparison.OrdinalIgnoreCase);
+            });
+        return string.Join("; ", kalan);
     }
 
     /// <summary>

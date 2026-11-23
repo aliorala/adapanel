@@ -40,7 +40,13 @@ public sealed class MailController(
         request ??= new();
         WebmailOpenDto result;
         if (string.IsNullOrWhiteSpace(request.Domain) && string.IsNullOrWhiteSpace(request.Address))
+        {
+            // G14: alan adsız çağrı SUNUCU GENELİ webmail kurulumunu (indirme, IIS sitesi, güvenlik
+            // duvarı portu) tetikleyebilir. Müşteri/bayi bu dalı kullanamaz; kendi alan adıyla açar.
+            if (!User.IsInRole("Administrator"))
+                throw new AdaPanel.Core.Common.AppException("auth.forbidden", 403, 403);
             result = await webmailService.OpenAsync(Request.Host.Host, cancellationToken);
+        }
         else
         {
             var domain = WebmailRequestValidation.Domain(request.Domain);

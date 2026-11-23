@@ -39,6 +39,14 @@ public static class PanelSecurityHeaders
     /// </remarks>
     private const string MuafYol = "/api/v1/dbtools";
 
+    /// <summary>
+    /// G15: DbTools yanıtlarında (araç kendi CSP'sini göndermiyorsa) uygulanan GEVŞEK ama sınırlı CSP:
+    /// betik/stil serbest (phpMyAdmin satır içi betik kullanır) ancak çerçevelenme, base, eklenti
+    /// nesnesi ve form hedefi aynı köken ile sınırlı.
+    /// </summary>
+    public const string DbToolsContentSecurityPolicy =
+        "frame-ancestors 'self'; base-uri 'self'; object-src 'none'; form-action 'self'";
+
     public const string ContentSecurityPolicy =
         "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
         "script-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";

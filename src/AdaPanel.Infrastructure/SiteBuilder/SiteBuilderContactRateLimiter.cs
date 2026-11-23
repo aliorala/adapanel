@@ -53,6 +53,11 @@ public sealed class SiteBuilderContactRateLimiter
 
     public static readonly TimeSpan SiteWindow = TimeSpan.FromHours(1);
 
+    /// <summary>G21: aynı ALICIYA (siteden bağımsız) günlük en fazla kaç gönderim; panel SMTP'sinin bombalama aracı olmasını önler.</summary>
+    public const int MaxPerRecipientPerDay = 50;
+
+    public static readonly TimeSpan RecipientWindow = TimeSpan.FromHours(24);
+
     /// <summary>Aynı gönderenin aynı siteye iki gönderimi arasındaki en az süre.</summary>
     public static readonly TimeSpan SenderCooldown = TimeSpan.FromSeconds(60);
 
@@ -85,7 +90,7 @@ public sealed class SiteBuilderContactRateLimiter
     /// dışarıda tutardı — yani saldırgan, hız sınırını bir hizmet engelleme aracına çevirirdi.
     /// </para>
     /// </remarks>
-    public bool TryAcquire(string? ipAddress, string siteKey, string senderEmail, DateTime utcNow)
+    public bool TryAcquire(string? ipAddress, string siteKey, string senderEmail, DateTime utcNow, string? recipient = null)
     {
         lock (_gate)
         {
@@ -112,8 +117,19 @@ public sealed class SiteBuilderContactRateLimiter
                 return false;
             }
 
+            var recipientKey = string.IsNullOrWhiteSpace(recipient) ? null : "rcpt:" + recipient.Trim().ToLowerInvariant();
+            if (recipientKey is not null && CountWithin(recipientKey, utcNow, RecipientWindow) >= MaxPerRecipientPerDay)
+            {
+                return false;
+            }
+
             Record(ipKey, utcNow);
             Record(siteBucket, utcNow);
+            if (recipientKey is not null)
+            {
+                Record(recipientKey, utcNow);
+            }
+
             _senders[senderKey] = utcNow;
             return true;
         }
@@ -149,7 +165,8 @@ public sealed class SiteBuilderContactRateLimiter
 
         foreach (var pair in _hits.ToArray())
         {
-            pair.Value.RemoveAll(stamp => utcNow - stamp >= EntryLifetime);
+            var omur = pair.Key.StartsWith("rcpt:", StringComparison.Ordinal) ? RecipientWindow + TimeSpan.FromHours(1) : EntryLifetime;
+            pair.Value.RemoveAll(stamp => utcNow - stamp >= omur);
             if (pair.Value.Count == 0)
             {
                 _hits.TryRemove(pair.Key, out _);

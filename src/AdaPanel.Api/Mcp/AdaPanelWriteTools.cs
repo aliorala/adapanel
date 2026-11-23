@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Security.Claims;
 using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Sites;
@@ -103,27 +103,28 @@ public sealed class AdaPanelWriteTools(
         // "mail" bölümüyle korunuyor; buradaki kilit de aynı olmalı.
         await McpCapability.EnsureWriteAllowedAsync(customerScopes, user, "mail", cancellationToken);
         await CustomerAccess.EnsureSiteAsync(customerScopes, user, domain, cancellationToken);
+        // G20: REST ikizi (MailController.ApplyDnsAsync) posta ALAN ADI kapsamını da denetler; site
+        // adıyla aynı olmayan bir posta alan adı için MCP bu kapıyı atlıyordu. Aynı kapı + aynı yayın
+        // mantığı (MailDnsPublication: tek toplu yazma, bölge doğrulaması) çağrılır, yeniden yazılmaz.
+        await CustomerAccess.EnsureMailDomainAsync(customerScopes, user, domain, cancellationToken);
 
         var dns = await mailService.GetDnsRecordsAsync(domain, cancellationToken);
-        var applied = 0;
-        foreach (var record in dns.Records.Where(item => !string.IsNullOrWhiteSpace(item.Value)))
+        var requests = AdaPanel.Infrastructure.Mail.MailDnsPublication.BuildRequests(dns);
+        SiteDnsZoneDto? zone = null;
+        if (requests.Count > 0)
         {
-            await dnsService.UpsertRecordAsync(
-                dns.Domain,
-                new UpsertDnsRecordRequest
-                {
-                    Type = record.Type,
-                    Host = record.Host,
-                    Value = record.Value,
-                    Priority = record.Priority,
-                    Ttl = 3600
-                },
-                cancellationToken);
-            applied++;
+            var site = AdaPanel.Infrastructure.Mail.MailService.ResolveManagedIdentitySite(await siteService.GetSitesAsync(cancellationToken), dns.Domain);
+            // Çözülen site de çağıranın kapsamında olmalı (kiracı başka bir sitenin bölgesine yazamaz).
+            await CustomerAccess.EnsureSiteAsync(customerScopes, user, site.Name, cancellationToken);
+            AdaPanel.Infrastructure.Mail.MailDnsPublication.EnsureDomainZone(await dnsService.GetZoneAsync(site.Name, cancellationToken), dns.Domain);
+            zone = await dnsService.UpsertRecordsAsync(site.Name, requests, cancellationToken);
         }
 
+        var evaluated = AdaPanel.Infrastructure.Mail.MailDnsPublication.Evaluate(zone, requests.Count);
+        var applied = evaluated.AppliedCount;
+
         await WriteAuditAsync(user, "mcp.mail.dns_apply", $"{domain}: {applied} kayıt", cancellationToken);
-        return new { dns.Domain, AppliedRecords = applied };
+        return new { dns.Domain, AppliedRecords = applied, evaluated.Published };
     }
 
     /// <summary>

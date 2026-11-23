@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -30,7 +30,8 @@ namespace AdaPanel.Infrastructure.SiteBuilder;
 public sealed class SiteBuilderService(
     IIisSiteService iisSiteService,
     JsonFileStore fileStore,
-    ILogger<SiteBuilderService> logger) : ISiteBuilderService
+    ILogger<SiteBuilderService> logger,
+    SiteBuilderContactRecipientPolicy? recipientPolicy = null) : ISiteBuilderService
 {
     /// <summary>
     /// Site başına yayın kilidi. Aynı siteye iki eşzamanlı yayın, yarısı eski yarısı yeni bir
@@ -56,7 +57,7 @@ public sealed class SiteBuilderService(
         var site = await ResolveSiteAsync(siteName, cancellationToken);
         var known = await KnownImageNamesAsync(site.Name, cancellationToken);
 
-        return await fileStore.UpdateAsync(
+        var saved = await fileStore.UpdateAsync(
             ProjectPath(site.Name),
             CreateStarterProject(site.Name),
             current =>
@@ -77,7 +78,16 @@ public sealed class SiteBuilderService(
                 return current;
             },
             cancellationToken);
+
+        // G21: alıcı kuralı (site alan adı / sahip e-postası) kaydederken söylenir; kayıt yine yapılır.
+        saved.ContactFormWarningKey = await ContactFormBlockedReasonAsync(saved, cancellationToken) is { Length: > 0 } reason &&
+                                      reason == RecipientNotVerifiedKey
+            ? RecipientNotVerifiedKey
+            : string.Empty;
+        return saved;
     }
+
+    private const string RecipientNotVerifiedKey = "sitebuilder.form_recipient_not_verified";
 
     public async Task<string> RenderPreviewAsync(
         string siteName,
@@ -649,6 +659,11 @@ public sealed class SiteBuilderService(
         if (!SiteBuilderContactForm.IsUsableAddress(contact.Email))
         {
             return "sitebuilder.form_recipient_missing";
+        }
+
+        if (!await (recipientPolicy ?? new SiteBuilderContactRecipientPolicy()).IsAllowedAsync(project.SiteName, contact.Email.Trim(), cancellationToken))
+        {
+            return RecipientNotVerifiedKey;
         }
 
         var key = StorageKey(project.SiteName);
