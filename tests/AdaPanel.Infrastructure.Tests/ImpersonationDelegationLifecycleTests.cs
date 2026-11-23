@@ -137,8 +137,9 @@ public sealed class ImpersonationDelegationLifecycleTests
         Assert.Equal(1, fixture.Authentication.Issued);
     }
 
+    // "confirm" burada YOK: kimliğe bürünme oturumunda 2FA kurulumu artık reddediliyor (G12;
+    // bkz. AuthTwoFactorLifecycleTests.TwoFactorChangesAreRejectedWhileImpersonating).
     [Theory]
-    [InlineData("confirm")]
     [InlineData("disable")]
     public async Task FactorCookieRenewalPreservesItsOriginalDelegation(string operation)
     {
@@ -153,8 +154,9 @@ public sealed class ImpersonationDelegationLifecycleTests
         Assert.False(await fixture.Validate(true));
     }
 
+    // "confirm" burada YOK: kimliğe bürünme oturumunda 2FA kurulumu artık reddediliyor (G12;
+    // bkz. AuthTwoFactorLifecycleTests.TwoFactorChangesAreRejectedWhileImpersonating).
     [Theory]
-    [InlineData("confirm")]
     [InlineData("disable")]
     public async Task FactorCookieRenewalCannotEscapeAnAdministratorRevokedAfterFactorCommit(string operation)
     {

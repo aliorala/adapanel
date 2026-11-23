@@ -13,7 +13,7 @@ vi.mock("../components/ConfirmDialog.vue", () => ({ useConfirm: () => ({ confirm
 vi.mock("../utils/clipboard", () => ({ copyToClipboard: vi.fn(async () => true) }));
 type State = {
   accountConfirmed: boolean; accountError: string; busy: boolean; loadingAccount: boolean; setup: TwoFactorSetup | null;
-  recoveryCodes: string[]; twoFactorVerificationCode: string; disableTwoFactorPassword: string;
+  recoveryCodes: string[]; twoFactorVerificationCode: string; twoFactorPassword: string; disableTwoFactorPassword: string;
   currentPassword: string; newPassword: string; confirmPassword: string;
   startTwoFactor(): Promise<void>; confirmTwoFactor(): Promise<void>; regenerateRecoveryCodes(): Promise<void>;
   disableTwoFactor(): Promise<void>; changePassword(): Promise<void>; refreshAccount(): Promise<void>;
@@ -35,7 +35,7 @@ async function mount(twoFactor = false) {
   const renderer = createRenderer<object, object>({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
   app = renderer.createApp({ ...AccountView, render: () => h("section") } as Component, { onNotify: (text: string, error: boolean) => notices.push({ text, error }) }).use(pinia);
   app.provide(ssrContextKey, {});
-  const state = (app.mount({}).$ as unknown as { setupState: State }).setupState; await flush(); return { state, auth };
+  const state = (app.mount({}).$ as unknown as { setupState: State }).setupState; await flush(); state.twoFactorPassword = "FixturePassword!123"; return { state, auth };
 }
 const mutations = () => calls.filter(config => config.method !== "get");
 beforeEach(() => {

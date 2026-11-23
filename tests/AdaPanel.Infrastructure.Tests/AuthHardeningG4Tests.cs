@@ -61,7 +61,7 @@ public sealed class AuthHardeningG4Tests
             Assert.Equal(403, error.HttpStatusCode);
         }
         // Yönetim (güncelle/sil/kilit aç): sunucu sahibi korunur, sahip olmayan yönetici yönetilebilir.
-        await Assert.ThrowsAsync<AppException>(() => ManagedUserGuard.EnsureManagedAsync(db, scope, second.Id, owner.Id, default, owners));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ManagedUserGuard.EnsureManagedAsync(db, scope, second.Id, owner.Id, default, owners));
         Assert.Equal(third.Id, (await ManagedUserGuard.EnsureManagedAsync(db, scope, second.Id, third.Id, default, owners)).Target.Id);
         // Kendisi ve müşteri serbest; sahip kendi hesabını değiştirebilir.
         Assert.Equal(second.Id, (await ManagedUserGuard.EnsureManagedAsync(

@@ -77,9 +77,15 @@ public static class ManagedUserGuard
                 // Sahiplik bilinemiyorsa (servis verilmedi) kapalı tarafta hata yapılır.
                 var sahip = serverOwnerService is null
                     || await serverOwnerService.IsServerOwnerAsync(target.Id, cancellationToken);
-                if (kimlikDevralma || sahip)
+                if (kimlikDevralma)
                 {
                     throw new AppException("users.forbidden", 403, 403);
+                }
+
+                if (sahip)
+                {
+                    // Mevcut sözleşme korunur: silme/pasife alma yollarının aynı hata anahtarı.
+                    throw new InvalidOperationException("users.server_owner_protected");
                 }
             }
 
