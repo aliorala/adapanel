@@ -69,6 +69,21 @@ public static class ReparseGuard
         return null;
     }
 
+    /// <summary>
+    /// <paramref name="boundary"/> (sitenin ana klasörü) doluysa ve <paramref name="path"/> onun içindeyse
+    /// ana klasörden yola giden TÜM parçalar (ana klasör ve yolun kendisi dahil) denetlenir. Yol ana
+    /// klasörün dışındaysa (yönetici kurulumu) yalnız yolun kendisi denetlenir.
+    /// </summary>
+    public static bool HasReparsePointWithin(string? boundary, string path)
+    {
+        if (!string.IsNullOrWhiteSpace(boundary) && PathContainment.IsRootOrInside(boundary, path))
+        {
+            return HasReparsePoint(boundary, path, includeRoot: true);
+        }
+
+        return IsReparsePoint(path);
+    }
+
     public static bool HasReparsePoint(string root, string fullPath, bool includeRoot = true) =>
         FindReparsePoint(root, fullPath, includeRoot) is not null;
 }

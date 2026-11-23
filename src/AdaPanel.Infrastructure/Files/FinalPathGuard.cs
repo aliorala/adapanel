@@ -30,9 +30,11 @@ internal static class FinalPathGuard
     /// <summary>Akışın son yolu sandbox'ın içinde değilse <c>files.path_outside_root</c> fırlatır.</summary>
     public static void EnsureInside(Stream stream, string sandboxRoot)
     {
+        // FileStream olmayan akışın tutamacı yoktur: ölçemediğimizi kabul etmeyiz. Test kancalarının
+        // sahte akışını FileService.OpenVerified bu çağrıya hiç getirmez.
         if (stream is not FileStream file)
         {
-            return;
+            throw new AppException("files.path_outside_root", 400, 400);
         }
 
         var final = FinalPath(file.SafeFileHandle);

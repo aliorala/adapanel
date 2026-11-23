@@ -10,14 +10,24 @@ namespace AdaPanel.Infrastructure.Iis;
 internal static class WebAppPublisher
 {
     /// <summary>
-    /// Kök (ya da yazılacak/silinecek dosyalar) bağlantıysa true. Panel SYSTEM olarak yazdığı için
-    /// kiracının koyduğu bir junction, panelin diskte başka yere yazmasına yol açardı.
+    /// Yayın kökü, ona giden ara klasörler ya da yazılacak/silinecek dosyalar bağlantıysa fırlatır.
+    /// Panel SYSTEM olarak yazdığı için kiracının koyduğu bir junction, panelin başka sitenin
+    /// klasörüne yazmasına yol açardı. <paramref name="appRoot"/> (sitenin ana klasörü) verilirse
+    /// ana klasörden belge köküne giden TÜM ara klasörler de denetlenir (örn. httpdocs sonradan
+    /// junction yapılırsa home\httpdocs\public güvenli görünürdü). Kök ana klasörün dışındaysa
+    /// (yönetici kurulumu) yalnız kök denetlenir.
     /// </summary>
-    internal static bool IsUnsafePublishRoot(string root) =>
-        ReparseGuard.IsReparsePoint(root)
-        || ReparseGuard.IsReparsePoint(Path.Combine(root, "web.config"))
-        || ReparseGuard.IsReparsePoint(Path.Combine(root, "index.html"))
-        || ReparseGuard.IsReparsePoint(Path.Combine(root, "index.php"));
+    internal static void EnsureSafePublishRoot(string root, string? appRoot = null)
+    {
+        var unsafeRoot = ReparseGuard.HasReparsePointWithin(appRoot, root)
+            || ReparseGuard.IsReparsePoint(Path.Combine(root, "web.config"))
+            || ReparseGuard.IsReparsePoint(Path.Combine(root, "index.html"))
+            || ReparseGuard.IsReparsePoint(Path.Combine(root, "index.php"));
+        if (unsafeRoot)
+        {
+            throw new AppException("sites.document_root_link", 400, 400);
+        }
+    }
 
     public static void EnsurePhpEntry(string root)
     {
@@ -27,10 +37,7 @@ internal static class WebAppPublisher
         }
 
         // Sessizce yutulmaz: çağıran bunu görür (SiteProvisioningService yeniden fırlatır).
-        if (IsUnsafePublishRoot(root))
-        {
-            throw new AppException("files.path_outside_root", 400, 400);
-        }
+        EnsureSafePublishRoot(root);
 
         try
         {
@@ -133,10 +140,7 @@ internal static class WebAppPublisher
             return;
         }
 
-        if (IsUnsafePublishRoot(root))
-        {
-            throw new AppException("files.path_outside_root", 400, 400);
-        }
+        EnsureSafePublishRoot(root);
 
         try
         {
@@ -170,10 +174,13 @@ internal static class WebAppPublisher
 
     internal static bool TryWriteFrontControllerRewrite(string root, bool moduleAvailable)
     {
-        if (string.IsNullOrWhiteSpace(root) || IsUnsafePublishRoot(root))
+        if (string.IsNullOrWhiteSpace(root))
         {
             return false;
         }
+
+        // "false" = "URL Rewrite modülü yok" demektir; güvensiz kök başka bir hatadır, ayrı anahtarla fırlar.
+        EnsureSafePublishRoot(root);
 
         if (!moduleAvailable)
         {

@@ -414,7 +414,10 @@ public sealed class HtaccessPanelService
         var hedefDizin = goreli.Length > 0
             ? Path.Combine(kok, goreli.Replace('/', Path.DirectorySeparatorChar))
             : kok;
-        if (ReparseGuard.HasReparsePoint(kok, hedefDizin, includeRoot: true))
+        // Ana klasör (ApplicationRootPath) ile belge kökü arasındaki ara klasörler de denetlenir.
+        var anaKlasor = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? null : site.ApplicationRootPath;
+        if (ReparseGuard.HasReparsePointWithin(anaKlasor, kok)
+            || ReparseGuard.HasReparsePoint(kok, hedefDizin, includeRoot: true))
         {
             throw new AppException("htaccess.directory_outside_root",
                 details: "Yol bir bağlantı (junction/symlink) içeriyor; inceleme REDDEDİLDİ.");

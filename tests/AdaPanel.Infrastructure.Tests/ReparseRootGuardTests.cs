@@ -129,15 +129,58 @@ public sealed class ReparseRootGuardTests : IDisposable
     }
 
     [Fact]
-    public async Task FileService_sandbox_koku_junction_ise_yazma_silme_reddedilir()
+    public async Task FileService_sandbox_koku_junction_ise_yazma_ve_silme_reddedilir()
     {
         var x = Path.Combine(_site, "x");
         Junction(x, _disari);
         var servis = new FileService(new SahteSiteServisi(x));
 
-        await Assert.ThrowsAsync<AppException>(() => servis.CalculateSizeAsync("sites/a.test/gizli.txt"));
-        Assert.True(File.Exists(Path.Combine(_disari, "gizli.txt")));
+        var yaz = await Assert.ThrowsAsync<AppException>(() => servis.WriteAsync(
+            new AdaPanel.Core.Dtos.Files.WriteFileRequest { Path = "sites/a.test/yeni.txt", Content = "ZARAR" }));
+        var sil = await Assert.ThrowsAsync<AppException>(() => servis.DeleteAsync(
+            new AdaPanel.Core.Dtos.Files.DeleteFileRequest { Path = "sites/a.test/gizli.txt" }));
+
+        Assert.Equal("files.path_outside_root", yaz.MessageKey);
+        Assert.Equal("files.path_outside_root", sil.MessageKey);
+        Assert.False(File.Exists(Path.Combine(_disari, "yeni.txt")));
         Assert.Equal("SIR", File.ReadAllText(Path.Combine(_disari, "gizli.txt")));
+    }
+
+    [Fact]
+    public async Task FileService_acilan_okuma_akisi_sandbox_disindaysa_reddedilir_ve_akis_kapanir()
+    {
+        File.WriteAllText(Path.Combine(_site, "a.txt"), "ic");
+        var disarda = Path.Combine(_disari, "gizli.txt");
+        FileStream? acilan = null;
+        var servis = new FileService(new SahteSiteServisi(_site))
+        {
+            // Denetimden sonra yola junction girmiş gibi: açıcı dış dosyanın tutamacını verir.
+            OpenWorkspaceFile = _ => acilan = new FileStream(disarda, FileMode.Open, FileAccess.Read, FileShare.Read)
+        };
+
+        var hata = await Assert.ThrowsAsync<AppException>(() => servis.GetWorkspaceAsync("sites/a.test/a.txt"));
+
+        Assert.Equal("files.path_outside_root", hata.MessageKey);
+        Assert.NotNull(acilan);
+        Assert.False(acilan!.CanRead);
+    }
+
+    [Fact]
+    public async Task FileService_arama_akisi_sandbox_disindaysa_dosya_okunmaz()
+    {
+        File.WriteAllText(Path.Combine(_site, "a.txt"), "SIR");
+        FileStream? acilan = null;
+        var servis = new FileService(new SahteSiteServisi(_site))
+        {
+            OpenSearchContent = _ => acilan = new FileStream(
+                Path.Combine(_disari, "gizli.txt"), FileMode.Open, FileAccess.Read, FileShare.Read)
+        };
+
+        await Assert.ThrowsAsync<AppException>(() => servis.SearchMeasuredAsync(
+            new AdaPanel.Core.Dtos.Files.SearchFilesRequest { Path = "sites/a.test", Query = "SIR" }));
+
+        Assert.NotNull(acilan);
+        Assert.False(acilan!.CanRead);
     }
 
     [Fact]
@@ -165,7 +208,7 @@ public sealed class ReparseRootGuardTests : IDisposable
         Junction(x, _disari);
 
         Assert.Throws<AppException>(() => WebAppPublisher.EnsurePhpEntry(x));
-        Assert.False(WebAppPublisher.TryWriteFrontControllerRewrite(x, moduleAvailable: true));
+        Assert.Throws<AppException>(() => WebAppPublisher.TryWriteFrontControllerRewrite(x, moduleAvailable: true));
         Assert.Throws<AppException>(() => WebAppPublisher.SetMaxAllowedContentLength(x, 1024));
 
         Assert.True(File.Exists(Path.Combine(_disari, "index.html")));
@@ -184,6 +227,26 @@ public sealed class ReparseRootGuardTests : IDisposable
 
         Assert.False(File.Exists(Path.Combine(kok, "index.html")));
         Assert.True(File.Exists(Path.Combine(kok, "web.config")));
+    }
+
+    [Fact]
+    public void Yayinci_ara_klasor_junction_ise_ana_klasorden_itibaren_reddedilir()
+    {
+        // home\httpdocs sonradan junction yapılır; belge kökü httpdocs\public.
+        var baska = Path.Combine(_disari, "public");
+        Directory.CreateDirectory(baska);
+        File.WriteAllText(Path.Combine(baska, "index.php"), "<?php");
+        var httpdocs = Path.Combine(_site, "httpdocs");
+        Junction(httpdocs, _disari);
+        var kok = Path.Combine(httpdocs, "public");
+
+        // Yalnız kök denetlenseydi (public gerçek klasör) bu geçerdi.
+        WebAppPublisher.EnsureSafePublishRoot(kok);
+        var hata = Assert.Throws<AppException>(() => WebAppPublisher.EnsureSafePublishRoot(kok, _site));
+        Assert.Equal("sites.document_root_link", hata.MessageKey);
+        Assert.True(ReparseGuard.HasReparsePointWithin(_site, kok));
+        // Ana klasörün dışındaki kök (yönetici kurulumu): yalnız kökün kendisi denetlenir.
+        Assert.False(ReparseGuard.HasReparsePointWithin(Path.Combine(_kok, "baska-site"), baska));
     }
 
     // ---- Tutamaç son yolu (G7)

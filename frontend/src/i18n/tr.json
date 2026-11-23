@@ -3388,6 +3388,7 @@
   "panel.hosting.rewriteEnabled": "Pretty-URL yönlendirmesi etkin (istekler index.php'ye yönlendirilir).",
   "panel.hosting.permissionsRepaired": "App pool için yazma izinleri onarıldı.",
   "sites.url_rewrite_module_missing": "IIS URL Rewrite modülü kurulu değil. Sunucuya kurup tekrar dene.",
+  "sites.document_root_link": "Belge kökü ya da yolundaki bir klasör bağlantı (junction/symlink); panel oraya yazmaz.",
   "panel.hosting.composer": "Composer install çalıştır",
   "panel.hosting.composerDone": "Composer işlemi tamamlandı.",
   "panel.hosting.composerFailed": "Composer işlemi hata ile tamamlandı.",
