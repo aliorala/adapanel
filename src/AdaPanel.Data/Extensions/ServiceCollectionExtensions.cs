@@ -8,6 +8,8 @@ namespace AdaPanel.Data.Extensions;
 
 public static class ServiceCollectionExtensions
 {
+    public const int DefaultBusyTimeoutSeconds = 30;
+
     public static IServiceCollection AddAdaPanelData(this IServiceCollection services, IConfiguration configuration)
     {
         const string defaultDataRoot = "%ProgramData%\\AdaPanel";
@@ -33,6 +35,16 @@ public static class ServiceCollectionExtensions
         // activation (dotnet/efcore#39008; fixed in 10.0.13). Keep .NET 8 opens
         // independent, including when configuration explicitly enables pooling.
         builder.Pooling = false;
+
+        // Eşzamanlı yazarlar "database is locked" ile düşmesin: Microsoft.Data.Sqlite, "Default Timeout"u
+        // hem komut zaman aşımı hem de SQLite busy_timeout olarak uygular. Açıkça yazılmamışsa
+        // 30 sn'ye SABİTLENİR (kütüphane varsayılanına örtük bağlı kalınmaz). Bilinçle KISA (5 sn) değil:
+        // aynı değer komut zaman aşımıdır; uzun migration/VACUUM komutlarını 5 sn'de keserdi.
+        // Açıkça verilen değer (yapılandırma) olduğu gibi korunur.
+        if (!builder.ContainsKey("Default Timeout"))
+        {
+            builder.DefaultTimeout = DefaultBusyTimeoutSeconds;
+        }
 
         if (!string.IsNullOrWhiteSpace(builder.DataSource))
         {

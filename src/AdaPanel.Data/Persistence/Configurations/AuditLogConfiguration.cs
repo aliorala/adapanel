@@ -31,6 +31,8 @@ public sealed class AuditLogConfiguration : IEntityTypeConfiguration<AuditLog>
         // yapardı — yani özellik, en çok işe yaradığı yerde (uzun geçmişte) kullanılamaz hâle gelirdi.
         builder.HasIndex(log => log.UserId).HasDatabaseName("ix_audit_logs_user");
         builder.HasIndex(log => log.SubscriptionUserId).HasDatabaseName("ix_audit_logs_subscription");
+        // Saklama temizliği (CreatedAtUtc < kesim) ve "son kayıtlar" sıralaması bu sütuna bakar.
+        builder.HasIndex(log => log.CreatedAtUtc).HasDatabaseName("ix_audit_logs_created_at");
     }
 }
 

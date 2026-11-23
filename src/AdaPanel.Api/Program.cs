@@ -463,36 +463,17 @@ static async Task EnsureDatabaseAsync(WebApplication app, string dataRoot)
 
     var database = dbContext.Database;
 
+    if (StartupDiagnostics.CertificateWarning is { } certificateWarning)
+    {
+        logger.LogWarning("{Message}", certificateWarning);
+    }
+
     try
     {
-        var applied = (await database.GetAppliedMigrationsAsync()).ToList();
-        if (applied.Count == 0)
-        {
-            // Migration geçmişi yok. Şema zaten varsa (eski EnsureCreated kurulumu) MigrateAsync
-            // "table already exists" ile patlar; bunu önlemek için InitialCreate'i BASELINE'la:
-            // şema InitialCreate ile birebir olduğundan onu "uygulanmış" işaretleyip kalanları uygula.
-            var creator = dbContext.GetService<IRelationalDatabaseCreator>();
-            var schemaAlreadyExists = await creator.ExistsAsync() && await creator.HasTablesAsync();
-            if (schemaAlreadyExists)
-            {
-                var initialMigration = (await database.GetPendingMigrationsAsync()).FirstOrDefault();
-                if (!string.IsNullOrEmpty(initialMigration))
-                {
-                    await database.ExecuteSqlRawAsync(
-                        "CREATE TABLE IF NOT EXISTS \"__EFMigrationsHistory\" (" +
-                        "\"MigrationId\" TEXT NOT NULL CONSTRAINT \"PK___EFMigrationsHistory\" PRIMARY KEY, " +
-                        "\"ProductVersion\" TEXT NOT NULL);");
-                    await database.ExecuteSqlRawAsync(
-                        "INSERT OR IGNORE INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({0}, {1});",
-                        initialMigration,
-                        "8.0.27");
-                    logger.LogInformation("Mevcut şema InitialCreate olarak baseline'landı (EnsureCreated → migration geçişi).");
-                }
-            }
-        }
-
-        // Bekleyen migration'ları uygula: taze kurulumda tüm şema, baseline sonrası/güncellemede yenileri.
-        await database.MigrateAsync();
+        // WAL (tek sefer, kalıcı) → bekleyen migration varsa ÖNCE tutarlı yedek → migration.
+        // Ayrıntı ve gerekçe: DatabaseUpgrader.
+        await AdaPanel.Data.Persistence.DatabaseUpgrader.EnableWalAsync(dbContext);
+        await AdaPanel.Data.Persistence.DatabaseUpgrader.UpgradeAsync(dbContext, dataRoot, logger);
         logger.LogInformation("Veritabanı şeması migration ile güncel.");
 
         await ApplyAccessRecoveryFlagAsync(
@@ -514,14 +495,23 @@ static async Task EnsureDatabaseAsync(WebApplication app, string dataRoot)
         // yok ve unutulamaz.
         logger.LogError(exception, "Migration başarısız; veri klasörü erişimi garanti edilip yeniden denenecek.");
         await AdaPanel.Infrastructure.Bootstrap.DataRootHardeningService.EnsureWritableAsync(dataRoot, logger);
+        // ESKİDEN burada EnsureCreated çağrılıyordu: mevcut bir veritabanında başarısız migration'ı
+        // maskeler, şemayı sessizce ayrıştırırdı. Artık yeniden dener; yine olmazsa AÇILIŞ DURUR
+        // (yükseltme öncesi yedek <DataRoot>ackups\db altında kalır). MigrateAsync boş/yeni
+        // veritabanında şemayı zaten sıfırdan kurduğu için EnsureCreated'a hiç gerek yok.
         try
         {
-            await database.MigrateAsync();
+            await AdaPanel.Data.Persistence.DatabaseUpgrader.EnableWalAsync(dbContext);
+            await AdaPanel.Data.Persistence.DatabaseUpgrader.UpgradeAsync(dbContext, dataRoot, logger);
         }
         catch (Exception retryException)
         {
-            logger.LogError(retryException, "Migration tekrar başarısız; EnsureCreated ile şema garanti ediliyor.");
-            await dbContext.Database.EnsureCreatedAsync();
+            logger.LogCritical(
+                retryException,
+                "Migration tekrar başarısız; panel BAŞLATILMIYOR. Veritabanı değiştirilmedi (EnsureCreated YOK); " +
+                "yükseltme öncesi yedek {BackupDir} altında. Önceki sürüme dönün ya da yedeği geri yükleyin.",
+                Path.Combine(dataRoot, "backups", "db"));
+            throw;
         }
     }
 }
@@ -626,8 +616,13 @@ static PanelCertificate? LoadPanelCertificate(string dataRoot)
 
         return new PanelCertificate(certificatePath, password);
     }
-    catch
+    catch (Exception exception)
     {
+        // Sertifika okunamadı → panel sertifikasız (varsayılan) açılır. Sessiz yutmak "neden HTTPS yok"
+        // sorusunu cevapsız bırakırdı. Yalnız özet yazılır: parola/dosya içeriği ASLA günlüğe girmez.
+        // Sertifika Serilog kurulmadan ÖNCE okunur; uyarı burada yazılamaz → EnsureDatabaseAsync günlüğe basar.
+        StartupDiagnostics.CertificateWarning =
+            $"Panel sertifikası yüklenemedi ({exception.GetType().Name}); sertifikasız devam ediliyor.";
         return null;
     }
 }
@@ -651,3 +646,8 @@ static int ResolveListenerPort(string? configuredUrls, int fallbackPort)
 }
 
 sealed record PanelCertificate(string Path, string Password);
+
+static class StartupDiagnostics
+{
+    public static string? CertificateWarning { get; set; }
+}

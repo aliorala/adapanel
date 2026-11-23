@@ -166,6 +166,8 @@ var
   InstallCompleted: Boolean;
   { wwwroot yedegi alindi mi (basarisiz yukseltmede geri koymak icin). }
   WwwRootBackedUp: Boolean;
+  { Panel veritabani (adapanel.db + -wal/-shm) kopyasi alindi mi (basarisiz yukseltmede geri koymak icin). }
+  DbBackedUp: Boolean;
 
 function GetPanelPort(Param: string): string;
 forward;
@@ -387,6 +389,82 @@ begin
     DelTree(Backup, True, True, True);
 end;
 
+{ Veritabani kopyasi: servis DURMUSKEN (PrepareToInstall) data\adapanel.db ile varsa -wal/-shm
+  backups\db\installer-pre\ altina KOPYALANIR (tasinmaz: eski surum db'yi yerinde ister).
+  Yeni surum acilista migration uygular ve geri donusu olmayabilir; kurulum yarida kalirsa bu
+  kopya eski exe ile birlikte geri konur. Basarili kurulumda KALIR (bir sonraki kuruluma kadar). }
+function DbBackupDir: string;
+begin
+  Result := ExpandConstant('{commonappdata}\AdaPanel\backups\db\installer-pre');
+end;
+
+function BackupPanelDatabase: Boolean;
+var
+  DataDir: string;
+  Dest: string;
+  Suffixes: array of string;
+  I: Integer;
+begin
+  Result := False;
+  DataDir := ExpandConstant('{commonappdata}\AdaPanel\data');
+  if not FileExists(DataDir + '\adapanel.db') then
+    Exit;
+
+  Dest := DbBackupDir;
+  ForceDirectories(Dest);
+  SetArrayLength(Suffixes, 3);
+  Suffixes[0] := '';
+  Suffixes[1] := '-wal';
+  Suffixes[2] := '-shm';
+
+  { Eski kopyanin artiklari yeni kopyayla karismasin. }
+  for I := 0 to 2 do
+    DeleteFile(Dest + '\adapanel.db' + Suffixes[I]);
+
+  if not FileCopy(DataDir + '\adapanel.db', Dest + '\adapanel.db', False) then
+  begin
+    Log('AdaPanel: adapanel.db yedeklenemedi; eski veritabani yerinde birakiliyor.');
+    Exit;
+  end;
+  for I := 1 to 2 do
+    if FileExists(DataDir + '\adapanel.db' + Suffixes[I]) then
+      if not FileCopy(DataDir + '\adapanel.db' + Suffixes[I], Dest + '\adapanel.db' + Suffixes[I], False) then
+      begin
+        Log('AdaPanel: ' + Suffixes[I] + ' yedeklenemedi; kopya GECERSIZ sayiliyor.');
+        DeleteFile(Dest + '\adapanel.db');
+        Exit;
+      end;
+  Result := True;
+  Log('AdaPanel: adapanel.db yedeklendi: ' + Dest);
+end;
+
+procedure RestorePanelDatabase;
+var
+  DataDir: string;
+  Src: string;
+  Suffixes: array of string;
+  I: Integer;
+begin
+  Src := DbBackupDir;
+  DataDir := ExpandConstant('{commonappdata}\AdaPanel\data');
+  if not FileExists(Src + '\adapanel.db') then
+    Exit;
+
+  SetArrayLength(Suffixes, 3);
+  Suffixes[0] := '';
+  Suffixes[1] := '-wal';
+  Suffixes[2] := '-shm';
+
+  { Yeni surumun yazdigi -wal/-shm eski db ile UYUSMAZ; once silinir, sonra kopya geri konur. }
+  for I := 0 to 2 do
+    DeleteFile(DataDir + '\adapanel.db' + Suffixes[I]);
+  for I := 0 to 2 do
+    if FileExists(Src + '\adapanel.db' + Suffixes[I]) then
+      if not FileCopy(Src + '\adapanel.db' + Suffixes[I], DataDir + '\adapanel.db' + Suffixes[I], False) then
+        Log('AdaPanel: veritabani GERI KONULAMADI: ' + Src + '\adapanel.db' + Suffixes[I]);
+  Log('AdaPanel: adapanel.db yedekten geri konuldu.');
+end;
+
 // Servis EN BASTA durdurulur; RestartManager taramasindan da once.
 //
 // Neden burada: panel bir Windows servisidir ve RestartManager onu pencere kapatarak durduramaz.
@@ -433,6 +511,9 @@ begin
 
   if WwwRootBackedUp then
     RestoreWwwRoot;
+
+  if DbBackedUp then
+    RestorePanelDatabase;
 
   if ServiceWasStoppedByUs then
     StartPanelService;
@@ -534,6 +615,7 @@ begin
   // Eski arayuz dosyalarini kopyalama BASLAMADAN once kenara al. Yerinde silmek (eski
   // [InstallDelete] girdisi) geri alinamazdi; tasima geri alinabilir.
   WwwRootBackedUp := BackupWwwRoot;
+  DbBackedUp := BackupPanelDatabase;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -545,6 +627,7 @@ begin
     InstallCompleted := True;
     DiscardWwwRootBackup;
     WwwRootBackedUp := False;
+    DbBackedUp := False; { kopya diskte KALIR; yalnizca geri koyma bayragi kapanir }
   end;
 end;
 
