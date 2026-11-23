@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using AdaPanel.Core.Common;
 
 namespace AdaPanel.Infrastructure.Iis;
 
@@ -8,12 +9,35 @@ namespace AdaPanel.Infrastructure.Iis;
 /// </summary>
 internal static class WebAppPublisher
 {
+    /// <summary>
+    /// Yayın kökü, ona giden ara klasörler ya da yazılacak/silinecek dosyalar bağlantıysa fırlatır.
+    /// Panel SYSTEM olarak yazdığı için kiracının koyduğu bir junction, panelin başka sitenin
+    /// klasörüne yazmasına yol açardı. <paramref name="appRoot"/> (sitenin ana klasörü) verilirse
+    /// ana klasörden belge köküne giden TÜM ara klasörler de denetlenir (örn. httpdocs sonradan
+    /// junction yapılırsa home\httpdocs\public güvenli görünürdü). Kök ana klasörün dışındaysa
+    /// (yönetici kurulumu) yalnız kök denetlenir.
+    /// </summary>
+    internal static void EnsureSafePublishRoot(string root, string? appRoot = null)
+    {
+        var unsafeRoot = ReparseGuard.HasReparsePointWithin(appRoot, root)
+            || ReparseGuard.IsReparsePoint(Path.Combine(root, "web.config"))
+            || ReparseGuard.IsReparsePoint(Path.Combine(root, "index.html"))
+            || ReparseGuard.IsReparsePoint(Path.Combine(root, "index.php"));
+        if (unsafeRoot)
+        {
+            throw new AppException("sites.document_root_link", 400, 400);
+        }
+    }
+
     public static void EnsurePhpEntry(string root)
     {
         if (string.IsNullOrWhiteSpace(root))
         {
             return;
         }
+
+        // Sessizce yutulmaz: çağıran bunu görür (SiteProvisioningService yeniden fırlatır).
+        EnsureSafePublishRoot(root);
 
         try
         {
@@ -116,6 +140,8 @@ internal static class WebAppPublisher
             return;
         }
 
+        EnsureSafePublishRoot(root);
+
         try
         {
             var webConfig = Path.Combine(root, "web.config");
@@ -152,6 +178,9 @@ internal static class WebAppPublisher
         {
             return false;
         }
+
+        // "false" = "URL Rewrite modülü yok" demektir; güvensiz kök başka bir hatadır, ayrı anahtarla fırlar.
+        EnsureSafePublishRoot(root);
 
         if (!moduleAvailable)
         {

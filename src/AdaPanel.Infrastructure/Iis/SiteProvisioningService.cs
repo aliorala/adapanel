@@ -322,9 +322,11 @@ public sealed class SiteProvisioningService(
 
         try
         {
+            WebAppPublisher.EnsureSafePublishRoot(site.PhysicalPath, site.ApplicationRootPath);
             PublishPhpEntry(site.PhysicalPath);
         }
         catch (OperationCanceledException) { throw; }
+        catch (AppException) { throw; }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Belge kökü web.config'i yazılamadı (en iyi çaba): {Site}", siteName);
@@ -349,6 +351,7 @@ public sealed class SiteProvisioningService(
         using var reservation = await target.ReserveAsync(beforeMutation, cancellationToken);
         var site = target.Site;
         cancellationToken.ThrowIfCancellationRequested();
+        WebAppPublisher.EnsureSafePublishRoot(site.PhysicalPath, site.ApplicationRootPath);
         if (!PublishFrameworkRewrite(site.PhysicalPath))
         {
             throw new AppException("sites.url_rewrite_module_missing", 409, 409);

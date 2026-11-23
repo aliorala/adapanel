@@ -719,6 +719,7 @@ public sealed class PhpService(
         var uploadBytes = ParsePhpSize(request.PostMaxSize);
         if (uploadBytes > 0)
         {
+            AdaPanel.Infrastructure.Iis.WebAppPublisher.EnsureSafePublishRoot(site.PhysicalPath, site.ApplicationRootPath);
             AdaPanel.Infrastructure.Iis.WebAppPublisher.SetMaxAllowedContentLength(site.PhysicalPath, uploadBytes);
         }
 

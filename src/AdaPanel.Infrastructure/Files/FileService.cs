@@ -69,9 +69,17 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// </remarks>
     private const int KopyaOgeButcesi = 200_000;
 
-    internal Func<string, Stream> OpenCompressionFile { get; set; } = static path =>
+    // Varsayılan açıcılar: yalnız bunlar FileStream döndürür ve tutamaç son yolu denetlenir.
+    // Test kancasıyla değiştirilen açıcı FileStream dışı akış verebilir (bkz. OpenVerified).
+    private static readonly Func<string, Stream> DefaultSequentialOpen = static path =>
         new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+    private static readonly Func<string, Stream> DefaultSearchOpen = static path =>
+        new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+    internal Func<string, Stream> OpenCompressionFile { get; set; } = DefaultSequentialOpen;
 
     internal Func<string> CompressionStagingPath { get; set; } = static () =>
         SecureTempFile.BuildPath("adapanel-compress", ".zip");
@@ -86,9 +94,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     internal Func<string, CancellationToken, Task>? TransferItemReady { get; set; }
     internal Action<string>? CopyEntryReady { get; set; }
 
-    internal Func<string, Stream> OpenWorkspaceFile { get; set; } = static path =>
-        new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
+    internal Func<string, Stream> OpenWorkspaceFile { get; set; } = DefaultSequentialOpen;
 
     internal Func<string, string, CancellationToken, Task<CommandResult>> PermissionCommand { get; set; } =
         static (fileName, arguments, token) => ProcessRunner.RunAsync(fileName, arguments, cancellationToken: token);
@@ -98,9 +104,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     internal TimeSpan PermissionExecutionTimeout { get; set; } = TimeSpan.FromMinutes(2);
 
     internal Func<string, CancellationToken, Task<string>>? ReadSearchContent { get; set; }
-    internal Func<string, Stream> OpenSearchContent { get; set; } = static path =>
-        new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
+    internal Func<string, Stream> OpenSearchContent { get; set; } = DefaultSearchOpen;
     internal Func<string, CancellationToken, Task>? ExtractEntryReady { get; set; }
     internal Func<CancellationToken, Task>? SizeWalkCompleted { get; set; }
 
@@ -133,7 +137,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
 
         if (File.Exists(target.PhysicalPath))
         {
-            var content = await ReadFileContentAsync(target.PhysicalPath, cancellationToken);
+            var content = await ReadFileContentAsync(target.PhysicalPath, target.SandboxRoot, cancellationToken);
             await Approve();
             return new FileWorkspaceDto
             {
@@ -210,7 +214,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         // Keep the same original open through quota and final approval: both its
         // codec and deducted length must still describe the file being replaced.
         await using var originalRead = !failIfExists && File.Exists(target.PhysicalPath)
-            ? OpenWorkspaceFile(target.PhysicalPath) : null;
+            ? OpenVerified(OpenWorkspaceFile, DefaultSequentialOpen, target.PhysicalPath, target.SandboxRoot) : null;
         var original = originalRead is not null
             ? await FileTextContent.ReadAsync(originalRead, cancellationToken) : FileTextContent.NewFile;
         // The quota and publication use this exact encoded snapshot. Do not reread the codec
@@ -275,6 +279,9 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             {
                 await using (akis)
                 {
+                    // Yaratılan dosyanın GERÇEK yolu sandbox içinde mi (denetimle yaratma arası junction yarışı)?
+                    // Dışındaysa hiçbir bayt yazılmaz; aşağıdaki geri sarma boş kalıntıyı siler.
+                    FinalPathGuard.EnsureInside(akis, target.SandboxRoot);
                     await akis.WriteAsync(encoded, cancellationToken);
                 }
             }
@@ -709,6 +716,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                     else
                     {
                         sourceRead = new FileStream(source.PhysicalPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                        FinalPathGuard.EnsureInside(sourceRead, source.SandboxRoot);
                         measuredBytes = sourceRead.Length;
                     }
                     original = OpenCompressionDestination(target.PhysicalPath, overwrite);
@@ -1179,7 +1187,10 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                 {
                     await using (var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write,
                         FileShare.None, 81920, FileOptions.Asynchronous))
+                    {
+                        FinalPathGuard.EnsureInside(output, target.SandboxRoot);
                         await payload.CopyEntryAsync(entry, output, token);
+                    }
                     File.SetLastWriteTimeUtc(destination, entry.LastWriteTimeUtc);
                 }
             }
@@ -1287,6 +1298,32 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// bir kuraldır ve <see cref="EnsureNotSiteRoot"/> ile uygulanır.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Açıcıyı çağırır ve açılan tutamacın GERÇEK yolunun sandbox içinde olduğunu doğrular; olmazsa
+    /// akışı kapatıp reddeder. Varsayılan açıcı her zaman FileStream döndürür; yalnız test kancasıyla
+    /// değiştirilmiş açıcının FileStream olmayan akışına izin verilir.
+    /// </summary>
+    private static Stream OpenVerified(
+        Func<string, Stream> open, Func<string, Stream> defaultOpen, string path, string sandboxRoot)
+    {
+        var stream = open(path);
+        if (stream is not FileStream && !ReferenceEquals(open, defaultOpen))
+        {
+            return stream;
+        }
+
+        try
+        {
+            FinalPathGuard.EnsureInside(stream, sandboxRoot);
+            return stream;
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
+    }
+
     private static void EnsureInsideSandbox(ResolvedTarget target)
     {
         if (!PathContainment.IsRootOrInside(target.SandboxRoot, target.PhysicalPath))
@@ -1549,6 +1586,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 81920, FileOptions.Asynchronous))
             {
+                FinalPathGuard.EnsureInside(output, target.SandboxRoot);
                 await write(output, cancellationToken);
                 await output.FlushAsync(cancellationToken);
             }
@@ -1613,6 +1651,8 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
         try
         {
+            // Açılan tutamacın GERÇEK yolu sandbox içinde mi (TOCTOU: denetimle açma arasında junction).
+            FinalPathGuard.EnsureInside(input, target.SandboxRoot);
             await ApprovePublicationAsync(target, beforeRead, cancellationToken);
             EnsureInsideSandbox(target);
             return (Path.GetFileName(target.PhysicalPath), "application/octet-stream", input);
@@ -1768,7 +1808,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         {
             cancellationToken.ThrowIfCancellationRequested();
             EnsureNoReparsePoints(source.SandboxRoot, file.FullName);
-            await using var input = OpenCompressionFile(file.FullName);
+            await using var input = OpenVerified(OpenCompressionFile, DefaultSequentialOpen, file.FullName, source.SandboxRoot);
             var entry = archive.CreateEntry(EntryName(file.FullName), CompressionLevel.Optimal);
             SetTimestamp(entry, file.LastWriteTime);
             await using var compressed = entry.Open();
@@ -1823,6 +1863,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         // Keep the measured archive open without write/delete sharing through quota and extraction.
         await using var input = new FileStream(archive.PhysicalPath, FileMode.Open, FileAccess.Read, FileShare.Read,
             81920, FileOptions.Asynchronous | FileOptions.RandomAccess);
+        FinalPathGuard.EnsureInside(input, archive.SandboxRoot);
         using var zip = OpenArchive(input);
         // Validate every header before effects; quota below accounts for each published
         // entry's net growth, including repeated names that replace an earlier entry.
@@ -1992,7 +2033,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                 {
                     var content = ReadSearchContent is { } read
                         ? await read(path, cancellationToken)
-                        : await ReadSearchFileAsync(path, cancellationToken);
+                        : await ReadSearchFileAsync(path, target.SandboxRoot, cancellationToken);
                     await ApprovePublicationAsync(target, beforeRead, cancellationToken);
                     contentMatch = content?.Contains(query, StringComparison.OrdinalIgnoreCase) == true;
                 }
@@ -2031,9 +2072,9 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             Truncated = reason.Length != 0, TruncatedReasonKey = reason };
     }
 
-    private async Task<string?> ReadSearchFileAsync(string path, CancellationToken token)
+    private async Task<string?> ReadSearchFileAsync(string path, string sandboxRoot, CancellationToken token)
     {
-        await using var stream = OpenSearchContent(path);
+        await using var stream = OpenVerified(OpenSearchContent, DefaultSearchOpen, path, sandboxRoot);
         token.ThrowIfCancellationRequested();
         // The path's earlier FileInfo may describe a different version. Measure and read
         // the same opened handle, and never let a later growth turn this into an unbounded read.
@@ -2232,6 +2273,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         // retained archive and verifies actual entry length/CRC before each file is published.
         await using var input = new FileStream(archive.PhysicalPath, FileMode.Open, FileAccess.Read, FileShare.Read,
             81920, FileOptions.Asynchronous | FileOptions.RandomAccess);
+        FinalPathGuard.EnsureInside(input, archive.SandboxRoot);
         using var zip = OpenArchive(input);
         return MeasureArchiveContentBytes(zip, cancellationToken);
     }
@@ -2391,18 +2433,11 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         string sandboxRoot,
         string fullPath)
     {
-        var relativePath = Path.GetRelativePath(sandboxRoot, fullPath);
-        var currentPath = sandboxRoot;
-        foreach (var segment in relativePath.Split(
-                     Path.DirectorySeparatorChar,
-                     StringSplitOptions.RemoveEmptyEntries))
+        // Kökün KENDİSİ de denetlenir (site\x -> C:\ProgramData) ve hedefi silinmiş (dangling)
+        // bağlantı da reddedilir; ikisi de ReparseGuard'da.
+        if (ReparseGuard.HasReparsePoint(sandboxRoot, fullPath, includeRoot: true))
         {
-            currentPath = Path.Combine(currentPath, segment);
-            if ((File.Exists(currentPath) || Directory.Exists(currentPath)) &&
-                File.GetAttributes(currentPath).HasFlag(FileAttributes.ReparsePoint))
-            {
-                throw new AppException("files.path_outside_root", 400, 400);
-            }
+            throw new AppException("files.path_outside_root", 400, 400);
         }
     }
 
@@ -2458,12 +2493,12 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         }
     }
 
-    private async Task<FileTextContent> ReadFileContentAsync(string path, CancellationToken cancellationToken)
+    private async Task<FileTextContent> ReadFileContentAsync(string path, string sandboxRoot, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         // Measure and read the same handle; a concurrently growing file must not turn a
         // bounded preview into an unbounded read. An unloaded file never impersonates text.
-        await using var input = OpenWorkspaceFile(path);
+        await using var input = OpenVerified(OpenWorkspaceFile, DefaultSequentialOpen, path, sandboxRoot);
         return await FileTextContent.ReadAsync(input, cancellationToken);
     }
 
