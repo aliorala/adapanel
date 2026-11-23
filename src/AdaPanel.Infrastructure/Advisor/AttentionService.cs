@@ -209,7 +209,7 @@ public sealed class AttentionService(
                         DescriptionKey = "attention.alerts.deliveryFailed.desc",
                         Detail = undelivered[0].Detail,
                         AffectedCount = undelivered.Count,
-                        Section = "automation"
+                        Section = "settings"
                     });
                 }
             }
