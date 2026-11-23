@@ -6,6 +6,7 @@ using AdaPanel.Core.Enums;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Security;
+using AdaPanel.Infrastructure.Subscriptions;
 using AdaPanel.Infrastructure.Database;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.AspNetCore.Identity;
@@ -28,7 +29,8 @@ public sealed class UserManagementService(
     ISchedulerService schedulerService,
     ISiteCascadeDeletionService siteCascadeDeletion,
     IApiTokenService apiTokenService,
-    IServerOwnerService serverOwnerService) : IUserManagementService
+    IServerOwnerService serverOwnerService,
+    IResellerQuotaService? resellerQuotas = null) : IUserManagementService
 {
     /// <summary>Müşteri OLMAYAN satırların diski: ÖLÇÜLMÜŞ sıfır.</summary>
     /// <remarks>
@@ -105,12 +107,14 @@ public sealed class UserManagementService(
         var normalizedUserNameLookup = normalizedUserName.ToLowerInvariant();
         var normalizedEmailLookup = normalizedEmail.ToLowerInvariant();
 
-        if (await dbContext.Users.AnyAsync(user => user.UserName.ToLower() == normalizedUserNameLookup, cancellationToken))
+        // G37: giriş "kullanıcı adı VEYA e-posta" ile aranır; bir kullanıcı adı başkasının e-postasına
+        // (ya da tersi) eşitse o hesabın girişini gölgeleyebilir. İki alan tek ad alanı sayılır.
+        if (await dbContext.Users.AnyAsync(user => user.UserName.ToLower() == normalizedUserNameLookup || user.Email.ToLower() == normalizedUserNameLookup, cancellationToken))
         {
             throw new InvalidOperationException("users.duplicate_username");
         }
 
-        if (await dbContext.Users.AnyAsync(user => user.Email.ToLower() == normalizedEmailLookup, cancellationToken))
+        if (await dbContext.Users.AnyAsync(user => user.Email.ToLower() == normalizedEmailLookup || user.UserName.ToLower() == normalizedEmailLookup, cancellationToken))
         {
             throw new InvalidOperationException("users.duplicate_email");
         }
@@ -145,6 +149,7 @@ public sealed class UserManagementService(
         {
             await ValidateScopeAsync(role, request.AssignedSites, request.MaxSites,
                 actorIsReseller ? actorUserId : null, cancellationToken);
+            await EnsureResellerQuotaAsync(actorIsReseller, role, actorUserId, Guid.Empty, request.MaxSites, request.MaxDiskMb, cancellationToken);
         }
 
         var user = new PanelUser
@@ -275,7 +280,7 @@ public sealed class UserManagementService(
         var normalizedEmail = request.Email.Trim();
         var normalizedEmailLookup = normalizedEmail.ToLowerInvariant();
         if (!string.Equals(user.Email, normalizedEmail, StringComparison.OrdinalIgnoreCase) &&
-            await dbContext.Users.AnyAsync(candidate => candidate.Email.ToLower() == normalizedEmailLookup && candidate.Id != userId, cancellationToken))
+            await dbContext.Users.AnyAsync(candidate => (candidate.Email.ToLower() == normalizedEmailLookup || candidate.UserName.ToLower() == normalizedEmailLookup) && candidate.Id != userId, cancellationToken))
         {
             throw new InvalidOperationException("users.duplicate_email");
         }
@@ -323,6 +328,7 @@ public sealed class UserManagementService(
         {
             await ValidateScopeAsync(newRole, request.AssignedSites, request.MaxSites,
                 actorIsReseller ? actorUserId : null, cancellationToken);
+            await EnsureResellerQuotaAsync(actorIsReseller, newRole, actorUserId, userId, request.MaxSites, request.MaxDiskMb, cancellationToken);
         }
 
         // profesyonel paneller gibi abonelik askıya alma: aktiflik değişimini yakala (sonra sitelerini durdur/başlat).
@@ -373,6 +379,22 @@ public sealed class UserManagementService(
             : null;
         return MapUser(user, scope, diskKullanimi, resolvedOwner, await ResolveOwnerNameAsync(resolvedOwner, cancellationToken), dbCount,
             parentId, await ResolveOwnerNameAsync(parentId, cancellationToken));
+    }
+
+    /// <summary>
+    /// G13: bayi müşteri açarken/güncellerken yeni limitler bayinin tavanına sığmalı. Daha önce yalnız
+    /// abonelik/plan ucu (SubscriptionsController) denetliyordu; kullanıcı ucu tavanı deliyordu.
+    /// </summary>
+    private async Task EnsureResellerQuotaAsync(bool actorIsReseller, UserRole role, Guid resellerId, Guid targetCustomerId,
+        int maxSites, int maxDiskMb, CancellationToken cancellationToken)
+    {
+        if (!actorIsReseller || role != UserRole.Customer || resellerQuotas is null)
+        {
+            return;
+        }
+
+        await ResellerQuotaGuard.EnsureAllocationFitsAsync(
+            resellerQuotas, customerScopeService, resellerId, targetCustomerId, maxSites, maxDiskMb, cancellationToken);
     }
 
     private async Task ValidateScopeAsync(UserRole role, string[] assignedSites, int maxSites,
@@ -943,12 +965,14 @@ public sealed class UserManagementService(
         var userNameLookup = normalizedUserName.ToLowerInvariant();
         var emailLookup = normalizedEmail.ToLowerInvariant();
 
-        if (await dbContext.Users.AnyAsync(user => user.UserName.ToLower() == userNameLookup, cancellationToken))
+        // G37: giriş "kullanıcı adı VEYA e-posta" ile aranır; bir kullanıcı adı başkasının e-postasına
+        // (ya da tersi) eşitse o hesabın girişini gölgeleyebilir. İki alan tek ad alanı sayılır.
+        if (await dbContext.Users.AnyAsync(user => user.UserName.ToLower() == userNameLookup || user.Email.ToLower() == userNameLookup, cancellationToken))
         {
             throw new InvalidOperationException("users.duplicate_username");
         }
 
-        if (await dbContext.Users.AnyAsync(user => user.Email.ToLower() == emailLookup, cancellationToken))
+        if (await dbContext.Users.AnyAsync(user => user.Email.ToLower() == emailLookup || user.UserName.ToLower() == emailLookup, cancellationToken))
         {
             throw new InvalidOperationException("users.duplicate_email");
         }
@@ -992,7 +1016,7 @@ public sealed class UserManagementService(
         var normalizedEmail = request.Email.Trim();
         var emailLookup = normalizedEmail.ToLowerInvariant();
         if (!string.Equals(user.Email, normalizedEmail, StringComparison.OrdinalIgnoreCase) &&
-            await dbContext.Users.AnyAsync(candidate => candidate.Email.ToLower() == emailLookup && candidate.Id != subUserId, cancellationToken))
+            await dbContext.Users.AnyAsync(candidate => (candidate.Email.ToLower() == emailLookup || candidate.UserName.ToLower() == emailLookup) && candidate.Id != subUserId, cancellationToken))
         {
             throw new InvalidOperationException("users.duplicate_email");
         }
