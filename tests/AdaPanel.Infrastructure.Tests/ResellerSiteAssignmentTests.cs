@@ -267,7 +267,7 @@ public sealed class ResellerSiteAssignmentTests
                 new KullanilmayanZamanlayici(),
                 new KullanilmayanCascade(),
                 new ThrowingApiTokenService(),
-                new SahipsizSunucuSahibiServisi(), null!);
+                new SahipsizSunucuSahibiServisi(), new SinirsizBayiTavani());
 
             return new Duzenek(baglanti, dbContext, servis, kapsam, bayi.Id, yonetici.Id);
         }

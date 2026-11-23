@@ -190,9 +190,10 @@ public sealed class AuthTwoFactorLifecycleTests
     [InlineData("begin")]
     [InlineData("confirm")]
     [InlineData("regenerate")]
+    [InlineData("disable")]
     public async Task TwoFactorChangesAreRejectedWhileImpersonating(string operation)
     {
-        await using var fixture = await Fixture.Create(enabled: operation == "regenerate", pending: operation == "confirm");
+        await using var fixture = await Fixture.Create(enabled: operation is "regenerate" or "disable", pending: operation == "confirm");
         var controller = fixture.Controller();
         ((ClaimsIdentity)controller.HttpContext.User.Identity!).AddClaim(new Claim("impersonator_id", Guid.NewGuid().ToString()));
         var password = new TwoFactorPasswordRequest { Password = Fixture.Password };
@@ -200,6 +201,7 @@ public sealed class AuthTwoFactorLifecycleTests
         {
             "begin" => controller.BeginTwoFactorSetupAsync(password, default),
             "confirm" => controller.ConfirmTwoFactorSetupAsync(new VerifyTwoFactorRequest { Code = "123456", Password = Fixture.Password }, default),
+            "disable" => controller.DisableTwoFactorAsync(new DisableTwoFactorRequest { Password = Fixture.Password }, default),
             _ => controller.RegenerateRecoveryCodesAsync(password, default)
         });
         Assert.Equal(403, error.HttpStatusCode);

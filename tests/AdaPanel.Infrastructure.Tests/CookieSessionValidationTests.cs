@@ -241,6 +241,7 @@ public sealed class CookieSessionValidationTests
                 kimlik.AddClaim(new Claim(
                     CookieSessionValidator.CredentialStampClaim,
                     CookieSessionValidator.ComputeStamp(girisAnindakiKarma)));
+                kimlik.AddClaim(new Claim(CookieSessionValidator.TwoFactorStateClaim, "0"));
             }
 
             return kimlik;
