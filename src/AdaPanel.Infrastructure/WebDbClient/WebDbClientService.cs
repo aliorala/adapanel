@@ -1256,7 +1256,7 @@ exit;
     // Best-effort: başarısız olsa da dağıtım bozulmaz (araç çalışır, sadece ilk istek yavaş olabilir).
     private static async Task KeepAppPoolWarmAsync(string appPoolName, CancellationToken cancellationToken)
     {
-        var pool = appPoolName.Replace("'", "''");
+        var pool = PowerShellQuoting.Escape(appPoolName);
         var script = $$"""
             Import-Module WebAdministration -ErrorAction Stop
             $pool = '{{pool}}'

@@ -1048,7 +1048,7 @@ public sealed partial class FtpService(
             {
                 // net.exe başarısızsa (lokalizasyon/kilit) PowerShell Remove-LocalUser ile dene.
                 var psScript = $"$ErrorActionPreference='SilentlyContinue'; " +
-                    $"Remove-LocalUser -Name '{normalizedUserName.Replace("'", "''")}'";
+                    $"Remove-LocalUser -Name '{PowerShellQuoting.Escape(normalizedUserName)}'";
                 await Approve(cancellationToken);
                 await RunScriptAsync(psScript, cancellationToken);
 
@@ -1882,7 +1882,7 @@ public sealed partial class FtpService(
         return normalized;
     }
 
-    private static string EscapePowerShellLiteral(string value) => value.Replace("'", "''");
+    private static string EscapePowerShellLiteral(string value) => PowerShellQuoting.Escape(value);
 
     /// <summary>
     /// FTP hesabının parolasını SÜRESİZ yapar ve sonucu GERİ OKUR.

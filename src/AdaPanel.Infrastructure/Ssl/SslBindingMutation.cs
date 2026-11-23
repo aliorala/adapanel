@@ -1,4 +1,6 @@
-﻿namespace AdaPanel.Infrastructure.Ssl;
+using AdaPanel.Infrastructure.Support;
+
+namespace AdaPanel.Infrastructure.Ssl;
 
 /// <summary>IIS binding snapshot guards. Does not inventory orphan HTTP.sys entries or native TLS policy.</summary>
 internal static class SslBindingMutation
@@ -8,7 +10,7 @@ internal static class SslBindingMutation
 
     internal static string Script(string siteName, string hostName, int port, string thumbprint, ExpectedBinding? expected = null)
     {
-        static string Literal(string value) => value.Replace("'", "''");
+        static string Literal(string value) => PowerShellQuoting.Escape(value);
         var expectedGuard = expected is null ? "" : $$"""
             $approvedSite = @($script:sslMutationSites | Where-Object { $_.Name -ieq $site })
             if ($approvedSite.Count -ne 1 -or [long]$approvedSite[0].Id -ne {{expected.SiteId}} -or

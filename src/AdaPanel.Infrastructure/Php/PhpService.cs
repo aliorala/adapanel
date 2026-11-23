@@ -1,3 +1,4 @@
+using AdaPanel.Infrastructure.Support;
 using System.Collections;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
@@ -846,8 +847,8 @@ public sealed class PhpService(
 
         var script =
             "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; " +
-            $"Invoke-WebRequest -Uri '{url}' -OutFile '{tempZip.Replace("'", "''")}' -UseBasicParsing; " +
-            $"Expand-Archive -Path '{tempZip.Replace("'", "''")}' -DestinationPath '{tempDir.Replace("'", "''")}' -Force";
+            $"Invoke-WebRequest -Uri '{url}' -OutFile '{PowerShellQuoting.Escape(tempZip)}' -UseBasicParsing; " +
+            $"Expand-Archive -Path '{PowerShellQuoting.Escape(tempZip)}' -DestinationPath '{PowerShellQuoting.Escape(tempDir)}' -Force";
         var download = await AdaPanel.Infrastructure.Support.ProcessRunner.RunPowerShellAsync(script, cancellationToken);
 
         var sourceDll = Directory.Exists(tempDir)

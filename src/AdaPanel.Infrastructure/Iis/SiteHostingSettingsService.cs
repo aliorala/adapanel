@@ -713,7 +713,7 @@ public sealed class SiteHostingSettingsService(
         }
 
         Directory.CreateDirectory(toolsDir);
-        var dest = wpCli.Replace("'", "''");
+        var dest = PowerShellQuoting.Escape(wpCli);
         var script =
             "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; " +
             $"Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar' -OutFile '{dest}' -UseBasicParsing";
@@ -841,9 +841,9 @@ public sealed class SiteHostingSettingsService(
     internal static string BuildImportScript(bool ftp, string url, string archive, string extractDir)
         => (ftp
                 ? "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; " +
-                  $"Invoke-WebRequest -Uri '{url}' -OutFile '{archive.Replace("'", "''")}' -UseBasicParsing; "
+                  $"Invoke-WebRequest -Uri '{url}' -OutFile '{PowerShellQuoting.Escape(archive)}' -UseBasicParsing; "
                 : string.Empty) +
-           $"Expand-Archive -Path '{archive.Replace("'", "''")}' -DestinationPath '{extractDir.Replace("'", "''")}' -Force";
+           $"Expand-Archive -Path '{PowerShellQuoting.Escape(archive)}' -DestinationPath '{PowerShellQuoting.Escape(extractDir)}' -Force";
 
     private async Task DenetlenenIndirmeAsync(string url, string hedefDosya, CancellationToken cancellationToken)
     {

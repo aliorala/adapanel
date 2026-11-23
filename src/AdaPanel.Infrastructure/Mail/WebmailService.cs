@@ -429,7 +429,7 @@ public sealed partial class WebmailService(
         // kapatır. Aynı dosyada doğrusu zaten yazılıydı (KeepAppPoolWarmAsync); burada atlanmıştı.
         var script = $$"""
             Import-Module WebAdministration -ErrorAction SilentlyContinue
-            New-WebBinding -Name '{{SiteName}}' -Protocol http -Port 80 -HostHeader '{{webmailHost.Replace("'", "''")}}' -ErrorAction SilentlyContinue
+            New-WebBinding -Name '{{SiteName}}' -Protocol http -Port 80 -HostHeader '{{PowerShellQuoting.Escape(webmailHost)}}' -ErrorAction SilentlyContinue
             """;
         await HostBindingCommand(script, cancellationToken);
     }
@@ -696,7 +696,7 @@ public sealed partial class WebmailService(
     // App pool'u sürekli ayakta tutar (soğuk başlangıç → yavaşlık/timeout olmasın). Best-effort.
     private static async Task KeepAppPoolWarmAsync(string appPoolName, CancellationToken cancellationToken)
     {
-        var pool = appPoolName.Replace("'", "''");
+        var pool = PowerShellQuoting.Escape(appPoolName);
         var script = $$"""
             Import-Module WebAdministration -ErrorAction Stop
             $pool = '{{pool}}'

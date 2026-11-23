@@ -345,5 +345,5 @@ if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
     /// keyfi kod çalıştırmaya açık bir kapıydı. Tek tırnaklı dizede genişleme YOKTUR.
     /// </para>
     /// </summary>
-    private static string TekTirnak(string value) => (value ?? string.Empty).Replace("'", "''");
+    private static string TekTirnak(string value) => PowerShellQuoting.Escape(value);
 }

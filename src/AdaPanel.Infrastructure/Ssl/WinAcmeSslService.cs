@@ -1069,7 +1069,7 @@ public sealed class WinAcmeSslService(
         Func<CancellationToken, Task>? beforeMutation,
         Func<string, CancellationToken, Task<CommandResult>>? commandRunner = null, int targetPort = 443)
     {
-        var site = siteName.Replace("'", "''");
+        var site = PowerShellQuoting.Escape(siteName);
         // HTTP_HOST may carry the incoming HTTP port. Capture only its host so
         // an HTTP request on :8080 cannot redirect to TLS on that old port.
         var redirectUrl = targetPort == 443 ? "https://{C:1}/{R:1}" : $"https://{{C:1}}:{targetPort}/{{R:1}}";
@@ -1192,7 +1192,7 @@ public sealed class WinAcmeSslService(
 
     private async Task<bool?> ReadHttpsRedirectAsync(string siteName, CancellationToken cancellationToken)
     {
-        var site = siteName.Replace("'", "''");
+        var site = PowerShellQuoting.Escape(siteName);
         var script = $$"""
             $ErrorActionPreference = 'Stop'
             Import-Module WebAdministration -ErrorAction Stop
@@ -2318,11 +2318,11 @@ public sealed class WinAcmeSslService(
 
     private async Task RemoveHttpsBindingAsync(string siteName, IisHttpsBinding target, CancellationToken cancellationToken)
     {
-        var site = siteName.Replace("'", "''");
-        var dn = target.HostName.Replace("'", "''");
-        var bindingInformation = target.BindingInformation.Replace("'", "''");
-        var thumbprint = target.Thumbprint.Replace("'", "''");
-        var storeName = target.StoreName.Replace("'", "''");
+        var site = PowerShellQuoting.Escape(siteName);
+        var dn = PowerShellQuoting.Escape(target.HostName);
+        var bindingInformation = PowerShellQuoting.Escape(target.BindingInformation);
+        var thumbprint = PowerShellQuoting.Escape(target.Thumbprint);
+        var storeName = PowerShellQuoting.Escape(target.StoreName);
 
         var script = $$"""
             Import-Module WebAdministration -ErrorAction Stop
@@ -2368,7 +2368,7 @@ public sealed class WinAcmeSslService(
             return ("remove_failed", "Sertifika parmak izi okunamadi.", []);
         }
 
-        var thumb = thumbprint.Replace("'", "''");
+        var thumb = PowerShellQuoting.Escape(thumbprint);
         var script = $$"""
             Import-Module WebAdministration -ErrorAction Stop
             $ErrorActionPreference = 'Stop'

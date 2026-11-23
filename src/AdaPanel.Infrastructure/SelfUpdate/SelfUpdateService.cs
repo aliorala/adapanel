@@ -1130,7 +1130,7 @@ public sealed class SelfUpdateService : ISelfUpdateService
     {
         try
         {
-            var kacirilmisYol = filePath.Replace("'", "''", StringComparison.Ordinal);
+            var kacirilmisYol = PowerShellQuoting.Escape(filePath);
             var script =
                 $"$imza = Get-AuthenticodeSignature -LiteralPath '{kacirilmisYol}'\r\n" +
                 "[Console]::Out.Write($imza.Status.ToString())\r\n" +

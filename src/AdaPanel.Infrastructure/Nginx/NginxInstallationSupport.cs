@@ -721,7 +721,7 @@ internal static partial class NginxInstallationSupport
         return ProcessRunner.CountProcessesUnder(installDirectory, "nginx");
     }
 
-    private static string EscapePowerShell(string value) => value.Replace("'", "''", StringComparison.Ordinal);
+    private static string EscapePowerShell(string value) => PowerShellQuoting.Escape(value);
 
     [GeneratedRegex(@"^(_|[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?)$")]
     private static partial Regex ServerNamePattern();

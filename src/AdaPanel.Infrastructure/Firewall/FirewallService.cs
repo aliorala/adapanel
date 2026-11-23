@@ -658,5 +658,5 @@ public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewall
     /// <c>EscapePowerShellString</c> vardı (yalnız <c>"</c> kaçırırdı) ve çıktısı ÇİFT TIRNAKLI
     /// dizelere giriyordu — bkz. <see cref="BuildUpsertScript"/>.
     /// </summary>
-    private static string TekTirnak(string value) => (value ?? string.Empty).Replace("'", "''");
+    private static string TekTirnak(string value) => PowerShellQuoting.Escape(value);
 }

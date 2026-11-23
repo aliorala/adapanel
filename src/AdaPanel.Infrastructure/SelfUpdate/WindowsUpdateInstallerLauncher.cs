@@ -44,7 +44,7 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
             new UTF8Encoding(false),
             cancellationToken);
 
-        var escapedLauncher = EscapePowerShell(launcherPath);
+        var escapedLauncher = EscapePowerShellLiteral(launcherPath);
         var registerScript = $$"""
             $ErrorActionPreference = 'Stop'
             $taskName = '{{TaskName}}'
@@ -352,7 +352,5 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
             """;
     }
 
-    private static string EscapePowerShell(string value) => value.Replace("\"", "`\"");
-
-    private static string EscapePowerShellLiteral(string value) => value.Replace("'", "''");
+    private static string EscapePowerShellLiteral(string value) => PowerShellQuoting.Escape(value);
 }

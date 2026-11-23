@@ -39,7 +39,7 @@ public static class BruteForceRecovery
             // Kural adları panel tarafından "AdaPanel BruteForce Block <ip>" olarak üretilir; yine de
             // çift tırnak kaçışı yapılır (durum dosyası elle düzenlenmiş olabilir).
             var script = $"""
-                Remove-NetFirewallRule -DisplayName "{ruleName.Replace("\"", "`\"")}" -ErrorAction SilentlyContinue | Out-Null
+                Remove-NetFirewallRule -DisplayName '{PowerShellQuoting.Escape(ruleName)}' -ErrorAction SilentlyContinue | Out-Null
                 """;
             await ProcessRunner.RunPowerShellAsync(script);
         }

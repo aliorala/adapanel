@@ -343,9 +343,9 @@ public sealed class WafService(
         var rights = string.IsNullOrWhiteSpace(request.Rights)
             ? "M"
             : Support.AclInputValidator.EnsureRights(request.Rights);
-        var rootLiteral = applicationRoot.Replace("'", "''");
-        var poolLiteral = principal.Replace("'", "''");
-        var siteLiteral = site.Name.Replace("'", "''");
+        var rootLiteral = PowerShellQuoting.Escape(applicationRoot);
+        var poolLiteral = PowerShellQuoting.Escape(principal);
+        var siteLiteral = PowerShellQuoting.Escape(site.Name);
 
         // PLESK-BENZERİ TAM KİRACI İZOLASYONU: (1) statik dosyalar IUSR ile DEĞİL app pool kimliğiyle sunulsun
         // (anonymousAuthentication.userName='') → sitenin TÜM erişimi (PHP FastCGI + statik) tek kimlikten geçer.

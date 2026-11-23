@@ -1835,7 +1835,7 @@ if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
     /// listesinden geçer (bkz. <see cref="EnsureUsableName"/> ve <see cref="ValidateRequest"/>).
     /// </para>
     /// </summary>
-    private static string EscapeSingleQuoted(string value) => value.Replace("'", "''");
+    private static string EscapeSingleQuoted(string value) => PowerShellQuoting.Escape(value);
 
     /// <summary>
     /// Var olan bir göreve dokunmadan önce adın kabuk için zararsız olduğunu doğrular.
