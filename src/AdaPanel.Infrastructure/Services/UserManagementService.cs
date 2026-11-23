@@ -268,7 +268,7 @@ public sealed class UserManagementService(
         await ReloadTrackedUserAsync(actorUserId, cancellationToken);
         // Kapsam denetimi TEK kaynaktan (ManagedUserGuard): bayi yalnız KENDI müşterisini güncelleyebilir.
         var erisim = await ManagedUserGuard.EnsureManagedAsync(
-            dbContext, customerScopeService, actorUserId, userId, cancellationToken);
+            dbContext, customerScopeService, actorUserId, userId, cancellationToken, serverOwnerService);
         var user = erisim.Target;
         var actorIsReseller = erisim.ActorIsReseller;
 
@@ -505,7 +505,7 @@ public sealed class UserManagementService(
         // Bayi yalnız KENDİ müşterisinin kilidini açabilir (silme/güncellemeyle AYNI kapsam kuralı,
         // tek kaynak: ManagedUserGuard).
         var user = (await ManagedUserGuard.EnsureManagedAsync(
-            dbContext, customerScopeService, actorUserId, userId, cancellationToken)).Target;
+            dbContext, customerScopeService, actorUserId, userId, cancellationToken, serverOwnerService)).Target;
 
         user.LockedUntilUtc = null;
         user.FailedLoginCount = 0;
@@ -564,7 +564,7 @@ public sealed class UserManagementService(
         // Bayi yalnız KENDİ müşterisini silebilir (tek kaynak: ManagedUserGuard); yıkıcı mod
         // (site silme) admin'e özeldir.
         var erisim = await ManagedUserGuard.EnsureManagedAsync(
-            dbContext, customerScopeService, actorUserId, userId, cancellationToken);
+            dbContext, customerScopeService, actorUserId, userId, cancellationToken, serverOwnerService);
         var user = erisim.Target;
 
         if (erisim.ActorIsReseller)

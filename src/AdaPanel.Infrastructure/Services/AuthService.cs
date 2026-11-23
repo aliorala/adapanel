@@ -114,11 +114,21 @@ public sealed class AuthService(
         // MEŞRU kullanıcıyı 15 dk dışarıda tutmaktı ve panelde başka giriş yolu her zaman olmayabilir.
         // TAKAS: dağıtık (çok IP'li) bir tahmin saldırısında hesap-başına 5-deneme/15 dk üst sınırı
         // ortadan kalkar; kalan savunmalar IP engeli, güçlü parola ve iki adımlı doğrulamadır.
+        // HESAP BAŞINA SERT TAVAN (G10/G11): pencere içinde çok sayıda hata biriktiyse doğru parola
+        // dahil hiçbir deneme doğrulanmaz; yanıt yanlış parolayla AYNI (numaralandırma yok).
+        if (AccountAttemptThrottle.IsBlocked(user.Id))
+        {
+            await auditService.WriteAsync("auth.login.throttled", "auth", $"Login attempts for '{user.UserName}' throttled.", user.Id, ipAddress, cancellationToken);
+            await bruteForceProtection.RegisterFailedAttemptAsync(ipAddress, cancellationToken);
+            throw new InvalidOperationException("auth.invalid_credentials");
+        }
+
         var wasLocked = user.LockedUntilUtc.HasValue && user.LockedUntilUtc.Value > DateTime.UtcNow;
 
         var passwordResult = passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password);
         if (passwordResult == PasswordVerificationResult.Failed)
         {
+            AccountAttemptThrottle.RegisterFailure(user.Id);
             user.FailedLoginCount += 1;
             user.UpdatedAtUtc = DateTime.UtcNow;
 
@@ -212,6 +222,7 @@ public sealed class AuthService(
                 //
                 // Parola yolundaki kilitle AYNI eşik ve süre kullanılıyor; iki yol arasında farklı
                 // davranmak için bir sebep yok.
+                AccountAttemptThrottle.RegisterFailure(user.Id);
                 user.FailedLoginCount += 1;
                 user.UpdatedAtUtc = DateTime.UtcNow;
                 if (user.FailedLoginCount >= 5)
@@ -233,6 +244,7 @@ public sealed class AuthService(
             }
         }
 
+        AccountAttemptThrottle.Reset(user.Id);
         user.FailedLoginCount = 0;
         user.LockedUntilUtc = null;
         user.LastLoginAtUtc = DateTime.UtcNow;
@@ -538,7 +550,8 @@ public sealed class AuthService(
         }
 
         var erisim = await ManagedUserGuard.EnsureManagedAsync(
-            dbContext, customerScopeService, actorUserId, targetUserId, cancellationToken);
+            dbContext, customerScopeService, actorUserId, targetUserId, cancellationToken,
+            serverOwnerService, ManagedUserGuard.AdminTargetRule.NoOtherAdmin);
         var target = erisim.Target;
 
         // Parola yazma disiplininin tamamı (uzunluk kuralı, kilit açma, anahtar düşürme) TEK
@@ -592,7 +605,8 @@ public sealed class AuthService(
         CancellationToken cancellationToken = default)
     {
         var erisim = await ManagedUserGuard.EnsureManagedAsync(
-            dbContext, customerScopeService, actorUserId, targetUserId, cancellationToken);
+            dbContext, customerScopeService, actorUserId, targetUserId, cancellationToken,
+            serverOwnerService, ManagedUserGuard.AdminTargetRule.NoOtherAdmin);
         var target = erisim.Target;
 
         // PASİF hesap için bağlantı ÜRETİLMEZ: normal giriş yolu (LoginAsync) pasif kullanıcıyı

@@ -40,12 +40,25 @@ public sealed record ManagedUserAccess(PanelUser Target, PanelUser? Actor)
 /// </remarks>
 public static class ManagedUserGuard
 {
+    /// <summary>
+    /// Hedef BAŞKA bir yönetici olduğunda uygulanacak kural.
+    /// </summary>
+    public enum AdminTargetRule
+    {
+        /// <summary>Kimlik devralmaya yarayan işlemler (parola belirleme, giriş bağlantısı): kendisi dışında hiçbir yönetici hedef olamaz (kimliğe bürünme ucuyla aynı kural).</summary>
+        NoOtherAdmin,
+        /// <summary>Yönetim işlemleri (güncelle, kilit aç, sil): yalnız SUNUCU SAHİBİ başkasınca değiştirilemez.</summary>
+        ProtectServerOwner,
+    }
+
     public static async Task<ManagedUserAccess> EnsureManagedAsync(
         AdaPanelDbContext dbContext,
         ICustomerScopeService customerScopeService,
         Guid actorUserId,
         Guid targetUserId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IServerOwnerService? serverOwnerService = null,
+        AdminTargetRule adminTargetRule = AdminTargetRule.ProtectServerOwner)
     {
         // Hedefin YOKLUĞU yetkiden ÖNCE bildirilir; mevcut üç çağrı yeri de böyle davranıyordu ve
         // kullanıcı listesi zaten aktörün kapsamıyla sınırlı olduğu için burada bir sızıntı yok.
@@ -56,6 +69,20 @@ public static class ManagedUserGuard
 
         if (actor?.Role == UserRole.Administrator)
         {
+            // İkinci bir yönetici, sunucu sahibini (terminalin SYSTEM kabuğu) başkası adına
+            // değiştiremez: sahip yalnız KENDİ hesabını değiştirir. Kendi hesabı serbest.
+            if (target.Role == UserRole.Administrator && target.Id != actor.Id)
+            {
+                var kimlikDevralma = adminTargetRule == AdminTargetRule.NoOtherAdmin;
+                // Sahiplik bilinemiyorsa (servis verilmedi) kapalı tarafta hata yapılır.
+                var sahip = serverOwnerService is null
+                    || await serverOwnerService.IsServerOwnerAsync(target.Id, cancellationToken);
+                if (kimlikDevralma || sahip)
+                {
+                    throw new AppException("users.forbidden", 403, 403);
+                }
+            }
+
             return new ManagedUserAccess(target, actor);
         }
 
