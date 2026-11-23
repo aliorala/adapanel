@@ -653,7 +653,7 @@ public sealed partial class ReverseProxyService(
     }
 
     /// <summary>Göreli RewriteUrl serbest; mutlak (http/https/ters-eğik-çizgisiz) olan hedef gibi denetlenir.</summary>
-    private async Task EnsureRewriteTargetAllowedAsync(string rewriteUrl, CancellationToken cancellationToken)
+    internal async Task EnsureRewriteTargetAllowedAsync(string rewriteUrl, CancellationToken cancellationToken)
     {
         var url = (rewriteUrl ?? string.Empty).Trim();
         if (url.StartsWith("//", StringComparison.Ordinal))
