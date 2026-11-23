@@ -2376,7 +2376,7 @@ public sealed partial class DnsService(
     }
 
     /// <summary>Tek tirnakli PowerShell dizesi icin kacis: yalnizca tek tirnak ikilenir.</summary>
-    private static string EscapeSingleQuoted(string value) => value.Replace("'", "''");
+    private static string EscapeSingleQuoted(string value) => PowerShellQuoting.Escape(value);
 
     internal static string BuildSrvLine(string host, string value, int? priority, int ttl)
     {
@@ -2800,7 +2800,7 @@ public sealed partial class DnsService(
 
     private static string EscapePowerShellLiteral(string value)
     {
-        return value.Replace("'", "''");
+        return PowerShellQuoting.Escape(value);
     }
 
     private static string BuildCommandDetails(CommandResult result)

@@ -143,7 +143,7 @@ public sealed partial class WebmailService
     internal static string BuildSsoAclScript(string root) => $$"""
         $ErrorActionPreference = 'Stop'
         Import-Module WebAdministration -ErrorAction Stop
-        $root = [IO.Path]::GetFullPath('{{root.Replace("'", "''")}}').TrimEnd('\')
+        $root = [IO.Path]::GetFullPath('{{PowerShellQuoting.Escape(root)}}').TrimEnd('\')
         $siteName = 'AdaPanel.Webmail'
         $poolName = 'AdaPanel.AdaPanel.Webmail'
         $pool = Get-Item -LiteralPath "IIS:\AppPools\$poolName" -ErrorAction Stop

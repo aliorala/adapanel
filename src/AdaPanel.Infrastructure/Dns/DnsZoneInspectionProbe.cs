@@ -49,7 +49,7 @@ internal static class DnsZoneInspectionProbe
 
     internal static string BuildScript(IEnumerable<string> names)
     {
-        var quoted = string.Join(",", names.Select(name => "'" + name.Replace("'", "''") + "'"));
+        var quoted = string.Join(",", names.Select(name => "'" + PowerShellQuoting.Escape(name) + "'"));
         return $$"""
             $available = [bool](Get-Command Get-DnsServerZone -ErrorAction SilentlyContinue)
             $zones = @{}

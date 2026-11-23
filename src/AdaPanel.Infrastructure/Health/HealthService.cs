@@ -111,7 +111,7 @@ public sealed class HealthService(AdaPanelDbContext dbContext) : IHealthService
 
     internal static string BuildRestartScript(string name)
     {
-        var safe = name.Replace("'", "''");
+        var safe = PowerShellQuoting.Escape(name);
         return $$"""
             $name = '{{safe}}'
             # Enumerate strictly: a failed direct Get-Service lookup can hide access errors as absence.

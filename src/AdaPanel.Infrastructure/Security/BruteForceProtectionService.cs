@@ -351,7 +351,7 @@ public sealed class BruteForceProtectionService(
     /// olmaktan farklıdır.
     /// </para>
     /// </summary>
-    private static string TekTirnak(string value) => (value ?? string.Empty).Replace("'", "''");
+    private static string TekTirnak(string value) => PowerShellQuoting.Escape(value);
 
     private sealed class BruteForceState
     {

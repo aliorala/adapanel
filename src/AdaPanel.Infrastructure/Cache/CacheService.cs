@@ -577,7 +577,7 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
             // Enumerate first so a genuinely missing task is a successful empty result,
             // while permission/module/CIM failures still terminate the inspection.
             var result = await InspectPowerShellAsync(
-                $"$task = Get-ScheduledTask -ErrorAction Stop | Where-Object {{ $_.TaskName -eq '{taskName.Replace("'", "''")}' }} | Select-Object -First 1\n[bool]($null -ne $task)",
+                $"$task = Get-ScheduledTask -ErrorAction Stop | Where-Object {{ $_.TaskName -eq '{PowerShellQuoting.Escape(taskName)}' }} | Select-Object -First 1\n[bool]($null -ne $task)",
                 cancellationToken);
             if (!result.Success || !string.IsNullOrWhiteSpace(result.StandardError)) throw new IOException(Detay(result));
             if (!bool.TryParse(result.StandardOutput.Trim(), out var registered)) throw new InvalidDataException("Task inspection returned no valid boolean result.");
@@ -916,7 +916,7 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
         {
             var result = await InspectPowerShellAsync(
                 $$"""
-                $service = Get-Service -ErrorAction Stop | Where-Object { $_.Name -eq '{{serviceName.Replace("'", "''")}}' } | Select-Object -First 1
+                $service = Get-Service -ErrorAction Stop | Where-Object { $_.Name -eq '{{PowerShellQuoting.Escape(serviceName)}}' } | Select-Object -First 1
                 if ($null -eq $service) { [pscustomobject]@{ Exists = $false } | ConvertTo-Json -Compress }
                 else { [pscustomobject]@{ Status = $service.Status.ToString() } | ConvertTo-Json -Compress }
                 """, cancellationToken);

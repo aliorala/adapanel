@@ -1,3 +1,4 @@
+using AdaPanel.Infrastructure.Support;
 using System.Text.RegularExpressions;
 
 namespace AdaPanel.Infrastructure.Scheduler;
@@ -264,7 +265,7 @@ foreach ($satir in ($adaBulunan | Sort-Object -Unique)) { [Console]::Out.WriteLi
 $ErrorActionPreference = 'Stop'
 $adaAnahtar = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
 $adaMevcut = (Get-ItemProperty -Path $adaAnahtar -Name Path -ErrorAction Stop).Path
-$adaEklenecek = @('{{klasor.Replace("'", "''")}}', '{{scripts.Replace("'", "''")}}')
+$adaEklenecek = @('{{PowerShellQuoting.Escape(klasor)}}', '{{PowerShellQuoting.Escape(scripts)}}')
 $adaParcalar = $adaMevcut.Split(';') | Where-Object { $_ }
 $adaYeni = @()
 foreach ($aday in $adaEklenecek) {
@@ -327,7 +328,7 @@ foreach ($aday in $adaEklenecek) {
     /// </summary>
     internal static string BuildMachinePathProbeScript(IEnumerable<string> klasorler)
     {
-        var liste = string.Join(", ", klasorler.Select(item => "'" + item.Replace("'", "''") + "'"));
+        var liste = string.Join(", ", klasorler.Select(item => "'" + PowerShellQuoting.Escape(item) + "'"));
         return "$ErrorActionPreference = 'Stop'\n$adaEklenecek = @(" + liste + ")\n" + MakinePathDogrulamaParcasi;
     }
 }

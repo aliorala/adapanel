@@ -1431,5 +1431,5 @@ public sealed partial class MailEnableMailService(
 
     // PowerShell tek-tırnak literal içeriği (script tek-tırnakla sarıldığı için ' -> '').
     private static string PsLiteralRaw(string value)
-        => (value ?? string.Empty).Replace("'", "''");
+        => PowerShellQuoting.Escape(value);
 }

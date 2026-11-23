@@ -2673,7 +2673,7 @@ public sealed class ComponentBootstrapper(
             try
             {
                 Directory.CreateDirectory(path);
-                var escaped = path.Replace("'", "''");
+                var escaped = PowerShellQuoting.Escape(path);
                 await ProcessRunner.RunPowerShellAsync(
                     $"Add-MpPreference -ExclusionPath '{escaped}' -ErrorAction SilentlyContinue",
                     cancellationToken);
@@ -2778,7 +2778,7 @@ public sealed class ComponentBootstrapper(
         string filePath,
         CancellationToken cancellationToken)
     {
-        var escapedPath = filePath.Replace("'", "''", StringComparison.Ordinal);
+        var escapedPath = PowerShellQuoting.Escape(filePath);
         var script =
             $"$signature = Get-AuthenticodeSignature -LiteralPath '{escapedPath}'\r\n" +
             "[Console]::Out.Write($signature.Status.ToString())\r\n" +
@@ -4121,7 +4121,7 @@ public sealed class ComponentBootstrapper(
         var serviceName = string.IsNullOrWhiteSpace(component.ServiceName) ? "docker" : component.ServiceName;
         var dockerd = FindExecutable(installDirectory, "dockerd.exe");
         var binDirectory = Path.GetDirectoryName(dockerd) ?? installDirectory;
-        var binLiteral = binDirectory.Replace("'", "''");
+        var binLiteral = PowerShellQuoting.Escape(binDirectory);
 
         await TryRemoveServiceAsync(serviceName, cancellationToken);
 
@@ -5130,7 +5130,7 @@ public sealed class ComponentBootstrapper(
             // failure must abort the update, not fall through to killing the process.
             var stopped = await ProcessRunner.RunPowerShellAsync($$"""
                 $ErrorActionPreference = 'Stop'
-                $service = Get-Service -Name '{{serviceName.Replace("'", "''")}}' -ErrorAction SilentlyContinue
+                $service = Get-Service -Name '{{PowerShellQuoting.Escape(serviceName)}}' -ErrorAction SilentlyContinue
                 if ($null -ne $service -and $service.Status -ne 'Stopped') {
                     $service.Stop()
                     $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(30))

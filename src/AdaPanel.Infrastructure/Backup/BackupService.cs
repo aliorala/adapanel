@@ -2868,7 +2868,7 @@ ConvertTo-Json -InputObject $list -Depth 3";
     {
         var xmlBase64 = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(xml));
         var script = $@"$xml = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{xmlBase64}'))
-Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\' -Xml $xml -Force | Out-Null";
+Register-ScheduledTask -TaskName '{PowerShellQuoting.Escape(ad)}' -TaskPath '\AdaPanel\' -Xml $xml -Force | Out-Null";
         return ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
     }
 
