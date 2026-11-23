@@ -37,7 +37,7 @@ public static class ServiceCollectionExtensions
         builder.Pooling = false;
 
         // Eşzamanlı yazarlar "database is locked" ile düşmesin: Microsoft.Data.Sqlite, "Default Timeout"u
-        // hem komut zaman aşımı hem de SQLite busy_timeout olarak uygular. Açıkça yazılmamışsa
+        // komut zaman aşımı olarak uygular; busy_timeout'a ise SqliteBusyTimeoutInterceptor yansıtır. Açıkça yazılmamışsa
         // 30 sn'ye SABİTLENİR (kütüphane varsayılanına örtük bağlı kalınmaz). Bilinçle KISA (5 sn) değil:
         // aynı değer komut zaman aşımıdır; uzun migration/VACUUM komutlarını 5 sn'de keserdi.
         // Açıkça verilen değer (yapılandırma) olduğu gibi korunur.
@@ -63,9 +63,13 @@ public static class ServiceCollectionExtensions
             builder.DataSource = dataSourcePath;
         }
 
+        var busyTimeoutMs = checked(builder.DefaultTimeout * 1000);
+
         services.AddDbContext<AdaPanelDbContext>(options =>
         {
             options.UseSqlite(builder.ToString());
+            // Microsoft.Data.Sqlite SQLite'ın busy_timeout'unu ayarlamaz; bağlantı başına açıkça ayarla.
+            options.AddInterceptors(new SqliteBusyTimeoutInterceptor(busyTimeoutMs));
         });
 
         return services;
