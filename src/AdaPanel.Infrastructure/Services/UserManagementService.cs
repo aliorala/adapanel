@@ -342,13 +342,16 @@ public sealed class UserManagementService(
         var wasActive = user.IsActive;
 
         // Bayi yalnız KENDİ pasife aldığı müşteriyi açabilir (G22 ile aynı kural). Pasifin KAYNAĞI,
-        // müşterinin askı kaydındaki sebepte tutulur: bayi "reseller", yönetici "manual". Kaydı
-        // olmayan (eski) pasif hesabı bayi açamaz — kapalı tarafta hata.
-        var trackSuspensionSource = user.Role == UserRole.Customer && existingParent is null && wasActive != request.IsActive;
+        // müşterinin AYRI pasif-kaynak alanında tutulur (askıdan bağımsız). Kaydı olmayan (eski) ya da
+        // yöneticinin pasifini bayi açamaz — kapalı tarafta hata.
+        var isTopLevelCustomer = user.Role == UserRole.Customer && existingParent is null;
+        var trackSuspensionSource = isTopLevelCustomer && wasActive != request.IsActive;
+        // Yönetici, zaten pasif olan müşteriyi yeniden "pasif" kaydederse de sahipliği alır.
+        var adminClaimsInactive = isTopLevelCustomer && !actorIsReseller && !request.IsActive;
         if (trackSuspensionSource && actorIsReseller && request.IsActive)
         {
-            var askiKaydi = await customerScopeService.GetScopeAsync(user.Id, cancellationToken);
-            if (!askiKaydi.IsSuspended || !string.Equals(askiKaydi.SuspendReason, "reseller", StringComparison.Ordinal))
+            var pasifKaynak = await customerScopeService.GetInactiveSourceAsync(user.Id, cancellationToken);
+            if (!string.Equals(pasifKaynak, "reseller", StringComparison.Ordinal))
             {
                 throw new AppException("users.forbidden", 403, 403);
             }
@@ -387,22 +390,13 @@ public sealed class UserManagementService(
         var suspensionScope = existingParent is not null ? new CustomerScope([], 0, 0, 0, 0, 0) : scope;
         await ApplySuspensionStateAsync(user, suspensionScope, wasActive, actorUserId, ipAddress, cancellationToken);
 
-        // Yalnız BAYİNİN pasife alması askı kaydına "reseller" olarak yazılır (yöneticinin pasifi kayıt
-        // bırakmaz; bayi kaydı olmayan pasifi açamaz). Açılırken bayi kaydı temizlenir — yönetici
-        // açsa bile: aksi hâlde müşteri salt-okur askıda kalırdı.
-        if (trackSuspensionSource)
+        // Pasifin KAYNAĞI askıdan ayrı alanda tutulur: bayi PUT ile pasife alırsa "reseller", yönetici
+        // alırsa "admin" (varsa bayi kaydını ezer). /subscriptions/suspend bu alanı ASLA yazmaz; bayi
+        // yalnız "reseller" kaydını açabilir. Açılınca kayıt silinir.
+        if (trackSuspensionSource || adminClaimsInactive)
         {
-            if (!request.IsActive)
-            {
-                if (actorIsReseller && !(await customerScopeService.GetScopeAsync(user.Id, cancellationToken)).IsSuspended)
-                {
-                    await customerScopeService.SuspendAsync(user.Id, "reseller", cancellationToken);
-                }
-            }
-            else if (await customerScopeService.GetScopeAsync(user.Id, cancellationToken) is { IsSuspended: true, SuspendReason: "reseller" })
-            {
-                await customerScopeService.ResumeAsync(user.Id, cancellationToken);
-            }
+            await customerScopeService.SetInactiveSourceAsync(
+                user.Id, request.IsActive ? null : (actorIsReseller ? "reseller" : "admin"), cancellationToken);
         }
 
         var diskKullanimi = user.Role == UserRole.Customer

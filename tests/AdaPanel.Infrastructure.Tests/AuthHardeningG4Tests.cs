@@ -354,4 +354,94 @@ public sealed class AuthHardeningG4Tests
         Assert.Equal(403, (await Assert.ThrowsAsync<AppException>(() => Check(["sites"]))).HttpStatusCode);
         await Check(null); // kısıtsız ek kullanıcı etkilenmez
     }
+
+    // ---- G22 (tur 2): pasif kaynağı askıdan AYRI; iki adımlı yolun iki sırası ----
+    private sealed class SharedScopeState
+    {
+        public string SuspendReason = string.Empty;
+        public string? InactiveSource;
+    }
+
+    private static async Task<(UserManagementService Users, SubscriptionsController Subscriptions, SharedScopeState State, Guid Admin, Guid Reseller, Guid Customer, AdaPanelDbContext Db, SqliteConnection Conn)> TwoStepFixture()
+    {
+        var (conn, db, owner, _, _, _) = await Seed();
+        PanelUser U(string n, UserRole r) => new()
+        {
+            Id = Guid.NewGuid(), UserName = n, Email = n + "@iki.test", Role = r, PreferredLanguage = "tr", IsActive = true,
+            PasswordHash = "x", CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow
+        };
+        var reseller = U("bayi2", UserRole.Reseller); var customer = U("musteri2", UserRole.Customer);
+        db.Users.AddRange(reseller, customer); await db.SaveChangesAsync();
+        var state = new SharedScopeState();
+        ICustomerScopeService? scopes = null;
+        scopes = Stub<ICustomerScopeService>((method, args) => method.Name switch
+        {
+            nameof(ICustomerScopeService.GetOwnerAsync) => Task.FromResult<Guid?>(reseller.Id),
+            nameof(ICustomerScopeService.GetParentSubscriptionAsync) => Task.FromResult<Guid?>(null),
+            nameof(ICustomerScopeService.GetScopeAsync) => Task.FromResult(new CustomerScope([], 0, 0, 0, 0, 0,
+                SuspendedAtUtc: state.SuspendReason.Length > 0 ? DateTime.UtcNow : null, SuspendReason: state.SuspendReason)),
+            nameof(ICustomerScopeService.SuspendAsync) => Task.Run(() => state.SuspendReason = (string)args![1]!),
+            nameof(ICustomerScopeService.ResumeAsync) => Task.Run(() => state.SuspendReason = string.Empty),
+            nameof(ICustomerScopeService.GetInactiveSourceAsync) => Task.FromResult(state.InactiveSource),
+            nameof(ICustomerScopeService.SetInactiveSourceAsync) => Task.Run(() => state.InactiveSource = (string?)args![1]),
+            nameof(ICustomerScopeService.GetOwnedUserIdsAsync) => Task.FromResult<IReadOnlyCollection<Guid>>([]),
+            nameof(ICustomerScopeService.GetAssignedSitesAsync) or nameof(ICustomerScopeService.GetResellerSitesAsync) => Task.FromResult<IReadOnlyCollection<string>>([]),
+            nameof(ICustomerScopeService.GetDiskUsageMbAsync) => Task.FromResult(new DiskUsage(0, true, string.Empty)),
+            _ => null
+        }).Stub;
+        var quotas = Stub<IResellerQuotaService>().Stub;
+        var users = new UserManagementService(db, new PasswordHasher<PanelUser>(), scopes, Stub<INotificationService>().Stub,
+            Stub<IPanelPreferencesService>().Stub, Stub<IPanelSecurityService>().Stub, NullLogger<UserManagementService>.Instance,
+            Stub<IAuditService>().Stub, Stub<IIisSiteService>().Stub, Stub<IDatabaseOwnershipService>().Stub, Stub<ISchedulerService>().Stub,
+            Stub<ISiteCascadeDeletionService>().Stub, Stub<IApiTokenService>().Stub, new Owner(owner.Id), quotas);
+        var enforcement = Stub<ISubscriptionEnforcementService>((method, args) =>
+            method.Name == nameof(ISubscriptionEnforcementService.SuspendAsync) ? scopes.SuspendAsync((Guid)args![0]!, (string)args[1]!) : null).Stub;
+        var subscriptions = new SubscriptionsController(enforcement, scopes, Stub<IServicePlanService>().Stub, quotas, Stub<IAuditService>().Stub)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { User = Principal(reseller.Id, "Reseller") } }
+        };
+        return (users, subscriptions, state, owner.Id, reseller.Id, customer.Id, db, conn);
+    }
+
+    private static UpdateUserRequest Toggle(bool active) =>
+        new() { Email = "musteri2@iki.test", Role = "Customer", IsActive = active, MaxSites = 1, MaxDiskMb = 10 };
+
+    [Fact]
+    public async Task AdminDeactivatesThenResellerSuspendsCannotReactivate()
+    {
+        var (users, subscriptions, state, admin, reseller, customer, db, conn) = await TwoStepFixture();
+        await using var _c = conn; await using var _d = db;
+        await users.UpdateUserAsync(customer, Toggle(false), admin, null);
+        Assert.Equal("admin", state.InactiveSource);
+        await subscriptions.SuspendAsync(customer, default); // bayi askısı pasif kaydını YAZMAZ
+        Assert.Equal("reseller", state.SuspendReason);
+        Assert.Equal("admin", state.InactiveSource);
+        var error = await Assert.ThrowsAsync<AppException>(() => users.UpdateUserAsync(customer, Toggle(true), reseller, null));
+        Assert.Equal(403, error.HttpStatusCode);
+        Assert.False((await db.Users.AsNoTracking().SingleAsync(user => user.Id == customer)).IsActive);
+    }
+
+    [Fact]
+    public async Task ResellerDeactivatesThenAdminDeactivatesCannotBeReactivatedByReseller()
+    {
+        var (users, _, state, admin, reseller, customer, db, conn) = await TwoStepFixture();
+        await using var _c = conn; await using var _d = db;
+        await users.UpdateUserAsync(customer, Toggle(false), reseller, null);
+        Assert.Equal("reseller", state.InactiveSource);
+        await users.UpdateUserAsync(customer, Toggle(false), admin, null); // zaten pasif: sahipliği yönetici alır
+        Assert.Equal("admin", state.InactiveSource);
+        var error = await Assert.ThrowsAsync<AppException>(() => users.UpdateUserAsync(customer, Toggle(true), reseller, null));
+        Assert.Equal(403, error.HttpStatusCode);
+    }
+
+    [Fact]
+    public async Task ResellerCanReactivateACustomerItDeactivatedItself()
+    {
+        var (users, _, state, _, reseller, customer, db, conn) = await TwoStepFixture();
+        await using var _c = conn; await using var _d = db;
+        await users.UpdateUserAsync(customer, Toggle(false), reseller, null);
+        await users.UpdateUserAsync(customer, Toggle(true), reseller, null);
+        Assert.Null(state.InactiveSource);
+        Assert.True((await db.Users.AsNoTracking().SingleAsync(user => user.Id == customer)).IsActive);
+    }
 }

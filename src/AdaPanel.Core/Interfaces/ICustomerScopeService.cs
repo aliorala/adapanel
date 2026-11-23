@@ -178,6 +178,16 @@ public interface ICustomerScopeService
     /// </remarks>
     Task SuspendAsync(Guid userId, string reason, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Kullanıcıyı PASİFE ALAN tarafın kaydı ("reseller" | "admin"; yok = null). Askıdan (SuspendReason) AYRIDIR:
+    /// bayi yalnız KENDİ pasife aldığını açabilir (denetim G22), /suspend bu kaydı asla yazmaz.
+    /// Varsayılan gövde "kayıt yok / yazma yok": eski sahteler derlenmeye devam eder.
+    /// </summary>
+    Task<string?> GetInactiveSourceAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<string?>(null);
+
+    /// <summary>Pasif kaynağını yazar; null siler.</summary>
+    Task SetInactiveSourceAsync(Guid userId, string? source, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
     /// <summary>Askıyı kaldırır.</summary>
     Task ResumeAsync(Guid userId, CancellationToken cancellationToken = default);
 
