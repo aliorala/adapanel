@@ -81,7 +81,7 @@ public static class DataRootHardeningService
     /// </para>
     /// </remarks>
     internal static readonly string[] SensitiveDirectories =
-        ["data", "keys", "certs", "config", "backups", "mail-certs", "updates", "downloads", "components", "logs", "temp"];
+        ["data", "keys", "certs", "config", "backups", "mail-certs", "updates", "downloads", "components", "logs", "temp", "git"];
 
     /*
      * "components" ve "logs" SONRADAN EKLENDI -- ikisi de ayni denetim turunda OLCULDU
