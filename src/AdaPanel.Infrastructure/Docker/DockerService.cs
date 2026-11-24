@@ -140,10 +140,114 @@ public sealed partial class DockerService(ILogger<DockerService> logger) : IDock
             builder.Append(" -e ").Append(WindowsArgument.Quote(variable));
         }
 
+        var cpu = NormalizeCpuLimit(request.CpuLimit);
+        if (cpu.Length > 0) builder.Append(" --cpus ").Append(cpu);
+        var memory = NormalizeMemoryLimit(request.MemoryLimit);
+        if (memory.Length > 0) builder.Append(" --memory ").Append(memory);
+        if (!string.IsNullOrWhiteSpace(request.SiteName))
+            builder.Append(" --label ").Append(SiteLabel(request.SiteName));
+
         builder.Append(' ').Append(image);
 
         await RunRequiredAsync(builder.ToString(), cancellationToken);
         return await GetWorkspaceAsync(cancellationToken);
+    }
+
+    public async Task<DockerWorkspaceDto> UpdateContainerLimitsAsync(string id, UpdateContainerLimitsRequest request, CancellationToken cancellationToken = default)
+    {
+        var safeId = RequireIdentifier(id);
+        var cpu = NormalizeCpuLimit(request.CpuLimit);
+        var memory = NormalizeMemoryLimit(request.MemoryLimit);
+        // Boş değer = "sınırı kaldır": docker update için 0 sınırsızdır.
+        var builder = new StringBuilder("update");
+        builder.Append(" --cpus ").Append(cpu.Length == 0 ? "0" : cpu);
+        // --memory-swap KULLANILMAZ: panelin motoru Windows konteyneri çalıştırır ve Windows motoru MemorySwap'ı reddeder.
+        builder.Append(" --memory ").Append(memory.Length == 0 ? "0" : memory);
+        builder.Append(' ').Append(safeId);
+        await RunRequiredAsync(builder.ToString(), cancellationToken);
+        return await GetWorkspaceAsync(cancellationToken);
+    }
+
+    public async Task<DockerContainerLimitsDto> GetContainerLimitsAsync(string id, CancellationToken cancellationToken = default)
+    {
+        var safeId = RequireIdentifier(id);
+        var result = await RunRequiredAsync("inspect --format \"{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}\" " + safeId, cancellationToken);
+        var parts = result.StandardOutput.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2 || !long.TryParse(parts[0], out var nano) || !long.TryParse(parts[1], out var memory))
+            throw new AppException("docker.command_failed", 502, 502, "Docker inspect output could not be parsed.");
+        return new DockerContainerLimitsDto { ContainerId = id, Cpus = nano / 1_000_000_000d, MemoryBytes = memory };
+    }
+
+    public async Task<IReadOnlyCollection<string>> ListSiteContainersAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        var (state, containers) = await ReadSiteContainersAsync(siteName, cancellationToken);
+        return state.DaemonRunning ? containers.Select(container => container.Name).ToArray() : [];
+    }
+
+    private async Task<(DockerSiteCleanupResult State, List<(string Id, string Name)> Containers)> ReadSiteContainersAsync(string siteName, CancellationToken cancellationToken)
+    {
+        var label = SiteLabel(siteName);
+        var outcome = new DockerSiteCleanupResult();
+        var containers = new List<(string Id, string Name)>();
+        var version = await TryRunAsync("version --format \"{{.Server.Version}}\"", cancellationToken);
+        if (version is null) return (outcome, containers);
+        outcome.Installed = true;
+        if (!version.Success || string.IsNullOrWhiteSpace(version.StandardOutput)) return (outcome, containers);
+        outcome.DaemonRunning = true;
+
+        var listed = await RunRequiredAsync("ps -a --filter label=" + label + " --format \"{{json .}}\"", cancellationToken);
+        containers.AddRange(ParseLines(listed.StandardOutput, element => (Id: GetString(element, "ID"), Name: GetString(element, "Names"))));
+        return (outcome, containers);
+    }
+
+    public async Task<DockerSiteCleanupResult> RemoveSiteContainersAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        var (outcome, containers) = await ReadSiteContainersAsync(siteName, cancellationToken);
+        foreach (var container in containers)
+        {
+            var removal = await TryRunAsync("rm -f " + RequireIdentifier(container.Id), cancellationToken);
+            if (removal is { Success: true }) outcome.Removed.Add(container.Name);
+            else outcome.Failed.Add($"{container.Name}: {removal?.StandardError.Trim() ?? "docker unavailable"}");
+        }
+        return outcome;
+    }
+
+    private static string SiteLabel(string siteName)
+    {
+        var trimmed = siteName?.Trim() ?? string.Empty;
+        if (!SiteNameRegex().IsMatch(trimmed)) throw new AppException("docker.invalid_site", 400, 400);
+        return "adapanel.site=" + trimmed;
+    }
+
+    private static string SiteFromLabels(string labels)
+    {
+        const string prefix = "adapanel.site=";
+        foreach (var part in labels.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            if (part.StartsWith(prefix, StringComparison.Ordinal)) return part[prefix.Length..];
+        return string.Empty;
+    }
+
+    private static string NormalizeCpuLimit(string? value)
+    {
+        var trimmed = value?.Trim() ?? string.Empty;
+        if (trimmed.Length == 0) return string.Empty;
+        if (!CpuRegex().IsMatch(trimmed) || !double.TryParse(trimmed, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var cpus) || cpus < 0.01 || cpus > 256)
+            throw new AppException("docker.invalid_limit", 400, 400);
+        return trimmed;
+    }
+
+    private static string NormalizeMemoryLimit(string? value)
+    {
+        var trimmed = value?.Trim().ToLowerInvariant() ?? string.Empty;
+        if (trimmed.Length == 0) return string.Empty;
+        var match = MemoryRegex().Match(trimmed);
+        if (!match.Success) throw new AppException("docker.invalid_limit", 400, 400);
+        var amount = long.Parse(match.Groups["n"].Value, System.Globalization.CultureInfo.InvariantCulture);
+        var megabytes = match.Groups["u"].Value == "g" ? amount * 1024 : amount;
+        // Docker en az 6 MB ister; üst sınır 1 TB ile makul tutulur.
+        if (megabytes < 6 || megabytes > 1024 * 1024) throw new AppException("docker.invalid_limit", 400, 400);
+        return trimmed;
     }
 
     private async Task<DockerWorkspaceDto> ContainerActionAsync(string action, string id, CancellationToken cancellationToken)
@@ -163,7 +267,8 @@ public sealed partial class DockerService(ILogger<DockerService> logger) : IDock
             Image = GetString(element, "Image"),
             State = GetString(element, "State"),
             Status = GetString(element, "Status"),
-            Ports = GetString(element, "Ports")
+            Ports = GetString(element, "Ports"),
+            Site = SiteFromLabels(GetString(element, "Labels"))
         });
     }
 
@@ -307,6 +412,15 @@ public sealed partial class DockerService(ILogger<DockerService> logger) : IDock
 
     [GeneratedRegex("^[a-zA-Z0-9][a-zA-Z0-9_./:@-]*$")]
     private static partial Regex ImageRegex();
+
+    [GeneratedRegex(@"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,259}$")]
+    private static partial Regex SiteNameRegex();
+
+    [GeneratedRegex(@"^\d{1,3}(\.\d{1,2})?$")]
+    private static partial Regex CpuRegex();
+
+    [GeneratedRegex(@"^(?<n>\d{1,7})(?<u>[mg])$")]
+    private static partial Regex MemoryRegex();
 
     [GeneratedRegex(@"^\d{1,5}:\d{1,5}$")]
     private static partial Regex PortMappingRegex();

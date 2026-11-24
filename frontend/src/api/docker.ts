@@ -14,6 +14,8 @@ export type DockerContainer = {
   state: string;
   status: string;
   ports: string;
+  /** Iliskili site (etiket adapanel.site); yoksa bos. */
+  site: string;
 };
 
 export type DockerImage = {
@@ -61,6 +63,9 @@ export async function runDockerContainer(payload: {
   ports: string;
   environment: string;
   autoRestart: boolean;
+  siteName?: string;
+  cpuLimit?: string;
+  memoryLimit?: string;
 }) {
   const response = await apiClient.post<ApiEnvelope<DockerWorkspace>>("/docker/containers/run", payload);
   return response.data.data;
@@ -73,5 +78,17 @@ export async function pullDockerImage(image: string) {
 
 export async function removeDockerImage(id: string) {
   const response = await apiClient.delete<ApiEnvelope<DockerWorkspace>>(`/docker/images/${encodeURIComponent(id)}`);
+  return response.data.data;
+}
+
+export type DockerContainerLimits = { containerId: string; cpus: number; memoryBytes: number };
+
+export async function getDockerContainerLimits(id: string) {
+  const response = await apiClient.get<ApiEnvelope<DockerContainerLimits>>(`/docker/containers/${encodeURIComponent(id)}/limits`);
+  return response.data.data;
+}
+
+export async function updateDockerContainerLimits(id: string, cpuLimit: string, memoryLimit: string) {
+  const response = await apiClient.put<ApiEnvelope<DockerWorkspace>>(`/docker/containers/${encodeURIComponent(id)}/limits`, { cpuLimit, memoryLimit });
   return response.data.data;
 }

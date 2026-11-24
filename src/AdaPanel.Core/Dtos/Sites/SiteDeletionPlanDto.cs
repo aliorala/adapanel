@@ -39,6 +39,12 @@ public sealed class SiteDeletionPlanDto
 
     public bool HasGitDeployment { get; set; }
 
+    /// <summary>Sitede Node/Python barındırma yapılandırması var mı (kaldırılacak).</summary>
+    public bool HasAppRuntime { get; set; }
+
+    /// <summary>Siteyle ilişkili Docker konteynerleri (kaldırılacak); motor yoksa/okunamazsa boş.</summary>
+    public string[] DockerContainers { get; set; } = [];
+
     /// <summary>Bu siteye atanmış müşteri sayısı (atama temizlenecek).</summary>
     public int CustomerAssignments { get; set; }
 

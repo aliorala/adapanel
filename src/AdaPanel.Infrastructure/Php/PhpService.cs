@@ -21,7 +21,7 @@ using IisAccess = AdaPanel.Infrastructure.AspNet.IisConfigurationAccess;
 
 namespace AdaPanel.Infrastructure.Php;
 
-public sealed class PhpService(
+public sealed partial class PhpService(
     AdaPanelDbContext dbContext,
     IComponentBootstrapper componentBootstrapper,
     IConcurrencyLock concurrencyLock,

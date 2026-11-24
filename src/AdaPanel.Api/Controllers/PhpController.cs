@@ -44,6 +44,31 @@ public sealed class PhpController(
         return Ok(ApiResponse<RedisExtensionResultDto>.Ok(result, result.Message == "already" ? "php.redis_already" : "php.redis_enabled"));
     }
 
+    /// <summary>PHP sürümünü kaldırır (sunucu düzeyi → yalnız yönetici). Kullanan site varsa 409 + site adları.</summary>
+    [HttpDelete("versions/{componentId}")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<object>>> RemoveVersionAsync(string componentId, CancellationToken cancellationToken)
+    {
+        var leftovers = await phpService.RemoveVersionAsync(
+            componentId,
+            User.GetRequiredUserId(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
+        await auditService.WriteAsync(
+            "php.version.removed",
+            "php",
+            $"PHP runtime '{componentId}' removed (leftovers: {leftovers.Count}).",
+            User.GetRequiredUserId(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
+        // KISMİ TEMİZLİK "tamamlandı" DEĞİLDİR (SoftwareController ile aynı kural).
+        return Ok(leftovers.Count == 0
+            ? ApiResponse<object>.Ok(new { componentId }, "php.version.removed")
+            : ApiResponse<object>.Ok(new { componentId, warnings = leftovers }, "php.version.removed_partial"));
+    }
+
     [HttpPost("install")]
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<ComponentInstallResultDto>>> InstallVersionAsync(

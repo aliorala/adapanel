@@ -27,7 +27,7 @@ function quota(site = "a.test", enabled = true): SiteDiskQuota {
   return { siteName: site, path: `C:/sites/${site}`, fsrmAvailable: true, quotaEnabled: enabled, limitBytes: 20 * 1_048_576, usedBytes: 100, softLimit: true };
 }
 function git(site = "a.test", configured = true): GitDeployment {
-  return { siteName: site, configured, repositoryUrl: configured ? `https://git.test/${site}` : "", branch: configured ? "production" : "", deployPath: "", lastCommit: "", lastDeployUtc: null, lastDeployStatus: "", webhookPath: "/webhook", webhookSecret: site, webhookHeaderName: "X-Hook" };
+  return { siteName: site, configured, repositoryUrl: configured ? `https://git.test/${site}` : "", branch: configured ? "production" : "", deployPath: "", lastCommit: "", lastDeployUtc: null, lastDeployStatus: "", webhookPath: "/webhook", webhookSecret: site, webhookHeaderName: "X-Hook", hasDeployKey: false, deployPublicKey: "", deployKeyFingerprint: "", deployKeyCreatedUtc: null, hasHttpsToken: false, httpsUsername: "", postDeployCommands: [], postDeployTimeoutSeconds: 600, allowedPostDeployCommands: [], recentDeployments: [] };
 }
 let app: App | undefined;
 beforeEach(() => {

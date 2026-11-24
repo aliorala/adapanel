@@ -56,10 +56,96 @@ public sealed class GitController(
             "git.deployment.configured",
             $"site:{siteName}",
             $"Git deployment configured: repository '{request.RepositoryUrl}', branch '{request.Branch}', "
-            + $"webhook token rotated: {jetonYenilendi}.",
+            + $"webhook token rotated: {jetonYenilendi}, HTTPS access token removed because the host changed: {deployment.HttpsTokenRemoved}.",
             await SiteSahibiAsync(siteName, cancellationToken));
 
-        return Ok(ApiResponse<GitDeploymentDto>.Ok(deployment, "git.configured"));
+        return Ok(ApiResponse<GitDeploymentDto>.Ok(deployment, deployment.HttpsTokenRemoved ? "git.configured_token_removed" : "git.configured"));
+    }
+
+    /// <summary>
+    /// Yapılandırmayı + panelin git dizinini + geçmişi + anahtar/jetonu kaldırır. YIKICI: dağıtım öncesi
+    /// yedeklenen yerel değişiklikler (refs/adapanel/saved) ve geri alma geçmişi de gider; site adı
+    /// AYNEN onaylanmadan çalışmaz. Site dosyalarına dokunulmaz.
+    /// </summary>
+    [HttpPost("{siteName}/remove")]
+    public async Task<ActionResult<ApiResponse<GitRemovalResultDto>>> RemoveAsync(
+        string siteName, [FromBody] RemoveGitDeploymentRequest request, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(request.ConfirmSiteName?.Trim(), siteName, StringComparison.OrdinalIgnoreCase))
+            throw new AppException("git.confirmation_required", 400, 400);
+        var result = await gitDeploymentService.RemoveAsync(siteName, cancellationToken);
+        await auditService.AuditAsync(
+            HttpContext,
+            "git.deployment.removed",
+            $"site:{siteName}",
+            $"Git deployment configuration removed (removed: {string.Join(',', result.Removed)}; leftovers: {result.Leftovers.Length}).",
+            await SiteSahibiAsync(siteName, cancellationToken));
+        return Ok(ApiResponse<GitRemovalResultDto>.Ok(result, result.Leftovers.Length == 0 ? "git.removed" : "git.removed_partial"));
+    }
+
+    // Dağıtım anahtarı: kayda yalnız OLGU ve genel anahtarın parmak izi yazılır; özel anahtar hiçbir yere çıkmaz.
+    [HttpPost("{siteName}/deploy-key")]
+    public async Task<ActionResult<ApiResponse<GitDeploymentDto>>> GenerateDeployKeyAsync(string siteName, CancellationToken cancellationToken)
+    {
+        var deployment = await gitDeploymentService.GenerateDeployKeyAsync(siteName, cancellationToken);
+        await auditService.AuditAsync(HttpContext, "git.deploy_key.generated", $"site:{siteName}",
+            $"Git deploy key generated (fingerprint {deployment.DeployKeyFingerprint}).", await SiteSahibiAsync(siteName, cancellationToken));
+        return Ok(ApiResponse<GitDeploymentDto>.Ok(deployment, "git.deploy_key_generated"));
+    }
+
+    [HttpDelete("{siteName}/deploy-key")]
+    public async Task<ActionResult<ApiResponse<GitDeploymentDto>>> RemoveDeployKeyAsync(string siteName, CancellationToken cancellationToken)
+    {
+        var deployment = await gitDeploymentService.RemoveDeployKeyAsync(siteName, cancellationToken);
+        await auditService.AuditAsync(HttpContext, "git.deploy_key.removed", $"site:{siteName}",
+            "Git deploy key removed.", await SiteSahibiAsync(siteName, cancellationToken));
+        return Ok(ApiResponse<GitDeploymentDto>.Ok(deployment, "git.deploy_key_removed"));
+    }
+
+    // HTTPS jetonu: kayda JETON ve kullanıcı adı DEĞERİ yazılmaz, yalnız olgu.
+    [HttpPut("{siteName}/https-token")]
+    public async Task<ActionResult<ApiResponse<GitDeploymentDto>>> SetHttpsTokenAsync(
+        string siteName, [FromBody] SetGitHttpsTokenRequest request, CancellationToken cancellationToken)
+    {
+        var deployment = await gitDeploymentService.SetHttpsTokenAsync(siteName, request, cancellationToken);
+        await auditService.AuditAsync(HttpContext, "git.https_token.set", $"site:{siteName}",
+            "Git HTTPS access token stored (value not logged).", await SiteSahibiAsync(siteName, cancellationToken));
+        return Ok(ApiResponse<GitDeploymentDto>.Ok(deployment, "git.https_token_set"));
+    }
+
+    [HttpDelete("{siteName}/https-token")]
+    public async Task<ActionResult<ApiResponse<GitDeploymentDto>>> RemoveHttpsTokenAsync(string siteName, CancellationToken cancellationToken)
+    {
+        var deployment = await gitDeploymentService.RemoveHttpsTokenAsync(siteName, cancellationToken);
+        await auditService.AuditAsync(HttpContext, "git.https_token.removed", $"site:{siteName}",
+            "Git HTTPS access token removed.", await SiteSahibiAsync(siteName, cancellationToken));
+        return Ok(ApiResponse<GitDeploymentDto>.Ok(deployment, "git.https_token_removed"));
+    }
+
+    // Derleme sonrası komut: yalnız beyaz liste kimlikleri. Kayıt, hangi kimliklerin seçildiğini yazar
+    // (siteye kod çalıştıran bir ayardır).
+    [HttpPut("{siteName}/post-deploy")]
+    public async Task<ActionResult<ApiResponse<GitDeploymentDto>>> SetPostDeployAsync(
+        string siteName, [FromBody] SetGitPostDeployRequest request, CancellationToken cancellationToken)
+    {
+        var deployment = await gitDeploymentService.SetPostDeployAsync(siteName, request, cancellationToken);
+        await auditService.AuditAsync(HttpContext, "git.post_deploy.updated", $"site:{siteName}",
+            $"Git post-deploy commands set: [{string.Join(", ", deployment.PostDeployCommands)}], timeout {deployment.PostDeployTimeoutSeconds}s.",
+            await SiteSahibiAsync(siteName, cancellationToken));
+        return Ok(ApiResponse<GitDeploymentDto>.Ok(deployment, "git.post_deploy_updated"));
+    }
+
+    [HttpPost("{siteName}/rollback")]
+    public async Task<ActionResult<ApiResponse<GitDeployResultDto>>> RollbackAsync(
+        string siteName, [FromBody] RollbackGitRequest request, CancellationToken cancellationToken)
+    {
+        // Geri alma da siteye dosya yazar: dağıtımla aynı disk kotası kapısı.
+        await DiskQuotaGate.EnsureForSiteAsync(HttpContext, siteName, 0, cancellationToken);
+        var result = await gitDeploymentService.RollbackAsync(siteName, request.DeploymentId, cancellationToken);
+        await auditService.AuditAsync(HttpContext, "git.rolled_back", $"site:{siteName}",
+            $"Git rollback ({(result.Success ? "success" : "failed")}) to the state before deployment '{request.DeploymentId}', commit '{result.Commit}'.",
+            await SiteSahibiAsync(siteName, cancellationToken));
+        return Ok(ApiResponse<GitDeployResultDto>.Ok(result, result.Success ? "git.rolled_back" : "git.deploy_failed"));
     }
 
     [HttpPost("{siteName}/deploy")]

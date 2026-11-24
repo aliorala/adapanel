@@ -194,6 +194,13 @@ public sealed partial class AppRuntimeService(
 
     private AppRuntimeSiteConfigurationDto ReadConfiguration(AdaPanel.Core.Dtos.Sites.SiteDto site)
     {
+        var configuration = ReadConfigurationCore(site);
+        configuration.PoolState = ReadPoolState(site.ApplicationPoolName);
+        return configuration;
+    }
+
+    private AppRuntimeSiteConfigurationDto ReadConfigurationCore(AdaPanel.Core.Dtos.Sites.SiteDto site)
+    {
         var siteRoot = ResolveSiteRoot(site.PhysicalPath);
         var webConfigPath = ResolveSiteManagedPath(siteRoot, "web.config", allowCurrentDirectory: false);
         var logsDirectory = Path.Combine(siteRoot, LogsDirectoryName);

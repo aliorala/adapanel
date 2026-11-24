@@ -490,6 +490,8 @@
             </div>
 
             <pre v-if="gitOutput" class="composer-output">{{ gitOutput }}</pre>
+
+            <GitDeployExtras v-if="git?.configured" :site-name="siteName" :deployment="git" @updated="git = $event" @removed="loadGit" />
           </section>
 
           <!-- .htaccess: site basina BARINDIRMA ayaridir (PHP surumu ve varsayilan belgelerle
@@ -539,6 +541,7 @@
 import { getFormattingLocale } from '../utils/locale';
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import GitDeployExtras from "../components/GitDeployExtras.vue";
 import SiteAliases from "../components/SiteAliases.vue";
 // .htaccess bolumu AYRI bir gorunumde: gerekcesi o dosyanin script blogunda yazili.
 import SiteHtaccessView from "./SiteHtaccessView.vue";
