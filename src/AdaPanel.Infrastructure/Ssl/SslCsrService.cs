@@ -161,9 +161,9 @@ public sealed partial class SslCsrService(
             }, cancellationToken);
             return imported;
         }
-        catch (CryptographicException)
+        catch (CryptographicException error)
         {
-            throw new AppException("ssl.invalid_certificate_payload", 400, 400);
+            throw new AppException("ssl.invalid_certificate_payload", 400, 400, error.Message);
         }
         finally
         {
@@ -195,7 +195,15 @@ public sealed partial class SslCsrService(
         var text = Encoding.ASCII.GetString(raw);
         if (text.Contains("-----BEGIN CERTIFICATE-----", StringComparison.Ordinal))
         {
-            target.ImportFromPem(text);
+            // Her CERTIFICATE blogu tek tek okunur (ozel anahtar bloklari yok sayilir).
+            // Bazi araclar bloklari satir sonu OLMADAN ard arda yazar; PemEncoding bunu bulamaz.
+            var remaining = text.Replace("-----END CERTIFICATE-----", "-----END CERTIFICATE-----" + Environment.NewLine, StringComparison.Ordinal).AsSpan();
+            while (PemEncoding.TryFind(remaining, out var fields))
+            {
+                if (remaining[fields.Label].SequenceEqual("CERTIFICATE"))
+                    target.Add(new X509Certificate2(Convert.FromBase64String(remaining[fields.Base64Data].ToString())));
+                remaining = remaining[fields.Location.End..];
+            }
             if (target.Count == 0) throw new CryptographicException("No certificate in PEM.");
             return;
         }

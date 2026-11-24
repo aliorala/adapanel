@@ -21,6 +21,7 @@
         <button role="tab" :aria-selected="activeTab === 'current'" :class="{ active: activeTab === 'current' }" @click="activeTab = 'current'">{{ t("panel.ssl.currentTab") }}</button>
         <button role="tab" :aria-selected="activeTab === 'letsencrypt'" :class="{ active: activeTab === 'letsencrypt' }" @click="activeTab = 'letsencrypt'">Let's Encrypt</button>
         <button role="tab" :aria-selected="activeTab === 'import'" :class="{ active: activeTab === 'import' }" @click="activeTab = 'import'">{{ t("panel.ssl.importTitle") }}</button>
+        <button v-if="isAdmin" role="tab" :aria-selected="activeTab === 'csr'" :class="{ active: activeTab === 'csr' }" @click="activeTab = 'csr'">{{ t("panel.ssl.csr.tab") }}</button>
       </div>
       <!-- Domain hub'dan gelince site zaten seçili (breadcrumb); tekrar seçici gösterme. -->
       <select v-if="!selectedSiteName" v-model="selectedSiteName" class="site-select">
@@ -93,7 +94,8 @@
         </span>
         <span class="cert-field">
           <span class="cert-field-label">{{ t("panel.ssl.expires") }}</span>
-          <span :class="['status-pill', expiryClass(item.notAfterUtc)]" :title="formatUtc(item.notAfterUtc)">{{ formatUtc(item.notAfterUtc) }} · {{ expiryLabel(item.notAfterUtc) }}</span>
+          <span :class="['status-pill', expiryClass(item.notAfterUtc, item.expiryStatus)]" :title="formatUtc(item.notAfterUtc)">{{ formatUtc(item.notAfterUtc) }} · {{ expiryLabel(item.notAfterUtc, item.expiryStatus) }}</span>
+          <small v-if="item.renewalPaused" class="cert-store-note missing">{{ t("panel.ssl.renewalPaused") }}</small>
         </span>
         <span class="cert-field">
         <span class="cert-field-label">HTTPS</span>
@@ -112,6 +114,14 @@
         </span>
         </span>
         <span class="row-actions">
+          <template v-if="isAdmin && item.managedRenewalId">
+            <button v-if="!item.renewalPaused" type="button" class="secondary compact"
+              v-bind="writeGate(!!busyAction || loading)" @click="changeRenewal(item, 'pause')">{{ t("panel.ssl.renewalPause") }}</button>
+            <button v-else type="button" class="secondary compact"
+              v-bind="writeGate(!!busyAction || loading)" @click="changeRenewal(item, 'resume')">{{ t("panel.ssl.renewalResume") }}</button>
+            <button type="button" class="danger compact"
+              v-bind="writeGate(!!busyAction || loading)" @click="changeRenewal(item, 'cancel')">{{ t("panel.ssl.renewalCancel") }}</button>
+          </template>
           <button v-if="canManageBindings && item.isHttpsBindingPresent === true" type="button" class="secondary compact"
             v-bind="writeGate(!!busyAction || loading)" @click="removeBinding(item)">{{ t("panel.ssl.removeBinding") }}</button>
         </span>
@@ -166,6 +176,8 @@
       <p class="field-hint">{{ t("panel.ssl.letsencryptHint") }}</p>
     </section>
 
+    <SslCsrPanel v-else-if="activeTab === 'csr'" :site-name="selectedSiteName" :disabled="!!busyAction || loading || locked" @imported="onCsrImported" />
+
     <section v-else class="form-surface">
       <div class="form-grid">
         <label>
@@ -196,8 +208,9 @@ import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } fr
 import { routeLocationKey } from "vue-router";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
+import SslCsrPanel from "../components/SslCsrPanel.vue";
 import { useConfirm } from "../components/ConfirmDialog.vue";
-import { getSslWorkspace, importCertificate, issueLetsEncrypt, renewAllCertificates, removeCertificate, setHttpsRedirect, type SslCertificate, type SslWorkspace, type SslRenewalResult } from "../api/ssl";
+import { getSslWorkspace, importCertificate, issueLetsEncrypt, renewAllCertificates, removeCertificate, setHttpsRedirect, setRenewalState, type RenewalAction, type SslCertificate, type SslWorkspace, type SslRenewalResult } from "../api/ssl";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
@@ -215,7 +228,7 @@ const { confirm } = useConfirm();
 const { writeGate, locked } = useSubscriptionGate();
 const sitesStore = useSitesStore();
 const workspace = ref<SslWorkspace | null>(null);
-const activeTab = ref<"current" | "letsencrypt" | "import">("current");
+const activeTab = ref<"current" | "letsencrypt" | "import" | "csr">("current");
 const notice = ref("");
 const noticeError = ref(false);
 const retryWwwHost = ref("");
@@ -554,7 +567,10 @@ async function removeBinding(item: SslCertificate) {
       showNotice(t(result?.bindingRemoved === false ? "ssl.remove_binding_failed" : "panel.ssl.removalUnverified"), true);
       return;
     }
-    const message = t("panel.ssl.bindingRemoved", { host: payload.hostName || target.site, port: payload.port });
+    let message = t("panel.ssl.bindingRemoved", { host: payload.hostName || target.site, port: payload.port });
+    // win-acme yenilemesi iptal edilemediyse sessiz gecilmez: yenileme baglamayi geri getirebilir.
+    const renewalFailed = result.renewalAction === "cancel_failed";
+    if (renewalFailed) message = `${message}\n${t("panel.ssl.renewalCancelFailed")}${result.renewalDetail ? ` ${result.renewalDetail}` : ""}`;
     const measured = result.workspace;
     if (!measured || !sameSslName(measured.siteName, target.site) || !Array.isArray(measured.certificates) || !Array.isArray(measured.hostNames)) {
       markUnknown();
@@ -569,7 +585,7 @@ async function removeBinding(item: SslCertificate) {
     // Binding removal and redirect verification are separate measurements. A
     // redirect read failure must not hide that the binding was actually removed.
     const redirectWarning = !redirectMeasured.value || (result.httpsRedirectDisabled === true && measured.httpsRedirectEnabled);
-    showNotice(redirectWarning ? `${message}\n${t("panel.ssl.redirectUnverified")}` : message, redirectWarning);
+    showNotice(redirectWarning ? `${message}\n${t("panel.ssl.redirectUnverified")}` : message, redirectWarning || renewalFailed);
   } catch (error) {
     if (current()) { markUnknown(); showNotice(resolveApiMessage(error), true); }
   } finally {
@@ -652,18 +668,60 @@ async function handleFileChange(event: Event) {
   }
 }
 
-function expiryClass(value: string) {
+// Sunucu `expiryStatus` verirse ONA uyulur (tek kaynak: 7 gun = expiring, 30 gun = renewal_due); eski
+// sunucuda alan yoksa tarihten yerel hesap yapilir. 1 gunu kalan sertifika artik yesil gorunmez.
+function expiryClass(value: string, status?: string) {
+  if (status === "expired" || status === "expiring") return "danger";
+  if (status === "renewal_due") return "warn";
+  if (status === "valid") return "ok";
   const days = (new Date(value).getTime() - Date.now()) / 86400000;
   return days < 0 ? "danger" : days < 30 ? "warn" : "ok";
 }
 
-// Açık geçerlilik etiketi: "X gün kaldı" / "Bugün doluyor" / "Süresi doldu" — sertifikanın geçerli/yenilenmiş olduğunu netleştirir.
-function expiryLabel(value: string) {
+// Açık geçerlilik etiketi: "X gün kaldı" / "Bugün doluyor" / "Süresi doldu" + yenileme/bitiyor uyarısı.
+function expiryLabel(value: string, status?: string) {
   if (!value) return "-";
   const days = Math.floor((new Date(value).getTime() - Date.now()) / 86400000);
-  if (days < 0) return t("panel.ssl.expired");
-  if (days === 0) return t("panel.ssl.expiresToday");
-  return t("panel.ssl.daysRemaining", { days });
+  let label: string;
+  if (days < 0) label = t("panel.ssl.expired");
+  else if (days === 0) label = t("panel.ssl.expiresToday");
+  else label = t("panel.ssl.daysRemaining", { days });
+  if (status === "renewal_due") return `${label} · ${t("panel.ssl.renewalDue")}`;
+  if (status === "expiring" && days >= 0) return `${label} · ${t("panel.ssl.expiringSoon")}`;
+  return label;
+}
+
+/** Yenileme kaydini duraklat / surdur / iptal et. Iptal geri alinamaz: onay ister. Yenileme okumasi basarisizsa soyler. */
+async function changeRenewal(item: SslCertificate, action: RenewalAction) {
+  if (!isActive() || !isAdmin.value || locked.value || busyAction.value || loading.value) return;
+  const target = siteContext();
+  busyAction.value = "renewal";
+  try {
+    if (action === "cancel" && !await confirm({
+      title: t("panel.ssl.renewalCancel"), tone: "neutral", confirmLabel: t("panel.ssl.renewalCancel"),
+      message: t("panel.ssl.renewalCancelConfirm", { host: item.hostName }), impact: [target.site, item.hostName]
+    })) return;
+    if (!target.current()) return;
+    await setRenewalState({ siteName: target.site, hostName: item.hostName, port: item.port, action });
+    if (!target.current()) return;
+    const refreshed = await refresh(true);
+    if (!target.current()) return;
+    const done = t(`panel.ssl.renewalDone_${action}`, { host: item.hostName });
+    showNotice(refreshed ? done : `${done}\n${notice.value}`, !refreshed);
+  } catch (error) {
+    if (target.current()) showNotice(resolveApiMessage(error), true);
+  } finally {
+    busyAction.value = "";
+  }
+}
+
+async function onCsrImported() {
+  if (!isActive()) return;
+  const target = siteContext();
+  const refreshed = await refresh(true);
+  if (!target.current()) return;
+  if (!refreshed) return; // refresh() zaten nedenini gosterdi.
+  activeTab.value = "current";
 }
 
 /** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */

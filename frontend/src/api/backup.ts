@@ -209,6 +209,36 @@ export async function verifyBackups() {
   return response.data.data;
 }
 
+export type BackupTestRestoreResult = {
+  backupId: string;
+  name: string;
+  /** passed | failed | not_tested */
+  outcome: "passed" | "failed" | "not_tested";
+  notTestedReason: string;
+  entryCount: number;
+  extractedBytes: number;
+  streamVerifiedBytes: number;
+  fileFailures: number;
+  databaseDumpsChecked: number;
+  databaseDumpFailures: number;
+  databaseDumpsUnchecked: number;
+  cleanedUp: boolean;
+  /** Daima false: test canli siteye/veritabanina dokunmaz. */
+  liveDataTouched: boolean;
+  durationMs: number;
+  issues: string[];
+};
+
+/** Yalitilmis test geri yukleme: gecici klasorde dogrular, siler. Canli veriye dokunmaz. */
+export async function testRestoreBackup(backupId: string, encryptionPassword?: string) {
+  const response = await apiClient.post<ApiEnvelope<BackupTestRestoreResult>>(
+    `/backup/${encodeURIComponent(backupId)}/test-restore`, { encryptionPassword: encryptionPassword || null });
+  const value = response.data?.data;
+  if (response.data?.success !== true || !value || !["passed", "failed", "not_tested"].includes(value.outcome))
+    throw new UserFacingError("panel.backup.testRestore.unverified");
+  return value;
+}
+
 export type BackupDatabaseRef = { engine: string; databaseName: string };
 
 export type SiteBackupScope = {

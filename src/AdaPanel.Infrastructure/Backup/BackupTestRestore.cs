@@ -28,6 +28,7 @@ internal static class BackupTestRestore
         try
         {
             Directory.CreateDirectory(workDirectory);
+            result.Outcome = "passed";
             if (IsZip(archivePath))
                 await VerifyZipAsync(archivePath, workDirectory, extractCapBytes, result, cancellationToken);
             else if (archivePath.EndsWith(".sql", StringComparison.OrdinalIgnoreCase))
