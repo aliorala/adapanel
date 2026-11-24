@@ -495,7 +495,10 @@ public sealed partial class MailService(
             }
 
             await SyncDataStageScriptForSenderPolicyAsync(cancellationToken);
-            return true;
+
+            // YALNIZ yururlukte olan kural "uygulandi" sayilir. Unavailable (asama okunamadi) ve
+            // ForeignExpression (baskasinin ifadesine dokunulmadi) da korumanin YOKLUGU demektir.
+            return result is SenderPolicySyncResult.Applied or SenderPolicySyncResult.AlreadyApplied;
         }
         catch (Exception exception)
         {
@@ -584,6 +587,7 @@ public sealed partial class MailService(
         // UI'de takılı kalır. account turunda ayrıca BAŞKA domaindeki hesaplarda bu domaine işaret eden alias
         // girdileri de temizlenir.
         var removedMembers = new List<string>();
+        var cleanupFailed = new List<string>();
         try
         {
         foreach (var principalType in DomainCascadeTypes)
@@ -620,10 +624,22 @@ public sealed partial class MailService(
                     var deletion = await RunCliAsync(cli, $"delete {principalType} --ids {Arg(memberId)}", env, cancellationToken);
                     if (!deletion.Success) throw MapMailError(deletion);
                     removedMembers.Add($"{principalType}:{(string.IsNullOrWhiteSpace(memberEmail) ? memberId : memberEmail)}");
-                    if (principalType == "account" && !string.IsNullOrWhiteSpace(memberEmail))
+                    if (!string.IsNullOrWhiteSpace(memberEmail))
                     {
+                        // Uye gitti: yarida kesilse bile kaydi kalmasin. Liste uyesinin politikasi da gider.
                         var removedAddress = memberEmail.Trim();
-                        await RemoveAutoRespondersAsync(key => string.Equals(key, removedAddress, StringComparison.OrdinalIgnoreCase), cancellationToken);
+                        if (principalType == "account")
+                        {
+                            await TryCleanupAsync(
+                                () => RemoveAutoRespondersAsync(key => string.Equals(key, removedAddress, StringComparison.OrdinalIgnoreCase), cancellationToken),
+                                removedAddress, cleanupFailed);
+                        }
+                        else if (principalType == MailingListObject)
+                        {
+                            await TryCleanupAsync(
+                                () => UpdateListPoliciesAsync(store => store.Remove(removedAddress), cancellationToken),
+                                removedAddress, cleanupFailed);
+                        }
                     }
 
                     continue;
@@ -666,16 +682,19 @@ public sealed partial class MailService(
         // Alan adi gitti: kalan otomatik yanit ve liste politikasi kayitlari da gider; yoksa ayni
         // adres yeniden acildiginda eski kayit geri gelirdi.
         var suffix = "@" + domain;
-        await RemoveAutoRespondersAsync(key => key.EndsWith(suffix, StringComparison.OrdinalIgnoreCase), cancellationToken);
-        await UpdateListPoliciesAsync(store =>
+        // Alan adi ZATEN silindi: temizlik hatasi 500'e cevrilmez, "artik var" uyarisi olur.
+        await TryCleanupAsync(() => RemoveAutoRespondersAsync(key => key.EndsWith(suffix, StringComparison.OrdinalIgnoreCase), cancellationToken), domain, cleanupFailed);
+        await TryCleanupAsync(() => UpdateListPoliciesAsync(store =>
         {
             var keys = store.Keys.Where(key => key.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)).ToList();
             foreach (var key in keys) store.Remove(key);
             return keys.Count > 0;
-        }, cancellationToken);
+        }, cancellationToken), domain, cleanupFailed);
         await TrySyncDataStageScriptAfterCleanupAsync(domain, cancellationToken);
 
-        return await GetWorkspaceAsync(null, cancellationToken);
+        var finalWorkspace = await GetWorkspaceAsync(null, cancellationToken);
+        if (cleanupFailed.Count > 0) finalWorkspace.Warnings = [MailDomainWarnings.StateCleanupFailed];
+        return finalWorkspace;
     }
 
     // Bir hesabın alias map'inden verilen domainId'ye ait tüm girdileri çıkarır.
@@ -763,9 +782,27 @@ public sealed partial class MailService(
 
         // Hesap gitti: otomatik yanit kaydi da gider; yoksa ayni adres yeniden acilinca eski yanit
         // (belki aylar once birakilmis bir "tatildeyim" iletisi) sessizce geri gelirdi.
-        await RemoveAutoRespondersAsync(key => string.Equals(key, normalized, StringComparison.OrdinalIgnoreCase), cancellationToken);
+        var cleanupFailed = new List<string>();
+        await TryCleanupAsync(
+            () => RemoveAutoRespondersAsync(key => string.Equals(key, normalized, StringComparison.OrdinalIgnoreCase), cancellationToken),
+            normalized, cleanupFailed);
         await TrySyncDataStageScriptAfterCleanupAsync(normalized, cancellationToken);
+        if (cleanupFailed.Count > 0) workspace.Warnings = [MailDomainWarnings.StateCleanupFailed];
         return workspace;
+    }
+
+    /// <summary>Silme sonrasi durum temizligi EN IYI CABA: hata silmeyi 500 yapmaz, <paramref name="failed"/>'e yazilir.</summary>
+    private async Task TryCleanupAsync(Func<Task> cleanup, string subject, List<string> failed)
+    {
+        try
+        {
+            await cleanup();
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Mail state cleanup failed after deleting {Subject}; stale autoresponder/list-policy entries may remain.", subject);
+            failed.Add(subject);
+        }
     }
 
     /// <summary>

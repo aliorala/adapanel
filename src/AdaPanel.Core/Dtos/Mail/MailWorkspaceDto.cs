@@ -65,4 +65,7 @@ public static class MailDomainWarnings
 
     /// <summary>Gonderen sahteciligi kurali yazilamadi ya da sunucuya yuklenmedi.</summary>
     public const string SenderPolicyNotApplied = "sender_policy_not_applied";
+
+    /// <summary>Silme tamamlandi ama otomatik yanit/liste politikasi kayitlari temizlenemedi.</summary>
+    public const string StateCleanupFailed = "state_cleanup_failed";
 }

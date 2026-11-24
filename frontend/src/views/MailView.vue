@@ -1513,9 +1513,9 @@ async function openDomain(name: string) {
   try {
     await run(async (isCurrent) => {
       if (!exists) {
-        const created = createMailDomain(lower);
-        await applyWorkspace(created, isCurrent);
-        const warnings = (await created).warnings ?? [];
+        const created = await createMailDomain(lower);
+        await applyWorkspace(Promise.resolve(created), isCurrent);
+        const warnings = created.warnings ?? [];
         if (warnings.length) showNotice(mailWarningText("mail.domain.completed_with_warnings", warnings), true);
       }
       await applyWorkspace(getMailWorkspace(lower), isCurrent);
@@ -1833,9 +1833,9 @@ async function removeDomain() {
     action: async () => {
       if (!confirmationContext()) return;
       await run(async (isCurrent) => {
-        const deleted = deleteMailDomain(domain);
-        await applyWorkspace(deleted, isCurrent);
-        const leftovers = (await deleted).warnings ?? [];
+        const deleted = await deleteMailDomain(domain);
+        await applyWorkspace(Promise.resolve(deleted), isCurrent);
+        const leftovers = deleted.warnings ?? [];
         selectedDomain.value = "";
         if (leftovers.length) showNotice(mailWarningText("mail.domain.delete_completed_with_leftovers", leftovers), true);
         else showNotice(t("panel.mail.domainDeleted"), false);
@@ -1879,8 +1879,11 @@ async function removeAccount(address: string) {
     impact,
     action: async () => {
       await run(async (isCurrent) => {
-        await applyWorkspace(deleteMailAccount(address), isCurrent);
-        showNotice(t("panel.mail.mailboxDeleted"), false);
+        const deleted = await deleteMailAccount(address);
+        await applyWorkspace(Promise.resolve(deleted), isCurrent);
+        const leftovers = deleted.warnings ?? [];
+        if (leftovers.length) showNotice(mailWarningText("mail.account.delete_completed_with_leftovers", leftovers), true);
+        else showNotice(t("panel.mail.mailboxDeleted"), false);
       }, targetCurrent);
     },
   });

@@ -5648,6 +5648,8 @@
   "mail.domain_quota_not_supported": "AdaPanel bu MailEnable kurulumunda alan adı kotasını henüz yönetemiyor. Posta kutusu bazlı kota kullanılabilir.",
   "mail.certificate_issue_not_supported": "MailEnable yedeğinde sertifika alımı panelden yapılamıyor. Sertifikayı MailEnable yönetiminden yükleyin.",
   "mail.spam_settings_not_supported": "MailEnable yedeğinde spam ayarları panelden yazılamıyor. MailEnable yönetim konsolunu kullanın.",
+  "mail.account.delete_completed_with_leftovers": "Posta kutusu silindi, ancak otomatik yanıt kaydı temizlenemedi.",
+  "panel.mail.warning.state_cleanup_failed": "Otomatik yanıt/liste politikası kayıtları temizlenemedi; aynı adres yeniden açılırsa eski kayıt geri gelebilir.",
   "mail.domain.completed_with_warnings": "E-posta alan adı oluşturuldu, ancak bazı adımlar tamamlanamadı.",
   "mail.domain.delete_completed_with_leftovers": "E-posta alan adı silindi, ancak bazı kaynaklar geride kaldı.",
   "mail.domain_delete_partial": "E-posta alan adı silme işlemi yarıda kaldı: bazı posta kutuları silindi, alan adı hâlâ duruyor. Ayrıntıya bakın ve işlemi yeniden deneyin.",

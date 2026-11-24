@@ -5648,6 +5648,8 @@
   "mail.domain_quota_not_supported": "AdaPanel cannot yet manage domain quotas for this MailEnable installation. Per-mailbox quotas are available.",
   "mail.certificate_issue_not_supported": "Certificate issuance is not available from the panel on the MailEnable backend. Install the certificate from MailEnable management.",
   "mail.spam_settings_not_supported": "Spam settings cannot be written from the panel on the MailEnable backend. Use the MailEnable management console.",
+  "mail.account.delete_completed_with_leftovers": "The mailbox was deleted, but its autoresponder record could not be cleaned up.",
+  "panel.mail.warning.state_cleanup_failed": "Autoresponder/list-policy records could not be cleaned up; if the same address is recreated the old record may return.",
   "mail.domain.completed_with_warnings": "The mail domain was created, but some steps could not be completed.",
   "mail.domain.delete_completed_with_leftovers": "The mail domain was deleted, but some resources were left behind.",
   "mail.domain_delete_partial": "Mail domain deletion stopped midway: some mailboxes were deleted and the domain still exists. Check the details and retry.",
