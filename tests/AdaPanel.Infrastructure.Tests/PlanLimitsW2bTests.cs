@@ -458,11 +458,11 @@ public sealed class PlanLimitsW2bTests : IDisposable
         Assert.Equal("license.expired", hata.MessageKey);
         Assert.Equal(402, hata.HttpStatusCode);
 
-        // Yaratan her yol kapiyi, yaratmadan ONCE cagirir.
+        // Yaratan her yol kapiyi, yaratmadan ONCE cagirir (sira: kapi < yaratan cagri).
         var depo = DepoKoku();
-        foreach (var (dosya, kaynak, isim) in new[]
+        foreach (var (dosya, kaynak, yaratan) in new[]
         {
-            ("src/AdaPanel.Api/Controllers/SitesController.cs", "LicensedResource.Site", "iisSiteService.CreateSiteAsync"),
+            ("src/AdaPanel.Api/Controllers/SitesController.cs", "LicensedResource.Site", "siteProvisioningService.CreateAndProvisionAsync("),
             ("src/AdaPanel.Api/Controllers/DatabasesController.cs", "LicensedResource.Database", "databaseService.CreateDatabaseAsync(request"),
             ("src/AdaPanel.Api/Controllers/ResellerDatabasesController.cs", "LicensedResource.Database", "databaseService.CreateDatabaseAsync(request"),
             ("src/AdaPanel.Api/Controllers/MailController.cs", "LicensedResource.Mailbox", "mailService.CreateAccountAsync(request"),
@@ -471,8 +471,10 @@ public sealed class PlanLimitsW2bTests : IDisposable
         })
         {
             var metin = await File.ReadAllTextAsync(Path.Combine(depo, dosya));
+            var isYeri = metin.IndexOf(yaratan, StringComparison.Ordinal);
+            Assert.True(isYeri >= 0, $"{dosya}: '{yaratan}' bulunamadi.");
             var kapiYeri = metin.IndexOf(kaynak, StringComparison.Ordinal);
-            Assert.True(kapiYeri >= 0, $"{dosya}: {kaynak} kapisi yok.");
+            Assert.True(kapiYeri >= 0 && kapiYeri < isYeri, $"{dosya}: {kaynak} kapisi '{yaratan}' cagrisindan ONCE olmali.");
         }
     }
 
