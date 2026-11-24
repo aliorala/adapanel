@@ -151,3 +151,29 @@ describe("safeRelativePath", () => {
     expect(safeRelativePath(input)).toBe(expected);
   });
 });
+
+import { getDownloadUrl } from "../api/files";
+
+const BS = String.fromCharCode(92);
+
+describe("safeHref with query strings", () => {
+  it("keeps encoded slashes and backslashes in the query", () => {
+    expect(safeHref("/api/v1/files/download?path=%2Fsite%2Fa.txt")).toBe("/api/v1/files/download?path=%2Fsite%2Fa.txt");
+    const windows = "/api/v1/files/download?path=" + encodeURIComponent(["C:", "sites", "a.txt"].join(BS));
+    expect(windows).toContain("%5C");
+    expect(safeHref(windows)).toBe(windows);
+  });
+
+  it("passes the real getDownloadUrl output unchanged", () => {
+    for (const path of ["/site/a b.txt", ["C:", "sites", "x", "a.txt"].join(BS), "/ü/ğ#1?.txt"]) {
+      const url = getDownloadUrl(path);
+      expect(safeHref(url)).toBe(url);
+    }
+  });
+
+  it("still rejects encoded separators in the path part and raw backslash in the query", () => {
+    expect(safeHref("/%2F/evil")).toBe("#");
+    expect(safeHref("/%5Cevil?x=1")).toBe("#");
+    expect(safeHref("/ok?x=" + BS + "y")).toBe("#");
+  });
+});

@@ -99,7 +99,10 @@ function isSafeRelativePath(value: string): boolean {
   if (value.includes("\\") || /[\u0000-\u001f\u007f]/.test(value)) {
     return false;
   }
-  return !/%(5c|2f)/i.test(value);
+  // Kodlanmış %5C/%2F yalnız YOL kısmında tehlikelidir; sorgu değerleri (örn. getDownloadUrl'in
+  // encodeURIComponent ile kodladığı ?path=%2Fsite%5Ca.txt) meşru olarak bunları taşır.
+  const pathPart = value.split(/[?#]/, 1)[0];
+  return !/%(5c|2f)/i.test(pathPart);
 }
 
 /**
