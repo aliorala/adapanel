@@ -511,7 +511,7 @@ public sealed class WinAcmeSslService(
             // External checks may await the network. Revoked authority must still stop WACS.
             if (beforeMutation is not null) await beforeMutation(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            return await RenewalCommand(wacs, "--renew --baseuri https://acme-v02.api.letsencrypt.org/", cancellationToken);
+            return await RunRenewalAsync(wacs, cancellationToken);
         }, cancellationToken);
         var cikti = string.IsNullOrWhiteSpace(result.StandardOutput) ? result.StandardError : result.StandardOutput;
         // Keep both diagnostic streams: progress on stdout must not hide errors/timeouts on stderr.
@@ -614,6 +614,35 @@ public sealed class WinAcmeSslService(
         };
     }
 
+    /// <summary>
+    /// Panel tetikli yenileme. Duraklatilmis kayit YOKSA eski davranis (tek <c>--renew</c> turu) aynen
+    /// korunur. Varsa win-acme'nin "bunu atla" bayragi olmadigi icin duraklatilmamis panel kayitlari
+    /// kimlikle (<c>--renew --id</c>) tek tek yenilenir ve cikti bunu acikca soyler.
+    /// </summary>
+    private async Task<CommandResult> RunRenewalAsync(string wacs, CancellationToken cancellationToken)
+    {
+        const string baseUri = "https://acme-v02.api.letsencrypt.org/";
+        var records = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
+        var production = records.Where(item => !string.IsNullOrWhiteSpace(item.ManagedRenewalId) && !item.ManagedRenewalStaging).ToArray();
+        if (!production.Any(item => item.RenewalPaused))
+            return await RenewalCommand(wacs, "--renew --baseuri " + baseUri, cancellationToken);
+
+        var pausedIds = production.Where(item => item.RenewalPaused).Select(item => item.ManagedRenewalId!.Trim()).ToHashSet(StringComparer.Ordinal);
+        var ids = production.Select(item => item.ManagedRenewalId!.Trim()).Where(id => !pausedIds.Contains(id)).Distinct(StringComparer.Ordinal).ToArray();
+        var output = new StringBuilder();
+        var success = true;
+        var errors = new StringBuilder();
+        foreach (var id in ids)
+        {
+            var one = await RenewalCommand(wacs, $"--renew --id \"{id.Replace("\"", string.Empty)}\" --baseuri {baseUri}", cancellationToken);
+            success &= one.Success;
+            if (!string.IsNullOrWhiteSpace(one.StandardOutput)) output.AppendLine(one.StandardOutput);
+            if (!string.IsNullOrWhiteSpace(one.StandardError)) errors.AppendLine(one.StandardError);
+        }
+        output.AppendLine($"Panel duraklatilmis {pausedIds.Count} yenileme kaydini atladi; kimliksiz (panel disi) win-acme kayitlari bu turda yenilenmedi.");
+        return new CommandResult { ExitCode = success ? 0 : 1, StandardOutput = output.ToString(), StandardError = errors.ToString() };
+    }
+
     private async Task PreflightManagedHttpRenewalsAsync(string wacs, Func<CancellationToken, Task>? approve,
         List<string> failures, List<string> notes, CancellationToken token)
     {
@@ -623,7 +652,7 @@ public sealed class WinAcmeSslService(
         {
             owned = (await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), token))
                 .Where(record => !string.IsNullOrEmpty(record.ManagedRenewalId) && record.ManagedRenewalSiteId.HasValue
-                    && !record.ManagedRenewalStaging && !string.IsNullOrWhiteSpace(record.HostName)
+                    && !record.ManagedRenewalStaging && !record.RenewalPaused && !string.IsNullOrWhiteSpace(record.HostName)
                     && !record.HostName.Contains('*') && !IsPreviewHost(record.HostName)).ToArray();
             if (owned.Length == 0) return;
             plans = await RenewalRecordsAsync(wacs, false, token);
@@ -2171,6 +2200,39 @@ public sealed class WinAcmeSslService(
             if (beforeMutation is not null) await beforeMutation(current, token);
         }, cancellationToken));
 
+        // (3b) win-acme yenilemesi. Panel kaydi gitti ama yenileme kaydi kaldiysa win-acme her gun
+        // bu bagi/siteyi yeniden kurmaya calisir (ya da bagi sessizce geri getirir). RemoveSiteAsync
+        // ile AYNI iptal+dogrulama kapisi; basarisizlik GIZLENMEZ, sonuca yazilir.
+        var renewalIds = expectedState
+            .Where(item => !string.IsNullOrWhiteSpace(item.ManagedRenewalId))
+            .Select(item => (Id: item.ManagedRenewalId!.Trim(), item.ManagedRenewalStaging))
+            .Distinct().ToArray();
+        if (renewalIds.Length > 0)
+        {
+            var remainingState = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
+            var details = new List<string>();
+            var action = "cancelled";
+            foreach (var (id, staging) in renewalIds)
+            {
+                if (remainingState.Any(o => string.Equals(o.ManagedRenewalId?.Trim(), id, StringComparison.Ordinal)))
+                {
+                    // Ayni yenileme baska bir kayitta da var (ör. joker): iptal digerini bozar.
+                    if (action == "cancelled") action = "kept_shared";
+                    details.Add($"win-acme yenilemesi {id} başka bir kayıtla paylaşılıyor — iptal edilmedi.");
+                    continue;
+                }
+                (bool Cancelled, string? Problem) outcome = default;
+                await MutateAsync(async () => { outcome = await CancelManagedRenewalAsync(id, staging, cancellationToken); });
+                if (!outcome.Cancelled)
+                {
+                    action = "cancel_failed";
+                    details.Add(outcome.Problem!);
+                }
+            }
+            result.RenewalAction = action;
+            result.RenewalDetail = string.Join(" | ", details);
+        }
+
         // (4) Sertifika deposu kararı — ÖLÇÜMLE.
         var digerKullananlar = SslRemovalPlan.FindOtherUsersOfCertificate(afterBindings, target);
         result.CertificateUsedBy = digerKullananlar;
@@ -2514,6 +2576,90 @@ public sealed class WinAcmeSslService(
     }
 
     /// <summary>
+    /// Bir win-acme yenileme kaydini IPTAL eder ve listeden GERCEKTEN kalktigini olcer (cikis koduna
+    /// guvenilmez). <see cref="RemoveSiteAsync"/> ve tek baglama kaldirma AYNI kapiyi kullanir: ikiz yol
+    /// ayrisirsa biri yenilemeyi iptal edip digeri unutur (tek baglama kaldirma bu yuzden unutuyordu).
+    /// </summary>
+    private async Task<(bool Cancelled, string? Problem)> CancelManagedRenewalAsync(
+        string renewalId, bool staging, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var wacs = await ResolveWinAcmeExecutableAsync(cancellationToken);
+            if (string.IsNullOrWhiteSpace(wacs))
+                return (false, $"win-acme yenilemesi {renewalId} iptal edilemedi: win-acme kurulu/bulunamadı.");
+
+            var baseUri = staging
+                ? "https://acme-staging-v02.api.letsencrypt.org/"
+                : "https://acme-v02.api.letsencrypt.org/";
+            var cancel = await RenewalCommand(wacs,
+                $"--cancel --id \"{renewalId.Replace("\"", string.Empty)}\" --baseuri {baseUri}", cancellationToken);
+            if (!cancel.Success)
+                return (false, $"win-acme yenilemesi {renewalId} iptal edilemedi: " +
+                    Kirp(SecretRedactor.Redact(string.IsNullOrWhiteSpace(cancel.StandardError) ? cancel.StandardOutput : cancel.StandardError)));
+
+            // Çıkış koduna GÜVENME: kimliğin win-acme listesinden gerçekten kalktığını ölç.
+            var remaining = await RenewalRecordsAsync(wacs, staging, cancellationToken);
+            if (remaining.Any(item => string.Equals(SslRenewalVerification.String(item, "Id"), renewalId, StringComparison.Ordinal)))
+                return (false, $"win-acme yenilemesi {renewalId} iptal komutu başarılı döndü ama liste hâlâ içeriyor.");
+            return (true, null);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return (false, $"win-acme yenilemesi {renewalId} iptal edilemedi: {Kirp(exception.Message)}");
+        }
+    }
+
+    /// <summary>Tek bir panel kaydinin (site+host+port) yenilemesini duraklatir/surdurur/iptal eder.</summary>
+    public async Task<SslCertificateDto> SetRenewalStateAsync(
+        string siteName, string hostName, int port, string action, CancellationToken cancellationToken = default)
+    {
+        if (action is not ("pause" or "resume" or "cancel"))
+            throw new AppException("ssl.renewal_action_invalid", 400, 400);
+        var effectivePort = port <= 0 ? 443 : port;
+        SslCertificateDto? updated = null;
+        string? problem = null;
+        // Iptal, win-acme'ye dis komut calistirir; ssl.json guncellemesinin ICINDE yapilmaz (kilit tutulmaz).
+        var all = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
+        var record = all.FirstOrDefault(item => SameRecord(item, siteName, hostName, effectivePort))
+            ?? throw new AppException("ssl.certificate_not_found", 404, 404);
+        if (string.IsNullOrWhiteSpace(record.ManagedRenewalId))
+            throw new AppException("ssl.renewal_not_managed", 409, 409);
+        var renewalId = record.ManagedRenewalId.Trim();
+
+        if (action == "cancel")
+        {
+            if (all.Any(o => !ReferenceEquals(o, record) && string.Equals(o.ManagedRenewalId?.Trim(), renewalId, StringComparison.Ordinal)))
+                throw new AppException("ssl.renewal_shared", 409, 409);
+            var outcome = await CancelManagedRenewalAsync(renewalId, record.ManagedRenewalStaging, cancellationToken);
+            if (!outcome.Cancelled) problem = outcome.Problem;
+            if (problem is not null) throw new AppException("ssl.renewal_cancel_failed", 500, 500, problem);
+        }
+
+        await fileStore.UpdateAsync(StatePath, Array.Empty<SslCertificateDto>(), existing =>
+        {
+            var fresh = existing.FirstOrDefault(item => SameRecord(item, siteName, hostName, effectivePort))
+                ?? throw new AppException("ssl.certificate_not_found", 404, 404);
+            if (!string.Equals(fresh.ManagedRenewalId?.Trim(), renewalId, StringComparison.Ordinal))
+                throw new AppException("ssl.renewal_changed", 409, 409);
+            switch (action)
+            {
+                case "pause": fresh.RenewalPaused = true; break;
+                case "resume": fresh.RenewalPaused = false; break;
+                default: fresh.ManagedRenewalId = null; fresh.ManagedRenewalSiteId = null; fresh.RenewalPaused = false; break;
+            }
+            updated = fresh;
+            return existing.ToArray();
+        }, cancellationToken);
+        return updated!;
+    }
+
+    private static bool SameRecord(SslCertificateDto item, string siteName, string hostName, int port) =>
+        string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(item.HostName, hostName, StringComparison.OrdinalIgnoreCase)
+        && (item.Port <= 0 ? 443 : item.Port) == port;
+
+    /// <summary>
     /// Site silinirken panelin SSL izini TAM temizler: (1) panelin kurduğu win-acme yenilemesini iptal eder
     /// (aksi halde her gün sitesi olmayan bir yenileme başarısız olur), (2) ssl.json kayıtlarını siler,
     /// (3) sertifikayı depodan YALNIZ başka hiçbir bağlama/FTPS/SMTP TLS/başka panel kaydı kullanmıyorsa siler.
@@ -2540,36 +2686,9 @@ public sealed class WinAcmeSslService(
                 continue;
             }
 
-            try
-            {
-                var wacs = await ResolveWinAcmeExecutableAsync(cancellationToken);
-                if (string.IsNullOrWhiteSpace(wacs))
-                {
-                    problems.Add($"win-acme yenilemesi {group.Key.Id} iptal edilemedi: win-acme kurulu/bulunamadı.");
-                    continue;
-                }
-
-                var baseUri = group.Key.Staging
-                    ? "https://acme-staging-v02.api.letsencrypt.org/"
-                    : "https://acme-v02.api.letsencrypt.org/";
-                var cancel = await RenewalCommand(wacs,
-                    $"--cancel --id \"{group.Key.Id.Replace("\"", string.Empty)}\" --baseuri {baseUri}", cancellationToken);
-                if (cancel.Success)
-                {
-                    // Çıkış koduna GÜVENME: kimliğin win-acme listesinden gerçekten kalktığını ölç.
-                    var remaining = await RenewalRecordsAsync(wacs, group.Key.Staging, cancellationToken);
-                    if (remaining.Any(item => string.Equals(SslRenewalVerification.String(item, "Id"), group.Key.Id, StringComparison.Ordinal)))
-                        problems.Add($"win-acme yenilemesi {group.Key.Id} iptal komutu başarılı döndü ama liste hâlâ içeriyor.");
-                    else
-                        cancelled.Add(group.Key.Id);
-                }
-                else problems.Add($"win-acme yenilemesi {group.Key.Id} iptal edilemedi: " +
-                    Kirp(SecretRedactor.Redact(string.IsNullOrWhiteSpace(cancel.StandardError) ? cancel.StandardOutput : cancel.StandardError)));
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                problems.Add($"win-acme yenilemesi {group.Key.Id} iptal edilemedi: {Kirp(exception.Message)}");
-            }
+            var outcome = await CancelManagedRenewalAsync(group.Key.Id, group.Key.Staging, cancellationToken);
+            if (outcome.Cancelled) cancelled.Add(group.Key.Id);
+            else problems.Add(outcome.Problem!);
         }
 
         // Kimliği kayıtlı olmayan eski Let's Encrypt kayıtları: hangi yenilemeye ait olduğu bilinmiyor,

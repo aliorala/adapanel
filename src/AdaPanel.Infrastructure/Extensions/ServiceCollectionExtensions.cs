@@ -154,6 +154,10 @@ public static class ServiceCollectionExtensions
         // yalnızca siliyor ve varsayılan olarak kapalı — yani uzun çalışan sunucuda günlükler sınırsız birikiyordu.
         services.AddScoped<Logs.ILogRotationService, Logs.LogRotationService>();
         services.AddScoped<IFirewallService, Firewall.FirewallService>();
+        services.AddScoped<ISslCsrService, Ssl.SslCsrService>();
+        services.AddSingleton<Firewall.IIpBlockRuleWriter, Firewall.PowerShellIpBlockRuleWriter>();
+        services.AddScoped<IIpBlockService, Firewall.IpBlockService>();
+        services.AddHostedService<Firewall.IpBlockExpiryWorker>();
         services.AddScoped<ISchedulerService, Scheduler.SchedulerService>();
         services.AddScoped<INotificationService, Notifications.NotificationService>();
         // Yedek şifreleme parolasının DPAPI korumalı kasası (zamanlanmış yedekler için şart).

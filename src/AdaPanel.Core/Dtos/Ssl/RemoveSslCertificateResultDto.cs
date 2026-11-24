@@ -41,6 +41,16 @@ public sealed class RemoveSslCertificateResultDto
     /// <summary>Serbest metin ayrıntı (silme hatası vb.).</summary>
     public string Detail { get; set; } = string.Empty;
 
+    /// <summary>
+    /// win-acme yenileme kaydina ne yapildi: <c>none</c> (panelin yonettigi kayit yoktu),
+    /// <c>cancelled</c> (iptal edildi ve listeden kalktigi DOGRULANDI), <c>kept_shared</c> (baska bir
+    /// kayit ayni yenilemeyi kullaniyor), <c>cancel_failed</c> (iptal edilemedi; ayrinti
+    /// <see cref="RenewalDetail"/>). Eskiden tek baglama kaldirilinca yenileme sessizce yasamaya devam ediyordu.
+    /// </summary>
+    public string RenewalAction { get; set; } = "none";
+
+    public string RenewalDetail { get; set; } = string.Empty;
+
     /// <summary>İşlem sonrası sitenin GÜNCEL SSL durumu (ekran tazelemek için).</summary>
     public SslWorkspaceDto Workspace { get; set; } = new();
 }

@@ -59,6 +59,14 @@ public interface ISslService
         Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("This SSL provider does not support authorized binding removal.");
 
+    /// <summary>
+    /// Bir kaydin win-acme yenilemesini <c>pause</c> (panel tetikli turlar atlar), <c>resume</c> ya da
+    /// <c>cancel</c> (win-acme kaydi iptal + dogrulama; sertifika kalir, otomatik yenilenmez) eder.
+    /// </summary>
+    Task<SslCertificateDto> SetRenewalStateAsync(string siteName, string hostName, int port, string action,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This SSL provider does not support renewal control.");
+
     /// <summary>Site silinince panelin SSL durumundaki o siteye ait kayıtları temizler (öksüz kalmasın).</summary>
     Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default);
 
