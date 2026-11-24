@@ -664,6 +664,9 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             $"site-quota:{aboneligim}",
             async () =>
             {
+                // M4: lisans "Kısıtlı" ise YENİ site açılmaz (yönetici dahil; mevcut siteler etkilenmez).
+                await LicenseGate.EnsureCanCreateAsync(HttpContext, Core.Dtos.Licensing.LicensedResource.Site, cancellationToken);
+
                 // M1 (profesyonel paneller gibi): Admin sınırsız; Bayi yalnız planının MaxSites kotası kadar site açabilir.
                 await EnsureSiteQuotaAsync(cancellationToken);
 
@@ -772,6 +775,7 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
                         async token =>
                         {
                             await authority.RevalidateAsync(dbContext, customerScopes, User, token);
+                            await LicenseGate.EnsureCanCreateAsync(HttpContext, Core.Dtos.Licensing.LicensedResource.Database, token);
                             if (await IsDatabaseQuotaReachedAsync(token))
                                 throw new AppException("database.quota_exceeded", 403, 403);
                             // This callback already owns the database lease. Pin until CREATE,
