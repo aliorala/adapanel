@@ -343,17 +343,16 @@ public sealed class SubscriptionResourceSuspender(
     public async Task<SuspensionReport?> RetryAsync(Guid userId, bool shouldBeClosed, IReadOnlyCollection<string> sites, CancellationToken cancellationToken)
     {
         var state = await customerScopes.GetSuspensionStateAsync(userId, cancellationToken);
-        if (state is null)
-        {
-            return null;
-        }
-
         if (shouldBeClosed)
         {
-            return state.PendingClose.Count > 0 ? await CloseAsync(userId, sites, cancellationToken) : null;
+            // Kayit YOKSA ama kapali olmaliysa (bu duzeltmeden onceki askilar, ya da kayit hic yazilamadi)
+            // kapatma yeniden uygulanir: FTP/cron/posta durumu da boylece kaydedilir.
+            return state is null || state.PendingClose.Count > 0
+                ? await CloseAsync(userId, sites, cancellationToken)
+                : null;
         }
 
-        return await RestoreAsync(userId, cancellationToken);
+        return state is null ? null : await RestoreAsync(userId, cancellationToken);
     }
 
     private static void AddOnce(List<string> list, string item)

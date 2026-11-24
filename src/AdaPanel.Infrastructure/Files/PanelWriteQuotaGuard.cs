@@ -21,8 +21,7 @@ public sealed class PanelWriteQuotaGuard(
         }
     }
 
-    /// <inheritdoc />
-    public async Task EnsureRoomForSubscriptionAsync(Guid userId, long incomingBytes, CancellationToken cancellationToken = default)
+    private async Task EnsureRoomForSubscriptionAsync(Guid userId, long incomingBytes, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var scope = await customerScopes.GetScopeAsync(userId, cancellationToken);

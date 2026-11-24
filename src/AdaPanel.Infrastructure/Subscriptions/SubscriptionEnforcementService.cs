@@ -345,6 +345,21 @@ public sealed class SubscriptionEnforcementService(
         var oncekiKapsam = await customerScopes.GetScopeAsync(userId, cancellationToken);
         await customerScopes.ResumeAsync(userId, cancellationToken);
 
+        // YETKI SIRASI: askiyi kaldirmak kaynagi ACMAZ eger BASKA kaynak hala kapali istiyorsa. Yonetici
+        // musteriyi pasife aldiysa (IsActive=false) bayinin/otomatik turun askiyi kaldirmasi siteleri,
+        // FTP'yi ve gorevleri acamaz; kayit korunur, pasif etkinlesince acilir.
+        var pasifMusteri = await dbContext.Users.AsNoTracking().FirstOrDefaultAsync(item => item.Id == userId, cancellationToken);
+        if (pasifMusteri is { IsActive: false })
+        {
+            var (a0, ip0, t0) = Aktor();
+            await auditService.WriteForSubscriptionAsync(
+                "subscription.resumed",
+                $"subscription:{userId:N}",
+                $"Subscription suspension lifted (trigger: {t0}); resources KEPT CLOSED because the customer is deactivated (IsActive=false).",
+                a0, userId, ip0, cancellationToken);
+            return;
+        }
+
         // KARDES YOL, AYNI HATA: acilmayan kaynak sessiz kalmaz. Yalniz askidan ONCE acik olanlar acilir
         // (musterinin elle durdurdugu site/hesap/gorev kapali kalir); acilamayanlar bekleyen adimdir.
         var rapor = await suspender.RestoreAsync(

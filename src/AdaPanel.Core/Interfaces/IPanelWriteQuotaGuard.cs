@@ -1,8 +1,7 @@
 namespace AdaPanel.Core.Interfaces;
 
 /// <summary>
-/// M3: PANELİN KENDİ başlattığı disk yazımlarında (Git dağıtımı, uygulama/WordPress kurulumu,
-/// yedek geri yükleme, site klonu) plan <c>MaxDiskMb</c> tavanını sorar. Dosya yöneticisi yüklemesi
+/// M3: PANELİN KENDİ başlattığı disk yazımlarında (Git dağıtımı, uygulama kurulumu, site klonu) plan <c>MaxDiskMb</c> tavanını sorar. Dosya yöneticisi yüklemesi
 /// zaten kendi yolunda sorar; asıl boşluk panelin dosya yazan DİĞER uçlarıydı.
 /// </summary>
 /// <remarks>
@@ -15,9 +14,6 @@ public interface IPanelWriteQuotaGuard
 {
     /// <summary>Sitenin sahibi aboneliğin tavanına <paramref name="incomingBytes"/> sığar mı.</summary>
     Task EnsureRoomForSiteAsync(string siteName, long incomingBytes, CancellationToken cancellationToken = default);
-
-    /// <summary>Verilen aboneliğin (alt-kullanıcı ise parent'ın) tavanına sığar mı.</summary>
-    Task EnsureRoomForSubscriptionAsync(Guid userId, long incomingBytes, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sitenin MEVCUT içeriğinin bir kopyası (klon) sahibinin tavanına sığar mı. Boyut bütçeli yürüyüşle

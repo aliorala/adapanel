@@ -3937,6 +3937,7 @@
   "ftp.user_delete_failed": "Could not delete the FTP user.",
   "ftp.home_outside_site": "The FTP home directory cannot be outside the site's folder. Leave it empty to use the site root.",
   "ftp.quota_exceeded": "FTP account quota reached: you have reached the maximum number of FTP accounts in your plan. Delete an unused account or contact your administrator.",
+  "users.suspension_apply_failed": "The user was saved but the suspension state (sites/FTP/tasks) could not be applied. The panel retries on every enforcement round; check the resources.",
   "ftp.enable_state_unverified": "The enabled/disabled state of the FTP account could not be verified; the change is not considered applied.",
   "attention.subscription.suspensionPending": "Suspended subscriptions have resources that could not be closed",
   "attention.subscription.suspensionPending.desc": "A site, FTP account or scheduled task of a suspended or deactivated subscription could not be closed (or could not be reopened after the suspension was lifted). The panel retries on every enforcement round; intervene manually if it persists.",

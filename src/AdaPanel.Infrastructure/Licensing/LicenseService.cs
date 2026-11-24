@@ -73,7 +73,8 @@ public sealed class LicenseService(
         record = await store.RunExclusiveAsync(async () =>
         {
             var updated = await store.UpdateAsync(existing =>
-                string.Equals(existing.ProtectedKey, claimedKey, StringComparison.Ordinal)
+                string.Equals(existing.ProtectedKey, claimedKey, StringComparison.Ordinal) &&
+                existing.LastAttemptAtUtc == attemptedAt
                     ? ApplyOutcome(existing, outcome, attemptedAt)
                     : existing, // anahtar değişti: bu karar ESKİ anahtarındı, uygulanmaz
                 cancellationToken);

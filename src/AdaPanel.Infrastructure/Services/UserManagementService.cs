@@ -332,6 +332,13 @@ public sealed class UserManagementService(
         }
 
         var newRole = actorIsReseller ? UserRole.Customer : Enum.Parse<UserRole>(request.Role, ignoreCase: true);
+
+        // M4: baska bir rolden MUSTERIYE donusmek de YENI abonelik acmaktir (lisans kapisi).
+        if (licenseService is not null && newRole == UserRole.Customer && user.Role != UserRole.Customer)
+        {
+            var mevcutAbonelik = (await customerScopeService.GetSubscriptionUserIdsAsync(cancellationToken)).Count;
+            await licenseService.EnsureCanCreateAsync(LicensedResource.Subscription, mevcutAbonelik, cancellationToken);
+        }
         var ownerId = actorIsReseller ? actorUserId : request.OwnerId;
         var willRemoveActiveAdmin = user.Role == UserRole.Administrator &&
             (newRole != UserRole.Administrator || !request.IsActive);
@@ -472,7 +479,17 @@ public sealed class UserManagementService(
         // Aktiflik değiştiyse (askıya al / sürdür) müşterinin atanan sitelerini durdur/başlat.
         // ALT-KULLANICI: PAYLAŞILAN siteleri DURDURMA (yalnız o login IsActive=false ile engellenir) → boş kapsam geç.
         var suspensionScope = existingParent is not null ? new CustomerScope([], 0, 0, 0, 0, 0) : scope;
-        await ApplySuspensionStateAsync(user, suspensionScope, wasActive, actorUserId, ipAddress, existingParent is not null, cancellationToken);
+        try
+        {
+            await ApplySuspensionStateAsync(user, suspensionScope, wasActive, actorUserId, ipAddress, existingParent is not null, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Satir ZATEN kaydedildi (commit sonrasi): sessiz gecmek, pasif musterinin kaynaklarinin acik
+            // kaldigini gizlerdi. Hata yukari cikar; zorlama turu IsActive=false gorup kapatmayi yeniden dener.
+            logger.LogError(exception, "Aski durumu uygulanamadi (kullanici kaydedildi): {User}", user.UserName);
+            throw new AppException("users.suspension_apply_failed", 500, 500, exception.Message);
+        }
 
         // Pasifin KAYNAĞI askıdan ayrı alanda tutulur (bkz. yukarıdaki atomik blok): bayi PUT ile pasife
         // alırsa "reseller", yönetici alırsa "admin". /subscriptions/suspend bu alanı ASLA yazmaz.
@@ -584,6 +601,20 @@ public sealed class UserManagementService(
 
         if (resourceSuspender is not null)
         {
+            // YETKI SIRASI: pasifi kaldirmak kaynagi ACMAZ eger abonelik hala askidaysa (sure/trafik/yonetici
+            // askisi). Kayit korunur; askiyi kaldiran taraf (ResumeAsync) pasif olmadigini gorup acar.
+            if (!suspended && scope.IsSuspended)
+            {
+                await auditService.WriteAsync(
+                    "users.resumed",
+                    "users",
+                    $"Customer '{user.UserName}' reactivated; resources KEPT CLOSED because the subscription is still suspended ({scope.SuspendReason}).",
+                    actorUserId,
+                    ipAddress,
+                    cancellationToken);
+                return;
+            }
+
             // TEK MANTIK (SubscriptionResourceSuspender): otomatik zorlama ile AYNI karar — önceki hal
             // kaydedilir, açılışta yalnız askıdan önce açık olanlar açılır, başarısızlar yeniden denenir.
             var rapor = suspended
@@ -933,11 +964,27 @@ public sealed class UserManagementService(
                 actorUserId,
                 ipAddress,
                 cancellationToken);
-            await customerScopeService.RemoveUserAsync(userId, cancellationToken);
             if (atomic is not null)
             {
                 await atomic.CommitAsync(cancellationToken);
             }
+        }
+
+        // Kapsam kaydi COMMIT'ten SONRA kaldirilir: commit dusseydi satir kalir ve kapsami da kalirdi.
+        // Bu adim dusse bile kullanici silindi; yetim kapsam kaydi zararsizdir ve rapora yazilir.
+        try
+        {
+            await customerScopeService.RemoveUserAsync(userId, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogError(exception, "Kullanici silindi ama kapsam kaydi kaldirilamadi: {UserId}", userId);
+            rapor.Leftovers.Add(new UserDeletionLeftoverDto
+            {
+                Kind = SiteLeftoverKinds.Site,
+                Name = user.UserName,
+                Reason = $"kullanici silindi ama kapsam kaydi kaldirilamadi (yetim kayit) - {exception.Message}"
+            });
         }
 
         rapor.UserDeleted = true;

@@ -15,6 +15,7 @@ using AdaPanel.Core.Enums;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Advisor;
+using AdaPanel.Infrastructure.Extensions;
 using AdaPanel.Infrastructure.Files;
 using AdaPanel.Infrastructure.Licensing;
 using AdaPanel.Infrastructure.Options;
@@ -602,6 +603,159 @@ public sealed class PlanLimitsW2bTests : IDisposable
     }
 
     // ------------------------------------------------------------------------------------------
+    // YETKI SIRASI: iki kaynak (askı / pasif) birbirinin kapattigini ACAMAZ
+    // ------------------------------------------------------------------------------------------
+
+    private async Task<(Duzenek D, Guid Musteri, Guid Yonetici)> AskidaPasifMusteriAsync(bool pasif, bool askida)
+    {
+        var d = Kur(s => s.Ekle("a.test", "Started"));
+        var musteri = Guid.NewGuid();
+        var yonetici = Guid.NewGuid();
+        PanelUser U(Guid id, string ad, UserRole rol, bool aktif) => new()
+        {
+            Id = id, UserName = ad, Email = ad + "@x.test", Role = rol, PreferredLanguage = "tr", IsActive = aktif,
+            PasswordHash = "x", CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow
+        };
+        d.Db.Users.AddRange(U(yonetici, "yon", UserRole.Administrator, true), U(musteri, "must", UserRole.Customer, !pasif));
+        await d.Db.SaveChangesAsync();
+        await d.Kapsamlar.SetScopeAsync(musteri, ["a.test"], 5, 1024);
+        if (askida)
+        {
+            await d.Servis.SuspendAsync(musteri, "traffic"); // kaynaklar kapandi, kayit yazildi
+        }
+        else
+        {
+            var kapatici = new SubscriptionResourceSuspender(d.Kapsamlar, d.Siteler, NullLogger<SubscriptionResourceSuspender>.Instance);
+            await kapatici.CloseAsync(musteri, ["a.test"], default); // pasif musteri: kapali
+        }
+
+        Assert.Equal("Stopped", d.Siteler.Durum["a.test"]);
+        return (d, musteri, yonetici);
+    }
+
+    private static UpdateUserRequest Guncelle(bool aktif) => new()
+    {
+        Email = "must@x.test", Role = "Customer", IsActive = aktif, MaxSites = 5, MaxDiskMb = 1024, AssignedSites = ["a.test"]
+    };
+
+    [Fact]
+    public async Task Senaryo_A_askidaki_aboneligi_PUT_ile_aktiflestirmek_kaynaklari_ACMAZ()
+    {
+        var (d, musteri, yonetici) = await AskidaPasifMusteriAsync(pasif: true, askida: true);
+        using var _b = d.Baglanti; using var _d = d.Db;
+        var um = KullaniciServisi(d.Db, denetim: d.Denetim, gercekKapsam: d.Kapsamlar,
+            suspender: new SubscriptionResourceSuspender(d.Kapsamlar, d.Siteler, NullLogger<SubscriptionResourceSuspender>.Instance));
+
+        await um.UpdateUserAsync(musteri, Guncelle(true), yonetici, null);
+
+        Assert.Equal("Stopped", d.Siteler.Durum["a.test"]);                         // sure/trafik/yonetici askisi hala gecerli
+        Assert.NotNull(await d.Kapsamlar.GetSuspensionStateAsync(musteri));          // kayit KORUNDU
+        Assert.Contains("KEPT CLOSED", d.Denetim.Son("users.resumed"), StringComparison.Ordinal);
+
+        // Askiyi kaldiran taraf musteri artik aktif oldugu icin acar.
+        await d.Servis.ResumeAsync(musteri);
+        Assert.Equal("Started", d.Siteler.Durum["a.test"]);
+        Assert.Null(await d.Kapsamlar.GetSuspensionStateAsync(musteri));
+    }
+
+    [Fact]
+    public async Task Senaryo_B_yoneticinin_pasife_aldigi_musterinin_askisini_kaldirmak_kaynaklari_ACMAZ()
+    {
+        var (d, musteri, yonetici) = await AskidaPasifMusteriAsync(pasif: true, askida: true);
+        using var _b = d.Baglanti; using var _d = d.Db;
+
+        await d.Servis.ResumeAsync(musteri); // bayi/otomatik tur kendi askisini kaldirir; musteri HALA pasif
+
+        Assert.Equal("Stopped", d.Siteler.Durum["a.test"]);
+        Assert.NotNull(await d.Kapsamlar.GetSuspensionStateAsync(musteri));
+        Assert.Contains("KEPT CLOSED", d.Denetim.Son("subscription.resumed"), StringComparison.Ordinal);
+
+        // Yonetici aktiflestirince (askida degil) kaynaklar acilir.
+        var um = KullaniciServisi(d.Db, denetim: d.Denetim, gercekKapsam: d.Kapsamlar,
+            suspender: new SubscriptionResourceSuspender(d.Kapsamlar, d.Siteler, NullLogger<SubscriptionResourceSuspender>.Instance));
+        await um.UpdateUserAsync(musteri, Guncelle(true), yonetici, null);
+        Assert.Equal("Started", d.Siteler.Durum["a.test"]);
+        Assert.Null(await d.Kapsamlar.GetSuspensionStateAsync(musteri));
+    }
+
+    [Fact]
+    public async Task Kayit_yokken_kapali_olmasi_gereken_abonelik_zorlama_turunda_KAPATILIR()
+    {
+        // Bu duzeltmeden ONCE alinmis askı: kayit yok, site hala acik, FTP/cron hic kapatilmamis.
+        var d = Kur(s => s.Ekle("a.test", "Started"));
+        using var _b = d.Baglanti; using var _d = d.Db;
+        var musteri = Guid.NewGuid();
+        await d.Kapsamlar.SetScopeAsync(musteri, ["a.test"], 5, 1024);
+        d.Ftp["h"] = ("a.test", true);
+        await d.Kapsamlar.SuspendAsync(musteri, "manual"); // yalniz kapsam kaydi: kaynaklara dokunulmadi
+        Assert.Null(await d.Kapsamlar.GetSuspensionStateAsync(musteri));
+
+        await d.Servis.EnforceAllAsync();
+
+        Assert.Equal("Stopped", d.Siteler.Durum["a.test"]);
+        Assert.False(d.Ftp["h"].Etkin);
+        Assert.NotNull(await d.Kapsamlar.GetSuspensionStateAsync(musteri));
+    }
+
+    [Fact]
+    public async Task Rol_degisimiyle_musteri_olmak_YENI_abonelik_sayilir_ve_lisans_kapisindan_gecer()
+    {
+        var (conn, db) = await VeritabaniAsync();
+        using var _c = conn; using var _d = db;
+        var diger = new PanelUser
+        {
+            Id = Guid.NewGuid(), UserName = "ikinci", Email = "ikinci@x.test", Role = UserRole.Administrator, PreferredLanguage = "tr",
+            IsActive = true, PasswordHash = "x", CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow
+        };
+        db.Users.Add(diger);
+        await db.SaveChangesAsync();
+        var lisans = Fake<ILicenseService>((metot, _) => metot.Name == nameof(ILicenseService.EnsureCanCreateAsync)
+            ? throw new AppException("license.expired", 402, 402) : null);
+        var servis = KullaniciServisi(db, lisans: lisans);
+        var yonetici = (await db.Users.FirstAsync(u => u.UserName == "yonetici")).Id;
+
+        var hata = await Assert.ThrowsAsync<AppException>(() => servis.UpdateUserAsync(
+            diger.Id, new UpdateUserRequest { Email = "ikinci@x.test", Role = "Customer", IsActive = true, MaxSites = 1, MaxDiskMb = 10 }, yonetici, null));
+        Assert.Equal("license.expired", hata.MessageKey);
+    }
+
+    [Fact]
+    public async Task WordPress_klonu_site_ve_veritabani_icin_lisans_kapisindan_gecer()
+    {
+        var metin = await File.ReadAllTextAsync(Path.Combine(DepoKoku(), "src/AdaPanel.Api/Controllers/WordPressController.cs"));
+        var isYeri = metin.IndexOf("wordPressToolkitService.CloneAsync(siteName", StringComparison.Ordinal);
+        var site = metin.IndexOf("LicensedResource.Site", StringComparison.Ordinal);
+        var veritabani = metin.IndexOf("LicensedResource.Database", StringComparison.Ordinal);
+        Assert.True(isYeri > 0 && site > 0 && veritabani > 0 && site < isYeri && veritabani < isYeri);
+    }
+
+    [Fact]
+    public void DI_kaydi_lisans_kota_ve_askı_bagimliliklarini_COZER()
+    {
+        var yapilandirma = new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build();
+        var kayitlar = new ServiceCollection().AddAdaPanelInfrastructure(yapilandirma);
+        foreach (var tip in new[]
+        {
+            typeof(ILicenseService), typeof(IPanelWriteQuotaGuard), typeof(SubscriptionResourceSuspender),
+            typeof(IFtpService), typeof(ISchedulerService), typeof(ISubscriptionEnforcementService), typeof(IUserManagementService)
+        })
+        {
+            Assert.Contains(kayitlar, d => d.ServiceType == tip);
+        }
+
+        // Istege bagli kurucu parametreleri sessizce null kalmasin: kayitli olmalilar.
+        foreach (var kurucu in new[] { typeof(UserManagementService), typeof(SubscriptionEnforcementService), typeof(AttentionService) })
+        {
+            foreach (var parametre in kurucu.GetConstructors().Single().GetParameters().Where(p => p.HasDefaultValue))
+            {
+                var tip = parametre.ParameterType;
+                if (tip.Namespace?.StartsWith("AdaPanel", StringComparison.Ordinal) != true) continue; // IHttpContextAccessor vb.
+                Assert.True(kayitlar.Any(d => d.ServiceType == tip), $"{kurucu.Name}.{parametre.Name} ({tip.Name}) DI'da kayitli degil: sessizce null kalir.");
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
     // duzenek
     // ------------------------------------------------------------------------------------------
 
@@ -622,9 +776,10 @@ public sealed class PlanLimitsW2bTests : IDisposable
     }
 
     private static UserManagementService KullaniciServisi(
-        AdaPanelDbContext db, IAuditService? denetim = null, ILicenseService? lisans = null, Dictionary<string, string?>? kaynak = null)
+        AdaPanelDbContext db, IAuditService? denetim = null, ILicenseService? lisans = null, Dictionary<string, string?>? kaynak = null,
+        ICustomerScopeService? gercekKapsam = null, SubscriptionResourceSuspender? suspender = null)
     {
-        var kapsamlar = Fake<ICustomerScopeService>((metot, args) => metot.Name switch
+        var kapsamlar = gercekKapsam ?? Fake<ICustomerScopeService>((metot, args) => metot.Name switch
         {
             nameof(ICustomerScopeService.GetParentSubscriptionAsync) => Task.FromResult<Guid?>(null),
             nameof(ICustomerScopeService.GetScopeAsync) => Task.FromResult(new CustomerScope([], 0, 0, 0, 0, 0)),
@@ -642,7 +797,7 @@ public sealed class PlanLimitsW2bTests : IDisposable
             NullLogger<UserManagementService>.Instance, denetim ?? Fake<IAuditService>((_, _) => null),
             Fake<IIisSiteService>((_, _) => null), Fake<IDatabaseOwnershipService>((_, _) => null), Fake<ISchedulerService>((_, _) => null),
             Fake<ISiteCascadeDeletionService>((_, _) => null), Fake<IApiTokenService>((_, _) => null),
-            Fake<IServerOwnerService>((_, _) => null), Fake<IResellerQuotaService>((_, _) => null), lisans);
+            Fake<IServerOwnerService>((_, _) => null), Fake<IResellerQuotaService>((_, _) => null), lisans, suspender);
     }
 
     private static async Task<AdaPanel.Core.Dtos.Advisor.AttentionSummaryDto> DikkatAl(ICustomerScopeService kapsamlar)
