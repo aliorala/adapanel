@@ -28,7 +28,7 @@ function sortSites(sites: SiteRecord[]): SiteRecord[] {
 
 type BusyKey = "creating" | "importing" | "busySiteName" | "busyBindingKey";
 type SiteState = {
-  sites: SiteRecord[]; selectedSiteName: string; loaded: boolean; loading: boolean;
+  sites: SiteRecord[]; selectedSiteName: string; loaded: boolean; refreshFailed: boolean; loading: boolean;
   creating: boolean; importing: boolean; busySiteName: string; busyBindingKey: string;
   fetchSites(): Promise<SiteRecord[]>;
 };
