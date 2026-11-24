@@ -22,6 +22,18 @@ export type UpdateAttempt = {
   isFailed: boolean;
 };
 
+/** Sunucuda tutulan arka plan indirme durumu (kalıcı; sayfa yenilense de aynı). */
+export type UpdateDownload = {
+  state: "idle" | "downloading" | "verifying" | "ready" | "failed";
+  /** 0-100; uzak sunucu boyut vermediyse null. */
+  percent: number | null;
+  /** state = failed iken çeviri anahtarı. */
+  errorKey: string;
+  targetVersion: string;
+  startedAtUtc: string | null;
+  updatedAtUtc: string | null;
+};
+
 export type UpdateStatus = {
   currentVersion: string;
   isUpdateAvailable: boolean;
@@ -41,6 +53,8 @@ export type UpdateStatus = {
   installScheduledAtUtc: string | null;
   notes: string;
   githubRepo: string;
+  /** Eski sunucular bu alanı göndermez; yoksa indirme durumu bilinmiyor demektir. */
+  download?: UpdateDownload | null;
   checkedAtUtc: string;
 };
 
@@ -50,12 +64,21 @@ function measuredStatus(envelope: ApiEnvelope<UpdateStatus>): UpdateStatus {
     [value.latestVersion, value.downloadUrl, value.packageSha256, value.packagePath].some(item => typeof item !== "string") ||
     [value.isUpdateAvailable, value.isCheckFailed, value.isPackageReady, value.isInstallScheduled].some(item => typeof item !== "boolean") ||
     [value.preparedVersion, value.preparedPackageSha256].some(item => item !== undefined && typeof item !== "string") ||
+    (value.download != null && !measuredDownload(value.download)) ||
     !isTimestamp(value.checkedAtUtc) ||
     (value.installScheduledAtUtc !== null && (!isTimestamp(value.installScheduledAtUtc) || Date.parse(value.installScheduledAtUtc) > Date.parse(value.checkedAtUtc))) ||
     (value.isInstallScheduled && value.installScheduledAtUtc === null) ||
     (value.lastAttempt !== null && !measuredAttempt(value.lastAttempt, Date.parse(value.checkedAtUtc))))
     throw new UserFacingError("panel.update.resultUnconfirmed");
   return value;
+}
+
+function measuredDownload(value: unknown): value is UpdateDownload {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const download = value as UpdateDownload;
+  return ["idle", "downloading", "verifying", "ready", "failed"].includes(download.state) &&
+    typeof download.errorKey === "string" &&
+    (download.percent === null || (typeof download.percent === "number" && download.percent >= 0 && download.percent <= 100));
 }
 
 function isTimestamp(value: unknown): value is string {
@@ -85,6 +108,7 @@ export async function checkForUpdate(force = false) {
   return measuredStatus(response.data);
 }
 
+/** İndirmeyi sunucuda arka plan işi olarak BAŞLATIR ve hemen döner (202); ilerleme `download` alanından yoklanır. */
 export async function applyUpdate(downloadUrl: string, packageSha256 = "") {
   const response = await apiClient.post<ApiEnvelope<UpdateStatus>>("/update/apply", {
     downloadUrl,
