@@ -3160,6 +3160,7 @@
   "update.checksum_required": "A 64-character SHA256 checksum is required for updates.",
   "update.package_invalid": "The update package is not a valid Windows installer executable.",
   "update.package_not_ready": "A verified update package is not ready.",
+  "update.downgrade_rejected": "The target version is not newer than the installed version; downgrade rejected.",
   "update.install_schedule_failed": "The update installation could not be registered with Windows Task Scheduler.",
   "update.install_scheduled": "The update installation was scheduled. The panel will briefly stop and restart automatically.",
   "update.attempt_no_verdict": "The outcome of the installation could not be determined: the helper that runs the installer ended before reporting a result, and the panel version did not change. The panel keeps running on the old version. Look at C:\\ProgramData\\AdaPanel\\updates\\apply-update.log on the server for the reason.",

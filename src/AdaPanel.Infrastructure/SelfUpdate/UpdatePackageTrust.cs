@@ -247,4 +247,44 @@ internal static class UpdatePackageTrust
         // bir mudahale isaretidir.
         return $"Paket imzali ama imzasi gecerli degil: '{durum}' (konu: '{konu}').";
     }
+
+    /// <summary>
+    /// SURUM DUSURME KORUMASI. Hedef surum kurulu surumden KESIN yeni degilse neden metni, yoksa
+    /// <c>null</c>. Iki surum de sayisal cozulemezse RED (eski "esit degilse yeni say" davranisi
+    /// burada kullanilmaz: cozulemeyen surum, eski bir paketi "guncelleme" diye gecirirdi).
+    /// </summary>
+    /// <remarks>
+    /// Neden: GitHub yayin kaydi ya da <c>config/update-manifest.json</c> onbellegi eski ama gecerli
+    /// imzali/ozetli bir paketi gosterirse panel, bilinen aciklari olan eski surumu SYSTEM olarak
+    /// kurardi. Ozet ve yayinci denetimi bunu yakalamaz; eski paket de "dogru" pakettir.
+    /// Acik bir "geri al" akisi bu depoda YOKTUR; eklenirse bu kontrolu ancak yoneticinin acik
+    /// onayiyla (ayri uc, ayri denetim kaydi) atlayabilir.
+    /// </remarks>
+    internal static string? SurumDusurmeKusuru(string? kurulu, string? hedef)
+    {
+        var mevcut = SurumuCozumle(kurulu);
+        var yeni = SurumuCozumle(hedef);
+        if (mevcut is null || yeni is null)
+        {
+            return $"Surum cozulemedi: kurulu='{kurulu}', hedef='{hedef}'.";
+        }
+
+        return yeni > mevcut ? null : $"Hedef surum kurulu surumden yeni degil: kurulu={mevcut}, hedef={yeni}.";
+    }
+
+    private static Version? SurumuCozumle(string? deger)
+    {
+        var cekirdek = (deger ?? string.Empty).Split('-', '+')[0].Trim().TrimStart('v', 'V');
+        if (cekirdek.Length == 0)
+        {
+            return null;
+        }
+
+        if (!cekirdek.Contains('.'))
+        {
+            cekirdek += ".0";
+        }
+
+        return Version.TryParse(cekirdek, out var cozum) ? cozum : null;
+    }
 }

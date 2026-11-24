@@ -266,6 +266,7 @@
   "update.checksum_required": "Güncelleme için 64 karakterlik SHA256 özeti zorunludur.",
   "update.package_invalid": "Güncelleme paketi geçerli bir Windows kurulum EXE dosyası değil.",
   "update.package_not_ready": "Doğrulanmış güncelleme paketi hazır değil.",
+  "update.downgrade_rejected": "Hedef sürüm kurulu sürümden yeni değil; sürüm düşürme reddedildi.",
   "update.install_schedule_failed": "Güncelleme kurulumu Windows görev zamanlayıcısına eklenemedi.",
   "update.install_scheduled": "Güncelleme kurulumu planlandı. Panel kısa süre kesilip otomatik yeniden başlatılacak.",
   "terminal.start_failed": "PowerShell süreci başlatılamadı.",
