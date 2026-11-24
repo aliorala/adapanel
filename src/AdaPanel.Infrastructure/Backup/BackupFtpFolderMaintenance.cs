@@ -28,8 +28,19 @@ public static class BackupFtpFolderMaintenance
         var provider = DataProtectionProvider.Create(keyDirectory, builder => builder.SetApplicationName("AdaPanel"));
         var password = new SecretProtector(provider).Unprotect(Read("backupRemotePasswordProtected"));
         return await SweepAsync(new FtpWebRequestCommands(), uri, new NetworkCredential(Read("backupRemoteUserName"), password),
-            DateTime.Today.AddDays(-days), cancellationToken);
+            ResolveCutoff(DateTime.UtcNow, days), cancellationToken);
     }
+
+    /// <summary>
+    /// Exclusive cutoff day for the FTP sweep (days strictly before it are expired). Derived from the
+    /// SAME clock helper as the server-wide local/FTP day retention (UTC instant converted by one shared
+    /// rule) instead of <c>DateTime.Today</c>, so the two pruners can no longer disagree about the day
+    /// boundary. Day-folder names are written with the server calendar date, hence the helper keeps that
+    /// calendar for the boundary.
+    /// </summary>
+    internal static DateTime ResolveCutoff(DateTime nowUtc, int retentionDays, TimeZoneInfo? timeZone = null) =>
+        (BackupRetentionCalendar.GetExpiredThroughLocalDate(nowUtc, retentionDays, timeZone)
+            ?? throw new InvalidOperationException("A positive retention is required.")).AddDays(1);
 
     internal static async Task<Report> SweepAsync(IBackupFtpCommands ftp, Uri root, NetworkCredential credential,
         DateTime cutoff, CancellationToken cancellationToken)

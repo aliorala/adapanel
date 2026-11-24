@@ -322,6 +322,11 @@ public sealed partial class SslRemovalLifecycleTests
         internal string BindingOutput = "OK";
         internal readonly WinAcmeSslService Service;
         internal CancellationToken Token => Area.Iptal;
+        // win-acme yenileme iptali icin sahte: komutlar kaydedilir, listede kalma/basarisizlik ayarlanir.
+        internal readonly List<string> RenewalCommands = [];
+        internal bool RenewalCancelOk = true;
+        internal bool RenewalStillListed;
+        private readonly string wacsDirectory = Path.Combine(Path.GetTempPath(), "wacs-rm-" + Guid.NewGuid().ToString("N"));
 
         private Fixture(string wait)
         {
@@ -329,6 +334,14 @@ public sealed partial class SslRemovalLifecycleTests
             connection.Open();
             db = new AdaPanelDbContext(new DbContextOptionsBuilder<AdaPanelDbContext>().UseSqlite(connection).Options);
             db.Database.EnsureCreated();
+            Directory.CreateDirectory(wacsDirectory);
+            File.WriteAllText(Path.Combine(wacsDirectory, "wacs.exe"), "x");
+            db.InstalledComponents.Add(new AdaPanel.Core.Entities.InstalledComponent
+            {
+                ComponentId = "win-acme", DisplayName = "win-acme", InstallDir = wacsDirectory,
+                Status = AdaPanel.Core.Enums.ComponentInstallStatus.Installed
+            });
+            db.SaveChanges();
             Change("initial");
             Bindings = [new() { SiteName = Name, BindingInformation = "*:443:" + Name,
                 Thumbprint = "fixture-certificate", CertificateReadable = true }];
@@ -338,6 +351,15 @@ public sealed partial class SslRemovalLifecycleTests
                 NullLogger<WinAcmeSslService>.Instance, ReadBindings, Gates)
             {
                 RedirectCommand = ReadOrWriteRedirect,
+                RenewalCommand = (_, arguments, _) =>
+                {
+                    RenewalCommands.Add(arguments);
+                    return Task.FromResult(new CommandResult { ExitCode = RenewalCancelOk ? 0 : 1, StandardError = RenewalCancelOk ? "" : "boom" });
+                },
+                RenewalRecordsAsync = (_, _, _) => Task.FromResult<IReadOnlyList<System.Text.Json.JsonElement>>(
+                    RenewalStillListed
+                        ? [System.Text.Json.JsonDocument.Parse("{\"Id\":\"ren-1\"}").RootElement.Clone()]
+                        : []),
                 RemoveBindingCommand = (_, token) =>
                 {
                     token.ThrowIfCancellationRequested();
@@ -438,7 +460,7 @@ public sealed partial class SslRemovalLifecycleTests
         internal Task<bool> NativeMutation() => SiteMutationGuard.RunMutationAsync(Gates, Name,
             SiteMutationGuard.MutationKind.IdentityChange, () => Task.FromResult(true), Token);
         private static CommandResult Ok(string output) => new() { ExitCode = 0, StandardOutput = output };
-        public void Dispose() { db.Dispose(); connection.Dispose(); Area.Dispose(); }
+        public void Dispose() { db.Dispose(); connection.Dispose(); Area.Dispose(); if (Directory.Exists(wacsDirectory)) Directory.Delete(wacsDirectory, true); }
     }
 
     public class SiteProxy : DispatchProxy

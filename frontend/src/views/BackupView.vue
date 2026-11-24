@@ -27,6 +27,34 @@
 
     <BackupRestoreResult v-if="fullRestore.result.value" :result="fullRestore.result.value" :refresh-error="fullRestore.refreshError.value" />
 
+    <!-- YALITILMIŞ TEST GERİ YÜKLEME SONUCU. Canlı siteye/veritabanına dokunulmaz; geçici klasörde
+         doğrulanır ve silinir. "Test edilemedi" ayrı bir sonuçtur ve "geçti" gibi gösterilmez. -->
+    <section v-if="testResult" class="form-surface verify-panel" role="status">
+      <div class="section-head">
+        <div>
+          <h3>{{ t("panel.backup.testRestore.title", { name: testResult.name }) }}</h3>
+          <p class="meta">{{ t("panel.backup.testRestore.hint") }}</p>
+        </div>
+        <button class="secondary compact" @click="testResult = null">{{ t("panel.backup.verify.close") }}</button>
+      </div>
+      <div class="verify-counts">
+        <span :class="['status-pill', testResult.outcome === 'passed' ? 'ok' : testResult.outcome === 'failed' ? 'danger' : 'warn']">
+          {{ t(`panel.backup.testRestore.outcome_${testResult.outcome}`) }}
+        </span>
+        <template v-if="testResult.outcome !== 'not_tested'">
+          <span class="status-pill">{{ t("panel.backup.testRestore.entries", { count: testResult.entryCount }) }}</span>
+          <span :class="['status-pill', testResult.fileFailures ? 'danger' : '']">{{ t("panel.backup.testRestore.fileFailures", { count: testResult.fileFailures }) }}</span>
+          <span :class="['status-pill', testResult.databaseDumpFailures ? 'danger' : '']">{{ t("panel.backup.testRestore.dumps", { checked: testResult.databaseDumpsChecked, failed: testResult.databaseDumpFailures }) }}</span>
+          <span v-if="testResult.databaseDumpsUnchecked" class="status-pill warn">{{ t("panel.backup.testRestore.dumpsUnchecked", { count: testResult.databaseDumpsUnchecked }) }}</span>
+          <span :class="['status-pill', testResult.cleanedUp ? 'ok' : 'danger']">{{ t(testResult.cleanedUp ? "panel.backup.testRestore.cleaned" : "panel.backup.testRestore.notCleaned") }}</span>
+        </template>
+        <span v-else class="status-pill warn">{{ t(testResult.notTestedReason) }}</span>
+      </div>
+      <ul v-if="testResult.issues.length" class="verify-issues">
+        <li v-for="issue in testResult.issues" :key="issue"><code>{{ issue }}</code></li>
+      </ul>
+    </section>
+
     <!-- DOĞRULAMA SONUCU. Üç sayı ayrı ayrı gösterilir; "ulaşılamadı" KAYIP DEĞİLDİR ve
          karıştırılırsa kullanıcı geçici bir ağ arızasında bütün geçmişini kayıp sanar. -->
     <section v-if="verification" class="form-surface verify-panel">
@@ -314,6 +342,9 @@
               <span class="safe-actions">
                 <button v-if="isAdmin" class="secondary compact row-button" v-bind="writeGate(busy)" @click="restore(backup)">
                   {{ t("panel.backup.restore") }}
+                </button>
+                <button v-if="isAdmin" class="secondary compact row-button" :disabled="busy || !!testingId" @click="testRestore(backup)">
+                  {{ testingId === backup.id ? t("panel.backup.testRestore.running") : t("panel.backup.testRestore.action") }}
                 </button>
                 <button
                   v-if="backup.format === 'zip'"
@@ -1208,6 +1239,8 @@ import {
   setBackupEncryption,
   updateBackupSchedule,
   verifyBackups,
+  testRestoreBackup,
+  type BackupTestRestoreResult,
   type BackupChain,
   type BackupEncryptionSettings,
   type BackupEntry,
@@ -1792,6 +1825,29 @@ const cloudTargetHint = computed(() => {
   }
 });
 
+// --- Yalıtılmış test geri yükleme ---
+const testingId = ref("");
+const testResult = ref<BackupTestRestoreResult | null>(null);
+
+/**
+ * Yedeği GEÇİCİ klasörde açıp doğrular ve siler; canlı site/veritabanı/posta değişmez. Sonuç ekranda
+ * kalır (geçti / kaldı / test edilemedi ayrı gösterilir). Hata sessiz yutulmaz.
+ */
+async function testRestore(record: BackupRecord) {
+  if (!isActive() || testingId.value || busy.value) return;
+  testingId.value = record.id;
+  try {
+    const result = await testRestoreBackup(record.id);
+    if (!isActive()) return;
+    testResult.value = result;
+    showNotice(t(`panel.backup.testRestore.notice_${result.outcome}`, { name: record.name }), result.outcome !== "passed");
+  } catch (error) {
+    if (isActive()) showError(error);
+  } finally {
+    if (isActive()) testingId.value = "";
+  }
+}
+
 // --- Yedek doğrulama (uzlaştırma) ---
 const verifying = ref(false);
 const verification = ref<BackupVerificationResult | null>(null);
@@ -1908,7 +1964,8 @@ const autoServerLocalTime = computed(() => (autoStatus.value?.serverLocalTime ||
 
 onMounted(async () => {
   if (sitesStore.sites.length === 0) {
-    await sitesStore.fetchSites().catch(() => undefined);
+    // Site listesi okunamazsa SOYLE: sessizce bos birakmak, site secicisinin neden bos oldugunu gizler.
+    await sitesStore.fetchSites().catch((error: unknown) => { if (isActive()) showError(error); });
   }
   if (!isActive()) return;
   await refresh();

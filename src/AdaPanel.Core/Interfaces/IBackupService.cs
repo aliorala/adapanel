@@ -176,6 +176,14 @@ public interface IBackupService
     Task<BackupVerificationResultDto> VerifyBackupsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Yalitilmis TEST geri yukleme: arsiv gecici klasore acilip dosya + veritabani dokumu butunlugu
+    /// olculur, klasor silinir. Canli veriye dokunmaz; sonuc <see cref="BackupTestRestoreResultDto"/>.
+    /// </summary>
+    Task<BackupTestRestoreResultDto> TestRestoreAsync(string backupId, string? encryptionPassword,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This backup provider does not support test restore.");
+
+    /// <summary>
     /// Bir aboneliğin YALNIZCA kendi yedeklerini budar: süre (<paramref name="retentionDays"/>) ve
     /// sayı (<paramref name="keepCount"/>) limitleri birlikte uygulanır. Kapsam daraltması ŞARTTIR:
     /// bir müşterinin saklama ayarı başka bir müşterinin yedeklerine dokunamaz.

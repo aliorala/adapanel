@@ -183,6 +183,8 @@
       </p>
       <p v-else-if="!loading && rules.length === 0" class="empty-state">{{ t("panel.firewall.empty") }}</p>
     </div>
+
+    <FirewallIpBlocks :disabled="busy" />
   </section>
 </template>
 
@@ -191,6 +193,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { allowPort, blockPort, getFirewallRules, getPortStatus, type FirewallRule, type PortStatus } from "../api/firewall";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import FirewallIpBlocks from "../components/FirewallIpBlocks.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { getSessionEpoch } from "../api/client";
 // Eylem sözcüğü İKİ ekranda çiziliyor; kural tek kaynakta (bkz. utils/firewallAction.ts).

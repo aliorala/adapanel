@@ -1,4 +1,4 @@
-﻿using AdaPanel.Api.Security;
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Ssl;
@@ -344,10 +344,33 @@ public sealed class SslController(
             // removed" diyor; ayrinti HAM basildigi icin buradaki Turkce cumle Ingilizce
             // panelde de gorunurdu.
             $"binding={result.HostName}:{result.Port}; removed={result.BindingRemoved}; " +
-            $"httpsRedirectDisabled={result.HttpsRedirectDisabled}; certificate={result.CertificateAction}",
+            $"httpsRedirectDisabled={result.HttpsRedirectDisabled}; certificate={result.CertificateAction}; " +
+            $"renewal={result.RenewalAction}",
             await SiteSahibiAsync(result.SiteName, cancellationToken));
 
         return Ok(ApiResponse<RemoveSslCertificateResultDto>.Ok(result, "ssl.binding_removed"));
+    }
+
+    /// <summary>
+    /// Bir kaydin otomatik yenilemesini duraklatir / surdurur / iptal eder. Yalniz yonetici: win-acme
+    /// sunucu geneli kaynaktir ve iptal geri alinamaz. Her eylem denetim kaydi yazar.
+    /// </summary>
+    [HttpPost("renewal")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<SslCertificateDto>>> SetRenewalStateAsync(
+        [FromBody] SslRenewalActionRequest request, CancellationToken cancellationToken)
+    {
+        var action = (request.Action ?? string.Empty).Trim().ToLowerInvariant();
+        var certificate = await sslService.SetRenewalStateAsync(
+            request.SiteName, request.HostName, request.Port, action, cancellationToken);
+        await auditService.AuditAsync(
+            HttpContext,
+            $"ssl.renewal.{action}",
+            $"ssl:{certificate.SiteName}",
+            $"host={certificate.HostName}:{certificate.Port}; renewalPaused={certificate.RenewalPaused}; " +
+            $"managedRenewal={(string.IsNullOrWhiteSpace(certificate.ManagedRenewalId) ? "none" : "present")}",
+            await SiteSahibiAsync(certificate.SiteName, cancellationToken));
+        return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.renewal_" + action));
     }
 
     /// <summary>
