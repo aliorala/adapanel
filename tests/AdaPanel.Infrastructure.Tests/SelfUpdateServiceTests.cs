@@ -109,7 +109,7 @@ public sealed class SelfUpdateServiceTests
                 Path.Combine(updatesDirectory, "pending-update.json"),
                 JsonSerializer.Serialize(new
                 {
-                    version = "0.2.1",
+                    version = "99.0.1",
                     downloadUrl = "https://example.test/AdaPanelSetup.exe",
                     packagePath,
                     packageSha256 = hash,

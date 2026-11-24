@@ -695,12 +695,6 @@ public sealed class SelfUpdateService : ISelfUpdateService
         // Uyumluluk: arayuz zaten manifestten okudugu iki degeri aynen geri gonderiyor
         // (UpdateView.vue -> applyUpdate(status.downloadUrl, status.packageSha256)), yani gormezden
         // gelmenin davranissal etkisi yok. Alanlar sozlesmede birakildi ki eski arayuzler kirilmasin.
-        // SURUM DUSURME KORUMASI: kurulu surumden yeni olmayan paket indirilmez bile.
-        if (UpdatePackageTrust.SurumDusurmeKusuru(status.CurrentVersion, status.LatestVersion) is { } dusurme)
-        {
-            throw new AppException("update.downgrade_rejected", 409, 409, dusurme);
-        }
-
         var url = status.DownloadUrl;
         if (string.IsNullOrWhiteSpace(url))
         {
@@ -720,6 +714,12 @@ public sealed class SelfUpdateService : ISelfUpdateService
                 IsUpdateAvailable = status.IsUpdateAvailable,
                 CheckedAtUtc = DateTime.UtcNow
             };
+        }
+
+        // SURUM DUSURME KORUMASI: kurulu surumden yeni olmayan paket indirilmez bile.
+        if (UpdatePackageTrust.SurumDusurmeKusuru(status.CurrentVersion, status.LatestVersion) is { } dusurme)
+        {
+            throw new AppException("update.downgrade_rejected", 409, 409, dusurme);
         }
 
         var packageUri = ResolvePackageUri(url);
