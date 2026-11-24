@@ -232,6 +232,12 @@
               <button class="secondary compact row-button" :disabled="busy" @click="openAutoResponder(account.address)">
                 {{ t("panel.mail.autoResponder") }}
               </button>
+              <button class="secondary compact row-button" :disabled="busy" @click="openForward(account.address)">
+                {{ t("panel.mail.forward") }}
+              </button>
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="toggleAccountActive(account.address, account.active === false)">
+                {{ account.active === false ? t("panel.mail.reactivate") : t("panel.mail.suspend") }}
+              </button>
               <button class="danger compact row-button" v-bind="writeGate(busy)" @click="removeAccount(account.address)">
                 {{ t("panel.mail.delete") }}
               </button>
@@ -271,6 +277,35 @@
               {{ busy ? t("panel.database.saving") : t("panel.common.save") }}
             </button>
             <button class="secondary compact" @click="autoResponderFor = ''">{{ t("panel.common.cancel") }}</button>
+          </div>
+        </section>
+
+        <section v-if="forwardFor" class="form-surface">
+          <div class="section-head">
+            <div>
+              <h3>{{ t("panel.mail.forward") }}</h3>
+              <p class="meta">{{ forwardFor }}</p>
+            </div>
+            <label class="toggle-field">
+              <input v-model="forwardForm.enabled" type="checkbox" />
+              <span>{{ t("panel.mail.aliasActive") }}</span>
+            </label>
+          </div>
+          <div v-if="forwardForm.enabled" class="form-grid one">
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.forwardTarget") }}</span>
+              <input v-model.trim="forwardForm.target" type="email" placeholder="info@example.com" />
+            </label>
+            <label class="toggle-field">
+              <input v-model="forwardForm.keepCopy" type="checkbox" />
+              <span>{{ t("panel.mail.forwardKeepCopy") }}</span>
+            </label>
+          </div>
+          <div class="row-actions">
+            <button class="compact" v-bind="writeGate(busy || (forwardForm.enabled && !forwardForm.target))" @click="saveForward">
+              {{ busy ? t("panel.database.saving") : t("panel.common.save") }}
+            </button>
+            <button class="secondary compact" @click="forwardFor = ''">{{ t("panel.common.cancel") }}</button>
           </div>
         </section>
 
@@ -319,9 +354,17 @@
           <div v-for="alias in workspace.aliases" :key="alias.address" class="data-row alias-row">
             <strong>{{ alias.address }}</strong>
             <span :data-label="t('panel.mail.aliasTarget')">{{ alias.target }}</span>
-            <button class="danger compact row-button" v-bind="writeGate(busy)" @click="removeAlias(alias.address)">
-              {{ t("panel.mail.delete") }}
-            </button>
+            <div class="row-actions">
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="editAliasTarget(alias.address, alias.target)">
+                {{ t("panel.mail.aliasEdit") }}
+              </button>
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="toggleAlias(alias.address, alias.active === false)">
+                {{ alias.active === false ? t("panel.mail.reactivate") : t("panel.mail.suspend") }}
+              </button>
+              <button class="danger compact row-button" v-bind="writeGate(busy)" @click="removeAlias(alias.address)">
+                {{ t("panel.mail.delete") }}
+              </button>
+            </div>
           </div>
           <p v-if="workspace.aliases.length === 0" class="empty-state">{{ t("panel.mail.noAliases") }}</p>
         </div>
@@ -798,6 +841,7 @@
           <div class="row-actions">
             <button class="secondary compact" :disabled="busy" @click="loadDns">{{ t("panel.mail.dnsShow") }}</button>
             <button v-if="dns" class="compact" v-bind="writeGate(busy)" @click="applyDns">{{ t("panel.mail.dnsApply") }}</button>
+            <button v-if="dns" class="secondary compact" v-bind="writeGate(busy)" @click="rotateDkim">{{ t("panel.mail.dkimRotate") }}</button>
           </div>
         </div>
 
@@ -998,6 +1042,11 @@ import {
   removeMailListAlias,
   deleteMailAccount,
   deleteMailAlias,
+  setMailAccountActive,
+  updateMailAlias,
+  getMailForward,
+  setMailForward,
+  rotateMailDkim,
   deleteMailDomain,
   getMailCertificate,
   getMailClientSettings,
@@ -1114,6 +1163,8 @@ function beginSectionRead(section: string) {
 const adminPassword = ref("");
 const accountForm = reactive({ localPart: "", password: "", maxSizeMB: 1024 });
 const autoResponderFor = ref("");
+const forwardFor = ref("");
+const forwardForm = reactive({ enabled: false, target: "", keepCopy: true });
 const autoResponderForm = reactive({ enabled: false, subject: "", message: "" });
 const aliasForm = reactive({ localPart: "", target: "" });
 const spam = ref<MailSpamSettings | null>(null);
@@ -1519,7 +1570,13 @@ async function openDomain(name: string) {
         if (warnings.length) showNotice(mailWarningText("mail.domain.completed_with_warnings", warnings), true);
       }
       await applyWorkspace(getMailWorkspace(lower), isCurrent);
-      const records = await getMailDns(lower).catch(() => null);
+      let records: Awaited<ReturnType<typeof getMailDns>> | null = null;
+      try {
+        records = await getMailDns(lower);
+      } catch (error) {
+        // DNS kayıtları okunamadı: sessizce boş bırakma, kullanıcıya göster.
+        if (isCurrent()) showNotice(t("panel.mail.refreshFailed", { message: resolveApiMessage(error) }), true);
+      }
       if (isCurrent()) dns.value = records;
     });
   } finally {
@@ -1552,7 +1609,11 @@ function backToDomains() {
 
 onMounted(async () => {
   if (sitesStore.sites.length === 0) {
-    await sitesStore.fetchSites().catch(() => undefined);
+    try {
+      await sitesStore.fetchSites();
+    } catch (error) {
+      showNotice(t("panel.mail.refreshFailed", { message: resolveApiMessage(error) }), true);
+    }
   }
   await refresh();
   await ensureSiteDomain();
@@ -1930,6 +1991,115 @@ async function saveAutoResponder() {
   }, targetCurrent);
 }
 
+async function toggleAccountActive(address: string, reactivate: boolean) {
+  const targetCurrent = domainTargetContext("accounts", address);
+  if (!targetCurrent()) return;
+  await confirm({
+    title: t(reactivate ? "panel.mail.reactivate" : "panel.mail.suspend") + ": " + address,
+    message: address,
+    impact: [address],
+    action: async () => {
+      await run(async (isCurrent) => {
+        await applyWorkspace(setMailAccountActive(address, reactivate), isCurrent);
+        showNotice(t(reactivate ? "mail.account_reactivated" : "mail.account_suspended"), false);
+      }, targetCurrent);
+    },
+  });
+}
+
+async function toggleAlias(address: string, reactivate: boolean) {
+  const targetCurrent = domainTargetContext("aliases", address);
+  if (!targetCurrent()) return;
+  await run(async (isCurrent) => {
+    await applyWorkspace(updateMailAlias(address, { active: reactivate }), isCurrent);
+    showNotice(t("mail.alias_updated"), false);
+  }, targetCurrent);
+}
+
+async function editAliasTarget(address: string, current: string) {
+  const targetCurrent = domainTargetContext("aliases", address);
+  if (!targetCurrent()) return;
+  const target = await prompt({
+    title: t("panel.mail.aliasEdit"),
+    message: address,
+    label: t("panel.mail.aliasTarget"),
+    defaultValue: current,
+  });
+  if (!target || target.trim().toLowerCase() === current.trim().toLowerCase()) return;
+  await run(async (isCurrent) => {
+    await applyWorkspace(updateMailAlias(address, { target: target.trim() }), isCurrent);
+    showNotice(t("mail.alias_updated"), false);
+  }, targetCurrent);
+}
+
+let forwardRead = 0;
+async function openForward(address: string) {
+  const targetCurrent = domainTargetContext("accounts", address);
+  if (!targetCurrent()) return;
+  const request = ++forwardRead;
+  const currentRead = () => targetCurrent() && request === forwardRead && forwardFor.value === address;
+  forwardFor.value = address;
+  forwardForm.enabled = false;
+  forwardForm.target = "";
+  forwardForm.keepCopy = true;
+  try {
+    const current = await getMailForward(address);
+    if (!currentRead()) return;
+    forwardForm.enabled = current.enabled;
+    forwardForm.target = current.target;
+    forwardForm.keepCopy = current.keepCopy;
+  } catch (error) {
+    if (currentRead()) showNotice(resolveApiMessage(error), true);
+  }
+}
+
+async function saveForward() {
+  const address = forwardFor.value;
+  const targetCurrent = domainTargetContext("accounts", address);
+  if (!address || !targetCurrent()) return;
+  await run(async (isCurrent) => {
+    const saved = await setMailForward({
+      address,
+      enabled: forwardForm.enabled,
+      target: forwardForm.target,
+      keepCopy: forwardForm.keepCopy
+    });
+    if (!isCurrent()) return;
+    forwardForm.enabled = saved.enabled;
+    forwardForm.target = saved.target;
+    forwardForm.keepCopy = saved.keepCopy;
+    showNotice(t(saved.enabled ? "mail.forward_saved" : "mail.forward_removed"), false);
+  }, targetCurrent);
+}
+
+async function rotateDkim() {
+  const targetCurrent = domainTargetContext();
+  if (!targetCurrent()) return;
+  const domain = selectedDomain.value;
+  await confirm({
+    title: t("panel.mail.dkimRotate") + ": " + domain,
+    message: t("panel.mail.dkimRotateConfirm"),
+    impact: [domain],
+    action: async () => {
+      await run(async (isCurrent) => {
+        const result = await rotateMailDkim(domain);
+        if (!isCurrent()) return;
+        showNotice(t("panel.mail.dkimRotated", {
+          old: result.oldSelector,
+          new: result.newSelector,
+          when: new Date(result.retireAfterUtc).toLocaleDateString()
+        }), false);
+        // Yeni kayıtlar listede görünsün; yenileme hatası YUTULMAZ (kullanıcıya gösterilir).
+        try {
+          dns.value = await getMailDns(domain);
+        } catch (error) {
+          showNotice(t("panel.mail.refreshFailed", { message: resolveApiMessage(error) }), true);
+        }
+      }, targetCurrent);
+    },
+  });
+}
+
 async function changePassword(address: string) {
   const targetCurrent = domainTargetContext("accounts", address);
   if (!targetCurrent()) return;
@@ -2218,7 +2388,7 @@ async function run(operation: (isCurrent: () => boolean) => Promise<void>, targe
   if (!targetCurrent()) return;
   const request = ++operationRequest;
   const context = currentWorkspaceContext();
-  const draftKey = () => JSON.stringify([accountForm, aliasForm, listForm, autoResponderFor.value, autoResponderForm, adminPassword.value]);
+  const draftKey = () => JSON.stringify([accountForm, aliasForm, listForm, autoResponderFor.value, autoResponderForm, forwardFor.value, forwardForm, adminPassword.value]);
   const draft = draftKey();
   const isCurrent = () => context() && targetCurrent() && draft === draftKey();
   busy.value = true;

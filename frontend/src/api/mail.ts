@@ -546,3 +546,31 @@ export async function getMailClientSettings(domain: string) {
     `/mail/client-settings/${encodeURIComponent(domain)}`);
   return response.data.data;
 }
+
+export type MailForward = { address: string; enabled: boolean; target: string; keepCopy: boolean };
+export type MailDkimRotation = { domain: string; oldSelector: string; newSelector: string; retireAfterUtc: string; status: string };
+
+export async function setMailAccountActive(address: string, active: boolean) {
+  const response = await apiClient.post<ApiEnvelope<MailWorkspace>>("/mail/accounts/active", { address, active });
+  return response.data.data;
+}
+
+export async function updateMailAlias(address: string, change: { target?: string; active?: boolean }) {
+  const response = await apiClient.put<ApiEnvelope<MailWorkspace>>("/mail/aliases", { address, ...change });
+  return response.data.data;
+}
+
+export async function getMailForward(address: string) {
+  const response = await apiClient.get<ApiEnvelope<MailForward>>("/mail/accounts/forward", { params: { address } });
+  return response.data.data;
+}
+
+export async function setMailForward(payload: MailForward) {
+  const response = await apiClient.put<ApiEnvelope<MailForward>>("/mail/accounts/forward", payload);
+  return response.data.data;
+}
+
+export async function rotateMailDkim(domain: string) {
+  const response = await apiClient.post<ApiEnvelope<MailDkimRotation>>("/mail/dkim/rotate", { domain });
+  return response.data.data;
+}
