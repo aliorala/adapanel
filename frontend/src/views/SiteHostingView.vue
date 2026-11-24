@@ -808,10 +808,12 @@ async function save() {
     // SADE YESIL "kaydedildi" ARTIK KOSULLU. Yazma bozuksa ya da IIS reddettiyse istek zaten
     // hata dondurur (onceki icerik geri konur). Buraya duseni de OLCUME gore anlatiriz:
     // IIS'e sorulamadiysa "kaydedildi" demeyiz.
+    // Iki uyari BIRLIKTE gorunur: yok sayilan bant/baglanti alanlari IIS uyarisini gizlemez (ve tersi).
+    const ignored = saved.tenantLimitsIgnored === true ? ` ${t("panel.hosting.limitsIgnored")}` : "";
     if (saved.webConfigWrite && !saved.webConfigWrite.iisVerified) {
-      showNotice(t("panel.hosting.savedIisUnverified"), true);
+      showNotice(`${t("panel.hosting.savedIisUnverified")}${ignored}`, true);
     } else {
-      showNotice(t("panel.hosting.saved"), false);
+      showNotice(`${t("panel.hosting.saved")}${ignored}`, ignored.length > 0);
     }
   });
 }

@@ -51,16 +51,37 @@ public sealed class PhpService(
         return await SiteLogProbe.VerifyAsync(site, plan, cancellationToken);
     }
 
-    /// <summary>Yalnız TEK sitenin havuzunu yeniler (kiracı yolu; sunucu geneli taskkill yok).</summary>
+    /// <summary>appcmd.exe'nin TAM yolu. Ayrı ve internal: testler sahte nesneyi atlayıp gerçek yol üretimini doğrular.</summary>
+    internal static string AppcmdPath() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "inetsrv", "appcmd.exe");
+
+    internal static bool IsSafePoolName(string? pool) =>
+        !string.IsNullOrWhiteSpace(pool) && System.Text.RegularExpressions.Regex.IsMatch(pool, "^[A-Za-z0-9 ._-]{1,128}$");
+
+    /// <summary>
+    /// Yalnız TEK sitenin havuzunu yeniler (kiracı yolu; sunucu geneli taskkill yok). Başarısızlık FIRLATILIR
+    /// (geçersiz ad, appcmd yok, sıfırdan farklı çıkış kodu): çağıran bunu sessizce başarı saymaz.
+    /// NOT: havuz paylaşımlıysa yenileme havuzdaki KOMŞU siteleri de kısa süreliğine etkiler.
+    /// </summary>
     internal Func<string, CancellationToken, Task> RecycleSitePoolAsync { get; init; } = async (pool, token) =>
     {
-        if (string.IsNullOrWhiteSpace(pool) || !System.Text.RegularExpressions.Regex.IsMatch(pool, @"^[A-Za-z0-9 ._-]{1,128}$"))
+        if (!IsSafePoolName(pool))
         {
-            return;
+            throw new InvalidOperationException("Uygulama havuzu adı geçersiz ya da boş.");
         }
 
-        var appcmd = Environment.ExpandEnvironmentVariables(@"%windir%\System32\inetsrvppcmd.exe");
-        await AdaPanel.Infrastructure.Support.ProcessRunner.RunAsync(appcmd, $"recycle apppool /apppool.name:\"{pool}\"", cancellationToken: token);
+        var appcmd = AppcmdPath();
+        if (!File.Exists(appcmd))
+        {
+            throw new FileNotFoundException("appcmd.exe bulunamadı.", appcmd);
+        }
+
+        var result = await AdaPanel.Infrastructure.Support.ProcessRunner.RunAsync(
+            appcmd, $"recycle apppool /apppool.name:\"{pool}\"", cancellationToken: token);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"appcmd recycle çıkış kodu {result.ExitCode}.");
+        }
     };
 
     /// <summary>Sunucudaki en düşük FastCGI requestTimeout/activityTimeout (sn); okunamazsa 0.</summary>
@@ -725,6 +746,7 @@ public sealed class PhpService(
         // ÖLÇÜLMÜŞ TUZAK SINIFI — alan eskiden `bool` idi ve varsayılanı `false`'du: alanı hiç göndermeyen
         // eski bir arayüz ya da API istemcisi, "limitleri kaydet" derken izolasyonu SESSİZCE KAPATIRDI.
         // Bu depoda aynı sınıf birden çok kez ölçüldü; bu yüzden alan `bool?` ve "söylenmediyse dokunma".
+        var poolRecycleFailed = false;
         if (request.OpenBasedirEnabled is { } isolationRequested)
         {
             // KİRACI yolunda durum ZATEN istenen değerdeyse hiçbir şey yapılmaz: arayüz bu alanı her
@@ -741,6 +763,7 @@ public sealed class PhpService(
                     if (request.TenantScope)
                     {
                         await RecycleSitePoolAsync(site.ApplicationPoolName, cancellationToken);
+                        poolRecycleFailed = false;
                     }
                     else
                     {
@@ -749,6 +772,7 @@ public sealed class PhpService(
                 }
                 catch (Exception exception)
                 {
+                    poolRecycleFailed = request.TenantScope;
                     logger.LogWarning(exception, "php süreçleri yenilenemedi; izolasyon değişikliği bir sonraki havuz dönüşünde uygulanır.");
                 }
             }
@@ -776,6 +800,7 @@ public sealed class PhpService(
         var logging = await EnsureSiteErrorLoggingAsync(siteName, cancellationToken);
         var result = await GetSitePhpSettingsAsync(siteName, cancellationToken);
         result.ErrorLogging = logging;
+        result.PoolRecycleFailed = poolRecycleFailed;
         return result;
     }
 

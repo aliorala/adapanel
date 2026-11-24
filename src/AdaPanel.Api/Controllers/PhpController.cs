@@ -177,7 +177,8 @@ public sealed class PhpController(
             cancellationToken);
 
         return Ok(ApiResponse<SitePhpSettingsDto>.Ok(settings,
-            settings.ErrorLogging?.Status == "verified" ? "php.settings.success" : "php.logging.unverified"));
+            settings.PoolRecycleFailed ? "php.pool_recycle_failed"
+            : settings.ErrorLogging?.Status == "verified" ? "php.settings.success" : "php.logging.unverified"));
     }
 
     [HttpPost("/api/v1/sites/{siteName}/php/logging/verify")]
@@ -236,13 +237,9 @@ public sealed class PhpController(
             return long.MaxValue;
         }
 
-        return text[^1] switch
-        {
-            'K' => number * 1024,
-            'M' => number * 1024 * 1024,
-            'G' => number * 1024 * 1024 * 1024,
-            _ => number
-        };
+        // Taşma "büyük"ü 0'a sarmasın (17179869184G → 0 olup sınırı aşardı): bölerek karşılaştır.
+        var multiplier = text[^1] switch { 'K' => 1024L, 'M' => 1024L * 1024, 'G' => 1024L * 1024 * 1024, _ => 1L };
+        return number > long.MaxValue / multiplier ? long.MaxValue : number * multiplier;
     }
 
     /// <summary>Yönetici dışına exe yolu verilmez (sunucu düzeni; müşteriye faydası yok).</summary>

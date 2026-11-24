@@ -38,6 +38,9 @@ public sealed class SitePhpSettingsDto
 
     /// <summary>phpredis (Redis) uzantısı PHP'de yüklü/etkin mi (global). UI'de "Etkin/Devre dışı" rozeti için.</summary>
     public bool RedisEnabled { get; set; }
+
+    /// <summary>İzolasyon değişti ama sitenin havuzu yenilenemedi: değişiklik bir sonraki havuz dönüşünde geçerli olur.</summary>
+    public bool PoolRecycleFailed { get; set; }
 }
 
 public sealed class UpdateSitePhpSettingsRequest

@@ -6814,5 +6814,7 @@
   "panel.htaccessModule.repairConfirm": "This changes the server-wide IIS configuration. Continue?",
   "panel.confirm.repairHtaccessModuleTitle": "Repair the .htaccess module registration?",
   "php.max_execution_exceeds_server": "max_execution_time exceeds the server's FastCGI timeout; enter a lower value or ask your administrator to raise the limit.",
-  "sites.hosting_settings_saved_limits_ignored": "Hosting settings saved; bandwidth and connection limits can only be changed by an administrator or reseller, so those two fields were NOT changed."
+  "sites.hosting_settings_saved_limits_ignored": "Hosting settings saved; bandwidth and connection limits can only be changed by an administrator or reseller, so those two fields were NOT changed.",
+  "panel.hosting.limitsIgnored": "The bandwidth and connection limit fields were NOT changed: only an administrator or reseller can change them.",
+  "php.pool_recycle_failed": "PHP settings were saved but the site pool could not be recycled; the open_basedir change takes effect at the next pool recycle."
 }

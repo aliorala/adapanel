@@ -26,6 +26,7 @@ public sealed class PhpTenantSideEffectsTests : IDisposable
     private readonly SqliteConnection connection;
     private readonly AdaPanelDbContext db;
     private int refreshCalls, recycleCalls, lockCalls;
+    private bool failRecycle;
     private readonly PhpService service;
 
     public PhpTenantSideEffectsTests()
@@ -43,7 +44,7 @@ public sealed class PhpTenantSideEffectsTests : IDisposable
         service = new PhpService(db, null!, gate, sites, NullLogger<PhpService>.Instance)
         {
             RefreshPhpProcessesAsync = _ => { refreshCalls++; return Task.CompletedTask; },
-            RecycleSitePoolAsync = (_, _) => { recycleCalls++; return Task.CompletedTask; },
+            RecycleSitePoolAsync = (_, _) => { recycleCalls++; return failRecycle ? Task.FromException(new InvalidOperationException("recycle failed")) : Task.CompletedTask; },
             ReadFastCgiTimeoutAsync = _ => Task.FromResult(600),
             SiteLogConfiguration = new PhpSiteLogConfiguration(_ => "test-pool", (path, _, _, apply) =>
             {
@@ -123,6 +124,59 @@ public sealed class PhpTenantSideEffectsTests : IDisposable
             "{\"memoryLimit\":\"256M\",\"tenantScope\":true}",
             new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
         Assert.False(json!.TenantScope);
+    }
+
+    [Fact]
+    public void Appcmd_path_is_real_has_no_control_characters_and_names_appcmd_exe()
+    {
+        // Sahte nesne ATLANIR: gercek yol uretimi olculur (once dosyaya gercek BEL 0x07 yazilmisti: "inetsrv<BEL>ppcmd").
+        var path = (string)typeof(PhpService).GetMethod("AppcmdPath", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, null)!;
+
+        Assert.DoesNotContain(path, ch => ch < 0x20);
+        Assert.Equal("appcmd.exe", Path.GetFileName(path));
+        Assert.Equal("inetsrv", Path.GetFileName(Path.GetDirectoryName(path)));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("pool\"; calc")]
+    [InlineData("a\u0007b")]
+    public async Task Default_recycle_rejects_unsafe_pool_names_instead_of_pretending_success(string pool)
+    {
+        var real = new PhpService(db, null!, null!, null!, NullLogger<PhpService>.Instance);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => real.RecycleSitePoolAsync(pool, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Failed_recycle_is_reported_in_the_result_not_silently_swallowed()
+    {
+        failRecycle = true;
+        var failed = await service.UpdateSitePhpSettingsAsync("fixture.test", Request(tenant: true, openBasedir: true));
+        Assert.True(failed.PoolRecycleFailed);
+
+        failRecycle = false;
+        var ok = await service.UpdateSitePhpSettingsAsync("fixture.test", Request(tenant: true, openBasedir: true));
+        Assert.False(ok.PoolRecycleFailed);
+    }
+
+    [Fact]
+    public void Changed_source_files_contain_no_control_bytes_besides_tab_lf_cr()
+    {
+        var dir = AppContext.BaseDirectory;
+        while (dir is not null && !File.Exists(Path.Combine(dir, "AdaPanel.sln"))) dir = Path.GetDirectoryName(dir);
+        Assert.NotNull(dir);
+        var files = new[]
+        {
+            "src/AdaPanel.Infrastructure/Php/PhpService.cs", "src/AdaPanel.Api/Controllers/PhpController.cs",
+            "src/AdaPanel.Api/Controllers/LogsController.cs", "src/AdaPanel.Api/Controllers/SiteHostingSettingsController.cs",
+            "src/AdaPanel.Api/Controllers/NotificationsController.cs", "src/AdaPanel.Infrastructure/Notifications/NotificationService.cs",
+            "src/AdaPanel.Api/Security/PanelRateLimits.cs", "src/AdaPanel.Core/Dtos/Php/SitePhpSettingsDto.cs"
+        };
+        foreach (var file in files)
+        {
+            var bad = File.ReadAllBytes(Path.Combine(dir!, file)).Where(b => b < 0x20 && b != 9 && b != 10 && b != 13).ToArray();
+            Assert.True(bad.Length == 0, $"{file}: kontrol bayti var (0x{(bad.Length > 0 ? bad[0] : 0):X2}).");
+        }
     }
 
     public void Dispose()

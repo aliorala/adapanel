@@ -282,6 +282,24 @@ public sealed class CustomerSelfServiceAuthorizationTests
         Assert.True(PanelRateLimits.Policies.ContainsKey(PanelRateLimits.PhpSettings));
     }
 
+    [Theory]
+    [InlineData("17179869184G")]
+    [InlineData("99999999999999999M")]
+    [InlineData("9223372036854775807K")]
+    public void MemoryBytes_buyuk_degerlerde_sarmaz_ve_tavani_asar(string deger)
+    {
+        Assert.True(PhpController.MemoryBytes(deger) > PhpController.CustomerMemoryCeilingBytes);
+    }
+
+    [Fact]
+    public async Task Musteri_tasan_memory_limit_yazamaz()
+    {
+        var (denetleyici, php) = Php("Customer", "benim.test");
+        await Reddedilir(() => denetleyici.UpdateSitePhpSettingsAsync(
+            "benim.test", new UpdateSitePhpSettingsRequest { MemoryLimit = "17179869184G", MaxExecutionTime = 120 }, CancellationToken.None));
+        Assert.DoesNotContain("UpdateSitePhpSettingsAsync", php.Cagrilar);
+    }
+
     [Fact]
     public async Task Musteri_sinirli_normal_PHP_ayarini_kendi_sitesine_yazar()
     {
@@ -372,14 +390,14 @@ public sealed class CustomerSelfServiceAuthorizationTests
             "benim.test",
             new UpdateSiteHostingSettingsRequest { MaximumBandwidthBytesPerSecond = 0, MaximumConnections = 0, HstsEnabled = true },
             CancellationToken.None);
-        var mesaj = ((AdaPanel.Core.Dtos.Common.ApiResponse<SiteHostingSettingsDto>)((OkObjectResult)yanit.Result!).Value!).Message;
+        var veri = ((AdaPanel.Core.Dtos.Common.ApiResponse<SiteHostingSettingsDto>)((OkObjectResult)yanit.Result!).Value!).Data!;
 
         Assert.NotNull(yazilan);
         Assert.Equal(1000, yazilan!.MaximumBandwidthBytesPerSecond);
         Assert.Equal(50, yazilan.MaximumConnections);
         Assert.True(yazilan.HstsEnabled);
         // Yok sayılan alanlar sessiz kalmaz: yanıt mesajı bunu söyler.
-        Assert.Equal("sites.hosting_settings_saved_limits_ignored", mesaj);
+        Assert.True(veri.TenantLimitsIgnored);
     }
 
     [Fact]

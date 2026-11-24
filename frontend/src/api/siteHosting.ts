@@ -15,6 +15,8 @@ export type SiteMimeType = {
 };
 
 export type SiteHostingSettings = {
+  /** Musteri cagrisinda bant genisligi/baglanti degerleri yok sayildi. */
+  tenantLimitsIgnored?: boolean;
   siteName: string;
   maximumBandwidthBytesPerSecond: number;
   maximumConnections: number;

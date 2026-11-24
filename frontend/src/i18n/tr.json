@@ -6814,5 +6814,7 @@
   "panel.htaccessModule.repairConfirm": "Bu işlem sunucu genelindeki IIS yapılandırmasını değiştirir. Devam edilsin mi?",
   "panel.confirm.repairHtaccessModuleTitle": ".htaccess modül kaydı onarılsın mı?",
   "php.max_execution_exceeds_server": "max_execution_time sunucunun FastCGI zaman aşımı sınırını aşıyor; daha düşük bir değer girin ya da yöneticiden sınırı yükseltmesini isteyin.",
-  "sites.hosting_settings_saved_limits_ignored": "Hosting ayarları kaydedildi; bant genişliği ve bağlantı sınırı yalnız yönetici/bayi tarafından değiştirilebildiği için bu iki alan DEĞİŞMEDİ."
+  "sites.hosting_settings_saved_limits_ignored": "Hosting ayarları kaydedildi; bant genişliği ve bağlantı sınırı yalnız yönetici/bayi tarafından değiştirilebildiği için bu iki alan DEĞİŞMEDİ.",
+  "panel.hosting.limitsIgnored": "Bant genişliği ve bağlantı sınırı alanları yalnız yönetici/bayi tarafından değiştirilebildiği için DEĞİŞMEDİ.",
+  "php.pool_recycle_failed": "PHP ayarları kaydedildi ama sitenin havuzu yenilenemedi; open_basedir değişikliği bir sonraki havuz dönüşünde geçerli olur."
 }

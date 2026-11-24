@@ -52,6 +52,8 @@ public sealed class SiteHostingSettingsController(
         }
 
         var settings = await service.UpdateAsync(siteName, request, cancellationToken);
+        // Yok sayilan alan bayragi DTO icinde: web.config uyarisiyla BIRLIKTE gorunur (biri otekini gizlemez).
+        settings.TenantLimitsIgnored = limitsIgnored;
 
         // Bu uç siteyi düşürebilecek ayarları (özel hata sayfaları, MIME eşlemeleri, HSTS) yazar.
         // HSTS özellikle geri alınması ZOR bir karardır: tarayıcı max-age boyunca siteyi zorla
@@ -72,7 +74,7 @@ public sealed class SiteHostingSettingsController(
         var notice = settings.WebConfigWrite.NoticeKey;
         return Ok(ApiResponse<SiteHostingSettingsDto>.Ok(
             settings,
-            notice.Length > 0 ? notice : limitsIgnored ? "sites.hosting_settings_saved_limits_ignored" : "sites.hosting_settings_saved"));
+            notice.Length > 0 ? notice : "sites.hosting_settings_saved"));
     }
 
     [HttpPost("composer-install")]
