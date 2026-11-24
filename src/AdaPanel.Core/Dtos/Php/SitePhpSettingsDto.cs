@@ -38,10 +38,21 @@ public sealed class SitePhpSettingsDto
 
     /// <summary>phpredis (Redis) uzantısı PHP'de yüklü/etkin mi (global). UI'de "Etkin/Devre dışı" rozeti için.</summary>
     public bool RedisEnabled { get; set; }
+
+    /// <summary>İzolasyon değişti ama sitenin havuzu yenilenemedi: değişiklik bir sonraki havuz dönüşünde geçerli olur.</summary>
+    public bool PoolRecycleFailed { get; set; }
 }
 
 public sealed class UpdateSitePhpSettingsRequest
 {
+    /// <summary>
+    /// İstek bir KİRACI (müşteri) adına mı geliyor? Yalnız denetleyici koyar; JSON'dan okunmaz.
+    /// Kiracı yolunda sunucu geneli yan etkiler (tüm php-cgi'yi öldürme, tüm FastCGI zaman aşımını
+    /// yükseltme) KAPALIDIR: bir müşterinin ayar kaydı başka kiracıların PHP'sini kesemez.
+    /// </summary>
+    [global::System.Text.Json.Serialization.JsonIgnore]
+    public bool TenantScope { get; set; }
+
     [Required]
     [RegularExpression(@"^-?\d+[KMG]?$")]
     [StringLength(16)]

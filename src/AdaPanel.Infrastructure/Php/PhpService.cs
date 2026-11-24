@@ -51,6 +51,42 @@ public sealed partial class PhpService(
         return await SiteLogProbe.VerifyAsync(site, plan, cancellationToken);
     }
 
+    /// <summary>appcmd.exe'nin TAM yolu. Ayrı ve internal: testler sahte nesneyi atlayıp gerçek yol üretimini doğrular.</summary>
+    internal static string AppcmdPath() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "inetsrv", "appcmd.exe");
+
+    internal static bool IsSafePoolName(string? pool) =>
+        !string.IsNullOrWhiteSpace(pool) && System.Text.RegularExpressions.Regex.IsMatch(pool, "^[A-Za-z0-9 ._-]{1,128}$");
+
+    /// <summary>
+    /// Yalnız TEK sitenin havuzunu yeniler (kiracı yolu; sunucu geneli taskkill yok). Başarısızlık FIRLATILIR
+    /// (geçersiz ad, appcmd yok, sıfırdan farklı çıkış kodu): çağıran bunu sessizce başarı saymaz.
+    /// NOT: havuz paylaşımlıysa yenileme havuzdaki KOMŞU siteleri de kısa süreliğine etkiler.
+    /// </summary>
+    internal Func<string, CancellationToken, Task> RecycleSitePoolAsync { get; init; } = async (pool, token) =>
+    {
+        if (!IsSafePoolName(pool))
+        {
+            throw new InvalidOperationException("Uygulama havuzu adı geçersiz ya da boş.");
+        }
+
+        var appcmd = AppcmdPath();
+        if (!File.Exists(appcmd))
+        {
+            throw new FileNotFoundException("appcmd.exe bulunamadı.", appcmd);
+        }
+
+        var result = await AdaPanel.Infrastructure.Support.ProcessRunner.RunAsync(
+            appcmd, $"recycle apppool /apppool.name:\"{pool}\"", cancellationToken: token);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"appcmd recycle çıkış kodu {result.ExitCode}.");
+        }
+    };
+
+    /// <summary>Sunucudaki en düşük FastCGI requestTimeout/activityTimeout (sn); okunamazsa 0.</summary>
+    internal Func<CancellationToken, Task<int>> ReadFastCgiTimeoutAsync { get; init; } = null!;
+
     internal Func<CancellationToken, Task> RefreshPhpProcessesAsync { get; init; } = async token =>
         await AdaPanel.Infrastructure.Support.ProcessRunner.RunAsync("taskkill.exe", "/f /im php-cgi.exe", cancellationToken: token);
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
@@ -674,6 +710,18 @@ public sealed partial class PhpService(
         CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+
+        // KİRACI: max_execution_time, sunucunun MEVCUT FastCGI zaman aşımının altında kalmak zorunda.
+        // Üstü reddedilir (kırpmak yerine açık hata: kullanıcı kaydedilen değeri gördüğünü sanmasın).
+        if (request.TenantScope)
+        {
+            var ceiling = await (ReadFastCgiTimeoutAsync ?? ReadFastCgiTimeoutDefaultAsync)(cancellationToken);
+            if (ceiling <= 0 || request.MaxExecutionTime <= 0 || FastCgiSecondsFor(request.MaxExecutionTime) > ceiling)
+            {
+                throw new AppException("php.max_execution_exceeds_server", 400, 400, Math.Max(0, ceiling - 60).ToString());
+            }
+        }
+
         if (string.IsNullOrWhiteSpace(site.PhysicalPath) || !Directory.Exists(site.PhysicalPath))
         {
             throw new AppException("php.site_root_missing", 404, 404);
@@ -698,19 +746,35 @@ public sealed partial class PhpService(
         // ÖLÇÜLMÜŞ TUZAK SINIFI — alan eskiden `bool` idi ve varsayılanı `false`'du: alanı hiç göndermeyen
         // eski bir arayüz ya da API istemcisi, "limitleri kaydet" derken izolasyonu SESSİZCE KAPATIRDI.
         // Bu depoda aynı sınıf birden çok kez ölçüldü; bu yüzden alan `bool?` ve "söylenmediyse dokunma".
+        var poolRecycleFailed = false;
         if (request.OpenBasedirEnabled is { } isolationRequested)
         {
-            await EnsureSiteIsolationAsync(site.Name, isolationRequested, cancellationToken);
+            // KİRACI yolunda durum ZATEN istenen değerdeyse hiçbir şey yapılmaz: arayüz bu alanı her
+            // kayıtta gönderir; önceden her kayıt sunucudaki BÜTÜN php-cgi süreçlerini öldürüyordu.
+            var changes = !request.TenantScope || await IsSiteIsolatedAsync(site.Name, cancellationToken) != isolationRequested;
+            if (changes)
+            {
+                await EnsureSiteIsolationAsync(site.Name, isolationRequested, cancellationToken);
 
-            // php.ini süreç başında okunur: var olan bir sitede değişikliğin HEMEN geçerli olması için
-            // php-cgi yenilenir (UpdateGlobalPhpSettingsAsync ile aynı, ölçülmüş yöntem). Best-effort.
-            try
-            {
-                await RefreshPhpProcessesAsync(cancellationToken);
-            }
-            catch (Exception exception)
-            {
-                logger.LogWarning(exception, "php-cgi yenilenemedi; izolasyon değişikliği bir sonraki havuz dönüşünde uygulanır.");
+                // php.ini süreç başında okunur: değişikliğin HEMEN geçerli olması için süreçler yenilenir.
+                // Yönetici: sunucu geneli (ölçülmüş eski yöntem). Kiracı: YALNIZ kendi sitesinin havuzu.
+                try
+                {
+                    if (request.TenantScope)
+                    {
+                        await RecycleSitePoolAsync(site.ApplicationPoolName, cancellationToken);
+                        poolRecycleFailed = false;
+                    }
+                    else
+                    {
+                        await RefreshPhpProcessesAsync(cancellationToken);
+                    }
+                }
+                catch (Exception exception)
+                {
+                    poolRecycleFailed = request.TenantScope;
+                    logger.LogWarning(exception, "php süreçleri yenilenemedi; izolasyon değişikliği bir sonraki havuz dönüşünde uygulanır.");
+                }
             }
         }
 
@@ -726,11 +790,17 @@ public sealed partial class PhpService(
 
         // max_execution_time panelden değiştirilebilir; FastCGI requestTimeout/activityTimeout'u da en az o kadar
         // yükselt ki uzun işlemler (büyük import vb.) "500 timeout (0x80070102)" vermesin. Raise-only, global FastCGI.
-        await RaiseFastCgiTimeoutAsync(FastCgiSecondsFor(request.MaxExecutionTime), cancellationToken);
+        // KİRACI yolunda sunucu geneli FastCGI zaman aşımı YÜKSELTİLMEZ (kalıcı, tüm kiracıları etkiler).
+        // Yönetici: yükseltme eskisi gibi. Kiracının değeri yukarıda (başta) mevcut tavanla sınırlanmıştı.
+        if (!request.TenantScope)
+        {
+            await RaiseFastCgiTimeoutAsync(FastCgiSecondsFor(request.MaxExecutionTime), cancellationToken);
+        }
 
         var logging = await EnsureSiteErrorLoggingAsync(siteName, cancellationToken);
         var result = await GetSitePhpSettingsAsync(siteName, cancellationToken);
         result.ErrorLogging = logging;
+        result.PoolRecycleFailed = poolRecycleFailed;
         return result;
     }
 
@@ -1239,6 +1309,35 @@ public sealed partial class PhpService(
         catch (Exception exception)
         {
             logger.LogWarning(exception, "FastCGI timeout yükseltilemedi (best-effort).");
+        }
+    }
+
+    private async Task<int> ReadFastCgiTimeoutDefaultAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await concurrencyLock.RunExclusiveAsync(() =>
+            {
+                using var serverManager = CreateServerManager();
+                var min = int.MaxValue;
+                foreach (var app in Enumerate(GetFastCgiCollection(serverManager)))
+                {
+                    foreach (var name in new[] { "requestTimeout", "activityTimeout" })
+                    {
+                        if (int.TryParse(GetAttributeString(app, name), out var value) && value > 0)
+                        {
+                            min = Math.Min(min, value);
+                        }
+                    }
+                }
+
+                return Task.FromResult(min == int.MaxValue ? 0 : min);
+            }, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "FastCGI zaman aşımı okunamadı; kiracı max_execution_time reddedilir.");
+            return 0;
         }
     }
 

@@ -143,6 +143,12 @@ export async function getClusterNodeLink(nodeId: string) {
   return response.data.data;
 }
 
+/** Yeni site otomatik seçimle hangi düğüme giderdi (önizleme; hiçbir şey oluşturmaz). */
+export async function getClusterPlacement() {
+  const response = await apiClient.get<ApiEnvelope<ClusterPlacement>>("/cluster/placement");
+  return response.data.data;
+}
+
 export async function createClusterSite(payload: { nodeId: string | null; name: string; hostName: string }) {
   const response = await apiClient.post<ApiEnvelope<ClusterSiteCreation>>("/cluster/sites", payload);
   return response.data.data;

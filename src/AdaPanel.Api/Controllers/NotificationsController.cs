@@ -26,8 +26,39 @@ public sealed class NotificationsController(
     public async Task<ActionResult<ApiResponse<NotificationSettingsDto>>> GetSettingsAsync(CancellationToken cancellationToken)
     {
         var settings = await notificationService.GetSettingsAsync(cancellationToken);
+        // Webhook imza anahtarı okumada MASKELİ döner (yalnız son 4 karakter): tam değer ekran görüntüsüne,
+        // tarayıcı önbelleğine ve proxy günlüğüne girmesin. Tam değer yalnız DÖNDÜRME anında, bir kez görünür.
+        settings.WebhookSecret = MaskSecret(settings.WebhookSecret);
         return Ok(ApiResponse<NotificationSettingsDto>.Ok(settings));
     }
+
+    /// <summary>
+    /// Webhook imza anahtarını yeniden üretir; YENİ değer yanıtta yalnız bu çağrıda görünür.
+    /// </summary>
+    /// <remarks>
+    /// Eski anahtar anında geçersizdir (alıcı tarafın doğrulaması güncellenene kadar imza uyuşmaz) — bu
+    /// bilinçli bir kesinti olduğundan denetim kaydına düşer. Anahtarın KENDİSİ kayda YAZILMAZ.
+    /// </remarks>
+    [HttpPost("webhook-secret/rotate")]
+    public async Task<ActionResult<ApiResponse<WebhookSecretRotationDto>>> RotateWebhookSecretAsync(CancellationToken cancellationToken)
+    {
+        var fresh = await notificationService.RotateWebhookSecretAsync(cancellationToken);
+        await auditService.AuditAsync(
+            HttpContext,
+            "notifications.webhook_secret.rotated",
+            "notifications",
+            "Webhook signature secret (X-AdaPanel-Signature) was rotated; the previous secret is no longer valid.");
+
+        return Ok(ApiResponse<WebhookSecretRotationDto>.Ok(
+            new WebhookSecretRotationDto { WebhookSecret = fresh, Masked = MaskSecret(fresh) },
+            "notifications.webhook_secret_rotated"));
+    }
+
+    /// <summary>Boşsa boş; değilse son dört karakter dışında maskelenmiş.</summary>
+    public static string MaskSecret(string? secret) =>
+        string.IsNullOrEmpty(secret) ? string.Empty
+        : secret.Length <= 8 ? new string('•', secret.Length)
+        : new string('•', 12) + secret[^4..];
 
     [HttpPut("settings")]
     public async Task<ActionResult<ApiResponse<NotificationSettingsDto>>> UpdateSettingsAsync([FromBody] UpdateNotificationSettingsRequest request, CancellationToken cancellationToken)
@@ -78,6 +109,7 @@ public sealed class NotificationsController(
             + $"credentials stored: {kimlikVerildi}); "
             + $"webhook '{webhookOncesi}' → '{webhookSonrasi}'.");
 
+        settings.WebhookSecret = MaskSecret(settings.WebhookSecret);
         return Ok(ApiResponse<NotificationSettingsDto>.Ok(settings, "notifications.settings_saved"));
     }
 

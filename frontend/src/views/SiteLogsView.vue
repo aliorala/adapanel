@@ -135,6 +135,8 @@ async function load() {
     if (!current()) return;
     log.value = result;
     // Döndürme durumu AYRI yakalanır: bu kartın okunamaması, günlük kuyruğunu göstermeye engel değil.
+    // Döndürme uçları bayi+yönetici içindir; müşteriye 403 dönecek bir istek atılmaz.
+    if (auth.session?.user?.role === "Customer") return;
     try {
       const status = await getSiteLogRotation(context.site);
       if (current()) rotation.value = status;

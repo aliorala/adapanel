@@ -51,6 +51,10 @@
         <span>DN</span>
         <strong>{{ t("panel.dnsTemplate.title") }}</strong>
       </button>
+      <button :class="{ active: activeTool === 'htaccessmodule' }" @click="activeTool = 'htaccessmodule'">
+        <span>HT</span>
+        <strong>{{ t("panel.htaccessModule.title") }}</strong>
+      </button>
     </nav>
 
     <ServerHealthView v-if="activeTool === 'health'" />
@@ -62,6 +66,7 @@
     <LogsView v-else-if="activeTool === 'logs'" />
     <TerminalView v-else-if="activeTool === 'terminal' && sunucuSahibi" />
     <DnsTemplateView v-else-if="activeTool === 'dnstemplate'" />
+    <HtaccessModuleCard v-else-if="activeTool === 'htaccessmodule'" />
     <DockerView v-else />
   </section>
 </template>
@@ -71,6 +76,7 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { lazyView } from "../utils/lazyView";
 import { useAuthStore } from "../stores/auth";
+import HtaccessModuleCard from "../components/HtaccessModuleCard.vue";
 
 // Sekmeler talep üzerine iner (bkz. utils/lazyView.ts): dokuz aracın kodu, hiçbirine
 // tıklanmasa bile indiriliyordu.
@@ -92,7 +98,7 @@ const { t } = useI18n();
 const authStore = useAuthStore();
 const sunucuSahibi = computed(() => authStore.session?.isServerOwner === true);
 
-const activeTool = ref<"health" | "firewall" | "backup" | "automation" | "nginx" | "ftp" | "logs" | "terminal" | "docker" | "dnstemplate">("health");
+const activeTool = ref<"health" | "firewall" | "backup" | "automation" | "nginx" | "ftp" | "logs" | "terminal" | "docker" | "dnstemplate" | "htaccessmodule">("health");
 </script>
 
 <style scoped>

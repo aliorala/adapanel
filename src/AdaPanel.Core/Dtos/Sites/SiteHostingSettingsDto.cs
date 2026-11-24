@@ -4,6 +4,9 @@ public sealed class SiteHostingSettingsDto
 {
     public string SiteName { get; set; } = string.Empty;
 
+    /// <summary>Musteri cagrisinda bant genisligi/baglanti siniri degerleri yok sayildi (yalniz yonetici/bayi degistirir).</summary>
+    public bool TenantLimitsIgnored { get; set; }
+
     public long MaximumBandwidthBytesPerSecond { get; set; }
 
     public long MaximumConnections { get; set; }

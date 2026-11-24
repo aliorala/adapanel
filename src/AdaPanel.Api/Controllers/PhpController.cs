@@ -11,10 +11,14 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace AdaPanel.Api.Controllers;
 
-// Reseller (Bayi) site-bazlı PHP ayarlarını yalnız kendi müşterilerinin sitelerinde yönetebilir
-// (EnsureSiteAsync). PHP runtime KURULUMU server-level → admin-only.
+// Müşteri (Plesk gibi) KENDİ sitesinin PHP sürümünü ve limitlerini yönetir; bayi kendi müşterilerinin
+// sitelerinde yönetir (EnsureSiteAsync her site ucunda). PHP runtime KURULUMU/kaldırılması, redis
+// uzantısı ve GENEL php.ini server-level → admin-only (eylem düzeyinde "Administrator"; sınıf ve eylem
+// rolleri VE ile birleştiği için sınıfa Customer eklemek bu uçları müşteriye AÇMAZ).
+// Askı: SubscriptionSuspensionFilter küresel olduğundan askıdaki müşterinin yazma uçları 403 döner.
 [ApiController]
-[Authorize(Roles = "Administrator,Reseller")]
+[Authorize(Roles = "Administrator,Reseller,Customer")]
+[RequireSubUserSection("sites")]
 [Route("api/v1/php")]
 public sealed class PhpController(
     IPhpService phpService,
@@ -25,6 +29,20 @@ public sealed class PhpController(
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<PhpVersionDto>>>> GetInstalledVersionsAsync(CancellationToken cancellationToken)
     {
         var versions = await phpService.GetInstalledVersionsAsync(cancellationToken);
+        if (!User.IsInRole("Administrator"))
+        {
+            // Sürüm SEÇMEK için kimlik/ad/sürüm yeter; kurulum dizini ve exe yolu sunucu düzenini sızdırır.
+            versions = versions.Select(item => new PhpVersionDto
+            {
+                ComponentId = item.ComponentId,
+                DisplayName = item.DisplayName,
+                Version = item.Version,
+                Status = item.Status,
+                IsFastCgiRegistered = item.IsFastCgiRegistered,
+                InstalledAtUtc = item.InstalledAtUtc
+            }).ToArray();
+        }
+
         return Ok(ApiResponse<IReadOnlyCollection<PhpVersionDto>>.Ok(versions));
     }
 
@@ -100,6 +118,7 @@ public sealed class PhpController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var assignment = await phpService.SetSitePhpVersionAsync(siteName, request, cancellationToken);
+        var disariyaAcilan = ScrubForNonAdministrator(assignment);
 
         // KONU = SİTENİN SAHİBİ. PHP sürümünü değiştirmek sitenin çalışıp çalışmadığını belirler;
         // yönetici bunu kiracının sitesinde yaptığında kiracı, "sitem neden 500 veriyor" sorusunun
@@ -125,7 +144,7 @@ public sealed class PhpController(
 
         var notice = assignment.ErrorLogging?.Status != "verified" ? "php.logging.unverified" : assignment.HandlerOrderNoticeKey;
         return Ok(ApiResponse<SitePhpAssignmentDto>.Ok(
-            assignment,
+            disariyaAcilan,
             notice.Length > 0 ? notice : "php.assignment.success"));
     }
 
@@ -140,6 +159,7 @@ public sealed class PhpController(
     }
 
     [HttpPost("/api/v1/sites/{siteName}/php/settings")]
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting(PanelRateLimits.PhpSettings)]
     public async Task<ActionResult<ApiResponse<SitePhpSettingsDto>>> UpdateSitePhpSettingsAsync(
         string siteName,
         [FromBody] UpdateSitePhpSettingsRequest request,
@@ -159,6 +179,18 @@ public sealed class PhpController(
             throw new AppException("php.isolation_admin_only", 403, 403);
         }
 
+        // MÜŞTERİ "sınırsız" yazamaz: memory_limit=-1 ve max_execution_time=0 paylaşımlı sunucuda
+        // komşu kiracıları aç bırakır; üst sınırı bayi/yönetici koyar. Normal sayısal limitler serbest.
+        if (User.IsInRole("Customer")
+            && (request.MemoryLimit.StartsWith('-') || request.MaxExecutionTime == 0 || MemoryBytes(request.MemoryLimit) > CustomerMemoryCeilingBytes))
+        {
+            throw new AppException("php.limits_staff_only", 403, 403);
+        }
+
+        // Yönetici dışı çağrıda sunucu geneli yan etkiler (tüm php-cgi'yi öldürme, tüm FastCGI zaman
+        // aşımını yükseltme) servis katmanında KAPALI; izolasyon yenilemesi yalnız o sitenin havuzunu kapsar.
+        request.TenantScope = !User.IsInRole("Administrator");
+
         var settings = await phpService.UpdateSitePhpSettingsAsync(siteName, request, cancellationToken);
         await auditService.WriteForSubscriptionAsync(
             "php.site.settings.updated",
@@ -170,7 +202,8 @@ public sealed class PhpController(
             cancellationToken);
 
         return Ok(ApiResponse<SitePhpSettingsDto>.Ok(settings,
-            settings.ErrorLogging?.Status == "verified" ? "php.settings.success" : "php.logging.unverified"));
+            settings.PoolRecycleFailed ? "php.pool_recycle_failed"
+            : settings.ErrorLogging?.Status == "verified" ? "php.settings.success" : "php.logging.unverified"));
     }
 
     [HttpPost("/api/v1/sites/{siteName}/php/logging/verify")]
@@ -216,5 +249,42 @@ public sealed class PhpController(
             cancellationToken);
 
         return Ok(ApiResponse<SitePhpSettingsDto>.Ok(settings, "php.settings.success"));
+    }
+
+    /// <summary>Müşterinin yazabileceği memory_limit üst sınırı (2 GB). Yönetici/bayi bunun üstünü verebilir.</summary>
+    internal const long CustomerMemoryCeilingBytes = 2L * 1024 * 1024 * 1024;
+
+    internal static long MemoryBytes(string value)
+    {
+        var text = (value ?? string.Empty).Trim().ToUpperInvariant();
+        if (text.Length == 0 || !long.TryParse(text.TrimEnd('K', 'M', 'G'), out var number) || number < 0)
+        {
+            return long.MaxValue;
+        }
+
+        // Taşma "büyük"ü 0'a sarmasın (17179869184G → 0 olup sınırı aşardı): bölerek karşılaştır.
+        var multiplier = text[^1] switch { 'K' => 1024L, 'M' => 1024L * 1024, 'G' => 1024L * 1024 * 1024, _ => 1L };
+        return number > long.MaxValue / multiplier ? long.MaxValue : number * multiplier;
+    }
+
+    /// <summary>Yönetici dışına exe yolu verilmez (sunucu düzeni; müşteriye faydası yok).</summary>
+    private SitePhpAssignmentDto ScrubForNonAdministrator(SitePhpAssignmentDto assignment)
+    {
+        if (User.IsInRole("Administrator"))
+        {
+            return assignment;
+        }
+
+        return new SitePhpAssignmentDto
+        {
+            ErrorLogging = assignment.ErrorLogging,
+            SiteName = assignment.SiteName,
+            ComponentId = assignment.ComponentId,
+            DisplayName = assignment.DisplayName,
+            Version = assignment.Version,
+            HandlerName = assignment.HandlerName,
+            IsFastCgiRegistered = assignment.IsFastCgiRegistered,
+            HandlerOrder = assignment.HandlerOrder
+        };
     }
 }

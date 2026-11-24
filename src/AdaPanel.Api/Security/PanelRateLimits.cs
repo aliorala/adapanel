@@ -83,6 +83,15 @@ public static class PanelRateLimits
     /// <summary>Git sağlayıcısının anonim webhook tetikleyicisi (IP başına).</summary>
     public const string GitWebhook = "git-webhook";
 
+    /// <summary>
+    /// Site PHP ayarı yazımı (kiracı başına, oturum/anahtar bölümlemesiyle): 10 istek / dakika.
+    /// Her kayıt php.ini + web.config yazar ve IIS yapılandırmasına dokunabilir; müşteriye açılan bu uç
+    /// döngüyle çağrılıp sunucuyu meşgul edemesin. Normal kullanım (elle kaydet) bunun çok altındadır.
+    /// </summary>
+    public const string PhpSettings = "php-settings";
+
+    public const int PhpSettingsPermitPerMinute = 10;
+
     // ---------------------------------------------------------------------------------------
     // DEĞERLER — hepsi burada, gerekçesiyle.
     // ---------------------------------------------------------------------------------------
@@ -340,7 +349,11 @@ public static class PanelRateLimits
 
             [GitWebhook] = context => RateLimitPartition.GetFixedWindowLimiter(
                 IpPartitionKey(context),
-                _ => Dakikalik(GitWebhookPermitPerMinute))
+                _ => Dakikalik(GitWebhookPermitPerMinute)),
+
+            [PhpSettings] = context => RateLimitPartition.GetFixedWindowLimiter(
+                PanelAuthentication.RateLimitPartitionKey(context),
+                _ => Dakikalik(PhpSettingsPermitPerMinute))
         };
 
     /// <summary>

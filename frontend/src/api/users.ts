@@ -8,6 +8,20 @@ type ApiEnvelope<T> = {
   details?: string;
 };
 
+/**
+ * Yöneticinin (ya da bayinin KENDİ müşterisi için) başka bir kullanıcının parolasını belirlemesi.
+ * Sunucu: 12+ karakter kuralı, kendi hesabı için red, API anahtarlarını düşürme, denetim kaydı
+ * (parola kayda YAZILMAZ). Dönen sayı: düşürülen API anahtarı sayısı.
+ */
+export async function setUserPassword(userId: string, newPassword: string): Promise<number> {
+  const response = await apiClient.post<ApiEnvelope<{ revokedApiTokens: number }>>(
+    `/auth/password/set/${encodeURIComponent(userId)}`,
+    { newPassword }
+  );
+  const revoked = response.data?.data?.revokedApiTokens;
+  return typeof revoked === "number" ? revoked : 0;
+}
+
 /** Sunucuda kalan tek bir kaynak (`UserDeletionLeftoverDto` karşılığı). */
 export type UserDeletionLeftover = {
   /** Hangi siteye aitti (site dışı kalıntılarda boş). */
