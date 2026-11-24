@@ -74,8 +74,21 @@ internal interface IBackupFtpCommands
 /// <c>BackupService.StoreFtpFileAsync</c>) aynı API'yi kullanıyor; silme yolunu başka bir
 /// istemciye taşımak, aynı hedefe iki farklı FTP davranışı (pasif kip, TLS, kimlik) sokardı.
 /// </remarks>
-internal sealed class FtpWebRequestCommands : IBackupFtpCommands
+internal sealed class FtpWebRequestCommands(IBackupFtpAddressPinner? pinner = null) : IBackupFtpCommands
 {
+    /// <summary>
+    /// G19 (DNS rebinding): adı BİR KEZ çözüp denetlenen IP'ye bağlanır; <c>FtpWebRequest</c> ikinci
+    /// bir DNS çözümlemesi yapmaz çünkü adres artık IP'dir. <paramref name="pinner"/> verilmezse
+    /// (yalnız testlerdeki yerel sahte sunucular) adres olduğu gibi kullanılır — ÜRETİM yolu
+    /// (<c>BackupService.FtpCommands</c>) her zaman pinner ile kurulur ve bu bir testle sabitlenmiştir.
+    /// </summary>
+    internal bool IsPinned => pinner is not null;
+
+    private async Task<Uri> PinAsync(Uri uri, CancellationToken cancellationToken)
+        => pinner is null
+            ? uri
+            : BackupFtpScheme.PinToAddress(uri, await pinner.ResolveAsync(uri, cancellationToken));
+
     /// <summary>
     /// Komut zaman aşımı. <see cref="FtpWebRequest"/>'in VARSAYILANI SONSUZDUR ve bu yol otomatik
     /// budamada GLOBAL KİLİDİN içinde çalışır: donmuş bir FTP bağlantısı paneli süresiz kilitler.
@@ -87,12 +100,12 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
         => BackupFtpRetry.RunAsync(token => DeleteFileOnceAsync(uri, credential, token), cancellationToken,
             result => !result.Success && BackupFtpRetry.IsTransientCode(result.Code));
 
-    private static async Task<FtpCommandResult> DeleteFileOnceAsync(
+    private async Task<FtpCommandResult> DeleteFileOnceAsync(
         Uri uri,
         NetworkCredential credential,
         CancellationToken cancellationToken)
     {
-        var request = Create(uri, WebRequestMethods.Ftp.DeleteFile, credential);
+        var request = Create(await PinAsync(uri, cancellationToken), WebRequestMethods.Ftp.DeleteFile, credential);
         using var deadline = new FtpRequestDeadline(request, CommandTimeout, cancellationToken);
 
         try
@@ -114,12 +127,12 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
         => BackupFtpRetry.RunAsync(token => RemoveDirectoryOnceAsync(uri, credential, token), cancellationToken,
             result => !result.Success && BackupFtpRetry.IsTransientCode(result.Code));
 
-    private static async Task<FtpCommandResult> RemoveDirectoryOnceAsync(
+    private async Task<FtpCommandResult> RemoveDirectoryOnceAsync(
         Uri directoryUri,
         NetworkCredential credential,
         CancellationToken cancellationToken)
     {
-        var request = Create(directoryUri, WebRequestMethods.Ftp.RemoveDirectory, credential);
+        var request = Create(await PinAsync(directoryUri, cancellationToken), WebRequestMethods.Ftp.RemoveDirectory, credential);
         using var deadline = new FtpRequestDeadline(request, CommandTimeout, cancellationToken);
 
         try
@@ -139,7 +152,7 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
         => BackupFtpRetry.RunAsync(token => ListDirectoryOnceAsync(uri, credential, token), cancellationToken,
             result => !result.Success && BackupFtpRetry.IsTransientCode(result.Code));
 
-    private static async Task<FtpListingResult> ListDirectoryOnceAsync(
+    private async Task<FtpListingResult> ListDirectoryOnceAsync(
         Uri directoryUri,
         NetworkCredential credential,
         CancellationToken cancellationToken)
@@ -148,7 +161,7 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
         // sunucuya göre değişen insan-okur bir tablo döndürür ve adı oradan ayıklamak, boşluk
         // içeren dosya adlarında yanlış ad üretirdi — yanlış ad "dosya yok" demeye götürür, o da
         // kaydı KAPATIR. Ad çıkarımının yanılabileceği bir yolda "yok" demeyiz.
-        var request = Create(directoryUri, WebRequestMethods.Ftp.ListDirectory, credential);
+        var request = Create(await PinAsync(directoryUri, cancellationToken), WebRequestMethods.Ftp.ListDirectory, credential);
         using var deadline = new FtpRequestDeadline(request, CommandTimeout, cancellationToken);
 
         try

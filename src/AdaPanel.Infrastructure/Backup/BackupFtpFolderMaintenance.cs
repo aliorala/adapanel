@@ -19,7 +19,7 @@ public static class BackupFtpFolderMaintenance
         string Read(string name) => root.GetProperty(name).GetString() ?? string.Empty;
         var days = root.GetProperty("backupRetentionDays").GetInt32();
         var uri = new Uri(Read("backupRemoteUrl").TrimEnd('/') + "/");
-        if (Read("backupTargetType") != "ftp" || uri.Scheme != "ftp" || days <= 0
+        if (Read("backupTargetType") != "ftp" || !BackupFtpScheme.Is(uri) || days <= 0
             || !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
             throw new InvalidOperationException("An FTP directory target and positive retention are required.");
 

@@ -198,8 +198,12 @@ public sealed class RemoteTrustFailure
 /// kapatmaya çalıştığımız küresel anahtarın yavaş biçimidir.
 /// </para>
 /// </remarks>
-public sealed class RemoteCertificateTrustGate(string? pinnedFingerprint)
+public sealed class RemoteCertificateTrustGate(string? pinnedFingerprint, string? expectedHost = null)
 {
+    // G19: panel adı BİR KEZ çözüp IP'ye bağlandığında TLS ana makine adı olarak IP'yi görür ve
+    // "ad uyuşmazlığı" der. expectedHost verilmişse, YALNIZ ad uyuşmazlığı varsa ve sertifika
+    // özgün adı gerçekten kapsıyorsa o hata yok sayılır; başka her hata (zincir, süre) aynen kalır.
+
     /// <summary>Reddedilen kimlik (yoksa <c>null</c>). İLK ret saklanır: sonrakiler teşhisi bulandırır.</summary>
     public RemoteTrustFailure? Failure { get; private set; }
 
@@ -235,6 +239,7 @@ public sealed class RemoteCertificateTrustGate(string? pinnedFingerprint)
             return false;
         }
 
+        errors = Support.CertificateHostMatcher.ForgiveNameMismatchFor(certificate, errors, expectedHost);
         if (errors == SslPolicyErrors.None)
         {
             return true;

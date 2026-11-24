@@ -68,12 +68,21 @@ public sealed class BackupNetworkTrustService(JsonFileStore store, IServerOwnerS
 
     public static async Task<string?> FindBlockedTrustedHostAsync(Uri target,
         OutboundAddressGuard.OutboundHostResolver resolver, CancellationToken token)
+        => (await InspectTrustedAsync(target, resolver, token)).BlockedTarget;
+
+    /// <summary>
+    /// Güvenilen NAS hedefi için adı BİR KEZ çözer; çıkan adresleri ve engel kararını birlikte döner
+    /// (bağlanacak taraf yeniden çözmez — DNS rebinding). Yalnız özel (RFC1918/ULA) NAS aralıkları
+    /// serbesttir; geri döngü, link-local ve bulut meta verisi hâlâ engelli.
+    /// </summary>
+    public static async Task<OutboundInspection> InspectTrustedAsync(Uri target,
+        OutboundAddressGuard.OutboundHostResolver resolver, CancellationToken token)
     {
         var host = target.DnsSafeHost.TrimEnd('.');
         if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
             || host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase)
             || host.Equals("metadata.google.internal", StringComparison.OrdinalIgnoreCase)
-            || host.Equals("metadata.goog", StringComparison.OrdinalIgnoreCase)) return host;
+            || host.Equals("metadata.goog", StringComparison.OrdinalIgnoreCase)) return new OutboundInspection([], host);
         IPAddress[] addresses;
         try
         {
@@ -81,9 +90,10 @@ public sealed class BackupNetworkTrustService(JsonFileStore store, IServerOwnerS
                 ? [literal] : await resolver(target.DnsSafeHost, token);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch { return target.DnsSafeHost; }
-        if (addresses.Length == 0) return target.DnsSafeHost;
-        return addresses.FirstOrDefault(ip => OutboundAddressGuard.IsBlockedAddress(ip) && !IsNasAddress(ip))?.ToString();
+        catch { return new OutboundInspection([], target.DnsSafeHost); }
+        if (addresses.Length == 0) return new OutboundInspection([], target.DnsSafeHost);
+        return new OutboundInspection(addresses,
+            addresses.FirstOrDefault(ip => OutboundAddressGuard.IsBlockedAddress(ip) && !IsNasAddress(ip))?.ToString());
     }
 
     private static bool IsNasAddress(IPAddress ip)

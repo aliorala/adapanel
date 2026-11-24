@@ -144,6 +144,7 @@ public sealed partial class BackupService(
         // ondalık/sekizlik/onaltılık IPv4 yazımlarını noktalı dörtlüye normalleştirir (ölçüldü).
         var trustedFtp = target.Type == "ftp" && networkTrust is not null
             && await networkTrust.IsTrustedAsync(target.Uri, cancellationToken);
+        // (Güvenilen-NAS istisnası YALNIZ düz ftp içindir: NormalizeTarget şeması "ftp" ister.)
         var engellenen = trustedFtp
             ? await BackupNetworkTrustService.FindBlockedTrustedHostAsync(target.Uri,
                 outboundResolver ?? OutboundAddressGuard.SystemResolver, cancellationToken)
@@ -197,7 +198,51 @@ public sealed partial class BackupService(
     /// Ölçüm ihtiyacı gerçek: 550'nin "dosya yok" mu "izin yok" mu olduğu kararı ancak GERÇEK bir
     /// FTP sunucusuna bağlanmadan denenebilirse korunabilir.
     /// </remarks>
-    internal IBackupFtpCommands FtpCommands { get; init; } = new FtpWebRequestCommands();
+    internal IBackupFtpCommands FtpCommands
+    {
+        get => ftpCommands ??= new RoutingBackupFtpCommands(
+            new FtpWebRequestCommands(new ServicePinner(this)),
+            new FluentFtpBackupCommands(new ServicePinner(this)));
+        init => ftpCommands = value;
+    }
+
+    private IBackupFtpCommands? ftpCommands;
+
+    /// <summary>
+    /// Uzak FTP/FTPS hedefinin adını BİR KEZ çözer, aynı denetimden (SSRF kapısı + güvenilen NAS
+    /// istisnası) geçirir ve bağlanılacak IP'yi döner (G19: DNS rebinding). Denetlenen adres ile
+    /// bağlanılan adres AYNI çözümlemenin ürünüdür.
+    /// </summary>
+    private async Task<IPAddress> ResolveFtpAddressAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        var resolver = outboundResolver ?? OutboundAddressGuard.SystemResolver;
+        OutboundInspection inspection;
+        if (networkTrust is not null && await networkTrust.IsTrustedAsync(uri, cancellationToken))
+        {
+            inspection = await BackupNetworkTrustService.InspectTrustedAsync(uri, resolver, cancellationToken);
+        }
+        else
+        {
+            inspection = await OutboundAddressGuard.InspectAsync(
+                uri.DnsSafeHost,
+                resolver,
+                OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false),
+                cancellationToken);
+        }
+
+        if (inspection.BlockedTarget is not null || inspection.Addresses.Length == 0)
+        {
+            throw new AppException("backup.remote_target_forbidden", 403, 403, inspection.BlockedTarget ?? uri.DnsSafeHost);
+        }
+
+        // IPv4 önce: FTP sunucularının büyük çoğunluğu ve PASV akışı IPv4'te sorunsuz.
+        return inspection.Addresses.OrderBy(address => address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 0 : 1).First();
+    }
+
+    private sealed class ServicePinner(BackupService owner) : IBackupFtpAddressPinner
+    {
+        public Task<IPAddress> ResolveAsync(Uri uri, CancellationToken cancellationToken) => owner.ResolveFtpAddressAsync(uri, cancellationToken);
+    }
 
     private const string IndexPath = "config/backups.json";
 
@@ -5490,7 +5535,7 @@ Register-ScheduledTask -TaskName '{PowerShellQuoting.Escape(ad)}' -TaskPath '\Ad
         BackupTarget target,
         CancellationToken cancellationToken)
     {
-        if (uri.Scheme != "ftp")
+        if (!BackupFtpScheme.Is(uri))
         {
             throw new AppException("backup.remote_target_invalid", 400, 400);
         }
@@ -5501,10 +5546,20 @@ Register-ScheduledTask -TaskName '{PowerShellQuoting.Escape(ad)}' -TaskPath '\Ad
         await BackupFtpRetry.RunAsync(async token =>
         {
           await EnsureRemoteTargetAllowedAsync(new BackupTarget("ftp", uri, "", "", ""), token);
-          var dizinSorunu = await EnsureFtpDirectoriesAsync(uri, credential, token);
+          // TEK çözümleme: aşağıdaki bütün bağlantılar bu IP'ye gider (DNS rebinding kapalı).
+          var address = await ResolveFtpAddressAsync(uri, token);
+          if (BackupFtpScheme.IsSecure(uri))
+          {
+            // FTPS: klasörler ve dosya tek oturumda (FluentFTP createRemoteDir); düz FTP'ye düşme YOK.
+            await BackupFtpsClient.UploadAsync(uri, address, credential, localPath, RemoteUploadTimeout, RemoteUploadStallTimeout, token);
+            return;
+          }
+
+          var connectUri = BackupFtpScheme.PinToAddress(uri, address);
+          var dizinSorunu = await EnsureFtpDirectoriesAsync(connectUri, credential, token);
           try
           {
-            await StoreFtpFileAsync(localPath, uri, credential, token);
+            await StoreFtpFileAsync(localPath, connectUri, credential, token, uri);
           }
           catch (WebException exception) when (BackupFtpRetry.IsTransient(exception)) { throw; }
           catch (AppException exception) when (dizinSorunu is not null)
@@ -5532,7 +5587,8 @@ Register-ScheduledTask -TaskName '{PowerShellQuoting.Escape(ad)}' -TaskPath '\Ad
         string localPath,
         Uri uri,
         NetworkCredential credential,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Uri? displayUri = null)
     {
         var request = (FtpWebRequest)WebRequest.Create(uri);
         request.Method = WebRequestMethods.Ftp.UploadFile;
@@ -5572,7 +5628,7 @@ Register-ScheduledTask -TaskName '{PowerShellQuoting.Escape(ad)}' -TaskPath '\Ad
                     "backup.remote_upload_failed",
                     (int)response.StatusCode,
                     502,
-                    $"Url={SanitizeUri(uri)}\r\nStatusCode={(int)response.StatusCode} {response.StatusDescription?.Trim()}");
+                    $"Url={SanitizeUri(displayUri ?? uri)}\r\nStatusCode={(int)response.StatusCode} {response.StatusDescription?.Trim()}");
             }
         }
         catch
@@ -5717,7 +5773,7 @@ Register-ScheduledTask -TaskName '{PowerShellQuoting.Escape(ad)}' -TaskPath '\Ad
             throw new AppException("backup.remote_target_invalid", 400, 400);
         }
 
-        if (normalizedType == "ftp" && uri.Scheme != "ftp")
+        if (normalizedType == "ftp" && !BackupFtpScheme.Is(uri))
         {
             throw new AppException("backup.remote_target_invalid", 400, 400);
         }

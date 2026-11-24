@@ -74,16 +74,31 @@ internal sealed class FileMigrationService(
         // 127.0.0.1'e normalleştiriyor — yani Uri'den geçmeyen bu yolda da sayısal yazımlar
         // yakalanıyor. Ayrıca çözülemeyen ad REDDEDİLİR: çözülemeyen bir konağa FluentFTP/SSH.NET
         // de bağlanamaz, yani reddetmek hiçbir çalışan göçü kapatmaz.
-        var engellenen = await OutboundAddressGuard.FindBlockedHostAsync(
+        //
+        // G19 (DNS rebinding): ad BİR KEZ çözülür (InspectAsync) ve aşağıdaki iki istemci o IP'ye
+        // bağlanır; denetlenen adres ile bağlanılan adres aynı çözümlemenin ürünüdür. Önceden ad
+        // yalnız denetlenip istemciye AD verildiği için istemci ikinci kez çözüyordu.
+        var inceleme = await OutboundAddressGuard.InspectAsync(
             request.Host,
             outboundResolver ?? OutboundAddressGuard.SystemResolver,
             OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false),
             cancellationToken);
 
-        if (engellenen is not null)
+        if (inceleme.BlockedTarget is not null)
         {
-            throw new AppException("migration.host_forbidden", 403, 403, engellenen);
+            throw new AppException("migration.host_forbidden", 403, 403, inceleme.BlockedTarget);
         }
+
+        var baglanilacakAdres = inceleme.Addresses
+            .OrderBy(adres => adres.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 0 : 1)
+            .FirstOrDefault();
+        if (baglanilacakAdres is null && PullTransport is null)
+        {
+            // Çözülemeyen ada FluentFTP/SSH.NET de bağlanamaz; reddetmek çalışan göçü kapatmaz.
+            throw new AppException("migration.host_forbidden", 403, 403, request.Host);
+        }
+
+        var baglantiKonagi = baglanilacakAdres?.ToString() ?? request.Host.Trim();
 
         var site = await iisSiteService.GetSiteAsync(request.SiteName, cancellationToken);
         var target = site.PhysicalPath;
@@ -105,15 +120,15 @@ internal sealed class FileMigrationService(
         // Güven kapıları BURADA kurulur, protokol dalından ÖNCE: reddi hataya çeviren catch de
         // burada. Kapıyı dalın içinde kursaydık, ret kaydı catch'e ulaşmaz ve el sıkışma reddi
         // aşağıda "bağlanılamadı" diye sınıflandırılırdı — yani yönetici gerçek sebebi hiç görmezdi.
-        var certificateTrust = new RemoteCertificateTrustGate(request.AcceptHostFingerprint);
+        var certificateTrust = new RemoteCertificateTrustGate(request.AcceptHostFingerprint, request.Host.Trim());
         var hostKeyTrust = new RemoteHostKeyTrustGate(request.AcceptHostFingerprint);
 
         try
         {
             var sonuc = PullTransport is not null ? await PullTransport(cancellationToken) : protocol switch
             {
-                "sftp" => await PullSftpAsync(request, target, remotePath, hostKeyTrust, cancellationToken),
-                _ => await PullFtpAsync(request, target, remotePath, protocol == "ftps", certificateTrust, cancellationToken)
+                "sftp" => await PullSftpAsync(request, target, remotePath, hostKeyTrust, baglantiKonagi, cancellationToken),
+                _ => await PullFtpAsync(request, target, remotePath, protocol == "ftps", certificateTrust, baglantiKonagi, cancellationToken)
             };
 
             KabulEdilenIstisnayiKaydet(request, hedefEtiket, certificateTrust.AcceptedByPin ?? hostKeyTrust.AcceptedByPin);
@@ -270,7 +285,8 @@ internal sealed class FileMigrationService(
     internal static AsyncFtpClient FtpIstemcisiOlustur(
         RemoteFileMigrationRequest request,
         bool secure,
-        RemoteCertificateTrustGate certificateTrust)
+        RemoteCertificateTrustGate certificateTrust,
+        string? connectHost = null)
     {
         var config = new FtpConfig
         {
@@ -302,13 +318,18 @@ internal sealed class FileMigrationService(
             // ve kütüphane varsayılanına bırakılırsa sürüm yükseltmesiyle sessizce değişebilir.
             DataConnectionEncryption = secure,
 
+            // PASV yanıtındaki IP YOK SAYILIR (G19): veri bağlantısı kontrol bağlantısının
+            // (doğrulanmış) IP'sine açılır. Aksi hâlde kaynak sunucu "227 (10,0,0,5,…)" diyerek
+            // paneli iç ağdaki bir adrese bağlayabilirdi (FTP bounce).
+            DataConnectionType = FtpDataConnectionType.PASVEX,
+
             // ARTIK FALSE. `true` iken FluentFTP sunulan HER sertifikayı kabul ediyordu; aşağıdaki
             // olay hiç sorulmuyordu bile. Bu satır olmadan kapının bağlı olması hiçbir şey ifade etmez.
             ValidateAnyCertificate = false
         };
 
         var client = new AsyncFtpClient(
-            request.Host,
+            string.IsNullOrWhiteSpace(connectHost) ? request.Host : connectHost,
             request.UserName,
             request.Password,
             request.Port > 0 ? request.Port : 21,
@@ -329,9 +350,10 @@ internal sealed class FileMigrationService(
         string remotePath,
         bool secure,
         RemoteCertificateTrustGate certificateTrust,
+        string connectHost,
         CancellationToken cancellationToken)
     {
-        await using var client = FtpIstemcisiOlustur(request, secure, certificateTrust);
+        await using var client = FtpIstemcisiOlustur(request, secure, certificateTrust, connectHost);
 
         await client.Connect(cancellationToken);
         var results = await client.DownloadDirectory(
@@ -424,10 +446,11 @@ internal sealed class FileMigrationService(
     /// </remarks>
     internal static SftpClient SftpIstemcisiOlustur(
         RemoteFileMigrationRequest request,
-        RemoteHostKeyTrustGate hostKeyTrust)
+        RemoteHostKeyTrustGate hostKeyTrust,
+        string? connectHost = null)
     {
         var client = new SftpClient(
-            request.Host,
+            string.IsNullOrWhiteSpace(connectHost) ? request.Host : connectHost,
             request.Port > 0 ? request.Port : 22,
             request.UserName,
             request.Password);
@@ -443,11 +466,12 @@ internal sealed class FileMigrationService(
         string target,
         string remotePath,
         RemoteHostKeyTrustGate hostKeyTrust,
+        string connectHost,
         CancellationToken cancellationToken)
     {
         return await Task.Run(() =>
         {
-            using var client = SftpIstemcisiOlustur(request, hostKeyTrust);
+            using var client = SftpIstemcisiOlustur(request, hostKeyTrust, connectHost);
 
             client.Connect();
             var counter = new MigrationCounter();
