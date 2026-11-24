@@ -53,4 +53,17 @@ public sealed class LicenseVerificationResponse
 
     /// <summary>İsteğe bağlı serbest metin (destek mesajı); panelde teşhis alanında gösterilir.</summary>
     public string Message { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Yanitin yayin zamani (UTC). YALNIZ imza dogrulamasi acikken anlamlidir; imzanin kapsadigi
+    /// alanlardan biridir ve eski bir "gecerli" yanitin sonsuza dek tekrar oynatilmasini sinirlar.
+    /// </summary>
+    public DateTime? IssuedAtUtc { get; init; }
+
+    /// <summary>
+    /// Sunucu imzasi (taban64, ECDSA P-256 / SHA-256). Alan SUNUCU TARAFINDA bugun YOK; bu bir
+    /// altyapi: <c>Panel:License:ResponsePublicKey</c> yapilandirilirsa zorunlu olur, yoksa yok sayilir.
+    /// Imzalanan kanonik metin icin bkz. <c>LicenseResponseValidator.CanonicalText</c>.
+    /// </summary>
+    public string Signature { get; init; } = string.Empty;
 }

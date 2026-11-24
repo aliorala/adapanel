@@ -2714,11 +2714,20 @@ public sealed class ComponentBootstrapper(
     }
 
     private static void EnsureIntegrityMetadata(ComponentManifestItemDto component)
+        => EnsureIntegrityMetadataForTests(component);
+
+    /// <summary>
+    /// Indirmeden ONCE kapali-basarisiz kapisi. Izinli ama checksum'siz host (bkz.
+    /// <see cref="TrustedNoChecksumHosts"/>) artik tek basina yetmez: son kapi
+    /// <see cref="VerifyPackageIntegrityAsync"/> zaten SHA256'siz zip/phar'i reddeder, ama bunu
+    /// yuzlerce MB indirdikten SONRA yapiyordu. Izinli ozet-siz yol yalniz Authenticode ile
+    /// dogrulanan msi/installer'dir. Bilinen surumler manifestteki SHA256'ya sabitlidir.
+    /// </summary>
+    internal static void EnsureIntegrityMetadataForTests(ComponentManifestItemDto component)
     {
         var normalizedType = component.Type.Trim().ToLowerInvariant();
         if (!string.IsNullOrWhiteSpace(component.Sha256) ||
-            normalizedType is "msi" or "installer" ||
-            IsTrustedNoChecksumHost(component.DownloadUrl))
+            normalizedType is "msi" or "installer")
         {
             return;
         }

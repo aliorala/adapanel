@@ -50,4 +50,11 @@ public sealed class LicenseRecord
 
     /// <summary>Son denemedeki hata metni (teşhis); başarılı denemede temizlenir.</summary>
     public string LastError { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Yerel butunluk muhru (taban64 HMAC-SHA256). Anahtar makineye bagli (DPAPI) korunur; dosyayi
+    /// elle duzenleyen (ornegin <c>LastVerdict</c>/<c>ExpiresAtUtc</c> degistiren) muhru uretemez.
+    /// Bos = muhur oncesi eski dosya (kabul edilir, sonraki yazimda muhurlenir).
+    /// </summary>
+    public string Seal { get; set; } = string.Empty;
 }

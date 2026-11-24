@@ -76,6 +76,15 @@ public sealed class HttpLicenseVerificationClient(
                 return new LicenseVerificationOutcome(null, $"unknown_status:{status}");
             }
 
+            var yanitKusuru = LicenseResponseValidator.Validate(
+                payload, request, settings.ResponsePublicKey, DateTime.UtcNow, TimeSpan.FromHours(Math.Max(1, settings.ResponseMaxAgeHours)));
+            if (yanitKusuru is not null)
+            {
+                // Imzasi/yasi gecersiz yanit KARAR DEGILDIR: ulasilamadi gibi islenir (onceki karar korunur).
+                logger.LogWarning("Lisans yaniti reddedildi: {Reason}", yanitKusuru);
+                return new LicenseVerificationOutcome(null, "response_untrusted:" + yanitKusuru);
+            }
+
             return new LicenseVerificationOutcome(payload, string.Empty);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
