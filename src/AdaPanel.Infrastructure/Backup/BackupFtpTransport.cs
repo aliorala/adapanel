@@ -55,6 +55,8 @@ internal interface IBackupFtpAddressPinner
 /// <summary>Şemaya göre doğru FTP komut uygulamasına yönlendirir.</summary>
 internal sealed class RoutingBackupFtpCommands(IBackupFtpCommands plain, IBackupFtpCommands secure) : IBackupFtpCommands
 {
+    internal IBackupFtpCommands Plain => plain;
+
     private IBackupFtpCommands For(Uri uri) => BackupFtpScheme.IsSecure(uri) ? secure : plain;
 
     public Task<FtpCommandResult> DeleteFileAsync(Uri uri, NetworkCredential credential, CancellationToken cancellationToken)
