@@ -392,7 +392,11 @@ public sealed class AuthHardeningG4Tests
         var quotas = Stub<IResellerQuotaService>().Stub;
         var users = new UserManagementService(db, new PasswordHasher<PanelUser>(), scopes, Stub<INotificationService>().Stub,
             Stub<IPanelPreferencesService>().Stub, Stub<IPanelSecurityService>().Stub, NullLogger<UserManagementService>.Instance,
-            Stub<IAuditService>().Stub, Stub<IIisSiteService>().Stub, Stub<IDatabaseOwnershipService>().Stub, Stub<ISchedulerService>().Stub,
+            // GERÇEK denetim yazıcısı: UpdateUserAsync kendi SaveChanges'ini çağırmaz, kullanıcı satırı
+            // denetim kaydının SaveChanges'iyle kalıcı olur (üretimle aynı). Sahte denetim kalıcılığı keserdi.
+            new AuditService(db, scopes, new JsonFileStore(Microsoft.Extensions.Options.Options.Create(
+                new PanelRuntimeOptions { DataRoot = Path.Combine(Path.GetTempPath(), "g4-two-step-" + Guid.NewGuid().ToString("N")) }))),
+            Stub<IIisSiteService>().Stub, Stub<IDatabaseOwnershipService>().Stub, Stub<ISchedulerService>().Stub,
             Stub<ISiteCascadeDeletionService>().Stub, Stub<IApiTokenService>().Stub, new Owner(owner.Id), quotas);
         var enforcement = Stub<ISubscriptionEnforcementService>((method, args) =>
             method.Name == nameof(ISubscriptionEnforcementService.SuspendAsync) ? scopes.SuspendAsync((Guid)args![0]!, (string)args[1]!) : null).Stub;
