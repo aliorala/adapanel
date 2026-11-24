@@ -570,7 +570,7 @@ async function removeBinding(item: SslCertificate) {
     let message = t("panel.ssl.bindingRemoved", { host: payload.hostName || target.site, port: payload.port });
     // win-acme yenilemesi iptal edilemediyse sessiz gecilmez: yenileme baglamayi geri getirebilir.
     const renewalFailed = result.renewalAction === "cancel_failed";
-    if (renewalFailed) message = `${message}\n${t("panel.ssl.renewalCancelFailed")}${result.renewalDetail ? ` ${result.renewalDetail}` : ""}`;
+    if (renewalFailed) message = `${message}\n${t("panel.ssl.renewalCancelFailed")}${result.renewalDetail ? ` ${t(result.renewalDetail)}` : ""}`;
     const measured = result.workspace;
     if (!measured || !sameSslName(measured.siteName, target.site) || !Array.isArray(measured.certificates) || !Array.isArray(measured.hostNames)) {
       markUnknown();

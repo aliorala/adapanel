@@ -35,7 +35,8 @@ public sealed partial class SslRemovalLifecycleTests
         var result = await f.Remove();
 
         Assert.Equal("cancel_failed", result.RenewalAction);
-        Assert.Contains("ren-1", result.RenewalDetail);
+        // Ham Turkce metin degil, mesaj ANAHTARI doner.
+        Assert.Equal("ssl.renewal_cancel_failed", result.RenewalDetail);
         Assert.True(result.BindingRemoved);
     }
 
@@ -49,6 +50,7 @@ public sealed partial class SslRemovalLifecycleTests
         var result = await f.Remove();
 
         Assert.Equal("kept_shared", result.RenewalAction);
+        Assert.Equal("ssl.renewal_shared", result.RenewalDetail);
         Assert.Empty(f.RenewalCommands);
     }
 

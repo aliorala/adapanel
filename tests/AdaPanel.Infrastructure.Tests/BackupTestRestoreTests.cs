@@ -149,6 +149,43 @@ public sealed class BackupTestRestoreTests : IDisposable
         Assert.Equal(0, result.DatabaseDumpsChecked);
     }
 
+    private Task<BackupTestRestoreResultDto> RunWithDatabases(string archive, int expected) =>
+        BackupTestRestore.RunAsync(new BackupRecordDto { Id = "b1", Name = "backup-1",
+            IncludedDatabases = Enumerable.Range(0, expected).Select(i => new BackupDatabaseRef { Engine = "mysql", DatabaseName = "db" + i }).ToList() },
+            archive, work, BackupTestRestore.DefaultExtractCapBytes, CancellationToken.None);
+
+    [Fact]
+    public async Task ARecordThatClaimsDatabasesButHasNoDumpIsAWarningNotAPass()
+    {
+        var archive = BuildZip("nodump.zip", zip => Add(zip, "files/index.php", "x"));
+        var result = await RunWithDatabases(archive, 1);
+        Assert.Equal("warning", result.Outcome);
+        Assert.Contains(result.Issues, issue => issue.StartsWith("database=not_verified", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AnUncheckableDumpIsAWarningAndAVerifiedDumpStillPasses()
+    {
+        var bak = BuildZip("bak2.zip", zip => { Add(zip, "files/a", "x"); Add(zip, "databases/shop.bak", "BINARY"); });
+        Assert.Equal("warning", (await RunWithDatabases(bak, 1)).Outcome);
+
+        var ok = BuildZip("ok2.zip", zip => { Add(zip, "files/a", "x"); Add(zip, "databases/shop.sql", GoodDump); });
+        Assert.Equal("passed", (await RunWithDatabases(ok, 1)).Outcome);
+    }
+
+    [Fact]
+    public void StaleTestFoldersAreRemovedAndOtherFoldersAreLeftAlone()
+    {
+        Directory.CreateDirectory(Path.Combine(work, "test-leftover", "sub"));
+        File.WriteAllText(Path.Combine(work, "test-leftover", "sub", "x.txt"), "x");
+        Directory.CreateDirectory(Path.Combine(work, "keep-me"));
+
+        Assert.Equal(1, BackupTestRestore.CleanupStale(work));
+
+        Assert.False(Directory.Exists(Path.Combine(work, "test-leftover")));
+        Assert.True(Directory.Exists(Path.Combine(work, "keep-me")));
+    }
+
     [Fact]
     public async Task AStandaloneSqlDumpIsChecked()
     {

@@ -46,7 +46,7 @@ public sealed class IpBlockServiceTests : IDisposable
     [InlineData("10.0.0.5")]                // the panel's own interface
     [InlineData("10.0.0.0/8")]              // range containing the panel's own interface
     [InlineData("127.0.0.1")]               // loopback
-    [InlineData("fe80::/10")]               // IPv6 range containing a local address
+    [InlineData("fe80::/32")]               // IPv6 range containing a local address
     public async Task ATargetCoveringTheAdminOrPanelAddressIsRefusedAndNothingIsWritten(string target)
     {
         var error = await Assert.ThrowsAsync<AppException>(() =>
@@ -72,6 +72,28 @@ public sealed class IpBlockServiceTests : IDisposable
             Create().AddAsync(new AddIpBlockRequest { Target = target }, "admin", Admin, area.Iptal));
         Assert.Equal("firewall.ipblock_target_invalid", error.MessageKey);
         Assert.Empty(writer.Applied);
+    }
+
+    [Theory]
+    [InlineData("10.0.0.0/7")]
+    [InlineData("1.0.0.0/1")]
+    [InlineData("2001::/31")]
+    [InlineData("::/8")]
+    public async Task ARangeWiderThanIpv4Slash8OrIpv6Slash32IsRefused(string target)
+    {
+        var error = await Assert.ThrowsAsync<AppException>(() =>
+            Create().AddAsync(new AddIpBlockRequest { Target = target }, "admin", Admin, area.Iptal));
+        Assert.Equal("firewall.ipblock_range_too_wide", error.MessageKey);
+        Assert.Empty(writer.Applied);
+    }
+
+    [Theory]
+    [InlineData("198.0.0.0/8")]
+    [InlineData("2001:db8::/32")]
+    public async Task TheMinimumAllowedPrefixesAreAccepted(string target)
+    {
+        var entry = await Create().AddAsync(new AddIpBlockRequest { Target = target }, "admin", Admin, area.Iptal);
+        Assert.Equal("applied", entry.RuleState);
     }
 
     [Fact]

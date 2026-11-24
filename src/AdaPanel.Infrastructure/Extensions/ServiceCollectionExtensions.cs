@@ -158,6 +158,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Firewall.IIpBlockRuleWriter, Firewall.PowerShellIpBlockRuleWriter>();
         services.AddScoped<IIpBlockService, Firewall.IpBlockService>();
         services.AddHostedService<Firewall.IpBlockExpiryWorker>();
+        services.AddHostedService<Backup.BackupTestRestoreCleanupWorker>();
         services.AddScoped<ISchedulerService, Scheduler.SchedulerService>();
         services.AddScoped<INotificationService, Notifications.NotificationService>();
         // Yedek şifreleme parolasının DPAPI korumalı kasası (zamanlanmış yedekler için şart).

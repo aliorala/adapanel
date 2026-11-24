@@ -6958,5 +6958,11 @@
   "backup.test_restore.unsupported_format": "This file type cannot be test-restored.",
   "backup.test_restore_passed": "Test restore passed.",
   "backup.test_restore_failed": "Test restore failed.",
-  "backup.test_restore_not_tested": "The backup could not be tested."
+  "backup.test_restore_not_tested": "The backup could not be tested.",
+  "panel.backup.testRestore.outcome_warning": "Passed with warnings",
+  "panel.backup.testRestore.notice_warning": "{name}: files are intact but the database part could not be fully verified; see the details below.",
+  "backup.test_restore_warning": "Test restore finished with warnings.",
+  "backup.test_restore_busy": "Another test restore is already running. Try again when it finishes.",
+  "firewall.ipblock_range_too_wide": "This range is too wide. The smallest allowed prefix is /8 for IPv4 and /32 for IPv6.",
+  "ssl.certificate_not_found": "No certificate record was found for this site and host."
 }

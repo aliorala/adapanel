@@ -338,5 +338,9 @@
   "ssl.renewal_verification_failed": "win-acme yenileme kaydı, sertifika veya IIS bağlantısı doğrulanamadı.",
   "ssl.issue_binding_verification_failed": "Sertifika bulundu ancak hedef IIS HTTPS bağlantısında bu sertifikanın kullanıldığı doğrulanamadı.",
   "ssl.certificate_server_auth_required": "Bu sertifikanın kullanım amacı sunucu kimlik doğrulamasına izin vermiyor. HTTPS için uygun bir sertifika seçin.",
-  "mail.certificate_files_unreadable": "PEM dosyaları eksik, tamamlanmamış veya kilitli. Yenileme tamamlandıktan sonra yeniden deneyin. Aynı adla başlayan sertifika, anahtar ve zincir dosyalarını birlikte tutun. Posta sertifikası değiştirilmedi."
+  "mail.certificate_files_unreadable": "PEM dosyaları eksik, tamamlanmamış veya kilitli. Yenileme tamamlandıktan sonra yeniden deneyin. Aynı adla başlayan sertifika, anahtar ve zincir dosyalarını birlikte tutun. Posta sertifikası değiştirilmedi.",
+  "backup.test_restore_warning": "Test geri yükleme uyarıyla bitti.",
+  "backup.test_restore_busy": "Başka bir test geri yükleme çalışıyor. Bitince tekrar deneyin.",
+  "firewall.ipblock_range_too_wide": "Bu aralık çok geniş. İzin verilen en küçük önek IPv4 için /8, IPv6 için /32.",
+  "ssl.certificate_not_found": "Bu site ve alan adı için sertifika kaydı bulunamadı."
 }

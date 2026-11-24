@@ -213,7 +213,7 @@ export type BackupTestRestoreResult = {
   backupId: string;
   name: string;
   /** passed | failed | not_tested */
-  outcome: "passed" | "failed" | "not_tested";
+  outcome: "passed" | "warning" | "failed" | "not_tested";
   notTestedReason: string;
   entryCount: number;
   extractedBytes: number;
@@ -234,7 +234,7 @@ export async function testRestoreBackup(backupId: string, encryptionPassword?: s
   const response = await apiClient.post<ApiEnvelope<BackupTestRestoreResult>>(
     `/backup/${encodeURIComponent(backupId)}/test-restore`, { encryptionPassword: encryptionPassword || null });
   const value = response.data?.data;
-  if (response.data?.success !== true || !value || !["passed", "failed", "not_tested"].includes(value.outcome))
+  if (response.data?.success !== true || !value || !["passed", "warning", "failed", "not_tested"].includes(value.outcome))
     throw new UserFacingError("panel.backup.testRestore.unverified");
   return value;
 }

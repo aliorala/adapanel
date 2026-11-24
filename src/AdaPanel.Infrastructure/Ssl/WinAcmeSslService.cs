@@ -2218,7 +2218,7 @@ public sealed class WinAcmeSslService(
                 {
                     // Ayni yenileme baska bir kayitta da var (ör. joker): iptal digerini bozar.
                     if (action == "cancelled") action = "kept_shared";
-                    details.Add($"win-acme yenilemesi {id} başka bir kayıtla paylaşılıyor — iptal edilmedi.");
+                    details.Add("ssl.renewal_shared");
                     continue;
                 }
                 (bool Cancelled, string? Problem) outcome = default;
@@ -2226,11 +2226,13 @@ public sealed class WinAcmeSslService(
                 if (!outcome.Cancelled)
                 {
                     action = "cancel_failed";
-                    details.Add(outcome.Problem!);
+                    logger.LogWarning("Renewal cancel failed after binding removal: {Problem}", outcome.Problem);
+                    details.Add("ssl.renewal_cancel_failed");
                 }
             }
             result.RenewalAction = action;
-            result.RenewalDetail = string.Join(" | ", details);
+            // Mesaj ANAHTARI doner (arayuz cevirir); ham metin yalniz gunluge gider.
+            result.RenewalDetail = details.Distinct().FirstOrDefault() ?? string.Empty;
         }
 
         // (4) Sertifika deposu kararı — ÖLÇÜMLE.
@@ -2627,12 +2629,20 @@ public sealed class WinAcmeSslService(
             throw new AppException("ssl.renewal_not_managed", 409, 409);
         var renewalId = record.ManagedRenewalId.Trim();
 
+        // Ortak kimlik: duraklatmak da iptal etmek de ayni yenilemeye bagli DIGER kaydi etkiler
+        // (duraklatma bayragi kayit basina, ama yenileme kimlikle yurur). Acikca reddedilir.
+        if (action is "pause" or "cancel"
+            && all.Any(o => !ReferenceEquals(o, record) && string.Equals(o.ManagedRenewalId?.Trim(), renewalId, StringComparison.Ordinal)))
+            throw new AppException("ssl.renewal_shared", 409, 409);
+
         if (action == "cancel")
         {
-            if (all.Any(o => !ReferenceEquals(o, record) && string.Equals(o.ManagedRenewalId?.Trim(), renewalId, StringComparison.Ordinal)))
-                throw new AppException("ssl.renewal_shared", 409, 409);
-            var outcome = await CancelManagedRenewalAsync(renewalId, record.ManagedRenewalStaging, cancellationToken);
-            if (!outcome.Cancelled) problem = outcome.Problem;
+            // Dis komut IIS kapisi altinda calisir (RemoveCertificate'in MutateAsync'iyle ayni kilit).
+            await siteGates.RunExclusiveAsync(ConcurrencyKeys.Iis, async () =>
+            {
+                var outcome = await CancelManagedRenewalAsync(renewalId, record.ManagedRenewalStaging, cancellationToken);
+                if (!outcome.Cancelled) problem = outcome.Problem;
+            }, cancellationToken);
             if (problem is not null) throw new AppException("ssl.renewal_cancel_failed", 500, 500, problem);
         }
 
