@@ -714,7 +714,7 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             result.Warnings.Add("PHP: " + logging.Detail);
         // Varsayılan adımlar (DNS/FTP/SSL/güvenlik...) isteğe bağlıdır: site yine kurulur, ama hazırlanamayanlar SESSİZ kalmaz.
         foreach (var feature in site.DefaultsFailedFeatures)
-            result.Warnings.Add($"defaults: {feature}");
+            result.Warnings.Add($"sites.create.default_failed — {feature}");
 
         // ALT ALAN ADI: yeni site başka bir yönetilen sitenin ALTINDAysa, üst bölgeye A kaydı düşer.
         //
@@ -952,7 +952,7 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         // DÜRÜSTLÜK: bilinçsiz kalıntı varsa "başarılı/tamamlandı" denmez (denetim kaydı da "partial").
         if (!result.FullyDeleted)
         {
-            var kalintilar = string.Join(", ", result.Leftovers.Where(l => !l.Deliberate).Select(l => $"{l.Kind}:{l.Name}"));
+            var kalintilar = string.Join(", ", result.Leftovers.Where(l => !l.Deliberate).Select(l => $"{l.Kind}:{l.Name} ({l.Reason})"));
             await WriteAuditAsync("sites.delete.partial", siteName, cancellationToken, sahip, ayrinti: "leftovers: " + kalintilar);
             return Ok(ApiResponse<SiteDeletionResultDto>.Ok(result, "sites.delete.completed_with_leftovers"));
         }

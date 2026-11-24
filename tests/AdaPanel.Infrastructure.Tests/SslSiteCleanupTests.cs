@@ -45,6 +45,9 @@ public sealed class SslSiteCleanupTests : IDisposable
         if (Directory.Exists(wacsDir)) Directory.Delete(wacsDir, true);
     }
 
+    /// <summary>win-acme'nin cancel SONRASI listesinde kalan kimlikler (cancelOk ve kalan = "komut başarılı ama kalktı sayılmaz").</summary>
+    private readonly List<string> stillListed = [];
+
     private WinAcmeSslService Create(bool cancelOk, bool installed = true, string certificateOutput = RemovedOutput)
     {
         if (installed)
@@ -62,6 +65,8 @@ public sealed class SslSiteCleanupTests : IDisposable
                 commands.Add(args);
                 return Task.FromResult(new CommandResult { ExitCode = cancelOk ? 0 : 1, StandardError = cancelOk ? "" : "boom" });
             },
+            RenewalRecordsAsync = (_, _, _) => Task.FromResult<IReadOnlyList<System.Text.Json.JsonElement>>(
+                stillListed.Select(id => System.Text.Json.JsonDocument.Parse("{\"Id\":\"" + id + "\"}").RootElement.Clone()).ToArray()),
             RemoveCertificateCommand = (script, _) =>
             {
                 certificateScripts.Add(script);
@@ -72,9 +77,10 @@ public sealed class SslSiteCleanupTests : IDisposable
 
     private Task Seed(params SslCertificateDto[] records) => area.DosyaDeposu.WriteAsync("config/ssl.json", records);
 
-    private static SslCertificateDto Rec(string site, string thumb, string? renewal) => new()
+    private static SslCertificateDto Rec(string site, string thumb, string? renewal, bool staging = false, string source = "manual") => new()
     {
-        SiteName = site, HostName = site, Port = 443, Thumbprint = thumb, ManagedRenewalId = renewal
+        SiteName = site, HostName = site, Port = 443, Thumbprint = thumb, ManagedRenewalId = renewal,
+        ManagedRenewalStaging = staging, Source = source
     };
 
     [Fact]
@@ -165,6 +171,69 @@ public sealed class SslSiteCleanupTests : IDisposable
         Assert.Empty(commands);
         Assert.Empty(certificateScripts);
         Assert.Empty(await area.DosyaDeposu.ReadAsync("config/ssl.json", Array.Empty<SslCertificateDto>()));
+    }
+
+    [Fact]
+    public async Task ACancelCommandThatSucceedsButLeavesTheIdListed_IsNotTrusted()
+    {
+        var service = Create(cancelOk: true);
+        stillListed.Add("ren-1");
+        await Seed(Rec("a.com", "AAA", "ren-1"));
+
+        var hata = await Assert.ThrowsAsync<AppException>(() => service.RemoveSiteAsync("a.com"));
+
+        Assert.Equal("ssl.site_cleanup_incomplete", hata.MessageKey);
+        Assert.Contains("ren-1", hata.Details);
+        Assert.Empty(certificateScripts);
+    }
+
+    [Fact]
+    public async Task AStagingRenewal_IsCancelledAgainstTheStagingServer()
+    {
+        var service = Create(cancelOk: true);
+        await Seed(Rec("a.com", "AAA", "ren-1", staging: true));
+
+        await service.RemoveSiteAsync("a.com");
+
+        Assert.Contains("acme-staging-v02", Assert.Single(commands));
+    }
+
+    [Fact]
+    public async Task ACertificateUsedBySmtpTls_IsNotDeleted()
+    {
+        var service = Create(cancelOk: true);
+        await Seed(Rec("a.com", "AAA", "ren-1"));
+        await area.DosyaDeposu.WriteAsync("config/mail-cert.json", new { source = "windows-store", thumbprint = "AAA" });
+
+        await service.RemoveSiteAsync("a.com");
+
+        Assert.Single(commands);
+        Assert.Empty(certificateScripts);
+    }
+
+    [Fact]
+    public async Task ALetsEncryptRecordWithoutRenewalId_IsReportedNotGuessed()
+    {
+        var service = Create(cancelOk: true);
+        await Seed(Rec("a.com", "AAA", null, source: "letsencrypt"));
+
+        var hata = await Assert.ThrowsAsync<AppException>(() => service.RemoveSiteAsync("a.com"));
+
+        Assert.Contains("a.com", hata.Details);
+        Assert.Empty(commands);
+        Assert.Empty(certificateScripts);
+    }
+
+    [Fact]
+    public void TheCascade_RemovesAliasesBeforeTheIisSite_AndSkipsSslWhenIisDeletionFailed()
+    {
+        var kaynak = Oku("src", "AdaPanel.Infrastructure", "Iis", "SiteCascadeDeletionService.cs");
+        var alias = kaynak.IndexOf("siteAliasService.RemoveAliasAsync", StringComparison.Ordinal);
+        var iis = kaynak.IndexOf("iisSiteService.DeleteSiteAsync(siteName", StringComparison.Ordinal);
+        Assert.True(alias > 0 && alias < iis, "Takma adlar IIS sitesinden once temizlenmeli.");
+        Assert.Contains("if (!result.Leftovers.Any(l => l.Kind == SiteLeftoverKinds.Site))", kaynak, StringComparison.Ordinal);
+        Assert.Contains("RunExclusiveAsync(AdaPanel.Core.Interfaces.ConcurrencyKeys.Iis",
+            Oku("src", "AdaPanel.Infrastructure", "Ssl", "WinAcmeSslService.cs"), StringComparison.Ordinal);
     }
 
     [Fact]

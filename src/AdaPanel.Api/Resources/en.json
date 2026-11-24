@@ -89,6 +89,7 @@
   "sites.create.completed_with_warnings": "The site was created, but some default steps could not be prepared.",
   "sites.delete.completed_with_leftovers": "The site was removed, but some resources were left behind.",
   "ssl.site_cleanup_incomplete": "SSL cleanup for the removed site is incomplete (renewal or certificate remains).",
+  "sites.create.default_failed": "A default step could not be prepared for the new site",
   "sites.delete.success": "The site was removed.",
   "sites.start.success": "The site was started.",
   "sites.stop.success": "The site was stopped.",

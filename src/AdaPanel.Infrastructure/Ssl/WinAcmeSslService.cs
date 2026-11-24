@@ -2554,7 +2554,15 @@ public sealed class WinAcmeSslService(
                     : "https://acme-v02.api.letsencrypt.org/";
                 var cancel = await RenewalCommand(wacs,
                     $"--cancel --id \"{group.Key.Id.Replace("\"", string.Empty)}\" --baseuri {baseUri}", cancellationToken);
-                if (cancel.Success) cancelled.Add(group.Key.Id);
+                if (cancel.Success)
+                {
+                    // Çıkış koduna GÜVENME: kimliğin win-acme listesinden gerçekten kalktığını ölç.
+                    var remaining = await RenewalRecordsAsync(wacs, group.Key.Staging, cancellationToken);
+                    if (remaining.Any(item => string.Equals(SslRenewalVerification.String(item, "Id"), group.Key.Id, StringComparison.Ordinal)))
+                        problems.Add($"win-acme yenilemesi {group.Key.Id} iptal komutu başarılı döndü ama liste hâlâ içeriyor.");
+                    else
+                        cancelled.Add(group.Key.Id);
+                }
                 else problems.Add($"win-acme yenilemesi {group.Key.Id} iptal edilemedi: " +
                     Kirp(SecretRedactor.Redact(string.IsNullOrWhiteSpace(cancel.StandardError) ? cancel.StandardOutput : cancel.StandardError)));
             }
@@ -2562,6 +2570,14 @@ public sealed class WinAcmeSslService(
             {
                 problems.Add($"win-acme yenilemesi {group.Key.Id} iptal edilemedi: {Kirp(exception.Message)}");
             }
+        }
+
+        // Kimliği kayıtlı olmayan eski Let's Encrypt kayıtları: hangi yenilemeye ait olduğu bilinmiyor,
+        // tahminle iptal edilmez; kalıntı olarak adıyla bildirilir.
+        foreach (var legacy in records.Where(r => string.IsNullOrWhiteSpace(r.ManagedRenewalId)
+                     && string.Equals(r.Source, "letsencrypt", StringComparison.OrdinalIgnoreCase)))
+        {
+            problems.Add($"{legacy.HostName}: Let's Encrypt kaydında win-acme yenileme kimliği yok; yenileme varsa win-acme'den elle iptal edin.");
         }
 
         // (2) Panel kayıtları.
@@ -2580,25 +2596,25 @@ public sealed class WinAcmeSslService(
         {
             try
             {
-                if (otherRecords.Any(o => string.Equals(o.Thumbprint?.Trim(), thumbprint, StringComparison.OrdinalIgnoreCase)))
-                {
-                    continue; // Başka sitenin kaydı kullanıyor: depoda kalır (bilinçli, kalıntı değil).
-                }
-
+                // Aynı sıra, ikiz RemoveCertificateCoreAsync gibi: önce mail yaşam döngüsü, sonra IIS kilidi.
                 using var mailOperation = await Mail.MailCertificateLifecycle.EnterAsync(
                     fileStore.ResolvePath(Mail.MailCertificateStoreReference.StatePath), cancellationToken);
-                var mailUsage = await Mail.MailCertificateStoreReference.ReadAsync(
-                    fileStore.ResolvePath(Mail.MailCertificateStoreReference.StatePath), thumbprint, cancellationToken);
-                if (mailUsage != Mail.MailCertificateStoreReference.Usage.None)
+                await siteGates.RunExclusiveAsync(AdaPanel.Core.Interfaces.ConcurrencyKeys.Iis, async () =>
                 {
-                    continue; // SMTP TLS kullanıyor: silinmez.
-                }
+                    // Kilit altında TAZE oku: bekleme sırasında başka bir site aynı sertifikayı kaydetmiş olabilir.
+                    var fresh = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
+                    if (fresh.Any(o => string.Equals(o.Thumbprint?.Trim(), thumbprint, StringComparison.OrdinalIgnoreCase)))
+                        return; // Başka kayıt kullanıyor: depoda kalır (bilinçli, kalıntı değil).
 
-                var deletion = await TryDeleteCertificateAsync(thumbprint, cancellationToken);
-                if (deletion.Action == "remove_failed" && !deletion.Detail.StartsWith("Sertifika depoda bulunamadi", StringComparison.Ordinal))
-                {
-                    problems.Add($"Sertifika {thumbprint} depodan silinemedi: {deletion.Detail}");
-                }
+                    var mailUsage = await Mail.MailCertificateStoreReference.ReadAsync(
+                        fileStore.ResolvePath(Mail.MailCertificateStoreReference.StatePath), thumbprint, cancellationToken);
+                    if (mailUsage != Mail.MailCertificateStoreReference.Usage.None)
+                        return; // SMTP TLS kullanıyor: silinmez.
+
+                    var deletion = await TryDeleteCertificateAsync(thumbprint, cancellationToken);
+                    if (deletion.Action == "remove_failed" && !deletion.Detail.StartsWith("Sertifika depoda bulunamadi", StringComparison.Ordinal))
+                        problems.Add($"Sertifika {thumbprint} depodan silinemedi: {deletion.Detail}");
+                }, cancellationToken);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {

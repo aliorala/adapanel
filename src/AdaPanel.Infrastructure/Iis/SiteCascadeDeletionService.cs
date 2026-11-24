@@ -39,7 +39,9 @@ public sealed class SiteCascadeDeletionService(
     IOptions<PanelRuntimeOptions> runtimeOptions,
     JsonFileStore fileStore,
     ILogger<SiteCascadeDeletionService> logger,
-    IConcurrencyLock concurrencyLock) : ISiteCascadeDeletionService
+    IConcurrencyLock concurrencyLock,
+    // Takma adlar: kayıt (site-aliases.json) + bağlamalar + yönlendirme kuralı. Opsiyonel: yoksa adım atlanır.
+    ISiteAliasService? siteAliasService = null) : ISiteCascadeDeletionService
 {
     private static readonly string[] DatabaseEngines = ["mysql", "mariadb", "postgresql", "mssql"];
 
@@ -240,6 +242,26 @@ public sealed class SiteCascadeDeletionService(
                     result.Warnings.Add($"{silinen} zamanlanmış görev kaldırıldı (sitenin klasöründen çalışıyordu).");
                 }
             });
+        }
+
+        // 8g) Takma adlar. IIS sitesi silinmeden ÖNCE: RemoveAliasAsync siteyi okur, bağlamaları ve
+        //     yönlendirme kuralını kaldırır; kayıt kalırsa aynı adla açılan yeni site eski yönlendirmeyi geri getirirdi.
+        if (siteAliasService is not null && site is not null)
+        {
+            try
+            {
+                foreach (var alias in (await siteAliasService.GetAliasesAsync(siteName, cancellationToken)).Aliases.ToArray())
+                {
+                    await StepAsync(result, $"Takma ad ({alias.HostName})",
+                        () => siteAliasService.RemoveAliasAsync(siteName, alias.HostName, cancellationToken),
+                        SiteLeftoverKinds.Other, $"alias:{alias.HostName}");
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                result.Warnings.Add($"Takma adlar: {exception.Message}");
+                Kalinti(result, SiteLeftoverKinds.Other, $"alias:{siteName}", exception.Message);
+            }
         }
 
         // SİLME POLİTİKASI IIS SİTESİ KALDIRILMADAN ÖNCE ÖLÇÜLÜR: "bu klasör başka bir siteye de
