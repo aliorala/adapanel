@@ -275,38 +275,9 @@ public sealed class FtpController(
         return Ok(ApiResponse<FtpUserDto>.Ok(user, mesaj));
     }
 
-    /// <summary>
-    /// M3 (plan MaxFtpUsers): sitenin abonelik sahibinin FTP hesabı kotası doldu mu? Admin sınırsız
-    /// (kardeşi: MailController.EnsureMailboxQuotaAsync). MaxFtpUsers=0 = limitsiz. Sayım abonelikteki
-    /// BÜTÜN sitelerin hesaplarını kapsar; bir sitede dolan kota diğer sitedeki açılışı da durdurur.
-    /// </summary>
-    internal async Task EnsureFtpQuotaAsync(System.Security.Claims.ClaimsPrincipal principal, string siteName, CancellationToken cancellationToken)
-    {
-        if (principal.IsInRole("Administrator"))
-        {
-            return;
-        }
-
-        var ownerId = await customerScopes.GetSiteOwnerUserIdAsync(siteName, cancellationToken);
-        if (ownerId is not { } subscriptionId)
-        {
-            return;
-        }
-
-        var scope = await customerScopes.GetScopeAsync(subscriptionId, cancellationToken);
-        if (scope.MaxFtpUsers <= 0)
-        {
-            return;
-        }
-
-        var sites = new HashSet<string>(scope.Sites, StringComparer.OrdinalIgnoreCase);
-        var count = (await ftpService.GetFtpUsersAsync(cancellationToken))
-            .Count(item => sites.Contains(item.SiteName));
-        if (count >= scope.MaxFtpUsers)
-        {
-            throw new AppException("ftp.quota_exceeded", 403, 403);
-        }
-    }
+    /// <summary>M3 (plan MaxFtpUsers): ortak kural <see cref="FtpQuota"/>'da; bkz. orası.</summary>
+    internal Task EnsureFtpQuotaAsync(System.Security.Claims.ClaimsPrincipal principal, string siteName, CancellationToken cancellationToken)
+        => FtpQuota.EnsureAsync(customerScopes, ftpService, principal, siteName, cancellationToken);
 
     [HttpPost("users/password")]
     public async Task<ActionResult<ApiResponse<object>>> SetPasswordAsync([FromBody] SetFtpPasswordRequest request, CancellationToken cancellationToken)

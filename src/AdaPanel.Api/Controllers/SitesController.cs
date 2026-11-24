@@ -857,6 +857,9 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
                 : request.FtpPassword;
             try
             {
+                // M3: site oluştururken açılan varsayılan FTP hesabı da plan MaxFtpUsers kotasına tabidir
+                // (FtpController'daki kardeş yol ile AYNI kural; aşılırsa hesap açılmaz, uyarı döner).
+                await FtpQuota.EnsureAsync(customerScopes, ftpService, User, site.Name, cancellationToken);
                 await ftpService.CreateFtpUserAsync(
                     new Core.Dtos.Ftp.CreateFtpUserRequest
                     {

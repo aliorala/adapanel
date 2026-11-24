@@ -350,6 +350,50 @@ public sealed class PlanLimitsW2bTests : IDisposable
     }
 
     // ------------------------------------------------------------------------------------------
+    // M2: FTP hesabini acip kapatan servis ucu (Windows yerel hesap bayragi + GERI OKUMA)
+    // ------------------------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(false, "ADAPANEL-ENABLED=False", 0, false)]  // kapatildi ve geri okundu
+    [InlineData(true, "ADAPANEL-ENABLED=True", 0, true)]
+    public async Task Ftp_hesabi_kapatilinca_kayit_guncellenir(bool etkinles, string cikti, int kod, bool beklenenEtkin)
+    {
+        var servis = FtpServisi((_, _, _) => Task.FromResult(new CommandResult { ExitCode = kod, StandardOutput = cikti }), baslangicEtkin: !etkinles);
+        await servis.SetFtpUserEnabledAsync("hesap1", etkinles);
+        Assert.Equal(beklenenEtkin, (await servis.GetFtpUsersAsync()).Single().IsEnabled);
+    }
+
+    [Fact]
+    public async Task Ftp_hesabi_bayragi_geri_okunamazsa_BASARILI_sayilmaz_ve_kayit_degismez()
+    {
+        // Cmdlet hatasiz doner ama bayrak degismemis (ya da cikti yok): "kapattim" DENMEZ.
+        var servis = FtpServisi((_, _, _) => Task.FromResult(new CommandResult { ExitCode = 0, StandardOutput = "ADAPANEL-ENABLED=True" }), baslangicEtkin: true);
+        var hata = await Assert.ThrowsAsync<AppException>(() => servis.SetFtpUserEnabledAsync("hesap1", false));
+        Assert.Equal("ftp.enable_state_unverified", hata.MessageKey);
+        Assert.True((await servis.GetFtpUsersAsync()).Single().IsEnabled);
+
+        // Panelin kendi acmadigi hesaba (Administrator vb.) dokunulmaz.
+        var yabanci = await Assert.ThrowsAsync<AppException>(() => servis.SetFtpUserEnabledAsync("Administrator", false));
+        Assert.Equal("ftp.user_not_found", yabanci.MessageKey);
+    }
+
+    private AdaPanel.Infrastructure.Ftp.FtpService FtpServisi(Func<string, bool, CancellationToken, Task<CommandResult>> betik, bool baslangicEtkin)
+    {
+        var secenekler = Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = kok });
+        var store = new JsonFileStore(secenekler);
+        Directory.CreateDirectory(Path.Combine(kok, "config"));
+        File.WriteAllText(Path.Combine(kok, "config", "ftp-users.json"),
+            System.Text.Json.JsonSerializer.Serialize(new[] { new { UserName = "hesap1", SiteName = "a.test", HomePath = "C:/x", IsEnabled = baslangicEtkin, CreatedAtUtc = DateTime.UtcNow } }));
+        var servis = new AdaPanel.Infrastructure.Ftp.FtpService(null!, store, null!, secenekler)
+        {
+            NativeScript = betik,
+            NativeAccountStatus = (_, _) => Task.FromResult(0u),
+            HomeTargetResolver = path => path
+        };
+        return servis;
+    }
+
+    // ------------------------------------------------------------------------------------------
     // M3: FTP kotasi
     // ------------------------------------------------------------------------------------------
 
