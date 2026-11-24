@@ -2177,13 +2177,6 @@ async function restore(record: BackupRecord) {
   text-align: center;
 }
 
-.action-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  flex-wrap: wrap;
-}
 
 .files-row,
 .backup-row,

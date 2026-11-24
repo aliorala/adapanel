@@ -1496,3 +1496,12 @@ label.checkbox input {
 
 .resource-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 @media (max-width: 700px) { .resource-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; } .resource-grid > :last-child { grid-column: 1 / -1; } }
+
+/* Paylasilan eylem satiri (GitDeployExtras, FilesView ...): scoped stil bilesenler arasi gecmez. */
+.action-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
