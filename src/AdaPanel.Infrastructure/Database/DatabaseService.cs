@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Databases;
@@ -620,6 +620,28 @@ internal sealed partial class DatabaseService(
         if (failures.Count > 0)
             throw new AppException("database.user_delete_cleanup_incomplete", 500, 500,
                 $"engine={profile.EngineKey}; user={normalizedUser}; cleanup={string.Join(", ", failures)}");
+    }
+
+    public async Task<IReadOnlyCollection<DatabaseUserLockDto>> GetUserLocksAsync(
+        string engine, IReadOnlyCollection<string> databaseNames, CancellationToken cancellationToken = default)
+    {
+        var dbEngine = ParseEngine(engine);
+        if (dbEngine is not (DbEngine.MySql or DbEngine.MariaDb))
+            throw new NotSupportedException("Database account lock is supported only for MariaDB/MySQL.");
+        using var mutation = await DatabaseLifecycle.EnterSharedEngineAsync(engine, cancellationToken);
+        var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
+        return await ResolveProvider(dbEngine).GetUserLocksAsync(profile, databaseNames, cancellationToken);
+    }
+
+    public async Task SetUserLockedAsync(string engine, string userName, string host, bool locked, CancellationToken cancellationToken = default)
+    {
+        var dbEngine = ParseEngine(engine);
+        if (dbEngine is not (DbEngine.MySql or DbEngine.MariaDb))
+            throw new NotSupportedException("Database account lock is supported only for MariaDB/MySQL.");
+        using var mutation = await DatabaseLifecycle.EnterSharedEngineAsync(engine, cancellationToken);
+        using var account = await DatabaseLifecycle.EnterAccountAsync(mutation, engine, userName, cancellationToken);
+        var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
+        await ResolveProvider(dbEngine).SetUserLockedAsync(profile, userName, host, locked, cancellationToken);
     }
 
     public async Task<DatabaseWorkspaceDto> SetUserPasswordAsync(

@@ -747,6 +747,133 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         return result;
     }
 
+    // --- Askı: hesap kilidi (ALTER USER ... ACCOUNT LOCK) ---
+
+    public async Task<IReadOnlyCollection<DatabaseUserLockDto>> GetUserLocksAsync(
+        DatabaseConnectionProfile profile, IReadOnlyCollection<string> databaseNames, CancellationToken cancellationToken)
+    {
+        var owned = new HashSet<string>(databaseNames.Select(name => name.Trim()), StringComparer.OrdinalIgnoreCase);
+        var grants = new Dictionary<(string User, string Host), List<string>>();
+        await using var connection = await OpenConnectionAsync(profile, cancellationToken);
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT User, Host, Db FROM mysql.db WHERE User <> ''";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var key = (reader.GetString(0), reader.GetString(1));
+                if (!grants.TryGetValue(key, out var list)) grants[key] = list = [];
+                // GRANT veritabanı adında _ ve % joker olduğundan panel \_ ile kaçırır; karşılaştırmadan önce çöz.
+                list.Add(reader.GetString(2).Replace("\\_", "_").Replace("\\%", "%"));
+            }
+        }
+
+        var results = new List<DatabaseUserLockDto>();
+        foreach (var (key, dbs) in grants)
+        {
+            if (!dbs.Any(owned.Contains)) continue;
+            if (IsProtectedAccount(key.User)) continue;
+            results.Add(new DatabaseUserLockDto
+            {
+                Engine = profile.EngineKey,
+                UserName = key.User,
+                Host = key.Host,
+                Exclusive = dbs.All(owned.Contains),
+                Locked = await ReadLockedAsync(connection, key.User, key.Host, cancellationToken)
+            });
+        }
+
+        return results;
+    }
+
+    public async Task SetUserLockedAsync(DatabaseConnectionProfile profile, string userName, string host, bool locked, CancellationToken cancellationToken)
+    {
+        if (IsProtectedAccount(userName)) throw new AppException("database.user_protected", 403, 403);
+        await using var connection = await OpenConnectionAsync(profile, cancellationToken);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"ALTER USER '{Escape(userName)}'@'{Escape(host)}' ACCOUNT {(locked ? "LOCK" : "UNLOCK")};";
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (MySqlException exception) when (exception.Number is 1396 or 1133)
+        {
+            throw new AppException("database.user_not_found", 404, 404);
+        }
+        catch (MySqlException exception) when (exception.Number is 1064 or 1235)
+        {
+            // ACCOUNT LOCK sözdizimi yok (MariaDB < 10.4.2, MySQL < 5.7.6): desteklenmiyor, başarı DEĞİL.
+            throw new NotSupportedException("This database server version does not support ACCOUNT LOCK.");
+        }
+
+        if (locked)
+        {
+            // Kilit yalnız YENİ girişleri keser; açık oturumlar sürerdi. Hesabın açık bağlantılarını kapat.
+            await KillSessionsAsync(connection, userName, cancellationToken);
+        }
+
+        var measured = await ReadLockedAsync(connection, userName, host, cancellationToken);
+        if (measured != locked)
+        {
+            throw new AppException("database.user_lock_not_applied", 500, 500,
+                $"user={userName}; requested={(locked ? "locked" : "unlocked")}; measured={(measured?.ToString() ?? "unmeasured")}");
+        }
+    }
+
+    private static bool IsProtectedAccount(string user) =>
+        string.IsNullOrWhiteSpace(user)
+        || new[] { "root", "mariadb.sys", "mysql.sys", "mysql.session", "mysql.infoschema", "debian-sys-maint" }
+            .Contains(user, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>SHOW CREATE USER çıktısından kilit durumu: MySQL "ACCOUNT LOCK"/"ACCOUNT UNLOCK", MariaDB yalnız kilitliyken "ACCOUNT LOCK".</summary>
+    internal static bool? ParseLockedFromCreateUser(string? statement)
+    {
+        if (string.IsNullOrWhiteSpace(statement)) return null;
+        if (System.Text.RegularExpressions.Regex.IsMatch(statement, @"ACCOUNT\s+UNLOCK", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return false;
+        return System.Text.RegularExpressions.Regex.IsMatch(statement, @"ACCOUNT\s+LOCK", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
+    private static async Task<bool?> ReadLockedAsync(MySqlConnection connection, string user, string host, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"SHOW CREATE USER '{Escape(user)}'@'{Escape(host)}'";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            return await reader.ReadAsync(cancellationToken) ? ParseLockedFromCreateUser(reader.GetString(0)) : null;
+        }
+        catch (MySqlException)
+        {
+            return null;
+        }
+    }
+
+    private static async Task KillSessionsAsync(MySqlConnection connection, string user, CancellationToken cancellationToken)
+    {
+        var ids = new List<long>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT ID FROM information_schema.PROCESSLIST WHERE USER = @user";
+            command.Parameters.AddWithValue("@user", user);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken)) ids.Add(Convert.ToInt64(reader.GetValue(0)));
+        }
+
+        foreach (var id in ids)
+        {
+            try
+            {
+                await using var kill = connection.CreateCommand();
+                kill.CommandText = $"KILL {id}"; // id sayıdır, enjeksiyon yok
+                await kill.ExecuteNonQueryAsync(cancellationToken);
+            }
+            catch (MySqlException)
+            {
+                // oturum zaten bitmiş olabilir
+            }
+        }
+    }
+
     private static string Escape(string value) => value.Replace("'", "''");
 
     private static async Task<MySqlConnection> OpenConnectionAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
