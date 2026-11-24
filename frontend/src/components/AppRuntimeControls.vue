@@ -1,5 +1,5 @@
 <template>
-  <section class="form-surface runtime-controls">
+  <section class="form-surface">
     <div class="module-head">
       <div>
         <h3>{{ t("panel.apps.controlTitle") }}</h3>

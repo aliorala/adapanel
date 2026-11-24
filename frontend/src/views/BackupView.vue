@@ -37,7 +37,7 @@
         </div>
         <button class="secondary compact" @click="testResult = null">{{ t("panel.backup.verify.close") }}</button>
       </div>
-      <div class="verify-counts">
+      <div>
         <span :class="['status-pill', testResult.outcome === 'passed' ? 'ok' : testResult.outcome === 'failed' ? 'danger' : 'warn']">
           {{ t(`panel.backup.testRestore.outcome_${testResult.outcome}`) }}
         </span>

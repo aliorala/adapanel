@@ -108,13 +108,13 @@
 
       <!-- İmza anahtarı: alıcı, X-AdaPanel-Signature başlığını bununla doğrular. Okumada MASKELİ; tam değer
            yalnız döndürme anında bir kez görünür (kapatılınca bir daha gösterilemez). -->
-      <div class="stacked-field webhook-secret">
+      <div class="stacked-field">
         <span class="field-label">{{ t("panel.notifications.webhookSecret") }}</span>
-        <code class="secret-mask" data-testid="webhook-secret-mask">{{ savedSettings?.webhookSecret || t("panel.notifications.webhookSecretNone") }}</code>
+        <code data-testid="webhook-secret-mask">{{ savedSettings?.webhookSecret || t("panel.notifications.webhookSecretNone") }}</code>
         <small class="field-hint">{{ t("panel.notifications.webhookSecretHint") }}</small>
         <div v-if="revealedSecret" class="notice warn-banner" role="status">
           <strong>{{ t("panel.notifications.webhookSecretNew") }}</strong>
-          <code class="secret-once" data-testid="webhook-secret-once">{{ revealedSecret }}</code>
+          <code data-testid="webhook-secret-once">{{ revealedSecret }}</code>
           <small>{{ t("panel.notifications.webhookSecretOnce") }}</small>
           <div class="toolbar-group">
             <button type="button" class="secondary compact" @click="copySecret">{{ t("panel.notifications.webhookSecretCopy") }}</button>

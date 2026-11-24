@@ -82,7 +82,7 @@
              hiçbir şey yapmıyordu. Formun görünümünü zaten `.form-surface` (base.css) veriyor. -->
         <!-- İÇE AKTARMA: 1) metni yapıştır/dosya seç → 2) ÖNİZLE (hiçbir şey yazılmaz) → 3) onayla → UYGULA.
              Önizleme metni değişirse geçersiz olur: yalnız önizlenen metin uygulanır (özet eşleşmesi). -->
-        <div v-if="!isSecondary && showImport" class="form-surface dns-import" data-test="dns-import">
+        <div v-if="!isSecondary && showImport" class="form-surface" data-test="dns-import">
           <div class="section-head">
             <div>
               <h4>{{ t("panel.dns.importTitle") }}</h4>
@@ -104,7 +104,7 @@
           </div>
 
           <template v-if="importPreview">
-            <div class="row-actions import-summary" role="status">
+            <div class="row-actions" role="status">
               <span class="status-pill ok">{{ t("panel.dns.importAdd", { count: importPreview.addCount }) }}</span>
               <span class="status-pill">{{ t("panel.dns.importChange", { count: importPreview.changeCount }) }}</span>
               <span class="status-pill">{{ t("panel.dns.importUnchanged", { count: importPreview.unchangedCount }) }}</span>

@@ -19,7 +19,7 @@
       <p v-else class="field-hint">
         {{ t("panel.alias.primaryIs", { host: workspace.primaryHostName }) }}
       </p>
-      <div v-if="primaryWwwHost" class="www-setup">
+      <div v-if="primaryWwwHost">
         <p class="field-hint">{{ t("panel.alias.wwwSetupHint", { host: primaryWwwHost }) }}</p>
         <button type="button" class="secondary compact" v-bind="writeGate(busy || loading)" @click="preparePrimaryWww">
           {{ t("panel.alias.wwwSetup") }}

@@ -21,7 +21,7 @@
 
         <p :id="messageId" class="confirm-message">{{ state.options.message }}</p>
 
-        <div v-if="state.options.checkbox" class="confirm-choice">
+        <div v-if="state.options.checkbox">
           <label class="checkbox-field">
             <input ref="choiceEl" v-model="state.options.checkbox.value" type="checkbox" :disabled="state.busy" />
             <span>{{ state.options.checkbox.label }}</span>

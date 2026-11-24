@@ -1,5 +1,5 @@
 <template>
-  <p v-if="installed === false" class="notice error av-no-protection" role="alert">{{ t("panel.antivirus.noProtection") }}</p>
+  <p v-if="installed === false" class="notice error" role="alert">{{ t("panel.antivirus.noProtection") }}</p>
 </template>
 
 <script setup lang="ts">

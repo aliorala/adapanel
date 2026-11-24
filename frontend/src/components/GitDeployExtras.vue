@@ -1,5 +1,5 @@
 <template>
-  <div class="git-extras">
+  <div>
     <p v-if="notice" :class="['notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <h5>{{ t("panel.git.keyTitle") }}</h5>
