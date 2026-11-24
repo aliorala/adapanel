@@ -306,7 +306,7 @@
 
     <SiteBuilderView v-else-if="activeSection === 'sitebuilder'" />
 
-    <FtpView v-else-if="activeSection === 'ftp' && (isAdmin || isReseller)" />
+    <FtpView v-else-if="activeSection === 'ftp' && (isAdmin || isReseller || isCustomer)" />
 
     <DatabasesView v-else-if="activeSection === 'database' && isAdmin" />
 
@@ -928,7 +928,7 @@ function canReadDashboardSection(section: string) {
   return !isSubUser.value || !subUserAllowedSections.value ||
     subUserAllowedSections.value.some(item => item.toLowerCase() === section);
 }
-const canReadFtpCount = computed(() => (isAdmin.value || isReseller.value) && canReadDashboardSection("sites"));
+const canReadFtpCount = computed(() => (isAdmin.value || isReseller.value || isCustomer.value) && canReadDashboardSection("sites"));
 const ftpUserCount = computed(() => canReadFtpCount.value ? measuredFtpCount.value : null);
 const databaseCount = computed(() => canReadDashboardSection("database") ? measuredDatabaseCount.value : null);
 const mailAccountCount = computed(() => canReadDashboardSection("mail") ? measuredMailCount.value : null);
@@ -1110,6 +1110,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "sites" ||
       section.id === "sitebuilder" ||
       section.id === "mail" ||
+      section.id === "ftp" ||
       section.id === "database" ||
       section.id === "files" ||
       section.id === "tasks" ||
@@ -1126,7 +1127,9 @@ const dashboardSections = computed<SectionItem[]>(() => {
       if (allowed) {
         const allowedSet = new Set(allowed.map((section) => section.toLowerCase()));
         customerSections = customerSections.filter((section) =>
-          section.id === "home" || section.id === "ai" || section.id === "account" || section.id === "exit" || allowedSet.has(section.id));
+          section.id === "home" || section.id === "ai" || section.id === "account" || section.id === "exit" || allowedSet.has(section.id)
+            // FTP, backend'de "sites" bölüm iznine bağlıdır (FtpController [RequireSubUserSection("sites")]).
+            || (section.id === "ftp" && allowedSet.has("sites")));
       }
     } else {
       // Top-level müşteri: aboneliği altındaki ek kullanıcıları yönetir (Plesk "Users" sekmesi) — Hesabım'dan önce.

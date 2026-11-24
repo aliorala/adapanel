@@ -2,13 +2,18 @@ using System.Security.Claims;
 using AdaPanel.Api.Extensions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Enums;
+using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 
 namespace AdaPanel.Api.Security;
 
-/// <summary>The authenticated identity accepted before FTP account/native waits.</summary>
+/// <summary>
+/// The authenticated identity accepted before FTP account/native waits. Administrator, Reseller and
+/// Customer (A6: customers manage their own sites' FTP accounts; sub-users act through the parent
+/// subscription). Site ownership is NOT decided here: <c>CustomerAccess.EnsureSiteAsync</c> does it.
+/// </summary>
 internal sealed class FtpActorAuthority
 {
     private readonly Guid userId;
@@ -23,16 +28,17 @@ internal sealed class FtpActorAuthority
         Principal = new ClaimsPrincipal(principal.Identities.Select(identity => new ClaimsIdentity(identity)));
         userId = Principal.GetRequiredUserId();
         role = Principal.FindFirst(ClaimTypes.Role)?.Value ?? "";
-        if (role is not ("Administrator" or "Reseller")) throw new AppException("auth.forbidden", 403, 403);
+        if (role is not ("Administrator" or "Reseller" or "Customer")) throw new AppException("auth.forbidden", 403, 403);
         cookie = PanelAuthentication.IsTokenAuthenticated(Principal)
             ? null : CookieSessionValidator.CaptureSourceActor(Principal);
     }
 
-    internal async Task ValidateAsync(AdaPanelDbContext db, SessionRevocationStore sessions, CancellationToken token)
+    internal async Task ValidateAsync(AdaPanelDbContext db, SessionRevocationStore sessions, CancellationToken token,
+        ICustomerScopeService? scopes = null)
     {
         token.ThrowIfCancellationRequested();
         var actor = await db.Users.AsNoTracking().SingleOrDefaultAsync(user => user.Id == userId, token);
-        if (actor is null || !actor.IsActive || actor.Role is not (UserRole.Administrator or UserRole.Reseller) || actor.Role.ToString() != role)
+        if (actor is null || !actor.IsActive || actor.Role is not (UserRole.Administrator or UserRole.Reseller or UserRole.Customer) || actor.Role.ToString() != role)
             Unauthorized();
         var stamp = CookieSessionValidator.ComputeStamp(actor!.PasswordHash);
         if (acceptedStamp is not null && acceptedStamp != stamp) Unauthorized();
@@ -44,6 +50,13 @@ internal sealed class FtpActorAuthority
             if (admin is not { IsActive: true, Role: UserRole.Administrator } ||
                 CookieSessionValidator.ComputeStamp(admin.PasswordHash) != delegation.CredentialStamp ||
                 await sessions.IsRevokedAsync(delegation.SessionId, token)) Unauthorized();
+        }
+        // Alt-kullanıcı: yetki ebeveyn aboneliğinden gelir; ebeveyn pasifleştirildiyse alt-kullanıcı da düşer.
+        if (scopes is not null && actor.Role == UserRole.Customer
+            && await scopes.GetParentSubscriptionAsync(userId, token) is { } parentId)
+        {
+            var parent = await db.Users.AsNoTracking().SingleOrDefaultAsync(user => user.Id == parentId, token);
+            if (parent is not { IsActive: true, Role: UserRole.Customer }) Unauthorized();
         }
         acceptedStamp ??= stamp;
         token.ThrowIfCancellationRequested();

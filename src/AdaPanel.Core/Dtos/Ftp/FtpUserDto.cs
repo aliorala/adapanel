@@ -68,6 +68,12 @@ public sealed class FtpUserDto
 
     public bool IsEnabled { get; set; }
 
+    /// <summary>
+    /// Salt-okunur hesap (NTFS ReadAndExecute + IIS FTP izni Read). Listede panelin kaydıdır;
+    /// güncelleme ucu IIS kuralını ve NTFS hakkını GERİ OKUYUP doğruladıktan sonra yazar/döner.
+    /// </summary>
+    public bool ReadOnly { get; set; }
+
     public DateTime CreatedAtUtc { get; set; }
 
     public string ServerAddress { get; set; } = string.Empty;
