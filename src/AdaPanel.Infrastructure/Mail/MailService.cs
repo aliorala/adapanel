@@ -276,7 +276,7 @@ public sealed partial class MailService(
                         Address = address,
                         // SABİT true DEĞİL: hesabın kendi nesnesine SORULUR. Alan yoksa null
                         // ("ölçülemedi") döner — bkz. MailAccountDto.Active.
-                        Active = OkunanEtkinlik(detail.Value),
+                        Active = MigrationAccountActive(detail.Value) ?? OkunanEtkinlik(detail.Value),
                         MaxSizeMB = (int)(ReadAccountQuotaBytes(detail.Value) / (1024 * 1024)),
                         CurrentSizeMB = (int)(GetLongField(detail.Value, "usedDiskQuota") / (1024 * 1024))
                     });
