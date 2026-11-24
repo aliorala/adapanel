@@ -198,8 +198,9 @@ public sealed class SiteCascadeDeletionService(
                 siteName);
         }
 
-        // 7) SSL durumu (panelin ssl.json'undaki o siteye ait sertifika kayıtları).
-        await StepAsync(result, "SSL kayıtları", () => sslService.RemoveSiteAsync(siteName, cancellationToken));
+        // 7) SSL temizliği IIS sitesi kaldırıldıktan SONRA yapılır (adım 9b): sertifikanın başka
+        //    bağlama/FTPS tarafından kullanılıp kullanılmadığı canlı IIS'ten ölçülür ve bu siteninki
+        //    o ölçümden düşmüş olmalıdır.
 
         // 8) Müşteri atamaları.
         await StepAsync(result, "Müşteri atamaları", () => customerScopeService.RemoveSiteFromAllScopesAsync(siteName, cancellationToken));
@@ -254,6 +255,18 @@ public sealed class SiteCascadeDeletionService(
             () => iisSiteService.DeleteSiteAsync(siteName, cancellationToken),
             SiteLeftoverKinds.Site,
             siteName);
+
+        // 9b) SSL: win-acme yenilemesini iptal et + panel kaydını sil + sertifikayı (kullanan yoksa) depodan çıkar.
+        //     IIS sitesi gitmediyse atlanır: site hâlâ o sertifikayı kullanıyor olabilir, kayıtları da duruyor.
+        if (!result.Leftovers.Any(l => l.Kind == SiteLeftoverKinds.Site))
+        {
+            await StepAsync(
+                result,
+                "SSL kayıtları ve yenileme",
+                () => sslService.RemoveSiteAsync(siteName, cancellationToken),
+                SiteLeftoverKinds.Other,
+                $"ssl:{siteName}");
+        }
 
         // 10) Dosyalar (en son; site kaldırıldıktan sonra). Uygulama kökü, fiziksel yolu
         //     da kapsıyorsa onunla birlikte gider.
