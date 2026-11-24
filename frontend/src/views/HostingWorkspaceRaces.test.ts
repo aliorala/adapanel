@@ -7,9 +7,12 @@ import { getQuota, setQuota, removeQuota, installFsrm, type SiteDiskQuota } from
 import { getGitDeployment, configureGitDeployment, deployGit, type GitDeployment } from "../api/git";
 import { updateDocumentRoot, enableFrameworkRewrite, repairSitePermissions } from "../api/sites";
 import { useSitesStore } from "../stores/sites";
+import { useAuthStore } from "../stores/auth";
 import { invalidateSessionRequests } from "../api/client";
 
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
+// Kotayı kaldırma onay ister (yeni): yarış testi onayı veren kullanıcıyı temsil eder.
+vi.mock("../components/ConfirmDialog.vue", () => ({ useConfirm: () => ({ confirm: async () => true }) }));
 vi.mock("../router", () => ({ default: { push: vi.fn() } }));
 vi.mock("../api/siteHosting", async original => ({ ...await original<object>(), getSiteHostingSettings: vi.fn(), updateSiteHostingSettings: vi.fn(), runComposerInstall: vi.fn() }));
 vi.mock("../api/quota", () => ({ getQuota: vi.fn(), setQuota: vi.fn(), removeQuota: vi.fn(), installFsrm: vi.fn() }));
@@ -51,6 +54,8 @@ async function flush() { for (let i = 0; i < 12; i++) await nextTick(); }
 async function mount() {
   const renderer = createRenderer<object, object>({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
   const pinia = createPinia(); setActivePinia(pinia); useSitesStore().selectedSiteName = "a.test";
+  // Rol süzgeci (Git/kota/Composer yalnız yönetici-bayi): bu yarış testleri YÖNETİCİ yoluyla ölçülür.
+  useAuthStore().session = { isAuthenticated: true, requiresSetupWizard: false, user: { id: "actor", role: "Administrator", userName: "actor", email: "a@example.test", preferredLanguage: "en", isTwoFactorEnabled: false, isActive: true, lastLoginAtUtc: null } } as never;
   app = renderer.createApp({ ...SiteHostingView, render: () => h("section") } as Component).use(pinia); app.provide(ssrContextKey, {});
   const state = (app.mount({}).$ as unknown as { setupState: State }).setupState; await flush(); return state;
 }
