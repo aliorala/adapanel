@@ -31,6 +31,7 @@ async function mount() {
   app = renderer.createApp({ ...UpdateView, render: () => h("section") } as Component).use(pinia); app.provide(ssrContextKey, {});
   const state = (app.mount({}).$ as unknown as { setupState: State }).setupState; await flush(); return state;
 }
+function close() { app?.unmount(); app = undefined; }
 const gets = () => calls.filter(config => config.method === "get");
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-04T10:00:00Z")); invalidateSessionRequests(); calls = []; confirm.mockReset(); confirm.mockResolvedValue(true);
@@ -78,7 +79,7 @@ it("does not allow installing while the download runs, but keeps a valid staged 
   read = () => valid({ ...readyPackage, download: download("downloading") });
   const running = await mount();
   expect(running.canInstall).toBe(false);
-  app?.unmount(); app = undefined;
+  close();
   read = () => valid({ ...readyPackage, download: download("failed", { errorKey: "update.checksum_mismatch" }) });
   const failed = await mount();
   expect(failed.canInstall).toBe(true);
@@ -91,10 +92,10 @@ it("announces a persisted failure only once per failure, not on every page open"
   read = () => valid({ download: download("failed", { errorKey: "update.download_interrupted", updatedAtUtc: "2026-10-04T09:00:00Z" }) });
   const first = await mount();
   expect(first.notice).toBe("update.download_interrupted");
-  app?.unmount(); app = undefined;
+  close();
   const second = await mount();
   expect(second.notice).toBe("");
-  app?.unmount(); app = undefined;
+  close();
   read = () => valid({ download: download("failed", { errorKey: "update.download_interrupted", updatedAtUtc: "2026-10-04T09:30:00Z" }) });
   expect((await mount()).notice).toBe("update.download_interrupted");
 });
