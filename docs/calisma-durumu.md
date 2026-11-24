@@ -1,5 +1,14 @@
 # Çalışma durumu — canlı kayıt
 
+## 2026-11-24 — GÜNCEL ÖZET: 0.8.155 + denetim dalı (fix/denetim-2026-11-23)
+
+Yayımlı son sürüm 0.8.155 (PHP site hata günlüğü yalıtımı). Bu bölüm ondan sonraki durumu özetler; aşağıdaki eski kayıtlar tarihsel olup güncel durum yerine geçmez.
+
+- Denetim düzeltmeleri `fix/denetim-2026-11-23` dalında dalga dalga yürüyor; ana dala henüz birleşmedi, canlıya gitmedi. Ayrıntı: `docs/sistem-denetimi-2026-11-23.md` (ana kopyada, takipsiz).
+- Dalga 4 (hijyen, ön yüz, test): `.gitignore` sır dosyalarını (.env, *.pem, *.key, *.p12, *.pfx), TestResults/ ve `.claude/settings.local.json` dosyasını dışlıyor; settings.local.json takipten çıktı. Sunucudan gelen adresler `safeHref` ile süzülüyor (yalnız http/https/mailto); `secureEntryPath` yönlendirmesi yalnız tek "/" ile başlayan göreli yolu kabul ediyor. Antivirüs sekmesi kurulu değilken açıkça "koruma yok" diyor. Test boşlukları: AutomationWorker, LogRotationWorker, BruteForceRecovery ve WebDbClient için davranış testleri eklendi; boş SmokeTests kaldırıldı.
+- Açık: CODEX_MEMORY.md gerçek sunucu IP'si içeriyor ve geçmişte duruyor (depo herkese açık görünüyor): karar bekliyor. Kökteki promp.md, release-body.json ve 0 baytlık `veritabani` dosyasına dokunulmadı.
+- Doğrulanmayan: tam test takımı bu dalgada koşulmadı (şef birleşik kodda koşar).
+
 ## 2026-09-27 — SON DURUM: 0.8.69 canlı — sürüm kaydı, FTP ve SSL onarımı
 
 Redis/win-acme latest kayıtları güncelleme denetiminde kurulu kök EXE'nin PE sürümünden düzeltilir; canlıda Redis5.0.14.1 ve win-acme2.2.9.1701 kaydedildi. Program çalıştırılmaz; parolalar/kurulum tarihi/servis durumu korunur. Var olan sayısal sürüm ve dışarıdan algılanan kurulum değiştirilmez. Ürün sürümündeki beta/geçersiz değer FileVersion ile gizlenmez. Yeni Redis kurulumunda da ölçülen dosya sürümü kullanılır. FTP NLST ./,../ ve tam yol nokta girdileri artık boş klasörü dolu göstermez; RMD sınırları, dolu klasör ve kök koruması değişmedi. Otomasyon alt başlığındaki bozuk Türkçe düzeltildi.

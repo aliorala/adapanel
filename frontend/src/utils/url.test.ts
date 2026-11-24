@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { maskSecretsInUri, toReachableUrl } from "./url";
+import { maskSecretsInUri, safeHref, safeRelativePath, toReachableUrl } from "./url";
 
 /*
  * Bu testler "TARAYICIDA AÇ" akışlarının çıkış kapısını koruyor.
@@ -99,5 +99,81 @@ describe("maskSecretsInUri", () => {
   it("temiz adresi masked=false ile geçiriyor", () => {
     const sonuc = maskSecretsInUri("https://sunucu.ornek/yedek");
     expect(sonuc.masked).toBe(false);
+  });
+});
+
+
+describe("safeHref", () => {
+  it.each([
+    ["javascript:alert(1)", "#"],
+    ["  JaVaScRiPt:alert(1)", "#"],
+    ["data:text/html,x", "#"],
+    ["vbscript:x", "#"],
+    ["//evil.example/x", "#"],
+    ["/\\evil.example", "#"],
+    ["/\t/evil", "#"],
+    ["/%5Cevil", "#"],
+    ["/%5cevil", "#"],
+    ["/%2F/evil", "#"],
+    ["/%2f/evil", "#"],
+    ["/a\nb", "#"],
+    ["/a\rb", "#"],
+    ["", "#"],
+    [null, "#"],
+    ["https://a.example/x", "https://a.example/x"],
+    ["http://a.example", "http://a.example"],
+    ["mailto:a@b.c", "mailto:a@b.c"],
+    ["/api/v1/x", "/api/v1/x"]
+  ])("%s -> %s", (input, expected) => {
+    expect(safeHref(input as string | null)).toBe(expected);
+  });
+});
+
+describe("safeRelativePath", () => {
+  it.each([
+    ["/panel", "/panel"],
+    ["//evil.example", ""],
+    ["/\\evil.example", ""],
+    ["/\t/evil", ""],
+    ["/%5Cevil", ""],
+    ["/%5cevil", ""],
+    ["/%2F/evil", ""],
+    ["/%2f/evil", ""],
+    ["/a\nb", ""],
+    ["/a\rb", ""],
+    ["\\evil.example", ""],
+    ["/\\evil.example", ""],
+    ["\\\\evil.example", ""],
+    ["https://evil.example", ""],
+    ["panel", ""],
+    ["", ""]
+  ])("%s -> %s", (input, expected) => {
+    expect(safeRelativePath(input)).toBe(expected);
+  });
+});
+
+import { getDownloadUrl } from "../api/files";
+
+const BS = String.fromCharCode(92);
+
+describe("safeHref with query strings", () => {
+  it("keeps encoded slashes and backslashes in the query", () => {
+    expect(safeHref("/api/v1/files/download?path=%2Fsite%2Fa.txt")).toBe("/api/v1/files/download?path=%2Fsite%2Fa.txt");
+    const windows = "/api/v1/files/download?path=" + encodeURIComponent(["C:", "sites", "a.txt"].join(BS));
+    expect(windows).toContain("%5C");
+    expect(safeHref(windows)).toBe(windows);
+  });
+
+  it("passes the real getDownloadUrl output unchanged", () => {
+    for (const path of ["/site/a b.txt", ["C:", "sites", "x", "a.txt"].join(BS), "/ü/ğ#1?.txt"]) {
+      const url = getDownloadUrl(path);
+      expect(safeHref(url)).toBe(url);
+    }
+  });
+
+  it("still rejects encoded separators in the path part and raw backslash in the query", () => {
+    expect(safeHref("/%2F/evil")).toBe("#");
+    expect(safeHref("/%5Cevil?x=1")).toBe("#");
+    expect(safeHref("/ok?x=" + BS + "y")).toBe("#");
   });
 });

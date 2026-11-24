@@ -661,6 +661,7 @@
 <script setup lang="ts">
 import { getFormattingLocale } from '../utils/locale';
 import { abortableDelay, pollProgress } from "../utils/progressPolling";
+import { safeRelativePath } from "../utils/url";
 import { closeConfirmDialog } from "../components/ConfirmDialog.vue";
 import { closePromptDialog } from "../components/PromptDialog.vue";
 import router from "../router";
@@ -1384,6 +1385,16 @@ async function loadAuthenticatedDashboard() {
   return true;
 }
 
+/** Yalnız tek "/" ile başlayan göreli yola yönlendirir; "//evil" ve "\evil" reddedilir. */
+function redirectToSecurePath(path: string) {
+  const safe = safeRelativePath(path);
+  if (!safe) {
+    showBanner(t("panel.setup.unsafeRedirect"), true);
+    return;
+  }
+  window.location.assign(safe);
+}
+
 async function submitSetup() {
   try {
     const result = await setupStore.initialize({ ...setupForm });
@@ -1398,7 +1409,7 @@ async function submitSetup() {
     }
 
     showBanner(`${t("panel.setup.success")} ${result.secureEntryPath}`, false);
-    window.location.assign(result.secureEntryPath);
+    redirectToSecurePath(result.secureEntryPath);
   } catch (error) {
     showBanner(resolveApiMessage(error), true);
   }
@@ -1433,7 +1444,7 @@ const installHalted = computed(() =>
  */
 function continueAfterInstall() {
   if (setupSecurePath.value) {
-    window.location.assign(setupSecurePath.value);
+    redirectToSecurePath(setupSecurePath.value);
   } else {
     window.location.reload();
   }
@@ -1862,7 +1873,7 @@ async function saveSecuritySettings() {
     showBanner(t("panel.security.saved"), false);
     const nextPath = updated.secureEntryPath.replace("/", "");
     if (nextPath && nextPath !== previousPath) {
-      window.location.assign(updated.secureEntryPath);
+      redirectToSecurePath(updated.secureEntryPath);
     }
   } catch (error) {
     showBanner(resolveApiMessage(error), true);

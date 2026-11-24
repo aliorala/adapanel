@@ -206,8 +206,8 @@
                `.link-btn` tanimi `.domain-row-actions` altina hapsedilmisti — yani onizleme
                kartindaki "Ac" HICBIR dugme bicimi almiyor, kalin bir duz baglanti olarak
                ciziliyordu. Ayni isi yapan satir icindeki dugmeyle ayni gorunmeli. -->
-          <a class="secondary compact link-btn" :href="preview.url" target="_blank" rel="noopener">{{ t("panel.sites.previewOpenLink") }} ↗</a>
-          <a class="preview-url" :href="preview.url" target="_blank" rel="noopener">{{ preview.url }}</a>
+          <a class="secondary compact link-btn" :href="safeHref(preview.url)" target="_blank" rel="noopener">{{ t("panel.sites.previewOpenLink") }} ↗</a>
+          <a class="preview-url" :href="safeHref(preview.url)" target="_blank" rel="noopener">{{ preview.url }}</a>
         </p>
         <p class="meta">{{ t("panel.sites.previewHostsHint") }}</p>
         <code v-if="preview.hostsLine" class="preview-hosts">{{ preview.hostsLine }}</code>
@@ -227,7 +227,7 @@
               <strong :title="site.name">{{ site.name }}</strong>
               <a
                 class="domain-url"
-                :href="siteUrl(site)"
+                :href="safeHref(siteUrl(site))"
                 :title="siteUrl(site)"
                 target="_blank"
                 rel="noopener"
@@ -338,6 +338,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { primarySiteUrl } from "../utils/siteUrl";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";

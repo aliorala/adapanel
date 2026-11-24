@@ -73,7 +73,7 @@
           </p>
         </div>
 
-        <a v-if="siteUrl" class="site-link" :href="siteUrl" target="_blank" rel="noopener">
+        <a v-if="siteUrl" class="site-link" :href="safeHref(siteUrl)" target="_blank" rel="noopener">
           {{ t("panel.apps.openSite") }}
         </a>
       </article>
@@ -216,7 +216,7 @@
                  farkli ritimde akiyordu. -->
             <p class="meta">{{ t("panel.apps.resultHint") }}</p>
           </div>
-          <a v-if="siteUrl" class="site-link" :href="siteUrl" target="_blank" rel="noopener">
+          <a v-if="siteUrl" class="site-link" :href="safeHref(siteUrl)" target="_blank" rel="noopener">
             {{ t("panel.apps.openSite") }}
           </a>
         </div>
@@ -292,6 +292,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { isCancel } from "axios";
 import { useI18n } from "vue-i18n";
