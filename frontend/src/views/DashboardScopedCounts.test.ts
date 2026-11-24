@@ -201,14 +201,17 @@ it("loads a reseller's FTP count from the scoped existing endpoint", async () =>
   const { state } = await mount("Reseller"); await state.loadDashboardData();
   expect(apiClient.get).toHaveBeenCalledWith("/ftp/users"); expect(state.ftpUserCount).toBe(3);
 });
-it("does not fabricate a zero FTP count for a Customer whose role cannot read that endpoint", async () => {
+it("loads a Customer's own FTP count (A6: FtpController is readable by Customer), but never fabricates one for a subuser without site access", async () => {
   const { state } = await mount("Customer"); await state.loadDashboardData();
-  expect(apiClient.get).not.toHaveBeenCalledWith("/ftp/users"); expect(state.ftpUserCount).toBeNull();
+  expect(apiClient.get).toHaveBeenCalledWith("/ftp/users"); expect(state.ftpUserCount).toBe(3);
+  vi.mocked(apiClient.get).mockClear();
+  const sub = await mount("Customer", ["database"]); await sub.state.loadDashboardData();
+  expect(apiClient.get).not.toHaveBeenCalledWith("/ftp/users"); expect(sub.state.ftpUserCount).toBeNull();
 });
 it.each(["logout", "expired"])("clears the previous administrator's local FTP count on %s", async end => {
   const { state } = await mount("Administrator"); await state.loadDashboardData(); expect(state.ftpUserCount).toBe(3);
   if (end === "logout") await state.logout(); else state.handleSessionExpired();
-  signIn("Customer"); state.mode = "dashboard"; await state.loadDashboardData();
+  signIn("Customer", ["database"]); state.mode = "dashboard"; await state.loadDashboardData();
   expect(state.ftpUserCount).toBeNull();
 });
 it("does not let a late administrator FTP response publish into the next actor", async () => {
