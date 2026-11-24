@@ -348,7 +348,7 @@ public sealed class SubscriptionEnforcementService(
         // KARDES YOL, AYNI HATA: acilmayan kaynak sessiz kalmaz. Yalniz askidan ONCE acik olanlar acilir
         // (musterinin elle durdurdugu site/hesap/gorev kapali kalir); acilamayanlar bekleyen adimdir.
         var rapor = await suspender.RestoreAsync(
-            userId, cancellationToken, oncekiKapsam.IsSuspended ? oncekiKapsam.Sites : null);
+            userId, cancellationToken, oncekiKapsam.Sites);
         var baslatilamayan = rapor.SitesFailed;
 
         var (aktor, ip, tetikleyici) = Aktor();

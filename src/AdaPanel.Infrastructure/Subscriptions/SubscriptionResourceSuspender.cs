@@ -214,8 +214,9 @@ public sealed class SubscriptionResourceSuspender(
     /// <summary>Askıdan ÖNCE açık olan kaynakları geri açar; başaramadıklarını yeniden denenmek üzere tutar.</summary>
     /// <param name="userId">Abonelik.</param>
     /// <param name="legacySites">
-    /// Yalnız <b>önceki hal kaydı OLMAYAN</b> bir askıyı kaldırırken (bu düzeltmeden ÖNCE alınmış askılar)
-    /// başlatılacak siteler; null ise kayıt yoksa hiçbir şey açılmaz. Kayıt yokken sitelerin önceki halini
+    /// Yalnız <b>önceki hal kaydı OLMAYAN</b> bir askıyı kaldırırken (bu düzeltmeden ÖNCE alınmış askılar, ya da
+    /// hiç askıda olmayan aboneliğe yapılan açık "askıyı kaldır" çağrısı) başlatılacak siteler; null ise kayıt
+    /// yoksa hiçbir şey açılmaz (zorlama turundaki yeniden deneme böyle çağırır: kendiliğinden site AÇMAZ). Kayıt yokken sitelerin önceki halini
     /// bilemeyiz; hepsini açmak (eski davranış) askıda kalmış müşteriyi sonsuza dek kapalı bırakmaktan iyidir.
     /// </param>
     public async Task<SuspensionReport> RestoreAsync(Guid userId, CancellationToken cancellationToken,
