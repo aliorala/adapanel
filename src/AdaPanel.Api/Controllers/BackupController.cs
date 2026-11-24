@@ -657,6 +657,30 @@ public sealed class BackupController(
         return Ok(ApiResponse<BackupVerificationResultDto>.Ok(result, "backup.verified"));
     }
 
+    /// <summary>
+    /// Yalitilmis test geri yukleme: yedek gecici klasore acilip dogrulanir, klasor silinir; canli veriye
+    /// dokunulmaz. Yalniz yonetici (arsivin tum icerigi okunur). Sonuc denetim kaydina yazilir.
+    /// </summary>
+    [HttpPost("{backupId}/test-restore")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<BackupTestRestoreResultDto>>> TestRestoreAsync(
+        string backupId, [FromBody] BackupTestRestoreRequest? request, CancellationToken cancellationToken)
+    {
+        var result = await backupService.TestRestoreAsync(backupId, request?.EncryptionPassword, cancellationToken);
+
+        await auditService.WriteAsync(
+            "backup.test_restore",
+            $"backup:{backupId}",
+            $"outcome={result.Outcome}; entries={result.EntryCount}; fileFailures={result.FileFailures}; " +
+            $"dumps={result.DatabaseDumpsChecked}; dumpFailures={result.DatabaseDumpFailures}; " +
+            $"dumpsUnchecked={result.DatabaseDumpsUnchecked}; cleanedUp={result.CleanedUp}",
+            User.GetRequiredUserId(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
+        return Ok(ApiResponse<BackupTestRestoreResultDto>.Ok(result, "backup.test_restore_" + result.Outcome));
+    }
+
     /// <summary>Zip yedeğinin içeriğine dizin bazlı gözatma (granüler geri yükleme).</summary>
     [HttpGet("{backupId}/entries")]
     public async Task<ActionResult<ApiResponse<BackupEntriesDto>>> GetEntriesAsync(
