@@ -59,28 +59,33 @@ public sealed class AppRuntimeController(
     }
 
     [HttpPost("{siteName}/apps/stop")]
-    public Task<ActionResult<ApiResponse<AppRuntimeSiteConfigurationDto>>> StopAppAsync(string siteName, CancellationToken cancellationToken) =>
-        ControlAsync(siteName, "stopped", "appruntime.stopped",
-            (before, token) => appRuntimeService.StopAppAsync(siteName, before, token), cancellationToken);
+    public async Task<ActionResult<ApiResponse<AppRuntimeSiteConfigurationDto>>> StopAppAsync(string siteName, CancellationToken cancellationToken)
+    {
+        var configuration = await ConfigureAuthorizedAsync(siteName,
+            before => appRuntimeService.StopAppAsync(siteName, before, cancellationToken), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        await WriteAuditAsync("appruntime.stopped", siteName, "Node.js/Python", cancellationToken, $"Hosted application was stopped for '{siteName}'.");
+        return Ok(ApiResponse<AppRuntimeSiteConfigurationDto>.Ok(configuration, "appruntime.stopped"));
+    }
 
     [HttpPost("{siteName}/apps/start")]
-    public Task<ActionResult<ApiResponse<AppRuntimeSiteConfigurationDto>>> StartAppAsync(string siteName, CancellationToken cancellationToken) =>
-        ControlAsync(siteName, "started", "appruntime.started",
-            (before, token) => appRuntimeService.StartAppAsync(siteName, before, token), cancellationToken);
+    public async Task<ActionResult<ApiResponse<AppRuntimeSiteConfigurationDto>>> StartAppAsync(string siteName, CancellationToken cancellationToken)
+    {
+        var configuration = await ConfigureAuthorizedAsync(siteName,
+            before => appRuntimeService.StartAppAsync(siteName, before, cancellationToken), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        await WriteAuditAsync("appruntime.started", siteName, "Node.js/Python", cancellationToken, $"Hosted application was started for '{siteName}'.");
+        return Ok(ApiResponse<AppRuntimeSiteConfigurationDto>.Ok(configuration, "appruntime.started"));
+    }
 
     [HttpPost("{siteName}/apps/restart")]
-    public Task<ActionResult<ApiResponse<AppRuntimeSiteConfigurationDto>>> RestartAppAsync(string siteName, CancellationToken cancellationToken) =>
-        ControlAsync(siteName, "restarted", "appruntime.restarted",
-            (before, token) => appRuntimeService.RestartAppAsync(siteName, before, token), cancellationToken);
-
-    private async Task<ActionResult<ApiResponse<AppRuntimeSiteConfigurationDto>>> ControlAsync(string siteName, string verb,
-        string messageKey, Func<Func<SiteDto, CancellationToken, Task>, CancellationToken, Task<AppRuntimeSiteConfigurationDto>> run,
-        CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<AppRuntimeSiteConfigurationDto>>> RestartAppAsync(string siteName, CancellationToken cancellationToken)
     {
-        var configuration = await ConfigureAuthorizedAsync(siteName, before => run(before, cancellationToken), cancellationToken);
+        var configuration = await ConfigureAuthorizedAsync(siteName,
+            before => appRuntimeService.RestartAppAsync(siteName, before, cancellationToken), cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        await WriteActionAuditAsync($"appruntime.{verb}", siteName, $"Hosted application was {verb} for '{siteName}'.", cancellationToken);
-        return Ok(ApiResponse<AppRuntimeSiteConfigurationDto>.Ok(configuration, messageKey));
+        await WriteAuditAsync("appruntime.restarted", siteName, "Node.js/Python", cancellationToken, $"Hosted application was restarted for '{siteName}'.");
+        return Ok(ApiResponse<AppRuntimeSiteConfigurationDto>.Ok(configuration, "appruntime.restarted"));
     }
 
     /// <summary>Barındırmayı kaldırır. YIKICI: site adı gövdede AYNEN onaylanmadan çalışmaz.</summary>
@@ -95,9 +100,8 @@ public sealed class AppRuntimeController(
         var result = await ConfigureAuthorizedAsync(siteName,
             before => appRuntimeService.RemoveAppAsync(siteName, request.DeleteLogs, before, cancellationToken), cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        await WriteActionAuditAsync("appruntime.removed", siteName,
-            $"Hosted application was removed for '{siteName}' (removed: {string.Join(',', result.Removed)}; leftovers: {result.Leftovers.Length}).",
-            cancellationToken);
+        await WriteAuditAsync("appruntime.removed", siteName, "Node.js/Python", cancellationToken,
+            $"Hosted application was removed for '{siteName}' (removed: {string.Join(',', result.Removed)}; leftovers: {result.Leftovers.Length}).");
         // KALINTI VARSA başarı anahtarı DEĞİL: kullanıcı kısmi temizliği "tamam" sanmasın.
         return Ok(ApiResponse<AppRuntimeRemovalResultDto>.Ok(result,
             result.Leftovers.Length == 0 ? "appruntime.removed" : "appruntime.removed_partial"));
@@ -110,18 +114,6 @@ public sealed class AppRuntimeController(
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var logs = await appRuntimeService.GetLogsAsync(siteName, tail, cancellationToken);
         return Ok(ApiResponse<AppRuntimeLogsDto>.Ok(logs));
-    }
-
-    private async Task WriteActionAuditAsync(string action, string siteName, string description, CancellationToken cancellationToken)
-    {
-        await auditService.WriteForSubscriptionAsync(
-            action,
-            $"appruntime:{siteName}",
-            description,
-            User.GetRequiredUserId(),
-            await AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken),
-            HttpContext.Connection.RemoteIpAddress?.ToString(),
-            cancellationToken);
     }
 
     private async Task<T> ConfigureAuthorizedAsync<T>(string siteName,
@@ -153,12 +145,12 @@ public sealed class AppRuntimeController(
     /// kendileri olduğu için kiracının denetim görünümünde HİÇ çıkmıyordu. Konu artık sitenin
     /// abonelik sahibidir; site sahipsizse (yöneticinin kendi sitesi) boş kalır.
     /// </remarks>
-    private async Task WriteAuditAsync(string action, string siteName, string runtimeLabel, CancellationToken cancellationToken)
+    private async Task WriteAuditAsync(string action, string siteName, string runtimeLabel, CancellationToken cancellationToken, string? description = null)
     {
         await auditService.WriteForSubscriptionAsync(
             action,
             $"appruntime:{siteName}",
-            $"{runtimeLabel} hosting was configured for '{siteName}'.",
+            description ?? $"{runtimeLabel} hosting was configured for '{siteName}'.",
             User.GetRequiredUserId(),
             await AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken),
             HttpContext.Connection.RemoteIpAddress?.ToString(),

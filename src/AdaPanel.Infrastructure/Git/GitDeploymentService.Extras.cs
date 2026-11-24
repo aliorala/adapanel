@@ -317,6 +317,9 @@ public sealed partial class GitDeploymentService
         if (!string.IsNullOrEmpty(record.HttpsTokenProtected) && (isHttps || isPlainHttp))
         {
             if (!isHttps) throw new AppException("git.token_requires_https", 409, 409);
+            // Jeton YALNIZ yapılandırılan depo konağına gider: panelin çözdüğü yönlendirme başka bir konağa
+            // çıkarsa (ör. ele geçirilmiş/yanlış adres) jeton oraya SIZDIRILMAZ.
+            if (!SameRepositoryHost(record.RepositoryUrl, url)) throw new AppException("git.token_redirect_blocked", 409, 409);
             var token = RequireProtector().Unprotect(record.HttpsTokenProtected);
             var username = string.IsNullOrWhiteSpace(record.HttpsUsername) ? "x-access-token" : record.HttpsUsername;
             var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{token}"));
@@ -353,6 +356,10 @@ public sealed partial class GitDeploymentService
         EnvironmentObserver?.Invoke(context.Environment);
         return context;
     }
+
+    internal static bool SameRepositoryHost(string configured, string effective) =>
+        Uri.TryCreate(configured.Trim(), UriKind.Absolute, out var a) && Uri.TryCreate(effective.Trim(), UriKind.Absolute, out var b) &&
+        string.Equals(a.Host, b.Host, StringComparison.OrdinalIgnoreCase) && a.Port == b.Port;
 
     /// <summary>Çıktıdan jetonu ve türevlerini siler (git bazen başlık/URL parçalarını yankılar).</summary>
     internal static string Scrub(string text, IEnumerable<string> secrets)

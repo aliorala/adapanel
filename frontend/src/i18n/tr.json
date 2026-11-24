@@ -6846,5 +6846,6 @@
   "php.version.removed": "PHP sürümü kaldırıldı.",
   "php.version.removed_partial": "PHP sürümü kaldırıldı ama bazı artıklar temizlenemedi (dosyalar kilitli olabilir). Ayrıntı için Günlükler'e bakın.",
   "php.version_in_use": "Bu PHP sürümünü kullanan siteler var; önce onları başka bir sürüme geçirin. Siteler ayrıntıda listelenir.",
-  "php.usage_unverified": "Bazı sitelerin PHP sürümü okunamadığı için kullanımda olup olmadığı doğrulanamadı; kaldırma yapılmadı."
+  "php.usage_unverified": "Bazı sitelerin PHP sürümü okunamadığı için kullanımda olup olmadığı doğrulanamadı; kaldırma yapılmadı.",
+  "git.token_redirect_blocked": "Panelin çözdüğü yönlendirme farklı bir konağa çıkıyor; jeton oraya gönderilmedi. Depo adresini kontrol edin."
 }

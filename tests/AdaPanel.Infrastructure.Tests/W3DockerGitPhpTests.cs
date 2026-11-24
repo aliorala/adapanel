@@ -312,6 +312,14 @@ public sealed class W3DockerGitPhpTests : IDisposable
     }
 
     [Theory]
+    [InlineData("https://a.test/x.git", "https://A.test/y.git", true)]
+    [InlineData("https://a.test/x.git", "https://b.test/x.git", false)]
+    [InlineData("https://a.test/x.git", "https://a.test:8443/x.git", false)]
+    [InlineData("git@a.test:x.git", "https://a.test/x.git", false)]
+    public void TheTokenOnlyTravelsToTheConfiguredRepositoryHost(string configured, string effective, bool same) =>
+        Assert.Equal(same, GitDeploymentService.SameRepositoryHost(configured, effective));
+
+    [Theory]
     [InlineData("http://repository.test/app.git")]
     [InlineData("git@example.test:me/app.git")]
     public async Task HttpsTokenIsRefusedForNonHttpsRepositories(string url)
