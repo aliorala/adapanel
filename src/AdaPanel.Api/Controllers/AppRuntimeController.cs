@@ -58,8 +58,74 @@ public sealed class AppRuntimeController(
         return Ok(ApiResponse<AppRuntimeSiteConfigurationDto>.Ok(configuration, "appruntime.python_updated"));
     }
 
-    private async Task<AppRuntimeSiteConfigurationDto> ConfigureAuthorizedAsync(string siteName,
-        Func<Func<SiteDto, CancellationToken, Task>, Task<AppRuntimeSiteConfigurationDto>> configure,
+    [HttpPost("{siteName}/apps/stop")]
+    public Task<ActionResult<ApiResponse<AppRuntimeSiteConfigurationDto>>> StopAppAsync(string siteName, CancellationToken cancellationToken) =>
+        ControlAsync(siteName, "stopped", "appruntime.stopped",
+            (before, token) => appRuntimeService.StopAppAsync(siteName, before, token), cancellationToken);
+
+    [HttpPost("{siteName}/apps/start")]
+    public Task<ActionResult<ApiResponse<AppRuntimeSiteConfigurationDto>>> StartAppAsync(string siteName, CancellationToken cancellationToken) =>
+        ControlAsync(siteName, "started", "appruntime.started",
+            (before, token) => appRuntimeService.StartAppAsync(siteName, before, token), cancellationToken);
+
+    [HttpPost("{siteName}/apps/restart")]
+    public Task<ActionResult<ApiResponse<AppRuntimeSiteConfigurationDto>>> RestartAppAsync(string siteName, CancellationToken cancellationToken) =>
+        ControlAsync(siteName, "restarted", "appruntime.restarted",
+            (before, token) => appRuntimeService.RestartAppAsync(siteName, before, token), cancellationToken);
+
+    private async Task<ActionResult<ApiResponse<AppRuntimeSiteConfigurationDto>>> ControlAsync(string siteName, string verb,
+        string messageKey, Func<Func<SiteDto, CancellationToken, Task>, CancellationToken, Task<AppRuntimeSiteConfigurationDto>> run,
+        CancellationToken cancellationToken)
+    {
+        var configuration = await ConfigureAuthorizedAsync(siteName, before => run(before, cancellationToken), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        await WriteActionAuditAsync($"appruntime.{verb}", siteName, $"Hosted application was {verb} for '{siteName}'.", cancellationToken);
+        return Ok(ApiResponse<AppRuntimeSiteConfigurationDto>.Ok(configuration, messageKey));
+    }
+
+    /// <summary>Barındırmayı kaldırır. YIKICI: site adı gövdede AYNEN onaylanmadan çalışmaz.</summary>
+    [HttpPost("{siteName}/apps/remove")]
+    public async Task<ActionResult<ApiResponse<AppRuntimeRemovalResultDto>>> RemoveAppAsync(
+        string siteName,
+        [FromBody] RemoveAppRuntimeRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(request.ConfirmSiteName?.Trim(), siteName, StringComparison.OrdinalIgnoreCase))
+            throw new AppException("appruntime.confirmation_required", 400, 400);
+        var result = await ConfigureAuthorizedAsync(siteName,
+            before => appRuntimeService.RemoveAppAsync(siteName, request.DeleteLogs, before, cancellationToken), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        await WriteActionAuditAsync("appruntime.removed", siteName,
+            $"Hosted application was removed for '{siteName}' (removed: {string.Join(',', result.Removed)}; leftovers: {result.Leftovers.Length}).",
+            cancellationToken);
+        // KALINTI VARSA başarı anahtarı DEĞİL: kullanıcı kısmi temizliği "tamam" sanmasın.
+        return Ok(ApiResponse<AppRuntimeRemovalResultDto>.Ok(result,
+            result.Leftovers.Length == 0 ? "appruntime.removed" : "appruntime.removed_partial"));
+    }
+
+    [HttpGet("{siteName}/apps/logs")]
+    public async Task<ActionResult<ApiResponse<AppRuntimeLogsDto>>> GetLogsAsync(
+        string siteName, [FromQuery] int tail = 200, CancellationToken cancellationToken = default)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        var logs = await appRuntimeService.GetLogsAsync(siteName, tail, cancellationToken);
+        return Ok(ApiResponse<AppRuntimeLogsDto>.Ok(logs));
+    }
+
+    private async Task WriteActionAuditAsync(string action, string siteName, string description, CancellationToken cancellationToken)
+    {
+        await auditService.WriteForSubscriptionAsync(
+            action,
+            $"appruntime:{siteName}",
+            description,
+            User.GetRequiredUserId(),
+            await AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+    }
+
+    private async Task<T> ConfigureAuthorizedAsync<T>(string siteName,
+        Func<Func<SiteDto, CancellationToken, Task>, Task<T>> configure,
         CancellationToken cancellationToken)
     {
         if (!User.IsInRole("Administrator") && !User.IsInRole("Reseller"))
