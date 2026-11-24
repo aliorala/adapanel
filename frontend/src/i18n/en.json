@@ -7192,5 +7192,21 @@
   "panel.backup.ftpSecurityPlain": "FTP (unencrypted)",
   "panel.backup.ftpSecurityTls": "FTPS (explicit TLS)",
   "panel.backup.ftpSecurityTlsHint": "The connection and data are encrypted with TLS. If the server offers no TLS or its certificate is invalid (chain, expiry, name) the backup is not sent; it never falls back to plain FTP.",
-  "panel.backup.ftpSecurityPlainWarning": "Plain FTP sends your user name, password and backup content unencrypted. Choose FTPS if your server supports it."
+  "panel.backup.ftpSecurityPlainWarning": "Plain FTP sends your user name, password and backup content unencrypted. Choose FTPS if your server supports it.",
+  "panel.aiConnection.formAllowedIps": "Allowed IP addresses (optional)",
+  "panel.aiConnection.formAllowedIpsPlaceholder": "203.0.113.5, 198.51.100.0/24",
+  "panel.aiConnection.formAllowedIpsHint": "IP or CIDR, separated by commas, spaces or new lines. When set, the key only works from these addresses. Empty = no restriction.",
+  "panel.aiConnection.formReadOnly": "Read-only (GET requests only)",
+  "panel.aiConnection.formReadOnlyHint": "When on, the key can only make read requests (GET); MCP write tools, destructive and terminal permissions are off. phpMyAdmin/Adminer cannot be used with a key anyway.",
+  "panel.aiConnection.permReadOnlyScope": "Read-only scope",
+  "panel.aiConnection.permIpRestricted": "IP restricted",
+  "panel.cluster.fieldTls": "Verify TLS certificate",
+  "panel.cluster.fieldTlsHint": "Recommended. Leave this on.",
+  "panel.cluster.fieldTlsWarning": "Verification is off: anyone in the middle can read your administrator key. Use only for self-signed certificates on your own network.",
+  "panel.cluster.tlsOff": "TLS verification off",
+  "apitoken.invalid_ip_list": "The allowed IP list is invalid. Each entry must be an IP or CIDR (at most 32 entries).",
+  "apitoken.ip_not_allowed": "This API key cannot be used from this IP address.",
+  "apitoken.read_only_scope": "This API key is read-only; it can only make GET requests.",
+  "apitoken.not_while_impersonating": "API keys cannot be created while signed in on behalf of another user.",
+  "security.bruteforce.ban_not_found": "No ban was found for this address."
 }

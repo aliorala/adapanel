@@ -16,6 +16,12 @@ public sealed class ApiTokenDto
 
     public bool AllowTerminal { get; set; }
 
+    /// <summary>Salt okunur: yalnız GET/HEAD.</summary>
+    public bool ReadOnly { get; set; }
+
+    /// <summary>IP/CIDR izin listesi (virgülle ayrılmış); boş = kısıt yok.</summary>
+    public string? AllowedIps { get; set; }
+
     public DateTime CreatedAtUtc { get; set; }
 
     public DateTime? ExpiresAtUtc { get; set; }
@@ -45,6 +51,13 @@ public sealed class CreateApiTokenRequest
     /// Yalnızca yönetici açabilir.
     /// </summary>
     public bool AllowTerminal { get; set; }
+
+    /// <summary>Salt okunur kapsam: yalnız GET/HEAD. Açıksa yıkıcı ve terminal yetkisi de kapatılır.</summary>
+    public bool ReadOnly { get; set; }
+
+    /// <summary>İsteğe bağlı IP/CIDR izin listesi (virgül/boşluk/satır ile ayrılmış). Boş = kısıt yok.</summary>
+    [StringLength(4096)]
+    public string? AllowedIps { get; set; }
 
     /// <summary>Gün cinsinden ömür; 0 ya da boş = süresiz.</summary>
     [Range(0, 3650)]

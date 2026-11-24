@@ -80,8 +80,24 @@
           </label>
         </div>
 
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.aiConnection.formAllowedIps") }}</span>
+          <textarea
+            v-model="form.allowedIps"
+            rows="2"
+            maxlength="1024"
+            :placeholder="t('panel.aiConnection.formAllowedIpsPlaceholder')"></textarea>
+          <span class="field-hint">{{ t("panel.aiConnection.formAllowedIpsHint") }}</span>
+        </label>
+
         <label class="check-field">
-          <input v-model="form.allowDestructive" type="checkbox" />
+          <input v-model="form.readOnly" type="checkbox" />
+          <span>{{ t("panel.aiConnection.formReadOnly") }}</span>
+        </label>
+        <p class="field-hint">{{ t("panel.aiConnection.formReadOnlyHint") }}</p>
+
+        <label class="check-field">
+          <input v-model="form.allowDestructive" type="checkbox" :disabled="form.readOnly" />
           <span>{{ t("panel.aiConnection.formDestructive") }}</span>
         </label>
         <p class="field-hint">{{ t("panel.aiConnection.formDestructiveHint") }}</p>
@@ -90,7 +106,7 @@
              isteğinde bu bayrağı sessizce kapatır; arayüzde de yalnız yöneticiye gösterilir. -->
         <template v-if="isAdmin">
           <label class="check-field">
-            <input v-model="form.allowTerminal" type="checkbox" />
+            <input v-model="form.allowTerminal" type="checkbox" :disabled="form.readOnly" />
             <span>{{ t("panel.aiConnection.formTerminal") }}</span>
           </label>
           <p class="field-hint">{{ t("panel.aiConnection.formTerminalHint") }}</p>
@@ -133,6 +149,8 @@
             {{ token.lastUsedAtUtc ? formatDate(token.lastUsedAtUtc) : t("panel.aiConnection.neverUsed") }}
           </span>
           <span class="permission-tags">
+            <span v-if="token.readOnly" class="status-pill ok">{{ t("panel.aiConnection.permReadOnlyScope") }}</span>
+            <span v-if="token.allowedIps" class="status-pill warn" :title="token.allowedIps">{{ t("panel.aiConnection.permIpRestricted") }}</span>
             <span v-if="token.allowTerminal" class="status-pill danger">{{ t("panel.aiConnection.permTerminal") }}</span>
             <span v-if="token.allowDestructive" class="status-pill warn">{{ t("panel.aiConnection.permDestructive") }}</span>
             <span v-if="!token.allowTerminal && !token.allowDestructive" class="status-pill ok">
@@ -246,6 +264,8 @@ const form = reactive({
   name: "",
   allowDestructive: false,
   allowTerminal: false,
+  readOnly: false,
+  allowedIps: "",
   expiresInDays: 0
 });
 
@@ -283,9 +303,11 @@ async function create() {
   try {
     const created = await createApiToken({
       name,
-      allowDestructive: form.allowDestructive,
+      allowDestructive: !form.readOnly && form.allowDestructive,
+      readOnly: form.readOnly,
+      allowedIps: form.allowedIps.trim(),
       // Yönetici olmayan rolde kutu görünmez; yine de istekte açık gitmesin.
-      allowTerminal: isAdmin.value && form.allowTerminal,
+      allowTerminal: isAdmin.value && !form.readOnly && form.allowTerminal,
       expiresInDays: form.expiresInDays || 0
     });
 
@@ -294,6 +316,8 @@ async function create() {
     form.name = "";
     form.allowDestructive = false;
     form.allowTerminal = false;
+    form.readOnly = false;
+    form.allowedIps = "";
     form.expiresInDays = 0;
     showForm.value = false;
     await refresh();

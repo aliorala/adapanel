@@ -348,5 +348,10 @@
   "cluster.certificate_approval_required": "This server's certificate has not been approved: read the certificate and approve its fingerprint first. No connection is made without approval.",
   "cluster.certificate_mismatch": "The server's certificate does not match the approved fingerprint. If it was not renewed someone may be intercepting; if it was, approve it again.",
   "cluster.certificate_unreadable": "The server's certificate could not be read (no TLS or the handshake failed).",
-  "cluster.certificate_approved": "Certificate approved."
+  "cluster.certificate_approved": "Certificate approved.",
+  "apitoken.invalid_ip_list": "The allowed IP list is invalid. Each entry must be an IP or CIDR (at most 32 entries).",
+  "apitoken.ip_not_allowed": "This API key cannot be used from this IP address.",
+  "apitoken.read_only_scope": "This API key is read-only; it can only make GET requests.",
+  "apitoken.not_while_impersonating": "API keys cannot be created while signed in on behalf of another user.",
+  "security.bruteforce.ban_not_found": "No ban was found for this address."
 }

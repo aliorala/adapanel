@@ -48,6 +48,8 @@ public static class PanelTokenCapabilities
     public const string ReadOnlyReason = "apitoken.read_only";
 
     /// <summary>Reddin makine tarafından okunabilir sebebi (çeviri gerektirmeyen sabit etiket).</summary>
+    public const string ReadOnlyScopeReason = "apitoken.read_only_scope";
+
     public const string TerminalReason = "apitoken.terminal_not_allowed";
 
     /// <summary>Anahtar yıkıcı/yazma işlemlerine izin veriyor mu?</summary>
@@ -74,6 +76,15 @@ public static class PanelTokenCapabilities
     /// olmadan da doğrulanabiliyor. Anahtarla doğrulanmamış istekler (çerez) hiç dokunulmadan geçer —
     /// panel arayüzünün davranışı değişmez.
     /// </remarks>
+    /// <summary>Salt okunur kapsamın izin verdiği tek fiiller: GET, HEAD, OPTIONS (TRACE dahil DEĞİL).</summary>
+    public static bool IsReadOnlyScopeMethod(string? httpMethod)
+    {
+        var method = (httpMethod ?? string.Empty).Trim();
+        return method.Equals("GET", StringComparison.OrdinalIgnoreCase)
+            || method.Equals("HEAD", StringComparison.OrdinalIgnoreCase)
+            || method.Equals("OPTIONS", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static void EnsureAllowed(ClaimsPrincipal user, string? httpMethod, string? path)
     {
         if (!PanelAuthentication.IsTokenAuthenticated(user))
@@ -86,6 +97,14 @@ public static class PanelTokenCapabilities
         if (IsTerminalPath(path) && !AllowsTerminal(user))
         {
             throw new AppException("auth.forbidden", 403, 403, TerminalReason);
+        }
+
+        // SALT OKUNUR KAPSAM: GET/HEAD/OPTIONS dışında HER istek 403 — ReadOnlyPostRoutes istisnası
+        // ve AllowDestructive de bunu açamaz. Kapsam anahtarın yaratılışında seçilir.
+        if (user.FindFirst(PanelTokenAuthenticationHandler.ReadOnlyScopeClaim)?.Value == "true" &&
+            !IsReadOnlyScopeMethod(httpMethod))
+        {
+            throw new AppException("auth.forbidden", 403, 403, ReadOnlyScopeReason);
         }
 
         // Inspection/download bodies do not require destructive capability. Neighboring

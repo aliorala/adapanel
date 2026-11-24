@@ -10,7 +10,9 @@ namespace AdaPanel.Api.Controllers;
 // Auth COOKIE tabanlı olduğundan tarayıcının asset/AJAX istekleri panel cookie'sini taşır → [Authorize] geçer.
 // [IgnoreAntiforgeryToken]: phpMyAdmin POST'ları (login/sorgu) panelin CSRF token'ını taşımaz; bu uçta doğrulama kapalı.
 [ApiController]
-[Authorize(Roles = "Administrator")]
+// YALNIZ ÇEREZ: API anahtarı (özellikle salt okunur kapsam) phpMyAdmin/Adminer üzerinden veritabanını
+// değiştiremesin; vekil MVC yetenek filtresinin ReadOnly/yıkıcı denetimini anahtar için anlamlı kılamaz.
+[Authorize(Roles = "Administrator", AuthenticationSchemes = Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme)]
 [IgnoreAntiforgeryToken]
 [Route("api/v1/dbtools")]
 public sealed class DbToolsProxyController(

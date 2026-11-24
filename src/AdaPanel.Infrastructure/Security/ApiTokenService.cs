@@ -37,6 +37,15 @@ internal sealed class ApiTokenService(AdaPanelDbContext dbContext) : IApiTokenSe
             throw new AppException("apitoken.invalid_name", 400, 400);
         }
 
+        var allowedIps = ApiTokenIpAllowList.Normalize(request.AllowedIps);
+        if (allowedIps is null)
+        {
+            throw new AppException("apitoken.invalid_ip_list", 400, 400);
+        }
+
+        // Salt okunur anahtar yıkıcı/terminal yetkisi TAŞIYAMAZ: kapsam çelişkisi sessizce daraltılır.
+        var readOnly = request.ReadOnly;
+
         // Kriptografik rastgele; tahmin edilebilir bir üreteç (Guid/Random) burada kabul edilemez.
         var raw = RandomNumberGenerator.GetBytes(TokenByteLength);
         var value = TokenPrefix + Convert.ToHexString(raw).ToLowerInvariant();
@@ -47,8 +56,10 @@ internal sealed class ApiTokenService(AdaPanelDbContext dbContext) : IApiTokenSe
             Name = name,
             TokenHash = ComputeHash(value),
             Suffix = value[^4..],
-            AllowDestructive = request.AllowDestructive,
-            AllowTerminal = request.AllowTerminal,
+            AllowDestructive = !readOnly && request.AllowDestructive,
+            AllowTerminal = !readOnly && request.AllowTerminal,
+            ReadOnly = readOnly,
+            AllowedIps = allowedIps.Length == 0 ? null : allowedIps,
             ExpiresAtUtc = request.ExpiresInDays > 0
                 ? DateTime.UtcNow.AddDays(request.ExpiresInDays)
                 : null
@@ -139,6 +150,8 @@ internal sealed class ApiTokenService(AdaPanelDbContext dbContext) : IApiTokenSe
         Suffix = entity.Suffix,
         AllowDestructive = entity.AllowDestructive,
         AllowTerminal = entity.AllowTerminal,
+        ReadOnly = entity.ReadOnly,
+        AllowedIps = entity.AllowedIps,
         CreatedAtUtc = entity.CreatedAtUtc,
         ExpiresAtUtc = entity.ExpiresAtUtc,
         LastUsedAtUtc = entity.LastUsedAtUtc,

@@ -348,5 +348,10 @@
   "cluster.certificate_approval_required": "Bu sunucunun sertifikası onaylanmamış: önce sertifikayı okuyup parmak izini onaylayın. Onay olmadan bağlanılmaz.",
   "cluster.certificate_mismatch": "Sunucunun sertifikası onaylı parmak iziyle uyuşmuyor. Sertifika yenilenmediyse biri araya girmiş olabilir; yenilendiyse yeniden onaylayın.",
   "cluster.certificate_unreadable": "Sunucunun sertifikası okunamadı (TLS yok ya da el sıkışma başarısız).",
-  "cluster.certificate_approved": "Sertifika onaylandı."
+  "cluster.certificate_approved": "Sertifika onaylandı.",
+  "apitoken.invalid_ip_list": "İzinli IP listesi geçersiz. Her satır bir IP ya da CIDR olmalı (en çok 32 kayıt).",
+  "apitoken.ip_not_allowed": "Bu API anahtarı bu IP adresinden kullanılamaz.",
+  "apitoken.read_only_scope": "Bu API anahtarı salt okunurdur; yalnız GET istekleri yapabilir.",
+  "apitoken.not_while_impersonating": "Başka bir kullanıcı adına oturum açıkken API anahtarı oluşturulamaz.",
+  "security.bruteforce.ban_not_found": "Bu adres için kaldırılacak bir yasak bulunamadı."
 }

@@ -67,7 +67,7 @@ public sealed class ApiTokensController(
         await auditService.WriteAsync(
             "apitoken.created",
             "api-token",
-            $"Token '{created.Token.Name}' ({created.Token.Suffix}) created. destructive={created.Token.AllowDestructive}, terminal={created.Token.AllowTerminal}",
+            $"Token '{created.Token.Name}' ({created.Token.Suffix}) created. destructive={created.Token.AllowDestructive}, terminal={created.Token.AllowTerminal}, readOnly={created.Token.ReadOnly}, ipRestricted={!string.IsNullOrEmpty(created.Token.AllowedIps)}",
             User.GetRequiredUserId(),
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
