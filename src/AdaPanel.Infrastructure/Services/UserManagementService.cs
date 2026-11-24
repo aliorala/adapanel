@@ -488,7 +488,7 @@ public sealed class UserManagementService(
             // Satir ZATEN kaydedildi (commit sonrasi): sessiz gecmek, pasif musterinin kaynaklarinin acik
             // kaldigini gizlerdi. Hata yukari cikar; zorlama turu IsActive=false gorup kapatmayi yeniden dener.
             logger.LogError(exception, "Aski durumu uygulanamadi (kullanici kaydedildi): {User}", user.UserName);
-            throw new AppException("users.suspension_apply_failed", 500, 500, exception.Message);
+            throw new AppException("users.suspension_apply_failed", 500, 500);
         }
 
         // Pasifin KAYNAĞI askıdan ayrı alanda tutulur (bkz. yukarıdaki atomik blok): bayi PUT ile pasife
@@ -981,7 +981,7 @@ public sealed class UserManagementService(
             logger.LogError(exception, "Kullanici silindi ama kapsam kaydi kaldirilamadi: {UserId}", userId);
             rapor.Leftovers.Add(new UserDeletionLeftoverDto
             {
-                Kind = SiteLeftoverKinds.Site,
+                Kind = SiteLeftoverKinds.ScopeRecord,
                 Name = user.UserName,
                 Reason = $"kullanici silindi ama kapsam kaydi kaldirilamadi (yetim kayit) - {exception.Message}"
             });

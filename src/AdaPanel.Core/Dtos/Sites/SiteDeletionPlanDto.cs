@@ -158,5 +158,6 @@ public static class SiteLeftoverKinds
     public const string MailDomain = "mailDomain";
     public const string FtpUser = "ftpUser";
     public const string DnsZone = "dnsZone";
+    public const string ScopeRecord = "scopeRecord";
     public const string Other = "other";
 }

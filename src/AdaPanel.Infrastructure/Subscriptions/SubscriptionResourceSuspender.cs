@@ -50,7 +50,14 @@ public sealed class SubscriptionResourceSuspender(
     internal static string CronOwnerPrefix(Guid userId) => $"u{userId:N}--";
 
     /// <summary>Kaynakları kapatır (idempotent: tekrar çağrılabilir, önceki hal korunur).</summary>
-    public async Task<SuspensionReport> CloseAsync(Guid userId, IReadOnlyCollection<string> sites, CancellationToken cancellationToken)
+    /// <param name="legacyClose">
+    /// Yalniz <see cref="RetryAsync"/> kaydi OLMAYAN eski bir askiyi/pasifi yeniden kapatirken true verir. Eski kod siteleri
+    /// zaten durdurmustu; onlarin onceki hali bilinmez, bu yuzden "Stopped" gorunen siteler de OpenBefore'a girer
+    /// (eski "hepsini ac" varsayimi korunur). Aksi halde kayit olusur, Restore legacy yoluna dusmez ve musterinin siteleri
+    /// sessizce kapali kalirdi. FTP/cron mevcut durumlarina gore islenir.
+    /// </param>
+    public async Task<SuspensionReport> CloseAsync(Guid userId, IReadOnlyCollection<string> sites, CancellationToken cancellationToken,
+        bool legacyClose = false)
     {
         var state = await customerScopes.GetSuspensionStateAsync(userId, cancellationToken) ?? new SubscriptionSuspensionState();
         var failedSites = new List<string>();
@@ -72,6 +79,11 @@ public sealed class SubscriptionResourceSuspender(
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 logger.LogWarning(exception, "Askı: site durumu okunamadı, açık sayılıyor: {Site}", site);
+            }
+
+            if (!open && legacyClose)
+            {
+                AddOnce(state.OpenBefore, key);
             }
 
             if (!open)
@@ -348,7 +360,7 @@ public sealed class SubscriptionResourceSuspender(
             // Kayit YOKSA ama kapali olmaliysa (bu duzeltmeden onceki askilar, ya da kayit hic yazilamadi)
             // kapatma yeniden uygulanir: FTP/cron/posta durumu da boylece kaydedilir.
             return state is null || state.PendingClose.Count > 0
-                ? await CloseAsync(userId, sites, cancellationToken)
+                ? await CloseAsync(userId, sites, cancellationToken, legacyClose: state is null)
                 : null;
         }
 

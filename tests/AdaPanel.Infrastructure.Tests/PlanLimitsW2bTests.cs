@@ -698,6 +698,44 @@ public sealed class PlanLimitsW2bTests : IDisposable
     }
 
     [Fact]
+    public async Task Eski_askida_site_zaten_Stopped_gorunse_bile_askı_kalkinca_ACILIR()
+    {
+        // Eski kod siteleri durdurmustu ve kayit yazmamisti: Retry kapatmayi yeniden uygular ama sitelerin
+        // onceki hali bilinmez -> "hepsini ac" varsayimi korunmali; yoksa musteri kapali kalir.
+        var d = Kur(s => s.Ekle("a.test", "Stopped"));
+        using var _b = d.Baglanti; using var _d = d.Db;
+        var musteri = Guid.NewGuid();
+        await d.Kapsamlar.SetScopeAsync(musteri, ["a.test"], 5, 1024);
+        await d.Kapsamlar.SuspendAsync(musteri, "manual");
+        Assert.Null(await d.Kapsamlar.GetSuspensionStateAsync(musteri));
+
+        await d.Servis.EnforceAllAsync();            // kayit yok + kapali olmali -> legacy kapatma, kayit yazilir
+        Assert.NotNull(await d.Kapsamlar.GetSuspensionStateAsync(musteri));
+        await d.Servis.ResumeAsync(musteri);
+
+        Assert.Equal("Started", d.Siteler.Durum["a.test"]);
+        Assert.Contains("1 site(s) started", d.Denetim.Son("subscription.resumed"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Eski_pasif_musteri_site_Stopped_gorunse_bile_aktiflesince_siteler_ACILIR()
+    {
+        var (d, musteri, yonetici) = await AskidaPasifMusteriAsync(pasif: true, askida: true);
+        using var _b = d.Baglanti; using var _d = d.Db;
+        // Eski kodla pasife alinmis gibi: kayit silinir, site Stopped, askida degil.
+        await d.Kapsamlar.SetSuspensionStateAsync(musteri, null);
+        await d.Kapsamlar.ResumeAsync(musteri);
+        await d.Servis.EnforceAllAsync();           // IsActive=false + kayit yok -> legacy kapatma
+        Assert.NotNull(await d.Kapsamlar.GetSuspensionStateAsync(musteri));
+        var um = KullaniciServisi(d.Db, denetim: d.Denetim, gercekKapsam: d.Kapsamlar,
+            suspender: new SubscriptionResourceSuspender(d.Kapsamlar, d.Siteler, NullLogger<SubscriptionResourceSuspender>.Instance));
+
+        await um.UpdateUserAsync(musteri, Guncelle(true), yonetici, null);
+
+        Assert.Equal("Started", d.Siteler.Durum["a.test"]);
+    }
+
+    [Fact]
     public async Task Rol_degisimiyle_musteri_olmak_YENI_abonelik_sayilir_ve_lisans_kapisindan_gecer()
     {
         var (conn, db) = await VeritabaniAsync();
