@@ -6,7 +6,7 @@ import { UserFacingError } from '../utils/apiError';
 const original = apiClient.defaults.adapter;
 let body: unknown;
 let lastRequest: { method?: string; url?: string; data?: unknown } = {};
-const user = { userName: 'fixture_ftp', siteName: 'fixture.test', homePath: 'C:\sites\fixture.test\sub', isEnabled: true, existsOnSystem: true, readOnly: true, createdAtUtc: '2026-10-04T00:00:00Z' };
+const user = { userName: 'fixture_ftp', siteName: 'fixture.test', homePath: ['C:', 'sites', 'fixture.test', 'sub'].join(String.fromCharCode(92)), isEnabled: true, existsOnSystem: true, readOnly: true, createdAtUtc: '2026-10-04T00:00:00Z' };
 beforeEach(() => {
   invalidateSessionRequests(); vi.stubGlobal('window', { location: { pathname: '/panel' } });
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ success: true, data: { requestToken: 'fixture' } }), { status: 200 })));
