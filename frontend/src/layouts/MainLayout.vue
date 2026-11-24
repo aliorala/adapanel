@@ -19,7 +19,7 @@
       <component
         :is="logoLinkUrl ? 'a' : 'div'"
         class="brand-card"
-        :href="logoLinkUrl || undefined"
+        :href="(logoLinkUrl ? safeHref(logoLinkUrl) : undefined)"
         :target="logoLinkUrl ? '_blank' : undefined"
         :rel="logoLinkUrl ? 'noopener noreferrer' : undefined">
         <img v-if="logoUrl" class="brand-logo" :src="logoUrl" :alt="panelName" />
@@ -247,6 +247,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { getFormattingLocale } from '../utils/locale';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";

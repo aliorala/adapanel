@@ -89,7 +89,7 @@
             <span v-if="!wp.versionMeasured" class="status-pill warn">{{ t("panel.software.installedVersionUnknown") }}</span>
             <span v-else-if="wp.updateAvailable" class="status-pill warn">{{ t("panel.wpkit.updateAvailable", { v: wp.latestVersion }) }}</span>
             <span v-else-if="wp.versionComparisonMeasured" class="status-pill ok">{{ t("panel.wpkit.upToDate") }}</span>
-            <a v-if="wp.adminUrl" :href="wp.adminUrl" target="_blank" rel="noopener" class="wp-admin-link">{{ t("panel.wpkit.openAdmin") }} ↗</a>
+            <a v-if="wp.adminUrl" :href="safeHref(wp.adminUrl)" target="_blank" rel="noopener" class="wp-admin-link">{{ t("panel.wpkit.openAdmin") }} ↗</a>
           </div>
 
           <div class="wp-actions">
@@ -213,7 +213,7 @@
             </div>
             <small class="hint">{{ t("panel.wpkit.cloneHint") }}</small>
             <div v-if="wpCloneResult" class="notice wp-cred" role="status">
-              <a v-if="wpCloneResult.siteStarted" :href="wpCloneResult.targetUrl" target="_blank" rel="noopener">{{ wpCloneResult.targetUrl }}</a>
+              <a v-if="wpCloneResult.siteStarted" :href="safeHref(wpCloneResult.targetUrl)" target="_blank" rel="noopener">{{ wpCloneResult.targetUrl }}</a>
               <span v-else>{{ wpCloneResult.targetUrl }}</span>
               · DB: <code>{{ wpCloneResult.targetDatabase }}</code>
               · {{ t("panel.wpkit.cloneUser") }}: <code>{{ wpCloneResult.databaseUser }}</code>
@@ -320,6 +320,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { computed, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import CommandConsole from "../components/CommandConsole.vue";

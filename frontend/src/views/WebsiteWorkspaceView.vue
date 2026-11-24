@@ -27,7 +27,7 @@
         <a
           v-if="primaryUrl"
           class="open-link"
-          :href="primaryUrl"
+          :href="safeHref(primaryUrl)"
           target="_blank"
           rel="noopener">
           {{ t("panel.sites.open") }} ↗
@@ -155,7 +155,7 @@ import { useSitesStore } from "../stores/sites";
 import { lazyView } from "../utils/lazyView";
 import { siteToolIcon } from "../utils/siteToolIcons";
 import { canUseSiteTool } from "../utils/siteToolAccess";
-import { toReachableUrl } from "../utils/url";
+import { safeHref, toReachableUrl } from "../utils/url";
 import SitesView from "./SitesView.vue";
 import SiteDetailView from "./SiteDetailView.vue";
 

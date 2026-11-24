@@ -85,7 +85,7 @@
           </button>
 
           <template v-if="preview">
-            <a class="preview-url" :href="preview.url" target="_blank" rel="noopener" :title="preview.url">
+            <a class="preview-url" :href="safeHref(preview.url)" target="_blank" rel="noopener" :title="preview.url">
               {{ preview.url }} ↗
             </a>
             <button
@@ -251,6 +251,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { primarySiteUrl } from "../utils/siteUrl";
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";

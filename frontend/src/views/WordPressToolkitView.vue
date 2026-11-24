@@ -35,8 +35,8 @@
       </div>
 
       <div class="wp-actions">
-        <a v-if="wp.adminUrl" class="secondary compact link-btn" :href="wp.adminUrl" target="_blank" rel="noopener">{{ t("panel.wp.openAdmin") }}</a>
-        <a v-if="wp.updateAvailable && wp.adminUrl" class="compact link-btn" :href="`${wp.adminUrl}update-core.php`" target="_blank" rel="noopener">{{ t("panel.wp.runUpdate") }}</a>
+        <a v-if="wp.adminUrl" class="secondary compact link-btn" :href="safeHref(wp.adminUrl)" target="_blank" rel="noopener">{{ t("panel.wp.openAdmin") }}</a>
+        <a v-if="wp.updateAvailable && wp.adminUrl" class="compact link-btn" :href="safeHref(`${wp.adminUrl}update-core.php`)" target="_blank" rel="noopener">{{ t("panel.wp.runUpdate") }}</a>
         <button class="secondary compact" v-bind="writeGate(busy)" @click="toggleMaintenance">
           {{ wp.maintenanceMode ? t("panel.wp.maintenanceOff") : t("panel.wp.maintenanceOn") }}
         </button>
@@ -90,6 +90,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import WordPressUpdates from "../components/WordPressUpdates.vue";

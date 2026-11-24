@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { maskSecretsInUri, toReachableUrl } from "./url";
+import { maskSecretsInUri, safeHref, safeRelativePath, toReachableUrl } from "./url";
 
 /*
  * Bu testler "TARAYICIDA AÇ" akışlarının çıkış kapısını koruyor.
@@ -99,5 +99,39 @@ describe("maskSecretsInUri", () => {
   it("temiz adresi masked=false ile geçiriyor", () => {
     const sonuc = maskSecretsInUri("https://sunucu.ornek/yedek");
     expect(sonuc.masked).toBe(false);
+  });
+});
+
+
+describe("safeHref", () => {
+  it.each([
+    ["javascript:alert(1)", "#"],
+    ["  JaVaScRiPt:alert(1)", "#"],
+    ["data:text/html,x", "#"],
+    ["vbscript:x", "#"],
+    ["//evil.example/x", "#"],
+    ["", "#"],
+    [null, "#"],
+    ["https://a.example/x", "https://a.example/x"],
+    ["http://a.example", "http://a.example"],
+    ["mailto:a@b.c", "mailto:a@b.c"],
+    ["/api/v1/x", "/api/v1/x"]
+  ])("%s -> %s", (input, expected) => {
+    expect(safeHref(input as string | null)).toBe(expected);
+  });
+});
+
+describe("safeRelativePath", () => {
+  it.each([
+    ["/panel", "/panel"],
+    ["//evil.example", ""],
+    ["\\evil.example", ""],
+    ["/\\evil.example", ""],
+    ["\\\\evil.example", ""],
+    ["https://evil.example", ""],
+    ["panel", ""],
+    ["", ""]
+  ])("%s -> %s", (input, expected) => {
+    expect(safeRelativePath(input)).toBe(expected);
   });
 });

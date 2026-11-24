@@ -719,7 +719,7 @@
               <h4>{{ t("panel.mail.autoconfig.probeUrls") }}</h4>
               <ul class="autoconfig-probes">
                 <li v-for="url in autoconfig.probeUrls" :key="url">
-                  <a :href="url" target="_blank" rel="noopener noreferrer">{{ url }}</a>
+                  <a :href="safeHref(url)" target="_blank" rel="noopener noreferrer">{{ url }}</a>
                   <button class="secondary compact row-button" @click="copyDnsValue(url)">
                     {{ t("panel.mail.dnsCopy") }}
                   </button>
@@ -975,6 +975,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { getFormattingLocale } from '../utils/locale';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";

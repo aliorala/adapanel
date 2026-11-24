@@ -30,10 +30,11 @@ public sealed class LogRotationWorker(
     IServiceScopeFactory scopeFactory,
     ILogger<LogRotationWorker> logger) : BackgroundService
 {
-    private static readonly TimeSpan Aralik = TimeSpan.FromHours(1);
+    // Yalnız testler kısaltır (InternalsVisibleTo); üretim değerleri varsayılandır.
+    internal TimeSpan Aralik { get; init; } = TimeSpan.FromHours(1);
 
     /// <summary>Açılışta IIS/veri kökü hazır olana kadar bekleme payı.</summary>
-    private static readonly TimeSpan IlkGecikme = TimeSpan.FromMinutes(5);
+    internal TimeSpan IlkGecikme { get; init; } = TimeSpan.FromMinutes(5);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {

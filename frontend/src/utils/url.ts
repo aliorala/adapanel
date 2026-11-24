@@ -84,3 +84,45 @@ export function openReachable(raw: string): void {
     window.open(url, "_blank", "noopener");
   }
 }
+
+const HREF_SEMALARI = new Set(["http:", "https:", "mailto:"]);
+
+/**
+ * Sunucudan gelen bir adresi `:href`e basmadan önce süzer: yalnız http, https ve mailto
+ * geçer; `javascript:`, `data:`, `vbscript:` ve ayrıştırılamayan her şey "#" olur.
+ * Göreli yollar ("/x", "x/y") geçer; "//evil" ağ-yolu referansı geçmez.
+ */
+export function safeHref(raw: string | null | undefined): string {
+  const value = (raw ?? "").trim();
+  if (!value) {
+    return "#";
+  }
+  if (value.startsWith("//") || value.startsWith("\\")) {
+    return "#";
+  }
+  if (value.startsWith("/") || value.startsWith("#") || value.startsWith("?")) {
+    return value;
+  }
+  try {
+    const url = new URL(value);
+    return HREF_SEMALARI.has(url.protocol) ? value : "#";
+  } catch {
+    // Şemasız göreli dizge ("a/b") olabilir; iki nokta içeriyorsa şema belirsizdir, reddet.
+    return value.includes(":") ? "#" : value;
+  }
+}
+
+/**
+ * Giriş sonrası yönlendirme hedefi: yalnız TEK "/" ile başlayan göreli yol kabul edilir.
+ * "//evil", "/\evil", "\evil" ve mutlak adresler boş dize döner (çağıran yönlendirmez).
+ */
+export function safeRelativePath(raw: string | null | undefined): string {
+  const value = (raw ?? "").trim();
+  if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
+    return "";
+  }
+  if (/[\u0000-\u001f]/.test(value)) {
+    return "";
+  }
+  return value;
+}
