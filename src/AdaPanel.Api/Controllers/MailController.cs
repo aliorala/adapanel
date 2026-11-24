@@ -178,14 +178,28 @@ public sealed class MailController(
                 exception.Message);
         }
 
+        // DNS yazimini asil olcen burasidir (servisteki ilk deneme ile bu ikinci deneme ayni
+        // bolgeyi hedefler): bu yuzden DNS uyarisi ONUN sonucuna gore belirlenir.
+        var warnings = workspace.Warnings
+            .Where(w => w != MailDomainWarnings.DnsNotPublished)
+            .ToList();
+        if (!dnsApplied)
+        {
+            warnings.Insert(0, MailDomainWarnings.DnsNotPublished);
+        }
+
+        workspace.Warnings = warnings;
+
         await auditService.AuditAsync(
             HttpContext,
             "mail.domain.created",
             request.DomainName,
-            $"Mail domain created (DNS records auto-applied: {dnsApplied}).",
+            $"Mail domain created (DNS records auto-applied: {dnsApplied}; warnings: {(warnings.Count == 0 ? "none" : string.Join(",", warnings))}).",
             await AlanAdiSahibiAsync(request.DomainName, cancellationToken));
 
-        return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, dnsApplied ? "mail.domain_created_dns" : "mail.domain_created"));
+        return Ok(ApiResponse<MailWorkspaceDto>.Ok(
+            workspace,
+            warnings.Count > 0 ? "mail.domain.completed_with_warnings" : "mail.domain_created_dns"));
     }
 
     [HttpDelete("domains/{domainName}")]
@@ -200,12 +214,15 @@ public sealed class MailController(
         // Domaine ait DNS kayıtlarını domain silinmeden ÖNCE çöz (silindikten sonra
         // GetDnsRecordsAsync DKIM anahtarını bulamaz). Kaldırma domain silindikten sonra yapılır.
         Core.Dtos.Mail.MailDnsDto? mailDns = null;
+        var leftovers = new List<string>();
         try
         {
             mailDns = await mailService.GetDnsRecordsAsync(domainName, cancellationToken);
         }
         catch (Exception exception)
         {
+            // Hangi kayitlari sileceginiz bilinmiyor: kayitlar KALACAK -> durustce bildir.
+            leftovers.Add("dns_records_unread");
             logger.LogInformation("Mail DNS kayıtları silme öncesi okunamadı ({Domain}): {Reason}", domainName, exception.Message);
         }
 
@@ -223,6 +240,13 @@ public sealed class MailController(
             catch (Exception exception)
             {
                 logger.LogInformation("Mail DNS kayıtları kaldırılamadı ({Domain}): {Reason}", domainName, exception.Message);
+
+                // Panelin yonettigi bir bolge YOKSA (dis DNS) kaldirilacak bizim kaydimiz da yoktur;
+                // diger tum hatalarda kayitlar bolgede KALDI.
+                if (!IsNoManagedZone(exception))
+                {
+                    leftovers.Add("dns_records_not_removed");
+                }
             }
         }
 
@@ -234,11 +258,21 @@ public sealed class MailController(
             HttpContext,
             "mail.domain.deleted",
             domainName,
-            "Mail domain and its mailboxes were deleted.",
+            leftovers.Count == 0
+                ? "Mail domain and its mailboxes were deleted."
+                : $"Mail domain and its mailboxes were deleted; leftovers: {string.Join(",", leftovers)}.",
             await AlanAdiSahibiAsync(domainName, cancellationToken));
 
-        return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.domain_deleted"));
+        workspace.Warnings = leftovers;
+        return Ok(ApiResponse<MailWorkspaceDto>.Ok(
+            workspace,
+            leftovers.Count > 0 ? "mail.domain.delete_completed_with_leftovers" : "mail.domain_deleted"));
     }
+
+    /// <summary>Alan adinin panelde yonetilen bir DNS bolgesi yok mu (dis DNS): silinecek kayit da yoktur.</summary>
+    internal static bool IsNoManagedZone(Exception exception)
+        => exception is AdaPanel.Core.Common.AppException { MessageKey: "mail.dns_zone_missing" }
+            or AdaPanel.Core.Common.AppException { MessageKey: "mail.invalid_domain", HttpStatusCode: 400 };
 
     private async Task RemoveDnsRecordsAsync(string domain, Core.Dtos.Mail.MailDnsDto mailDns, IDnsService dnsService, CancellationToken cancellationToken)
     {

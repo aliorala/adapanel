@@ -153,6 +153,16 @@ public sealed class PhpController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var result = await phpService.VerifySiteErrorLoggingAsync(siteName, cancellationToken);
+
+        // Dogrulama IIS/PHP hata gunlugu yolunu siteye uygulayip geri okur; sahibi bilen iz birakir.
+        await auditService.WriteForSubscriptionAsync(
+            "php.site.logging.verified",
+            $"php:{siteName}",
+            $"PHP error logging for site '{siteName}' was verified (status: {result.Status}).",
+            User.GetRequiredUserId(),
+            await AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
         return Ok(ApiResponse<PhpErrorLoggingDto>.Ok(result, result.Status == "verified" ? "php.logging.verified" : "php.logging.unverified"));
     }
 

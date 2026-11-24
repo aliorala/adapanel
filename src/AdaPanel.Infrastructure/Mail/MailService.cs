@@ -446,12 +446,23 @@ public sealed partial class MailService(
         // spam'e duser. Canli sunucuda tam olarak bu oldu: iletiler v1-rsa-*/v1-ed25519-* seciciyle
         // imzaliydi, iki TXT kaydinin ikisi de bolgede yoktu. Plesk de posta acilirken kaydi
         // kendisi yayinlar.
-        await TryPublishDnsRecordsAsync(domain, cancellationToken);
+        var warnings = new List<string>();
+        if (!await TryPublishDnsRecordsAsync(domain, cancellationToken))
+        {
+            warnings.Add(MailDomainWarnings.DnsNotPublished);
+        }
 
         // Gönderen sahteciliği kuralı: ilk alan adı oluşturulduğunda Stalwart yeni kurulmuş
         // olabilir ve açılış işçisi (MailSenderPolicyWorker) çoktan geçmiştir. EN İYİ ÇABA —
         // kural yazılamadıysa alan adı oluşturma DÜŞMEZ, ama sessiz de kalmaz.
-        await TryApplySenderPolicyAsync(cancellationToken);
+        if (!await TryApplySenderPolicyAsync(cancellationToken))
+        {
+            warnings.Add(MailDomainWarnings.SenderPolicyNotApplied);
+        }
+
+        // DURUSTLUK: alan adi olustu ama yan adimlar (DNS, gonderen kurali) tamamlanamadiysa
+        // cevap bunu TASIR; eskiden yalniz gunluge yaziliyor, API duz "basari" donuyordu.
+        workspace.Warnings = warnings;
         return workspace;
     }
 
@@ -463,7 +474,7 @@ public sealed partial class MailService(
     /// başarısız göstermek ve kullanıcıyı ikinci kez denemeye itmek olurdu — ikinci deneme
     /// "zaten var" yoluna girip aynı yerde patlardı.
     /// </remarks>
-    private async Task TryApplySenderPolicyAsync(CancellationToken cancellationToken)
+    private async Task<bool> TryApplySenderPolicyAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -479,13 +490,17 @@ public sealed partial class MailService(
                 logger.LogWarning(
                     "Mail sender policy was WRITTEN but the mail server did not reload it (MtaStageMail.isSenderAllowed) "
                     + "after domain creation; sender forgery protection is not in effect yet.");
+                await SyncDataStageScriptForSenderPolicyAsync(cancellationToken);
+                return false;
             }
 
             await SyncDataStageScriptForSenderPolicyAsync(cancellationToken);
+            return true;
         }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Mail sender policy could not be applied after domain creation.");
+            return false;
         }
     }
 
@@ -497,7 +512,7 @@ public sealed partial class MailService(
     /// Sessiz kalmamak icin sonuc gunlugue yazilir.
     /// </para>
     /// </summary>
-    private async Task TryPublishDnsRecordsAsync(string domain, CancellationToken cancellationToken)
+    private async Task<bool> TryPublishDnsRecordsAsync(string domain, CancellationToken cancellationToken)
     {
         try
         {
@@ -529,6 +544,7 @@ public sealed partial class MailService(
                     "Mail DNS records published for {Domain}: {Count} record(s).",
                     domain,
                     sonuc.AppliedCount);
+                return true;
             }
             else
             {
@@ -538,6 +554,7 @@ public sealed partial class MailService(
                     domain,
                     sonuc.StatusKey,
                     yazilacak.Count);
+                return false;
             }
         }
         catch (Exception exception)
@@ -546,6 +563,7 @@ public sealed partial class MailService(
                 exception,
                 "Mail DNS records could not be published automatically for {Domain}. The zone is probably hosted elsewhere; the records must be added manually.",
                 domain);
+            return false;
         }
     }
 
@@ -565,6 +583,9 @@ public sealed partial class MailService(
         // gider. Stalwart, ÜYESİ olan bir domaini silmeyi REDDEDER; üye kalırsa "delete domain" patlar ve domain
         // UI'de takılı kalır. account turunda ayrıca BAŞKA domaindeki hesaplarda bu domaine işaret eden alias
         // girdileri de temizlenir.
+        var removedMembers = new List<string>();
+        try
+        {
         foreach (var principalType in DomainCascadeTypes)
         {
             // "UYE YOK" ile "UYELERI SORAMADIM" ayrilir: soramadigimizda uyeler SILINMEZ ve
@@ -598,6 +619,13 @@ public sealed partial class MailService(
                 {
                     var deletion = await RunCliAsync(cli, $"delete {principalType} --ids {Arg(memberId)}", env, cancellationToken);
                     if (!deletion.Success) throw MapMailError(deletion);
+                    removedMembers.Add($"{principalType}:{(string.IsNullOrWhiteSpace(memberEmail) ? memberId : memberEmail)}");
+                    if (principalType == "account" && !string.IsNullOrWhiteSpace(memberEmail))
+                    {
+                        var removedAddress = memberEmail.Trim();
+                        await RemoveAutoRespondersAsync(key => string.Equals(key, removedAddress, StringComparison.OrdinalIgnoreCase), cancellationToken);
+                    }
+
                     continue;
                 }
 
@@ -621,6 +649,31 @@ public sealed partial class MailService(
         {
             throw new AppException("mail.operation_failed", 500, 500, CombineError(result));
         }
+        }
+        catch (AppException failure) when (removedMembers.Count > 0 && failure.MessageKey != "mail.domain_delete_partial")
+        {
+            // ORTADA KALDI: bazi uyeler silindi, alan adi hala duruyor. Geri alma YOK (silinen posta
+            // kutulari geri getirilemez) -- bu yuzden "basarisiz" demek yetmez; ne gittigi ve ne
+            // kaldigi acikca soylenir. Gidenlerin otomatik yanitlari yukarida zaten dusuruldu.
+            logger.LogWarning(failure, "Mail domain {Domain} deletion stopped midway; removed: {Removed}.", domain, string.Join(", ", removedMembers));
+            throw new AppException(
+                "mail.domain_delete_partial",
+                502,
+                502,
+                $"{domain}; removed: {string.Join(", ", removedMembers)}; remaining: domain and unprocessed members; cause: {failure.MessageKey} {failure.Details}");
+        }
+
+        // Alan adi gitti: kalan otomatik yanit ve liste politikasi kayitlari da gider; yoksa ayni
+        // adres yeniden acildiginda eski kayit geri gelirdi.
+        var suffix = "@" + domain;
+        await RemoveAutoRespondersAsync(key => key.EndsWith(suffix, StringComparison.OrdinalIgnoreCase), cancellationToken);
+        await UpdateListPoliciesAsync(store =>
+        {
+            var keys = store.Keys.Where(key => key.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)).ToList();
+            foreach (var key in keys) store.Remove(key);
+            return keys.Count > 0;
+        }, cancellationToken);
+        await TrySyncDataStageScriptAfterCleanupAsync(domain, cancellationToken);
 
         return await GetWorkspaceAsync(null, cancellationToken);
     }
@@ -706,7 +759,30 @@ public sealed partial class MailService(
         var normalized = address.Trim().ToLowerInvariant();
         var domain = ExtractDomain(normalized);
         var id = await FindIdAsync("account", "emailAddress", normalized, cancellationToken) ?? normalized;
-        return await MutateAsync(domain, $"delete account --ids {Arg(id)}", cancellationToken);
+        var workspace = await MutateAsync(domain, $"delete account --ids {Arg(id)}", cancellationToken);
+
+        // Hesap gitti: otomatik yanit kaydi da gider; yoksa ayni adres yeniden acilinca eski yanit
+        // (belki aylar once birakilmis bir "tatildeyim" iletisi) sessizce geri gelirdi.
+        await RemoveAutoRespondersAsync(key => string.Equals(key, normalized, StringComparison.OrdinalIgnoreCase), cancellationToken);
+        await TrySyncDataStageScriptAfterCleanupAsync(normalized, cancellationToken);
+        return workspace;
+    }
+
+    /// <summary>
+    /// Silme sonrasi script yenilemesi EN IYI CABA: hesap/alan adi zaten silindi; yenileme
+    /// patlarsa silmeyi basarisiz gostermek yaniltici olur. Bayat kural var olmayan adrese
+    /// eslesir (zararsiz) ve sonraki otomatik yanit/liste islemi script'i yeniden yazar.
+    /// </summary>
+    private async Task TrySyncDataStageScriptAfterCleanupAsync(string subject, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await SyncDataStageScriptAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "DATA stage script could not be refreshed after removing {Subject}.", subject);
+        }
     }
 
     public async Task<MailWorkspaceDto> SetAccountPasswordAsync(SetMailAccountPasswordRequest request, CancellationToken cancellationToken = default)
@@ -871,11 +947,7 @@ public sealed partial class MailService(
         // Politika kaydı da gider: liste silindikten sonra script'te ARTIK OLMAYAN bir adrese
         // kural kalsaydı, aynı adres yeniden açıldığında eski (belki çok dar) politika sessizce
         // geri gelirdi.
-        var store = await ReadListPoliciesAsync(cancellationToken);
-        if (store.Remove(normalized))
-        {
-            await fileStore.WriteAsync(ListPolicyStorePath, store, cancellationToken);
-        }
+        await UpdateListPoliciesAsync(store => store.Remove(normalized), cancellationToken);
 
         await SyncListPolicyScriptAsync(cancellationToken);
         // Liste silindi -> ona ait List-Unsubscribe kurali da script'ten dusmeli.
@@ -1421,19 +1493,21 @@ public sealed partial class MailService(
             throw new AppException("mail.list_policy_invalid", 400, 400, policy);
         }
 
-        var store = await ReadListPoliciesAsync(cancellationToken);
-        var entry = store.TryGetValue(address, out var existing) ? existing : new ListPolicyEntry();
-
-        entry.Policy = MailListPostingPolicy.Normalize(policy ?? entry.Policy);
-        if (allowedSenders is not null)
+        await UpdateListPoliciesAsync(store =>
         {
-            // İzinli gönderenler de doğrulanır: script'e teslim edilemez bir adres yazmak, o satırı
-            // hiçbir zaman eşleşmeyen ölü bir kurala çevirir.
-            entry.AllowedSenders = [.. NormalizeRecipients(allowedSenders, domain)];
-        }
+            var entry = store.TryGetValue(address, out var existing) ? existing : new ListPolicyEntry();
 
-        store[address] = entry;
-        await fileStore.WriteAsync(ListPolicyStorePath, store, cancellationToken);
+            entry.Policy = MailListPostingPolicy.Normalize(policy ?? entry.Policy);
+            if (allowedSenders is not null)
+            {
+                // İzinli gönderenler de doğrulanır: script'e teslim edilemez bir adres yazmak, o satırı
+                // hiçbir zaman eşleşmeyen ölü bir kurala çevirir.
+                entry.AllowedSenders = [.. NormalizeRecipients(allowedSenders, domain)];
+            }
+
+            store[address] = entry;
+            return true;
+        }, cancellationToken);
     }
 
     /// <summary>
@@ -1910,6 +1984,66 @@ public sealed partial class MailService(
     // Bilinen sınırlar: gönderen-başına frekans kısıtı yok (duplicate trusted'da desteklenmez) ve
     // yanıtın From başlığı Stalwart'ın bildirim varsayılanıdır (mailto from parametresi RFC 5436 gereği yok sayılır).
     private const string AutoResponderStorePath = "config/mail-autoresponders.json";
+
+    /// <summary>
+    /// Otomatik yanit ve liste politikasi dosyalarinin oku-degistir-yaz KAPISI. Kapi olmadan iki
+    /// es zamanli istek ayni eski kopyayi okuyup ikisi de yazar; sonuncu oncekini sessizce ezerdi.
+    /// Surece ozgu (tek panel sureci); iki dosya TEK kapiyi paylasir, cunku ikisi de ayni kisa
+    /// sureli is. Kapi tutulurken CLI/ag cagrisi YAPILMAZ (yalniz dosya okuma/yazma).
+    /// </summary>
+    private static readonly SemaphoreSlim MailStoreGate = new(1, 1);
+
+    /// <summary>Otomatik yanit deposunu kilit altinda degistirir; <paramref name="mutate"/> true donerse yazar.</summary>
+    internal async Task UpdateAutoRespondersAsync(
+        Func<Dictionary<string, AutoResponderEntry>, bool> mutate,
+        CancellationToken cancellationToken)
+    {
+        await MailStoreGate.WaitAsync(cancellationToken);
+        try
+        {
+            var store = await ReadAutoRespondersAsync(cancellationToken);
+            if (mutate(store))
+            {
+                await fileStore.WriteAsync(AutoResponderStorePath, store, cancellationToken);
+            }
+        }
+        finally
+        {
+            MailStoreGate.Release();
+        }
+    }
+
+    /// <summary>Liste politikasi deposunu kilit altinda degistirir; <paramref name="mutate"/> true donerse yazar.</summary>
+    internal async Task UpdateListPoliciesAsync(
+        Func<Dictionary<string, ListPolicyEntry>, bool> mutate,
+        CancellationToken cancellationToken)
+    {
+        await MailStoreGate.WaitAsync(cancellationToken);
+        try
+        {
+            var store = await ReadListPoliciesAsync(cancellationToken);
+            if (mutate(store))
+            {
+                await fileStore.WriteAsync(ListPolicyStorePath, store, cancellationToken);
+            }
+        }
+        finally
+        {
+            MailStoreGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Silinen hesabin (ya da alan adinin) otomatik yanit kaydini dusurur. Kalirsa ayni adres
+    /// yeniden acildiginda ESKI otomatik yanit sessizce geri gelirdi.
+    /// </summary>
+    private Task RemoveAutoRespondersAsync(Func<string, bool> matches, CancellationToken cancellationToken)
+        => UpdateAutoRespondersAsync(store =>
+        {
+            var keys = store.Keys.Where(matches).ToList();
+            foreach (var key in keys) store.Remove(key);
+            return keys.Count > 0;
+        }, cancellationToken);
     private const string AutoResponderScriptName = "adapanel-autoreply";
 
     internal sealed class AutoResponderEntry
@@ -1940,22 +2074,21 @@ public sealed partial class MailService(
         _ = await FindIdAsync("account", "emailAddress", normalized, cancellationToken)
             ?? throw new AppException("mail.account_not_found", 404, 404);
 
-        var store = await ReadAutoRespondersAsync(cancellationToken);
-        if (request.Enabled)
+        await UpdateAutoRespondersAsync(store =>
         {
-            store[normalized] = new AutoResponderEntry
+            if (request.Enabled)
             {
-                Enabled = true,
-                Subject = request.Subject.Trim(),
-                Message = request.Message.Trim()
-            };
-        }
-        else
-        {
-            store.Remove(normalized);
-        }
+                store[normalized] = new AutoResponderEntry
+                {
+                    Enabled = true,
+                    Subject = request.Subject.Trim(),
+                    Message = request.Message.Trim()
+                };
+                return true;
+            }
 
-        await fileStore.WriteAsync(AutoResponderStorePath, store, cancellationToken);
+            return store.Remove(normalized);
+        }, cancellationToken);
         await SyncDataStageScriptAsync(cancellationToken);
 
         return await GetAutoResponderAsync(normalized, cancellationToken);

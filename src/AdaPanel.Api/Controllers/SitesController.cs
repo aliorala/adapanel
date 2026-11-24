@@ -810,10 +810,14 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             var domain = string.IsNullOrWhiteSpace(request.HostName) ? site.Name : request.HostName.Trim();
             try
             {
-                await mailService.CreateDomainAsync(
+                var mailWorkspace = await mailService.CreateDomainAsync(
                     new Core.Dtos.Mail.CreateMailDomainRequest { DomainName = domain },
                     cancellationToken);
                 result.Created.Add($"mail: {domain}");
+                if (mailWorkspace.Warnings.Contains(Core.Dtos.Mail.MailDomainWarnings.SenderPolicyNotApplied))
+                {
+                    result.Warnings.Add($"mail ({domain}): sender forgery protection rule could not be applied.");
+                }
 
                 // profesyonel paneller gibi: mail domaini sitenin DNS bölgesine MX/SPF/DKIM/DMARC kayıtlarını
                 // otomatik yazsın (mail ekranındaki davranışla tutarlı). Best-effort.
