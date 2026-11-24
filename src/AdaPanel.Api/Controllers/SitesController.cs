@@ -712,6 +712,9 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         var result = new SiteCreationResultDto { Site = site };
         if (site.PhpErrorLogging is { Status: not "verified" } logging)
             result.Warnings.Add("PHP: " + logging.Detail);
+        // Varsayılan adımlar (DNS/FTP/SSL/güvenlik...) isteğe bağlıdır: site yine kurulur, ama hazırlanamayanlar SESSİZ kalmaz.
+        foreach (var feature in site.DefaultsFailedFeatures)
+            result.Warnings.Add($"sites.create.default_failed — {feature}");
 
         // ALT ALAN ADI: yeni site başka bir yönetilen sitenin ALTINDAysa, üst bölgeye A kaydı düşer.
         //
@@ -873,7 +876,8 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             }
         }
 
-        return Ok(ApiResponse<SiteCreationResultDto>.Ok(result, "sites.create.success"));
+        return Ok(ApiResponse<SiteCreationResultDto>.Ok(result,
+            result.Warnings.Count > 0 ? "sites.create.completed_with_warnings" : "sites.create.success"));
     }
 
     // Alt-kaynak (DB/mail/FTP) provisyon hatasını okunur özetler: AppException ise GERÇEK sebebi (Details =
@@ -945,6 +949,14 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         //
         // Karar artık GERÇEĞİ bilen yerde: cascade servisi yalnızca DROP'u başarılı olan
         // veritabanının kaydını siler, hayatta kalanların sahipliğini KORUYUP ölü site adını koparır.
+        // DÜRÜSTLÜK: bilinçsiz kalıntı varsa "başarılı/tamamlandı" denmez (denetim kaydı da "partial").
+        if (!result.FullyDeleted)
+        {
+            var kalintilar = string.Join(", ", result.Leftovers.Where(l => !l.Deliberate).Select(l => $"{l.Kind}:{l.Name} ({l.Reason})"));
+            await WriteAuditAsync("sites.delete.partial", siteName, cancellationToken, sahip, ayrinti: "leftovers: " + kalintilar);
+            return Ok(ApiResponse<SiteDeletionResultDto>.Ok(result, "sites.delete.completed_with_leftovers"));
+        }
+
         await WriteAuditAsync("sites.delete.completed", siteName, cancellationToken, sahip);
         return Ok(ApiResponse<SiteDeletionResultDto>.Ok(result, "sites.delete.success"));
     }

@@ -57,14 +57,16 @@ public sealed class SiteProvisioningService(
             site = await iisSiteService.GetSiteAsync(site.Name, cancellationToken);
             // A migration plan owns DNS/FTP/mail separately. Provisioning a stopped web site
             // must not publish defaults for components which were not selected for migration.
+            var defaultsFailed = Array.Empty<string>();
             if (!request.MigrationFreshOnly)
-                _ = await siteDefaultsService.EnsureDefaultsAsync(site, cancellationToken);
+                defaultsFailed = (await siteDefaultsService.EnsureDefaultsAsync(site, cancellationToken)).FailedFeatures;
             await GrantSiteWritableAsync(site, cancellationToken);
             // Auto uses mixed handlers and bypasses SetSitePhpVersionAsync. Verify only after
             // the final pool ACLs are in place; a partial outcome must reach the create screen.
             if (!request.MigrationFreshOnly && (profile is "php" or "auto" or "mixed") && site.PhpErrorLogging?.Status != "failed")
                 site.PhpErrorLogging = await phpService.EnsureSiteErrorLoggingAsync(site.Name, cancellationToken);
             await target.RunAsync(_ => Task.CompletedTask, cancellationToken);
+            site.DefaultsFailedFeatures = defaultsFailed;
             return site;
         }
         catch

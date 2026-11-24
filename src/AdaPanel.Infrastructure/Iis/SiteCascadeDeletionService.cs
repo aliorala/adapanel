@@ -39,7 +39,9 @@ public sealed class SiteCascadeDeletionService(
     IOptions<PanelRuntimeOptions> runtimeOptions,
     JsonFileStore fileStore,
     ILogger<SiteCascadeDeletionService> logger,
-    IConcurrencyLock concurrencyLock) : ISiteCascadeDeletionService
+    IConcurrencyLock concurrencyLock,
+    // Takma adlar: kayıt (site-aliases.json) + bağlamalar + yönlendirme kuralı. Opsiyonel: yoksa adım atlanır.
+    ISiteAliasService? siteAliasService = null) : ISiteCascadeDeletionService
 {
     private static readonly string[] DatabaseEngines = ["mysql", "mariadb", "postgresql", "mssql"];
 
@@ -198,8 +200,9 @@ public sealed class SiteCascadeDeletionService(
                 siteName);
         }
 
-        // 7) SSL durumu (panelin ssl.json'undaki o siteye ait sertifika kayıtları).
-        await StepAsync(result, "SSL kayıtları", () => sslService.RemoveSiteAsync(siteName, cancellationToken));
+        // 7) SSL temizliği IIS sitesi kaldırıldıktan SONRA yapılır (adım 9b): sertifikanın başka
+        //    bağlama/FTPS tarafından kullanılıp kullanılmadığı canlı IIS'ten ölçülür ve bu siteninki
+        //    o ölçümden düşmüş olmalıdır.
 
         // 8) Müşteri atamaları.
         await StepAsync(result, "Müşteri atamaları", () => customerScopeService.RemoveSiteFromAllScopesAsync(siteName, cancellationToken));
@@ -241,6 +244,26 @@ public sealed class SiteCascadeDeletionService(
             });
         }
 
+        // 8g) Takma adlar. IIS sitesi silinmeden ÖNCE: RemoveAliasAsync siteyi okur, bağlamaları ve
+        //     yönlendirme kuralını kaldırır; kayıt kalırsa aynı adla açılan yeni site eski yönlendirmeyi geri getirirdi.
+        if (siteAliasService is not null && site is not null)
+        {
+            try
+            {
+                foreach (var alias in (await siteAliasService.GetAliasesAsync(siteName, cancellationToken)).Aliases.ToArray())
+                {
+                    await StepAsync(result, $"Takma ad ({alias.HostName})",
+                        () => siteAliasService.RemoveAliasAsync(siteName, alias.HostName, cancellationToken),
+                        SiteLeftoverKinds.Other, $"alias:{alias.HostName}");
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                result.Warnings.Add($"Takma adlar: {exception.Message}");
+                Kalinti(result, SiteLeftoverKinds.Other, $"alias:{siteName}", exception.Message);
+            }
+        }
+
         // SİLME POLİTİKASI IIS SİTESİ KALDIRILMADAN ÖNCE ÖLÇÜLÜR: "bu klasör başka bir siteye de
         // ait mi?" sorusunun cevabı IIS'in site listesinden gelir ve o liste birazdan değişecek.
         var silmePolitikasi = deleteFiles
@@ -254,6 +277,18 @@ public sealed class SiteCascadeDeletionService(
             () => iisSiteService.DeleteSiteAsync(siteName, cancellationToken),
             SiteLeftoverKinds.Site,
             siteName);
+
+        // 9b) SSL: win-acme yenilemesini iptal et + panel kaydını sil + sertifikayı (kullanan yoksa) depodan çıkar.
+        //     IIS sitesi gitmediyse atlanır: site hâlâ o sertifikayı kullanıyor olabilir, kayıtları da duruyor.
+        if (!result.Leftovers.Any(l => l.Kind == SiteLeftoverKinds.Site))
+        {
+            await StepAsync(
+                result,
+                "SSL kayıtları ve yenileme",
+                () => sslService.RemoveSiteAsync(siteName, cancellationToken),
+                SiteLeftoverKinds.Other,
+                $"ssl:{siteName}");
+        }
 
         // 10) Dosyalar (en son; site kaldırıldıktan sonra). Uygulama kökü, fiziksel yolu
         //     da kapsıyorsa onunla birlikte gider.
