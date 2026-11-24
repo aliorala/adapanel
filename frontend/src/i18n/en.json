@@ -4111,6 +4111,13 @@
   "panel.aiConnection.neverExpires": "Never expires",
   "panel.aiConnection.permReadOnly": "Read only",
   "panel.aiConnection.permDestructive": "Destructive",
+  "panel.aiConnection.formAllowedIps": "Allowed IP addresses (optional)",
+  "panel.aiConnection.formAllowedIpsPlaceholder": "203.0.113.5, 198.51.100.0/24",
+  "panel.aiConnection.formAllowedIpsHint": "IP or CIDR, separated by commas, spaces or new lines. When set, the key only works from these addresses. Empty = no restriction.",
+  "panel.aiConnection.formReadOnly": "Read-only (GET requests only)",
+  "panel.aiConnection.formReadOnlyHint": "When on, the key cannot change anything; destructive and terminal permissions are turned off too.",
+  "panel.aiConnection.permReadOnlyScope": "Read-only scope",
+  "panel.aiConnection.permIpRestricted": "IP restricted",
   "panel.aiConnection.permTerminal": "Terminal",
   "panel.aiConnection.statusActive": "Active",
   "panel.aiConnection.statusExpired": "Expired",
@@ -7044,5 +7051,9 @@
   "php.max_execution_exceeds_server": "max_execution_time exceeds the server's FastCGI timeout; enter a lower value or ask your administrator to raise the limit.",
   "sites.hosting_settings_saved_limits_ignored": "Hosting settings saved; bandwidth and connection limits can only be changed by an administrator or reseller, so those two fields were NOT changed.",
   "panel.hosting.limitsIgnored": "The bandwidth and connection limit fields were NOT changed: only an administrator or reseller can change them.",
-  "php.pool_recycle_failed": "PHP settings were saved but the site pool could not be recycled; the open_basedir change takes effect at the next pool recycle."
+  "php.pool_recycle_failed": "PHP settings were saved but the site pool could not be recycled; the open_basedir change takes effect at the next pool recycle.",
+  "apitoken.invalid_ip_list": "The allowed IP list is invalid. Each entry must be an IP or CIDR (at most 32 entries).",
+  "apitoken.ip_not_allowed": "This API key cannot be used from this IP address.",
+  "apitoken.read_only_scope": "This API key is read-only; it can only make GET requests.",
+  "apitoken.not_while_impersonating": "API keys cannot be created while signed in on behalf of another user."
 }

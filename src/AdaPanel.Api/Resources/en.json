@@ -342,5 +342,9 @@
   "backup.test_restore_warning": "Test restore finished with warnings.",
   "backup.test_restore_busy": "Another test restore is already running. Try again when it finishes.",
   "firewall.ipblock_range_too_wide": "This range is too wide. The smallest allowed prefix is /8 for IPv4 and /32 for IPv6.",
-  "ssl.certificate_not_found": "No certificate record was found for this site and host."
+  "ssl.certificate_not_found": "No certificate record was found for this site and host.",
+  "apitoken.invalid_ip_list": "The allowed IP list is invalid. Each entry must be an IP or CIDR (at most 32 entries).",
+  "apitoken.ip_not_allowed": "This API key cannot be used from this IP address.",
+  "apitoken.read_only_scope": "This API key is read-only; it can only make GET requests.",
+  "apitoken.not_while_impersonating": "API keys cannot be created while signed in on behalf of another user."
 }

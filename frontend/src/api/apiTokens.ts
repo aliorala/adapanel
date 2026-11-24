@@ -17,6 +17,10 @@ export type ApiToken = {
   suffix: string;
   allowDestructive: boolean;
   allowTerminal: boolean;
+  /** Salt okunur kapsam: yalnız GET/HEAD. */
+  readOnly: boolean;
+  /** IP/CIDR izin listesi (virgülle ayrılmış); boş/null = kısıt yok. */
+  allowedIps: string | null;
   createdAtUtc: string;
   expiresAtUtc: string | null;
   lastUsedAtUtc: string | null;
@@ -29,6 +33,9 @@ export type CreateApiTokenPayload = {
   name: string;
   allowDestructive: boolean;
   allowTerminal: boolean;
+  readOnly: boolean;
+  /** Virgül/boşluk/satırla ayrılmış IP veya CIDR; boş = kısıt yok. */
+  allowedIps: string;
   /** Gün cinsinden ömür; 0 = süresiz. */
   expiresInDays: number;
 };

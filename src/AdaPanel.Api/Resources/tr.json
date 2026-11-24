@@ -342,5 +342,9 @@
   "backup.test_restore_warning": "Test geri yükleme uyarıyla bitti.",
   "backup.test_restore_busy": "Başka bir test geri yükleme çalışıyor. Bitince tekrar deneyin.",
   "firewall.ipblock_range_too_wide": "Bu aralık çok geniş. İzin verilen en küçük önek IPv4 için /8, IPv6 için /32.",
-  "ssl.certificate_not_found": "Bu site ve alan adı için sertifika kaydı bulunamadı."
+  "ssl.certificate_not_found": "Bu site ve alan adı için sertifika kaydı bulunamadı.",
+  "apitoken.invalid_ip_list": "İzinli IP listesi geçersiz. Her satır bir IP ya da CIDR olmalı (en çok 32 kayıt).",
+  "apitoken.ip_not_allowed": "Bu API anahtarı bu IP adresinden kullanılamaz.",
+  "apitoken.read_only_scope": "Bu API anahtarı salt okunurdur; yalnız GET istekleri yapabilir.",
+  "apitoken.not_while_impersonating": "Başka bir kullanıcı adına oturum açıkken API anahtarı oluşturulamaz."
 }

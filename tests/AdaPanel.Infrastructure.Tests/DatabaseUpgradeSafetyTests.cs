@@ -103,11 +103,11 @@ public sealed class DatabaseUpgradeSafetyTests : IDisposable
         Assert.Contains(penultimate, Path.GetFileName(backup));
         Assert.Empty(await db.Database.GetPendingMigrationsAsync());
 
-        // Yedek, yükseltme ÖNCESİ şemayı (son migration'ın dizini YOK) ve veriyi taşır.
+        // Yedek, yükseltme ÖNCESİ şemayı (son migration'ın sütunu YOK) ve veriyi taşır.
         await using var copy = new SqliteConnection($"Data Source={backup};Pooling=False;Mode=ReadOnly");
         await copy.OpenAsync();
         Assert.Equal(1L, await ScalarLongAsync(copy, "SELECT count(*) FROM panel_settings WHERE Key='probe' AND Value='korunmali'"));
-        Assert.Equal(0L, await ScalarLongAsync(copy, "SELECT count(*) FROM sqlite_master WHERE name='ix_audit_logs_created_at'"));
+        Assert.Equal(0L, await ScalarLongAsync(copy, "SELECT count(*) FROM pragma_table_info('api_tokens') WHERE name='ReadOnly'"));
     }
 
     [Fact]
@@ -116,9 +116,9 @@ public sealed class DatabaseUpgradeSafetyTests : IDisposable
         await using var db = NewContext();
         await MigrateToPenultimateAsync(db);
         var penultimate = AllMigrations(db)[^2];
-        // Son migration'ın oluşturacağı dizini elle önceden yarat → migration "already exists" ile patlar.
+        // Son migration'ın ekleyeceği sütunu elle önceden yarat → migration "duplicate column" ile patlar.
         await db.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX \"ix_audit_logs_created_at\" ON \"audit_logs\" (\"CreatedAtUtc\");");
+            "ALTER TABLE \"api_tokens\" ADD COLUMN \"ReadOnly\" INTEGER NOT NULL DEFAULT 0;");
 
         var ex = await Assert.ThrowsAsync<DatabaseUpgradeException>(
             () => DatabaseUpgrader.UpgradeAsync(db, root, NullLogger.Instance));
