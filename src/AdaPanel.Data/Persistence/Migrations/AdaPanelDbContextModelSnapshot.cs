@@ -53,6 +53,9 @@ namespace AdaPanel.Data.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CreatedAtUtc")
+                        .HasDatabaseName("ix_audit_logs_created_at");
+
                     b.HasIndex("SubscriptionUserId")
                         .HasDatabaseName("ix_audit_logs_subscription");
 
