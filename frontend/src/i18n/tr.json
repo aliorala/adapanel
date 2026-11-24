@@ -7066,5 +7066,10 @@
   "cluster.certificate_approval_required": "Bu sunucunun sertifikası onaylanmamış: önce sertifikayı okuyup parmak izini onaylayın. Onay olmadan bağlanılmaz.",
   "cluster.certificate_mismatch": "Sunucunun sertifikası onaylı parmak iziyle uyuşmuyor. Sertifika yenilenmediyse biri araya girmiş olabilir; yenilendiyse yeniden onaylayın.",
   "cluster.certificate_unreadable": "Sunucunun sertifikası okunamadı (TLS yok ya da el sıkışma başarısız).",
-  "cluster.certificate_approved": "Sertifika onaylandı."
+  "cluster.certificate_approved": "Sertifika onaylandı.",
+  "panel.backup.ftpSecurity": "FTP güvenliği",
+  "panel.backup.ftpSecurityPlain": "FTP (şifresiz)",
+  "panel.backup.ftpSecurityTls": "FTPS (açık TLS)",
+  "panel.backup.ftpSecurityTlsHint": "Bağlantı ve veri TLS ile şifrelenir. Sunucu TLS sunmazsa ya da sertifikası geçersizse (zincir, süre, ad) yedek gönderilmez; düz FTP'ye düşülmez.",
+  "panel.backup.ftpSecurityPlainWarning": "Düz FTP kullanıcı adınızı, parolanızı ve yedek içeriğini şifresiz gönderir. Sunucunuz destekliyorsa FTPS seçin."
 }

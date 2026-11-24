@@ -905,6 +905,18 @@
           <span class="field-label">{{ isFolderPathTarget(targetForm.targetType) ? t("panel.backup.remoteFolder") : t("panel.backup.remoteUrl") }}</span>
           <input v-model="targetForm.remoteUrl" :placeholder="remoteUrlPlaceholder" />
         </label>
+        <!-- G19: FTPS (açık TLS). Şema adreste taşınır (ftp:// / ftps://); seçici adresi yeniden yazar.
+             Varsayılan düz FTP KALIR (mevcut hedefler kırılmasın) ama uyarı gösterilir. -->
+        <label v-if="targetForm.targetType === 'ftp'" class="stacked-field">
+          <span class="field-label">{{ t("panel.backup.ftpSecurity") }}</span>
+          <select :value="ftpSecurityOf(targetForm.remoteUrl)" @change="targetForm.remoteUrl = withFtpSecurity(targetForm.remoteUrl, ($event.target as HTMLSelectElement).value)">
+            <option value="ftp">{{ t("panel.backup.ftpSecurityPlain") }}</option>
+            <option value="ftps">{{ t("panel.backup.ftpSecurityTls") }}</option>
+          </select>
+          <small :class="ftpSecurityOf(targetForm.remoteUrl) === 'ftps' ? 'field-hint' : 'notice warn'">
+            {{ ftpSecurityOf(targetForm.remoteUrl) === "ftps" ? t("panel.backup.ftpSecurityTlsHint") : t("panel.backup.ftpSecurityPlainWarning") }}
+          </small>
+        </label>
         <label class="stacked-field">
           <span class="field-label">{{ remoteUserLabel(targetForm.targetType) }}</span>
           <input v-model="targetForm.remoteUserName" autocomplete="off" />
@@ -1172,6 +1184,16 @@
             <label class="stacked-field remote-url">
               <span class="field-label">{{ t("panel.backup.remoteUrl") }}</span>
               <input v-model="scheduleForm.remoteUrl" />
+            </label>
+            <label v-if="scheduleForm.targetType === 'ftp'" class="stacked-field">
+              <span class="field-label">{{ t("panel.backup.ftpSecurity") }}</span>
+              <select :value="ftpSecurityOf(scheduleForm.remoteUrl)" @change="scheduleForm.remoteUrl = withFtpSecurity(scheduleForm.remoteUrl, ($event.target as HTMLSelectElement).value)">
+                <option value="ftp">{{ t("panel.backup.ftpSecurityPlain") }}</option>
+                <option value="ftps">{{ t("panel.backup.ftpSecurityTls") }}</option>
+              </select>
+              <small :class="ftpSecurityOf(scheduleForm.remoteUrl) === 'ftps' ? 'field-hint' : 'notice warn'">
+                {{ ftpSecurityOf(scheduleForm.remoteUrl) === "ftps" ? t("panel.backup.ftpSecurityTlsHint") : t("panel.backup.ftpSecurityPlainWarning") }}
+              </small>
             </label>
             <label class="stacked-field">
               <span class="field-label">{{ scheduleForm.targetType === 's3' ? t("panel.backup.remoteAccessKey") : t("panel.backup.remoteUser") }}</span>
@@ -1761,6 +1783,16 @@ const breadcrumbs = computed(() => {
  */
 function isFolderPathTarget(type: string) {
   return type === "dropbox" || type === "onedrive";
+}
+
+/** FTP şeması: `ftp://` düz, `ftps://` açık TLS (AUTH TLS; sunucu desteklemezse bağlantı KESİLİR, düz FTP'ye düşülmez). */
+function ftpSecurityOf(url: string) {
+  return /^ftps:\/\//i.test((url ?? "").trim()) ? "ftps" : "ftp";
+}
+
+function withFtpSecurity(url: string, mode: string) {
+  const bare = (url ?? "").trim().replace(/^ftps?:\/\//i, "");
+  return `${mode === "ftps" ? "ftps" : "ftp"}://${bare}`;
 }
 
 const remoteUrlPlaceholder = computed(() => {

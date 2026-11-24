@@ -7066,5 +7066,10 @@
   "cluster.certificate_approval_required": "This server's certificate has not been approved: read the certificate and approve its fingerprint first. No connection is made without approval.",
   "cluster.certificate_mismatch": "The server's certificate does not match the approved fingerprint. If it was not renewed someone may be intercepting; if it was, approve it again.",
   "cluster.certificate_unreadable": "The server's certificate could not be read (no TLS or the handshake failed).",
-  "cluster.certificate_approved": "Certificate approved."
+  "cluster.certificate_approved": "Certificate approved.",
+  "panel.backup.ftpSecurity": "FTP security",
+  "panel.backup.ftpSecurityPlain": "FTP (unencrypted)",
+  "panel.backup.ftpSecurityTls": "FTPS (explicit TLS)",
+  "panel.backup.ftpSecurityTlsHint": "The connection and data are encrypted with TLS. If the server offers no TLS or its certificate is invalid (chain, expiry, name) the backup is not sent; it never falls back to plain FTP.",
+  "panel.backup.ftpSecurityPlainWarning": "Plain FTP sends your user name, password and backup content unencrypted. Choose FTPS if your server supports it."
 }
