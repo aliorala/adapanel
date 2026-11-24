@@ -120,11 +120,12 @@ public sealed class DatabaseUpgradeSafetyTests : IDisposable
         await db.Database.ExecuteSqlRawAsync(
             "CREATE INDEX \"ix_audit_logs_created_at\" ON \"audit_logs\" (\"CreatedAtUtc\");");
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<DatabaseUpgradeException>(
             () => DatabaseUpgrader.UpgradeAsync(db, root, NullLogger.Instance));
 
         Assert.Contains("migration", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Single(Directory.EnumerateFiles(BackupDir, "adapanel-pre-*.db"));
+        Assert.NotNull(ex.BackupPath);
         // Geçmiş değişmedi: başarısız migration "uygulanmış" görünmüyor, şema örtük olarak onarılmadı.
         var applied = (await db.Database.GetAppliedMigrationsAsync()).ToList();
         Assert.Equal(penultimate, applied[^1]);
@@ -138,9 +139,10 @@ public sealed class DatabaseUpgradeSafetyTests : IDisposable
         await DatabaseUpgrader.UpgradeAsync(db, root, NullLogger.Instance);
         for (var i = 0; i < 4; i++)
         {
-            await DatabaseUpgrader.BackupAsync(db, root, "m" + i, keep: 2);
+            await DatabaseUpgrader.BackupAsync(db, root, "m" + i);
             await Task.Delay(30);
         }
+        DatabaseUpgrader.Prune(BackupDir, keep: 2);
 
         var files = Directory.EnumerateFiles(BackupDir, "adapanel-pre-*.db").Select(f => Path.GetFileName(f)).ToArray();
         Assert.Equal(2, files.Length);
@@ -245,11 +247,11 @@ public sealed class DatabaseUpgradeSafetyTests : IDisposable
         await using var db = NewContext();
         await DatabaseUpgrader.UpgradeAsync(db, root, NullLogger.Instance);
         await db.Database.ExecuteSqlRawAsync("DROP TABLE audit_logs;");
-        AuditFailureMonitor.ResetForTests();
+        var before = AuditFailureMonitor.FailureCount; // paralel testler de sayacı artırabilir: DELTA ölç
 
         await Assert.ThrowsAnyAsync<Exception>(() => NewAuditService(db).WriteAsync("x.y", "res", "details", null, null));
 
-        Assert.Equal(1, AuditFailureMonitor.FailureCount);
+        Assert.True(AuditFailureMonitor.FailureCount >= before + 1);
         Assert.NotNull(AuditFailureMonitor.LastFailureUtc);
         Assert.Empty(db.ChangeTracker.Entries<AuditLog>()); // bozuk giriş izlemeden çıktı
     }
@@ -260,15 +262,52 @@ public sealed class DatabaseUpgradeSafetyTests : IDisposable
         await using var db = NewContext();
         await DatabaseUpgrader.UpgradeAsync(db, root, NullLogger.Instance);
         await db.Database.ExecuteSqlRawAsync("DROP TABLE audit_logs;");
-        AuditFailureMonitor.ResetForTests();
+        var before = AuditFailureMonitor.FailureCount;
 
         await AuditWriter.WriteAsync(db, "x", "r", "d", null, null, null, propagateFailure: false);
-        Assert.Equal(1, AuditFailureMonitor.FailureCount);
+        Assert.True(AuditFailureMonitor.FailureCount >= before + 1);
+        var afterFirst = AuditFailureMonitor.FailureCount;
 
         // Aynı SaveChanges başka bekleyen değişikliği de taşır → yutulursa kayıp "başarı" görünür.
         db.Settings.Add(new PanelSetting { Key = "pending", Value = "v" });
         await Assert.ThrowsAnyAsync<Exception>(() =>
             AuditWriter.WriteAsync(db, "x", "r", "d", null, null, null, propagateFailure: false));
-        Assert.Equal(2, AuditFailureMonitor.FailureCount);
+        Assert.True(AuditFailureMonitor.FailureCount >= afterFirst + 1);
+    }
+
+    [Fact]
+    public async Task Retry_reuses_first_attempt_backup_instead_of_taking_a_second_one()
+    {
+        await using var db = NewContext();
+        await MigrateToPenultimateAsync(db);
+        var first = await DatabaseUpgrader.BackupAsync(db, root, "ilk");
+
+        var used = await DatabaseUpgrader.UpgradeAsync(db, root, NullLogger.Instance, reuseBackup: first);
+
+        Assert.Equal(first, used);
+        Assert.Single(Directory.EnumerateFiles(BackupDir, "adapanel-pre-*.db"));
+    }
+
+    [Fact]
+    public void Program_never_calls_EnsureCreated_again()
+    {
+        // EnsureCreated başarısız migration'ı maskeler; açılış kodunda geri gelmesini kaynak taramasıyla yakala.
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        string? program = null;
+        while (dir is not null && program is null)
+        {
+            var candidate = Path.Combine(dir.FullName, "src", "AdaPanel.Api", "Program.cs");
+            if (File.Exists(candidate)) program = candidate;
+            dir = dir.Parent;
+        }
+        Assert.NotNull(program);
+        var code = File.ReadAllLines(program!)
+            .Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal))
+            .Where(l => !l.Contains('"')) // log metinleri
+            .ToArray();
+        Assert.DoesNotContain(code, l => System.Text.RegularExpressions.Regex.IsMatch(l, @"EnsureCreated(Async)?\s*\("));
+        var upgrader = File.ReadAllText(Path.Combine(
+            Path.GetDirectoryName(program)!, "..", "AdaPanel.Data", "Persistence", "DatabaseUpgrader.cs"));
+        Assert.DoesNotMatch(@"\.EnsureCreated(Async)?\s*\(", upgrader);
     }
 }

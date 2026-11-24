@@ -29,10 +29,4 @@ public static class AuditFailureMonitor
         Interlocked.Increment(ref _count);
         Interlocked.Exchange(ref _lastTicksUtc, DateTime.UtcNow.Ticks);
     }
-
-    internal static void ResetForTests()
-    {
-        Interlocked.Exchange(ref _count, 0);
-        Interlocked.Exchange(ref _lastTicksUtc, 0);
-    }
 }

@@ -494,22 +494,27 @@ static async Task EnsureDatabaseAsync(WebApplication app, string dataRoot)
         // (DataRootHardeningService.RecoveryStepOrder son adımı "harden") — buradan ayrıca çağrılmasına gerek
         // yok ve unutulamaz.
         logger.LogError(exception, "Migration başarısız; veri klasörü erişimi garanti edilip yeniden denenecek.");
+        // İlk denemenin yükseltme-öncesi yedeği yeniden kullanılır (ikinci yedek, yarım şemanın kopyası olurdu).
+        var backupFromFirstAttempt = (exception as AdaPanel.Data.Persistence.DatabaseUpgradeException)?.BackupPath;
         await AdaPanel.Infrastructure.Bootstrap.DataRootHardeningService.EnsureWritableAsync(dataRoot, logger);
         // ESKİDEN burada EnsureCreated çağrılıyordu: mevcut bir veritabanında başarısız migration'ı
         // maskeler, şemayı sessizce ayrıştırırdı. Artık yeniden dener; yine olmazsa AÇILIŞ DURUR
-        // (yükseltme öncesi yedek <DataRoot>ackups\db altında kalır). MigrateAsync boş/yeni
+        // (yükseltme öncesi yedek <DataRoot>\backups\db altında kalır). MigrateAsync boş/yeni
         // veritabanında şemayı zaten sıfırdan kurduğu için EnsureCreated'a hiç gerek yok.
         try
         {
             await AdaPanel.Data.Persistence.DatabaseUpgrader.EnableWalAsync(dbContext);
-            await AdaPanel.Data.Persistence.DatabaseUpgrader.UpgradeAsync(dbContext, dataRoot, logger);
+            await AdaPanel.Data.Persistence.DatabaseUpgrader.UpgradeAsync(
+                dbContext, dataRoot, logger, reuseBackup: backupFromFirstAttempt);
         }
         catch (Exception retryException)
         {
             logger.LogCritical(
                 retryException,
-                "Migration tekrar başarısız; panel BAŞLATILMIYOR. Veritabanı değiştirilmedi (EnsureCreated YOK); " +
-                "yükseltme öncesi yedek {BackupDir} altında. Önceki sürüme dönün ya da yedeği geri yükleyin.",
+                "Migration tekrar başarısız; panel BAŞLATILMIYOR. Yükseltme yarım kalmış olabilir (EnsureCreated YOK); " +
+                "yükseltme öncesi yedek: {Backup} (klasör {BackupDir}). Önceki sürüme dönün ya da yedeği geri yükleyin.",
+                (retryException as AdaPanel.Data.Persistence.DatabaseUpgradeException)?.BackupPath
+                    ?? backupFromFirstAttempt ?? "(yok)",
                 Path.Combine(dataRoot, "backups", "db"));
             throw;
         }

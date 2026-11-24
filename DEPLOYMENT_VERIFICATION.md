@@ -82,7 +82,14 @@ Panelden kur, sırayla doğrula:
 - **PHP "memory exhausted" / yazma hatası**: PHP ayarlarından memory_limit; Site → "Yazma izinlerini onar".
 - **Mail gelmiyor/gitmiyor**: önce Mail "Kontrol" (port 25/587/143 dinleniyor mu + DNS yeşil mi).
 - **Felaket kurtarma**: panel config yedeğini (adapanel.db + config) AYNI makineye geri koy. Not: DataProtection anahtarları (keys/) ve
-  sertifikalar yedeğe DAHİL DEĞİL (makineye bağlı) — farklı makinede kurtarmada panel yeniden setup ister.
+  sertifikalar yedeğe DAHİL DEĞİL (makineye bağlı) — farklı makinede kurtarmada panel yeniden setup ister.
+  **DB geri yükleme adımları (SQLite WAL kipinde):** (1) AdaPanel servisini DURDUR; (2) `C:\ProgramData\AdaPanel\data\` içindeki canlı
+  `adapanel.db-wal` ve `adapanel.db-shm` dosyalarını SİL; (3) yedek `adapanel.db`'yi (varsa kendi `-wal`/`-shm` dosyasıyla BİRLİKTE) yerine koy;
+  (4) servisi başlat. db ile wal'ı farklı kaynaklardan karıştırma. Yedekler: her şema yükseltmesinden önce
+  `C:\ProgramData\AdaPanel\backups\db\adapanel-pre-<migration>-<utc>.db` (son 5); yükleyici güncellemesinden önce
+  `C:\ProgramData\AdaPanel\backups\db\installer-pre\`. **Eski sürüme dönüş:** eski kurulumu yükle, servisi durdur, `installer-pre` içindeki
+  `adapanel.db`'yi (+ `-wal`/`-shm` varsa) yukarıdaki sırayla geri koy; yeni sürümün migration'ları eski sürümle uyumsuz olabilir, bu yüzden db'yi eski exe ile BİRLİKTE geri al.
+  Büyük DB'de (≈1 GB üzeri denetim kaydı) yükseltme açılışı uzar; servis başlatma zaman aşımına (1053) takılırsa önce Denetim Kaydı saklama süresini düşürüp temizle.
 
 ---
 _Bu runbook kaynak koddan üretildi; üründe gördüğün davranışla çelişen bir şey olursa ürün esastır — geri bildir, güncelleyelim._
