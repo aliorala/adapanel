@@ -24,4 +24,12 @@ public interface IDockerService
     Task<DockerWorkspaceDto> RemoveImageAsync(string id, CancellationToken cancellationToken = default);
 
     Task<DockerWorkspaceDto> RunContainerAsync(RunContainerRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Çalışan konteynerin CPU/RAM sınırını günceller (<c>docker update</c>).</summary>
+    Task<DockerWorkspaceDto> UpdateContainerLimitsAsync(string id, UpdateContainerLimitsRequest request, CancellationToken cancellationToken = default);
+
+    Task<DockerContainerLimitsDto> GetContainerLimitsAsync(string id, CancellationToken cancellationToken = default);
+
+    /// <summary>Siteyle ilişkili (etiketli) bütün konteynerleri durdurup kaldırır; ölçülmüş sonucu döner.</summary>
+    Task<DockerSiteCleanupResult> RemoveSiteContainersAsync(string siteName, CancellationToken cancellationToken = default);
 }

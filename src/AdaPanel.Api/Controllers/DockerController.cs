@@ -123,10 +123,39 @@ public sealed class DockerController(
         return Ok(ApiResponse<DockerLogsDto>.Ok(logs));
     }
 
+    [HttpGet("containers/{id}/limits")]
+    public async Task<ActionResult<ApiResponse<DockerContainerLimitsDto>>> GetLimitsAsync(string id, CancellationToken cancellationToken)
+    {
+        await EnsureServerOwnerAsync(cancellationToken);
+        return Ok(ApiResponse<DockerContainerLimitsDto>.Ok(await dockerService.GetContainerLimitsAsync(id, cancellationToken)));
+    }
+
+    // CPU/RAM sınırı değişikliği çalışan bir servisin kaynağını keser/açar: iz bırakılır.
+    [HttpPut("containers/{id}/limits")]
+    public async Task<ActionResult<ApiResponse<DockerWorkspaceDto>>> UpdateLimitsAsync(
+        string id, [FromBody] UpdateContainerLimitsRequest request, CancellationToken cancellationToken)
+    {
+        await EnsureServerOwnerAsync(cancellationToken);
+        var workspace = await dockerService.UpdateContainerLimitsAsync(id, request, cancellationToken);
+        await auditService.AuditAsync(
+            HttpContext,
+            "docker.container.limits.updated",
+            $"docker-container:{id}",
+            $"Container {Tanim(workspace, id)} limits set (cpu: {(string.IsNullOrWhiteSpace(request.CpuLimit) ? "unlimited" : request.CpuLimit.Trim())}, "
+            + $"memory: {(string.IsNullOrWhiteSpace(request.MemoryLimit) ? "unlimited" : request.MemoryLimit.Trim())}).");
+        return Ok(ApiResponse<DockerWorkspaceDto>.Ok(workspace, "docker.limits_updated"));
+    }
+
     [HttpPost("containers/run")]
     public async Task<ActionResult<ApiResponse<DockerWorkspaceDto>>> RunAsync([FromBody] RunContainerRequest request, CancellationToken cancellationToken)
     {
         await EnsureServerOwnerAsync(cancellationToken);
+        // Site ilişkisi uydurulamaz: var olmayan siteye etiketli konteyner hiçbir silmede temizlenmez.
+        if (!string.IsNullOrWhiteSpace(request.SiteName))
+        {
+            var sites = HttpContext.RequestServices.GetRequiredService<IIisSiteService>();
+            await sites.GetSiteAsync(request.SiteName.Trim(), cancellationToken);
+        }
         var workspace = await dockerService.RunContainerAsync(request, cancellationToken);
 
         // Ortam DEĞİŞKENLERİ kasten yazılmaz: parola/jeton taşımaları olağandır ve kayıt, korumaya
@@ -137,7 +166,10 @@ public sealed class DockerController(
             $"docker-image:{request.Image}",
             $"Container '{request.Name}' started from image '{request.Image}' "
             + $"(ports: {(string.IsNullOrWhiteSpace(request.Ports) ? "none" : request.Ports)}, "
-            + $"env vars: {OrtamDegiskeniSayisi(request.Environment)}).");
+            + $"env vars: {OrtamDegiskeniSayisi(request.Environment)}, "
+            + $"site: {(string.IsNullOrWhiteSpace(request.SiteName) ? "none" : request.SiteName.Trim())}, "
+            + $"cpu limit: {(string.IsNullOrWhiteSpace(request.CpuLimit) ? "none" : request.CpuLimit.Trim())}, "
+            + $"memory limit: {(string.IsNullOrWhiteSpace(request.MemoryLimit) ? "none" : request.MemoryLimit.Trim())}).");
 
         return Ok(ApiResponse<DockerWorkspaceDto>.Ok(workspace, "docker.container_started"));
     }
