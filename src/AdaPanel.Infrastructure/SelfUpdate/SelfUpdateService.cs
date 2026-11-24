@@ -1114,8 +1114,7 @@ public sealed class SelfUpdateService : ISelfUpdateService
                 "update.package_invalid",
                 400,
                 400,
-                $"File={Path.GetFileName(filePath)}
-{surumKusuru}");
+                $"File={Path.GetFileName(filePath)}\r\n{surumKusuru}");
         }
 
         var guven = await fileStore.ReadAsync(TrustConfigPath, new TrustConfig(), cancellationToken);

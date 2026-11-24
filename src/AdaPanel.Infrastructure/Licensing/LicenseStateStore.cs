@@ -112,8 +112,7 @@ public sealed class LicenseStateStore(JsonFileStore fileStore, ISecretProtector 
 
     internal static string ComputeSeal(byte[] key, LicenseRecord record)
     {
-        var text = string.Join('
-',
+        var text = string.Join('\n',
             record.ProtectedKey,
             record.KeySuffix,
             record.KeyStoredAtUtc?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture) ?? string.Empty,
