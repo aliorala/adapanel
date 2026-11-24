@@ -129,6 +129,10 @@ Log.Logger = new LoggerConfiguration()
         Path.Combine(logDirectory, "adapanel-.log"),
         rollingInterval: RollingInterval.Day,
         retainedFileCountLimit: 14,
+        // Günlük döngüye EK boyut tavanı: tek gün içinde taşan günlük diski doldurmasın.
+        // 50 MB'a gelince yeni dosyaya geçer; 14 dosya sınırı toplamı da sınırlar.
+        fileSizeLimitBytes: 50L * 1024 * 1024,
+        rollOnFileSizeLimit: true,
         shared: true)
     .CreateLogger();
 

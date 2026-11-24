@@ -22,9 +22,20 @@ public sealed class SystemMonitoringService : ISystemMonitoringService, IDisposa
     private readonly LinkedList<SystemHistorySampleDto> history = new();
     private bool disposed;
 
-    public SystemMonitoringService(ILogger<SystemMonitoringService> logger)
+    // M8: geçmiş yalnız bellekte değildi (panel yeniden başlayınca grafik boşalıyordu). Sınırlı
+    // (en çok MaxHistorySamples ≈ 24 saat) bir JSON dosyasına atomik yazılır (JsonFileStore) ve
+    // ilk erişimde yüklenir. Her PersistEverySamples örnekte bir yazılır; dosya ≈ 200 KB.
+    internal const string HistoryPath = "state/monitoring-history.json";
+    internal const int PersistEverySamples = 5;
+    private readonly JsonFileStore? historyStore;
+    private readonly SemaphoreSlim loadGate = new(1, 1);
+    private bool historyLoaded;
+    private int samplesSincePersist;
+
+    public SystemMonitoringService(ILogger<SystemMonitoringService> logger, JsonFileStore? historyStore = null)
     {
         this.logger = logger;
+        this.historyStore = historyStore;
         cpuCounter = CreateCpuCounter(logger);
         sources = new SystemMonitoringSources
         {
@@ -36,10 +47,76 @@ public sealed class SystemMonitoringService : ISystemMonitoringService, IDisposa
         };
     }
 
-    internal SystemMonitoringService(ILogger<SystemMonitoringService> logger, SystemMonitoringSources sources)
+    internal SystemMonitoringService(ILogger<SystemMonitoringService> logger, SystemMonitoringSources sources,
+        JsonFileStore? historyStore = null)
     {
         this.logger = logger;
         this.sources = sources;
+        this.historyStore = historyStore;
+    }
+
+    private async Task EnsureHistoryLoadedAsync(CancellationToken cancellationToken)
+    {
+        if (historyStore is null || Volatile.Read(ref historyLoaded)) return;
+        await loadGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (historyLoaded) return;
+            List<SystemHistorySampleDto> stored;
+            try
+            {
+                stored = await historyStore.ReadAsync(HistoryPath, new List<SystemHistorySampleDto>(), cancellationToken);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception exception)
+            {
+                // Bozuk/okunamayan dosya paneli durdurmaz; geçmiş boş başlar, ilk yazımda yenilenir.
+                logger.LogWarning(exception, "İzleme geçmişi dosyası okunamadı; boş başlanıyor.");
+                stored = [];
+            }
+            var cutoff = sources.Clock.GetUtcNow().UtcDateTime.AddMinutes(-MaxHistorySamples);
+            lock (syncRoot)
+            {
+                // Dosyadaki örnekler, yüklenmeden önce eklenmiş olabilecek yenilerden ÖNCE gelir.
+                var fresh = history.ToList();
+                history.Clear();
+                foreach (var sample in stored.Where(item => item is not null && item.TimestampUtc >= cutoff)
+                             .OrderBy(item => item.TimestampUtc))
+                {
+                    if (fresh.Count > 0 && sample.TimestampUtc >= fresh[0].TimestampUtc) continue;
+                    history.AddLast(sample);
+                }
+                foreach (var sample in fresh) history.AddLast(sample);
+                while (history.Count > MaxHistorySamples) history.RemoveFirst();
+            }
+            historyLoaded = true;
+        }
+        finally
+        {
+            loadGate.Release();
+        }
+    }
+
+    private async Task PersistHistoryAsync(bool force, CancellationToken cancellationToken)
+    {
+        if (historyStore is null) return;
+        SystemHistorySampleDto[] snapshot;
+        lock (syncRoot)
+        {
+            if (!force && ++samplesSincePersist < PersistEverySamples) return;
+            samplesSincePersist = 0;
+            snapshot = history.ToArray();
+        }
+        try
+        {
+            await historyStore.WriteAsync(HistoryPath, snapshot.ToList(), cancellationToken);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception)
+        {
+            // Kalıcılık best-effort: yazılamayan geçmiş izlemeyi bozmaz.
+            logger.LogWarning(exception, "İzleme geçmişi dosyaya yazılamadı.");
+        }
     }
 
     public Task<SystemOverviewDto> GetOverviewAsync(CancellationToken cancellationToken = default)
@@ -88,6 +165,7 @@ public sealed class SystemMonitoringService : ISystemMonitoringService, IDisposa
 
     public async Task RecordSampleAsync(CancellationToken cancellationToken = default)
     {
+        await EnsureHistoryLoadedAsync(cancellationToken);
         var overview = await GetOverviewAsync(cancellationToken);
         var sample = new SystemHistorySampleDto
         {
@@ -110,14 +188,17 @@ public sealed class SystemMonitoringService : ISystemMonitoringService, IDisposa
                 history.RemoveFirst();
             }
         }
+
+        await PersistHistoryAsync(force: false, cancellationToken);
     }
 
-    public Task<IReadOnlyList<SystemHistorySampleDto>> GetHistoryAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<SystemHistorySampleDto>> GetHistoryAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        await EnsureHistoryLoadedAsync(cancellationToken);
         lock (syncRoot)
         {
-            return Task.FromResult<IReadOnlyList<SystemHistorySampleDto>>(history.Select(sample => new SystemHistorySampleDto
+            return (IReadOnlyList<SystemHistorySampleDto>)(history.Select(sample => new SystemHistorySampleDto
             {
                 TimestampUtc = sample.TimestampUtc, CpuPercent = sample.CpuPercent, CpuMeasured = sample.CpuMeasured,
                 MemoryPercent = sample.MemoryPercent, MemoryMeasured = sample.MemoryMeasured,

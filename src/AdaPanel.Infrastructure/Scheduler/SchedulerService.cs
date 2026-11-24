@@ -985,7 +985,8 @@ else {{ [Console]::Out.WriteLine('ADAPANEL-DURUM=' + $gorev.State) }}";
     internal static string BuildCreateScript(CreateScheduledTaskRequest request, ScriptPlan? plan, string? logPath = null)
     {
         if (request.MigrationFreshDisabled) return BuildMigrationCreateScript(request, plan, logPath);
-        var scheduleType = request.ScheduleType.Trim().ToLowerInvariant();
+        // M6: bilinmeyen tür artık sessizce saatliğe DÜŞMEZ; ValidateRequest ile aynı kural.
+        var scheduleType = NormalizeScheduleType(request.ScheduleType);
         var interval = Math.Max(1, request.Interval);
         var (execute, arguments, workingDirectory) = plan is null
             ? ResolveAction(request)
@@ -1018,7 +1019,8 @@ else {{ [Console]::Out.WriteLine('ADAPANEL-DURUM=' + $gorev.State) }}";
         {
             "minute" or "minutely" => $"New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes {interval}) -RepetitionDuration (New-TimeSpan -Days 3650)",
             "daily" => $"New-ScheduledTaskTrigger -Daily -At ([datetime]::ParseExact('{NormalizeTime(request.TimeOfDay)}','HH:mm',[System.Globalization.CultureInfo]::InvariantCulture))",
-            _ => $"New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Hours {interval}) -RepetitionDuration (New-TimeSpan -Days 3650)"
+            "hourly" => $"New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Hours {interval}) -RepetitionDuration (New-TimeSpan -Days 3650)",
+            _ => throw new AppException("cron.invalid_schedule_type", 400, 400)
         };
 
         // Principal'i ACIKCA ver: panel servisi LocalSystem'dir ve principal'siz "-RunLevel Highest"
@@ -1218,9 +1220,38 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(req
         }
     }
 
+    /// <summary>Panelin zamanlayıcı kodunun gerçekten kurabildiği türler (frontend seçenekleriyle aynı).</summary>
+    internal const int MaxMinuteInterval = 1439;   // 24 saat ve üstü "saatlik" ya da "günlük" ile ifade edilir
+    internal const int MaxHourInterval = 744;      // Görev Zamanlayıcı tekrar aralığı üst sınırı ~31 gün
+
+    internal static string NormalizeScheduleType(string? raw)
+    {
+        var tip = (raw ?? string.Empty).Trim().ToLowerInvariant();
+        return tip switch
+        {
+            "minute" or "minutely" => "minute",
+            "hourly" => "hourly",
+            "daily" => "daily",
+            // weekly/monthly: tetikleyici kurma ve geri okuma (düzenleme) kodu yok; sessizce saatliğe
+            // çevirmek yerine açıkça reddedilir.
+            _ => throw new AppException("cron.invalid_schedule_type", 400, 400)
+        };
+    }
+
+    internal static void ValidateSchedule(CreateScheduledTaskRequest request)
+    {
+        var tip = NormalizeScheduleType(request.ScheduleType);
+        var max = tip switch { "minute" => MaxMinuteInterval, "hourly" => MaxHourInterval, _ => int.MaxValue };
+        if (tip != "daily" && request.Interval > max)
+        {
+            throw new AppException("cron.invalid_interval", 400, 400);
+        }
+    }
+
     private static void ValidateRequest(CreateScheduledTaskRequest request)
     {
         SanitizeRequest(request);
+        ValidateSchedule(request);
 
         // GÖREV ADI BİR GÜVENLİK SINIRIDIR, bir etiket değil.
         //

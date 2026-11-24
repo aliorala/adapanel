@@ -23,7 +23,8 @@ public sealed class AttentionService(
     IDnsService dnsService,
     IDomainRefreshService domainRefreshService,
     IHealthService healthService,
-    ILogger<AttentionService>? logger = null) : IAttentionService
+    ILogger<AttentionService>? logger = null,
+    Automation.IAlertDeliveryFailureStore? alertFailures = null) : IAttentionService
 {
     public async Task<AttentionSummaryDto> GetSummaryAsync(CancellationToken cancellationToken = default)
     {
@@ -189,6 +190,32 @@ public sealed class AttentionService(
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("domains"); }
         RecordDuration("domains");
+
+        // 4c) Uyarı teslimi: e-posta VE webhook başarısızsa uyarı kimseye ulaşmıyordur. Eskiden bu
+        // yalnız günlüğe düşüyordu; yönetici "uyarı gelmiyor" diye sorunu aylarca bilmezdi.
+        if (alertFailures is not null)
+        {
+            try
+            {
+                var undelivered = ((await alertFailures.ReadAsync(cancellationToken)) ?? []).Values
+                    .OrderByDescending(item => item.LastAttemptUtc).ToList();
+                if (undelivered.Count > 0)
+                {
+                    items.Add(new AttentionItemDto
+                    {
+                        Id = "alert-delivery-failed",
+                        Severity = "warning",
+                        TitleKey = "attention.alerts.deliveryFailed",
+                        DescriptionKey = "attention.alerts.deliveryFailed.desc",
+                        Detail = undelivered[0].Detail,
+                        AffectedCount = undelivered.Count,
+                        Section = "settings"
+                    });
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("alertDelivery"); }
+            RecordDuration("alertDelivery");
+        }
 
         // 5) Durmuş Windows servisleri → tek-tık yeniden başlat.
         try

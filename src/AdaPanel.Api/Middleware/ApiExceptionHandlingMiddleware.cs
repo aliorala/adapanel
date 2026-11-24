@@ -13,8 +13,14 @@ namespace AdaPanel.Api.Middleware;
 public sealed class ApiExceptionHandlingMiddleware(
     RequestDelegate next,
     ILogger<ApiExceptionHandlingMiddleware> logger,
-    IServiceScopeFactory scopeFactory)
+    IServiceScopeFactory scopeFactory,
+    AdaPanel.Infrastructure.Support.IArkaPlanIsKuyrugu? backgroundQueue = null)
 {
+    private static long droppedErrorReports;
+
+    /// <summary>Kuyruk doluyken (ya da kuyruk yokken) ATILAN hata bildirimi sayısı.</summary>
+    internal static long DroppedErrorReports => Interlocked.Read(ref droppedErrorReports);
+
     public async Task InvokeAsync(HttpContext context)
     {
         try
@@ -106,21 +112,33 @@ public sealed class ApiExceptionHandlingMiddleware(
             return;
         }
 
-        _ = Task.Run(async () =>
+        // SINIRLI kuyruk (ArkaPlanIsKuyrugu: tek tüketici, kapasite, iş başına zaman aşımı, panel
+        // kapanırken iptal). Eskiden her 5xx için sınırsız Task.Run açılıyordu: arızalı bir uç
+        // noktaya yağan istekler iş parçacığı havuzunu ve veritabanını boğabilirdi.
+        // Kuyruk doluysa rapor ATILIR ve sayılır: telemetri uğruna isteği/paneli riske atmayız.
+        var accepted = backgroundQueue?.Kuyrukla("error-report", async (services, cancellationToken) =>
         {
             try
             {
-                using var scope = scopeFactory.CreateScope();
-                var reportService = scope.ServiceProvider.GetRequiredService<IErrorReportService>();
+                var reportService = services.GetRequiredService<IErrorReportService>();
                 // İstek iptal jetonu KULLANILMAZ: tarayıcı bağlantıyı kapatınca kayıt da iptal olurdu.
-                await reportService.RecordAsync(exception, routePattern, correlationId, CancellationToken.None);
+                await reportService.RecordAsync(exception, routePattern, correlationId, cancellationToken);
             }
-            catch (Exception reportFailure)
+            catch (Exception reportFailure) when (reportFailure is not OperationCanceledException)
             {
                 // Bildirim mekanizmasının kendi hatası kullanıcıya YANSIMAZ; yalnız yerel günlük.
                 logger.LogDebug(reportFailure, "Error report could not be queued for {RoutePattern}", routePattern);
             }
-        });
+        }) ?? false;
+
+        if (!accepted)
+        {
+            var total = Interlocked.Increment(ref droppedErrorReports);
+            logger.LogWarning(
+                "Error report dropped (queue full or unavailable) for {RoutePattern}; total dropped {Dropped}",
+                routePattern,
+                total);
+        }
     }
 
     private static Task WriteResponseAsync(HttpContext context, int statusCode, string message, int? code = null, string details = "")
