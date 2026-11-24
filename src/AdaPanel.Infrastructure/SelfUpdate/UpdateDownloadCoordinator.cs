@@ -74,7 +74,7 @@ public sealed class UpdateDownloadCoordinator(
         {
             lock (sync)
             {
-                if (job is { IsCompleted: false }) return (Snapshot(), false);
+                if (state is { State: UpdateDownloadDto.Downloading or UpdateDownloadDto.Verifying }) return (Snapshot(), false);
             }
             var now = DateTime.UtcNow;
             var next = new PersistedState
@@ -161,19 +161,21 @@ public sealed class UpdateDownloadCoordinator(
         string partial;
         lock (sync)
         {
-            state ??= new PersistedState();
-            state.State = finalState;
-            state.ErrorKey = errorKey;
-            state.Percent = finalState == UpdateDownloadDto.Ready ? 100 : null;
-            if (!string.IsNullOrEmpty(targetVersion)) state.TargetVersion = targetVersion;
-            state.UpdatedAtUtc = DateTime.UtcNow;
-            partial = state.PartialPath;
-            state.PartialPath = string.Empty;
-            snapshot = state.Clone();
+            snapshot = (state ?? new PersistedState()).Clone();
+            partial = snapshot.PartialPath;
+            snapshot.State = finalState;
+            snapshot.ErrorKey = errorKey;
+            snapshot.Percent = finalState == UpdateDownloadDto.Ready ? 100 : null;
+            if (!string.IsNullOrEmpty(targetVersion)) snapshot.TargetVersion = targetVersion;
+            snapshot.UpdatedAtUtc = DateTime.UtcNow;
+            snapshot.PartialPath = string.Empty;
         }
         if (!keepPartial) DeleteQuietly(partial);
+        // Önce diske, SONRA belleğe: bellekteki durum "çalışıyor" olmaktan çıkınca yeni bir indirme
+        // başlayabilir; bu işin eski yazması yeni işin kaydının üstüne binmemeli.
         try { await fileStore.WriteAsync(StatePath, snapshot, CancellationToken.None); }
         catch (Exception exception) { logger.LogError(exception, "Update download state could not be saved."); }
+        lock (sync) state = snapshot;
     }
 
     private async Task EnsureLoadedAsync(CancellationToken cancellationToken)
