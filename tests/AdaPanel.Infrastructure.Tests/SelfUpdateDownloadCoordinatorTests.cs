@@ -207,7 +207,7 @@ public sealed class SelfUpdateDownloadCoordinatorTests : IDisposable
     [Fact]
     public async Task Only_managed_candidate_files_are_ever_deleted_even_if_the_state_file_is_tampered_with()
     {
-        var outside = Path.Combine(root, "updates", "AdaPanelSetup.exe");
+        var outside = Path.Combine(root, "updates", "AdaPanelUpdate-notaguid.exe");
         Directory.CreateDirectory(Path.Combine(root, "updates"));
         await File.WriteAllBytesAsync(outside, [1]);
         await File.WriteAllTextAsync(Path.Combine(root, "updates", "download-state.json"),
