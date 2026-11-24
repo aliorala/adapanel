@@ -235,7 +235,7 @@ public sealed class FtpAccountMeasurementTests
             Service = new FtpService(sites, store,
                 Fake<IPanelPreferencesService>((method, _) => method.Name == "GetAsync" ? Task.FromResult(new PanelPreferencesDto()) : throw new NotSupportedException(method.Name)), options)
             { NativeCommand = Command, NativeScript = Script, NativeAccountStatus = Lookup };
-            services = new ServiceCollection().AddSingleton(Db).AddSingleton(new SessionRevocationStore(store))
+            services = new ServiceCollection().AddSingleton(Db).AddSingleton(store).AddSingleton(new SessionRevocationStore(store))
                 .AddSingleton<IConcurrencyLock, ConcurrencyLock>().AddSingleton<IFtpService>(Service)
                 .AddSingleton<ICustomerScopeService>(scopes).AddSingleton<IIisSiteService>(sites)
                 .AddSingleton<IAuditService>(new AuditService(Db, scopes, store)).BuildServiceProvider();

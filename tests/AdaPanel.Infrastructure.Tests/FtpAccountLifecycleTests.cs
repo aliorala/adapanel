@@ -339,7 +339,7 @@ public sealed class FtpAccountLifecycleTests
             { NativeCommand = Command, NativeScript = Script, NativeAccountStatus = Lookup };
             sessions = new SessionRevocationStore(store);
             var audit = new AuditService(Db, Scopes, store);
-            services = new ServiceCollection().AddSingleton(Db).AddSingleton(sessions).AddSingleton<IConcurrencyLock, ConcurrencyLock>()
+            services = new ServiceCollection().AddSingleton(Db).AddSingleton(store).AddSingleton(sessions).AddSingleton<IConcurrencyLock, ConcurrencyLock>()
                 .AddSingleton<IFtpService>(Service).AddSingleton<ICustomerScopeService>(Scopes).AddSingleton<IIisSiteService>(sites)
                 .AddSingleton<IAuditService>(audit).BuildServiceProvider();
             // ActivatorUtilities resolves additional mandatory controller dependencies when the
