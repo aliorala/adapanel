@@ -16,14 +16,15 @@ public sealed class AutomationWorker(
     IServiceScopeFactory scopeFactory,
     ILogger<AutomationWorker> logger) : BackgroundService
 {
-    private static readonly TimeSpan PollInterval = TimeSpan.FromMinutes(1);
+    internal TimeSpan PollInterval { get; init; } = TimeSpan.FromMinutes(1);
+    internal TimeSpan StartupDelay { get; init; } = TimeSpan.FromSeconds(30);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Panel açılışında DB/IIS hazır olana kadar kısa bir gecikme.
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+            await Task.Delay(StartupDelay, stoppingToken);
         }
         catch (OperationCanceledException)
         {

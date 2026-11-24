@@ -35,11 +35,11 @@ public interface IAutomationService
     /// <summary>Zamanı gelmiş job'ları çalıştırır (worker tarafından çağrılır).</summary>
     Task RunDueJobsAsync(CancellationToken cancellationToken = default);
 
-    /// <summary>Kısa nöbetçiler (uyarı, DNS, izleme örneği, ban temizliği). Uzun işlerden bağımsız döngüde çalışır.</summary>
-    Task RunWatchdogsAsync(CancellationToken cancellationToken = default);
+    /// <summary>Kısa nöbetçiler (uyarı, DNS, izleme örneği, ban temizliği). Varsayılan: boş (eski uygulamalar). Uzun işlerden bağımsız döngüde çalışır.</summary>
+    Task RunWatchdogsAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
     /// <summary>Uzun işler (yedek, SSL yenileme, log temizliği, güncelleme kontrolü).</summary>
-    Task RunLongJobsAsync(CancellationToken cancellationToken = default);
+    Task RunLongJobsAsync(CancellationToken cancellationToken = default) => RunDueJobsAsync(cancellationToken);
 
     /// <summary>
     /// Off-site yedek hedefini test eder (gerçek yedek almadan küçük dosya yükleme). İstekte parola boşsa
