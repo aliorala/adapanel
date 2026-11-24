@@ -161,17 +161,20 @@ export type SitePhpSettings = {
   openBasedirEnabled?: boolean;
   configured: boolean;
   redisEnabled?: boolean;
+  /** Izolasyon degisti ama sitenin havuzu yenilenemedi: degisiklik bir sonraki havuz donusunde gecerli olur. */
+  poolRecycleFailed?: boolean;
 };
 
 function settingsRecord(value: unknown, siteName: string): SitePhpSettings {
   const row = object(value), actualSite = identity(row, "siteName"), maxExecutionTime = row.maxExecutionTime;
   if (!sameIdentity(actualSite, siteName) || typeof maxExecutionTime !== "number" || !Number.isInteger(maxExecutionTime)) return unconfirmed();
-  const openBasedirEnabled = optionalBool(row, "openBasedirEnabled"), redisEnabled = optionalBool(row, "redisEnabled");
+  const openBasedirEnabled = optionalBool(row, "openBasedirEnabled"), redisEnabled = optionalBool(row, "redisEnabled"), poolRecycleFailed = optionalBool(row, "poolRecycleFailed");
   return { siteName: actualSite, memoryLimit: text(row, "memoryLimit"), maxExecutionTime,
     uploadMaxFilesize: text(row, "uploadMaxFilesize"), postMaxSize: text(row, "postMaxSize"),
     displayErrors: bool(row, "displayErrors"), configured: bool(row, "configured"),
     ...(row.errorLogging == null ? {} : { errorLogging: errorLogging(row.errorLogging) }),
-    ...(openBasedirEnabled === undefined ? {} : { openBasedirEnabled }), ...(redisEnabled === undefined ? {} : { redisEnabled }) };
+    ...(openBasedirEnabled === undefined ? {} : { openBasedirEnabled }), ...(redisEnabled === undefined ? {} : { redisEnabled }),
+    ...(poolRecycleFailed === undefined ? {} : { poolRecycleFailed }) };
 }
 
 export async function getSitePhpSettings(siteName: string) {

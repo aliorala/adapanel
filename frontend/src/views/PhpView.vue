@@ -321,7 +321,12 @@ async function saveSettings() {
     // İzolasyon durumunu SUNUCUNUN döndürdüğü GERÇEK değerle tazele: kutucuk, kaydedilmiş sanılan
     // ama uygulanmamış bir durumu göstermesin (yanıt php.ini'den taze okunur).
     settings.openBasedirEnabled = data.openBasedirEnabled ?? settings.openBasedirEnabled;
-    showNotice(`${t("panel.php.settingsSaved")}\n\n${loggingMessage(data.errorLogging)}`, false, data.errorLogging?.status !== "verified");
+    // Havuz yenilenemediyse "kaydedildi" DENMEZ: ayar yazildi ama uygulanmadi; sari uyari gosterilir.
+    if (data.poolRecycleFailed === true) {
+      showNotice(`${t("php.pool_recycle_failed")}\n\n${loggingMessage(data.errorLogging)}`, false, true);
+    } else {
+      showNotice(`${t("panel.php.settingsSaved")}\n\n${loggingMessage(data.errorLogging)}`, false, data.errorLogging?.status !== "verified");
+    }
   } catch (error) {
     // `extractApiMessage` HAM anahtar döndürür (ör. `php.settings_locked`); çevirmeden basmak
     // kullanıcıya anlamsız bir dizge gösteriyordu. Aynı dosyanın diğer 5 noktası zaten doğruydu.
