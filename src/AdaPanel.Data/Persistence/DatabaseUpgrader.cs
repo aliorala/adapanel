@@ -15,6 +15,19 @@ namespace AdaPanel.Data.Persistence;
 public static class DatabaseUpgrader
 {
     public const int DefaultBackupsToKeep = 5;
+    /// <summary>Test kancası: hızlı yol dosya kopyası (hata enjekte edilebilir).</summary>
+    public static Action<string, string> CopyFile { get; set; } = (source, target) => File.Copy(source, target, overwrite: false);
+
+    /// <summary>Son yedeğin yolu: "copy" (hızlı) ya da "vacuum" (VACUUM INTO). Test/tanılama içindir.</summary>
+    public static string? LastBackupMethod { get; private set; }
+
+    private static void TryDelete(string path)
+    {
+        try { File.Delete(path); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
     private const string BackupPrefix = "adapanel-pre-";
 
     /// <summary>Tek seferlik: günlük kipini WAL yapar (kalıcıdır; dosyada saklanır).</summary>
@@ -139,15 +152,24 @@ public static class DatabaseUpgrader
                 var walEmpty = !File.Exists(walPath) || new FileInfo(walPath).Length == 0;
                 if (busy == 0 && walEmpty)
                 {
-                    File.Copy(source, target, overwrite: false);
-                    copied = new FileInfo(target).Length == new FileInfo(source).Length;
+                    try
+                    {
+                        CopyFile(source, target);
+                        copied = new FileInfo(target).Length == new FileInfo(source).Length;
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        copied = false; // VACUUM INTO'ya düşülür
+                    }
+
                     if (!copied)
                     {
-                        File.Delete(target);
+                        TryDelete(target); // yarım hedef VACUUM INTO'yu ("already exists") engellemesin
                     }
                 }
             }
 
+            LastBackupMethod = copied ? "copy" : "vacuum";
             if (!copied)
             {
                 await using var command = connection.CreateCommand();

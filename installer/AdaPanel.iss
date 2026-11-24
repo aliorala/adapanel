@@ -477,6 +477,7 @@ var
   Src: string;
   Suffixes: array of string;
   I: Integer;
+  J: Integer;
 begin
   Result := False;
   Src := DbBackupDir;
@@ -486,7 +487,8 @@ begin
 
   if not RunServiceGuard('Stop') then
   begin
-    Log('AdaPanel: servis durdurulamadi; veritabani GERI KONMADI. Yedek: ' + Src);
+    Log('AdaPanel: servis durdurulamadi; veritabani GERI KONMADI. Yedek: ' + Src +
+      '. Servis devre disi birakildi, elle acin.');
     Exit;
   end;
 
@@ -502,20 +504,28 @@ begin
     if FileExists(Src + '\adapanel.db' + Suffixes[I]) then
       if not CopyAndVerify(Src + '\adapanel.db' + Suffixes[I], DataDir + '\adapanel.db' + Suffixes[I] + '.restore') then
       begin
-        Log('AdaPanel: yedek kopyalanamadi/dogrulanamadi; canli veritabani DEGISMEDI. Yedek: ' + Src);
-        for I := 0 to 2 do
-          DeleteFile(DataDir + '\adapanel.db' + Suffixes[I] + '.restore');
+        Log('AdaPanel: yedek kopyalanamadi/dogrulanamadi; canli veritabani DEGISMEDI. Yedek: ' + Src +
+          '. Servis devre disi birakildi, elle acin.');
+        for J := 0 to 2 do
+          DeleteFile(DataDir + '\adapanel.db' + Suffixes[J] + '.restore');
         Exit;
       end;
 
   { Yeni surumun -wal/-shm'i eski db ile UYUSMAZ: uc canli dosya birlikte gider. }
   for I := 0 to 2 do
-    DeleteFile(DataDir + '\adapanel.db' + Suffixes[I]);
+    if FileExists(DataDir + '\adapanel.db' + Suffixes[I]) then
+      if not DeleteFile(DataDir + '\adapanel.db' + Suffixes[I]) then
+      begin
+        Log('AdaPanel: canli adapanel.db' + Suffixes[I] + ' silinemedi; veritabani GERI KONMADI. Yedek: ' + Src +
+          '. Servis devre disi birakildi, elle acin.');
+        Exit;
+      end;
   for I := 0 to 2 do
     if FileExists(DataDir + '\adapanel.db' + Suffixes[I] + '.restore') then
       if not RenameFile(DataDir + '\adapanel.db' + Suffixes[I] + '.restore', DataDir + '\adapanel.db' + Suffixes[I]) then
       begin
-        Log('AdaPanel: veritabani GERI KONULAMADI (yeniden adlandirma). Elle geri yukleyin; yedek: ' + Src);
+        Log('AdaPanel: veritabani GERI KONULAMADI (yeniden adlandirma). Elle geri yukleyin; yedek: ' + Src +
+          '. Servis devre disi birakildi, elle acin.');
         Exit;
       end;
 
@@ -575,6 +585,8 @@ begin
   DbRestoreFailed := False;
   if DbBackedUp then
     DbRestoreFailed := not RestorePanelDatabase;
+  if DbRestoreFailed then
+    Log('AdaPanel: veritabani geri konamadi; servis devre disi birakildi, elle acin (yedek: ' + DbBackupDir + ').');
 
   if ServiceWasStoppedByUs and not DbRestoreFailed then
     StartPanelService;

@@ -89,6 +89,7 @@ Panelden kur, sırayla doğrula:
   `C:\ProgramData\AdaPanel\backups\db\adapanel-pre-<migration>-<utc>.db` (son 5); yükleyici güncellemesinden önce
   `C:\ProgramData\AdaPanel\backups\db\installer-pre\`. **Eski sürüme dönüş:** eski kurulumu yükle, servisi durdur, `installer-pre` içindeki
   `adapanel.db`'yi (+ `-wal`/`-shm` varsa) yukarıdaki sırayla geri koy; yeni sürümün migration'ları eski sürümle uyumsuz olabilir, bu yüzden db'yi eski exe ile BİRLİKTE geri al.
+  Yükleyici DB'yi geri koyamazsa servis DEVRE DIŞI kalır (bilerek: boş/karışık db ile açılmasın); kurulum günlüğündeki yedek yolundan yukarıdaki adımları elle uygula, sonra servisi Otomatik yap ve başlat.
   Büyük DB'de (≈1 GB üzeri denetim kaydı) yükseltme açılışı uzar; servis başlatma zaman aşımına (1053) takılırsa önce Denetim Kaydı saklama süresini düşürüp temizle.
 
 ---

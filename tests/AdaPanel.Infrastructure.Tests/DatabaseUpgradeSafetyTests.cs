@@ -310,4 +310,37 @@ public sealed class DatabaseUpgradeSafetyTests : IDisposable
             Path.GetDirectoryName(program)!, "..", "AdaPanel.Data", "Persistence", "DatabaseUpgrader.cs"));
         Assert.DoesNotMatch(@"\.EnsureCreated(Async)?\s*\(", upgrader);
     }
+
+    [Fact]
+    public async Task Backup_uses_fast_copy_path_and_falls_back_to_vacuum_when_copy_fails()
+    {
+        await using var db = NewContext();
+        await DatabaseUpgrader.UpgradeAsync(db, root, NullLogger.Instance);
+        await db.Database.ExecuteSqlRawAsync("INSERT INTO panel_settings (Key, Value) VALUES ('k','v');");
+
+        var original = DatabaseUpgrader.CopyFile;
+        try
+        {
+            var fast = await DatabaseUpgrader.BackupAsync(db, root, "hizli");
+            Assert.Equal("copy", DatabaseUpgrader.LastBackupMethod);
+            Assert.True(File.Exists(fast));
+
+            // Kopya yarım dosya bırakıp patlar → hedef silinir, VACUUM INTO tutarlı yedeği üretir.
+            DatabaseUpgrader.CopyFile = (_, target) =>
+            {
+                File.WriteAllText(target, "yarim");
+                throw new IOException("enjekte");
+            };
+            var fallback = await DatabaseUpgrader.BackupAsync(db, root, "yedek");
+            Assert.Equal("vacuum", DatabaseUpgrader.LastBackupMethod);
+
+            await using var copy = new SqliteConnection($"Data Source={fallback};Pooling=False;Mode=ReadOnly");
+            await copy.OpenAsync();
+            Assert.Equal(1L, await ScalarLongAsync(copy, "SELECT count(*) FROM panel_settings WHERE Key='k'"));
+        }
+        finally
+        {
+            DatabaseUpgrader.CopyFile = original;
+        }
+    }
 }
