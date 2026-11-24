@@ -42,8 +42,9 @@ public sealed class PanelApiToken
     public bool AllowTerminal { get; set; }
 
     /// <summary>
-    /// SALT OKUNUR kapsam: true ise anahtar GET/HEAD dışında hiçbir istek yapamaz (403) ve MCP'de
-    /// yıkıcı/terminal yetkisi kapalıdır. Varsayılan false: mevcut anahtarlar değişmeden kalır.
+    /// SALT OKUNUR kapsam: true ise REST'te GET/HEAD/OPTIONS dışındaki istekler 403 alır; MCP'de tüm yazma
+    /// araçları reddedilir ve yıkıcı/terminal yetkisi kapalıdır; phpMyAdmin/Adminer vekili (dbtools)
+    /// anahtarla zaten kullanılamaz. Varsayılan false: mevcut anahtarlar değişmeden kalır.
     /// </summary>
     public bool ReadOnly { get; set; }
 

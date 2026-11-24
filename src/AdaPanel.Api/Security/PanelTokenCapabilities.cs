@@ -76,6 +76,15 @@ public static class PanelTokenCapabilities
     /// olmadan da doğrulanabiliyor. Anahtarla doğrulanmamış istekler (çerez) hiç dokunulmadan geçer —
     /// panel arayüzünün davranışı değişmez.
     /// </remarks>
+    /// <summary>Salt okunur kapsamın izin verdiği tek fiiller: GET, HEAD, OPTIONS (TRACE dahil DEĞİL).</summary>
+    public static bool IsReadOnlyScopeMethod(string? httpMethod)
+    {
+        var method = (httpMethod ?? string.Empty).Trim();
+        return method.Equals("GET", StringComparison.OrdinalIgnoreCase)
+            || method.Equals("HEAD", StringComparison.OrdinalIgnoreCase)
+            || method.Equals("OPTIONS", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static void EnsureAllowed(ClaimsPrincipal user, string? httpMethod, string? path)
     {
         if (!PanelAuthentication.IsTokenAuthenticated(user))
@@ -93,7 +102,7 @@ public static class PanelTokenCapabilities
         // SALT OKUNUR KAPSAM: GET/HEAD/OPTIONS dışında HER istek 403 — ReadOnlyPostRoutes istisnası
         // ve AllowDestructive de bunu açamaz. Kapsam anahtarın yaratılışında seçilir.
         if (user.FindFirst(PanelTokenAuthenticationHandler.ReadOnlyScopeClaim)?.Value == "true" &&
-            PanelAuthentication.IsStateChanging(httpMethod))
+            !IsReadOnlyScopeMethod(httpMethod))
         {
             throw new AppException("auth.forbidden", 403, 403, ReadOnlyScopeReason);
         }

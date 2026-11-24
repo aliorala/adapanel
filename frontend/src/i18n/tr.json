@@ -4115,7 +4115,7 @@
   "panel.aiConnection.formAllowedIpsPlaceholder": "203.0.113.5, 198.51.100.0/24",
   "panel.aiConnection.formAllowedIpsHint": "IP ya da CIDR; virgül, boşluk veya satırla ayırın. Doluysa anahtar yalnız bu adreslerden çalışır. Boş = kısıt yok.",
   "panel.aiConnection.formReadOnly": "Salt okunur (yalnız GET)",
-  "panel.aiConnection.formReadOnlyHint": "Açıksa anahtar hiçbir şeyi değiştiremez; yıkıcı ve terminal izinleri de kapanır.",
+  "panel.aiConnection.formReadOnlyHint": "Açıksa anahtar yalnız okuma isteği (GET) yapabilir; MCP yazma araçları, yıkıcı ve terminal izinleri kapanır. phpMyAdmin/Adminer anahtarla zaten kullanılamaz.",
   "panel.aiConnection.permReadOnlyScope": "Salt okunur kapsam",
   "panel.aiConnection.permIpRestricted": "IP kısıtlı",
   "panel.aiConnection.permTerminal": "Terminal",
@@ -7055,5 +7055,6 @@
   "apitoken.invalid_ip_list": "İzinli IP listesi geçersiz. Her satır bir IP ya da CIDR olmalı (en çok 32 kayıt).",
   "apitoken.ip_not_allowed": "Bu API anahtarı bu IP adresinden kullanılamaz.",
   "apitoken.read_only_scope": "Bu API anahtarı salt okunurdur; yalnız GET istekleri yapabilir.",
-  "apitoken.not_while_impersonating": "Başka bir kullanıcı adına oturum açıkken API anahtarı oluşturulamaz."
+  "apitoken.not_while_impersonating": "Başka bir kullanıcı adına oturum açıkken API anahtarı oluşturulamaz.",
+  "security.bruteforce.ban_not_found": "Bu adres için kaldırılacak bir yasak bulunamadı."
 }

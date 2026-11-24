@@ -20,7 +20,7 @@ public sealed class PanelApiTokenConfiguration : IEntityTypeConfiguration<PanelA
             .IsRequired();
 
         builder.Property(token => token.AllowedIps)
-            .HasMaxLength(1024);
+            .HasMaxLength(1536);
 
         builder.Property(token => token.Suffix)
             .HasMaxLength(8)

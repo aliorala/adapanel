@@ -14,7 +14,7 @@ namespace AdaPanel.Data.Persistence.Migrations
                 name: "AllowedIps",
                 table: "api_tokens",
                 type: "TEXT",
-                maxLength: 1024,
+                maxLength: 1536,
                 nullable: true);
 
             migrationBuilder.AddColumn<bool>(

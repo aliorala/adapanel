@@ -56,7 +56,7 @@ public sealed class CreateApiTokenRequest
     public bool ReadOnly { get; set; }
 
     /// <summary>İsteğe bağlı IP/CIDR izin listesi (virgül/boşluk/satır ile ayrılmış). Boş = kısıt yok.</summary>
-    [StringLength(2048)]
+    [StringLength(4096)]
     public string? AllowedIps { get; set; }
 
     /// <summary>Gün cinsinden ömür; 0 ya da boş = süresiz.</summary>

@@ -256,6 +256,102 @@ public sealed class W4LowFindingsTests
         Assert.Equal(simdi.AddMinutes(beklenen), BruteForceProtectionService.BanExpiry(anahtar, dakika, simdi));
     }
 
+    // ------------------------------------------------------------------ DÜZELT turu
+
+    private static ClaimsPrincipal SaltOkunurAnahtar() => new(new ClaimsIdentity(
+        [
+            new Claim(ClaimTypes.NameIdentifier, Guid.NewGuid().ToString()),
+            new Claim(ClaimTypes.Role, "Administrator"),
+            new Claim(PanelTokenAuthenticationHandler.AllowDestructiveClaim, "false"),
+            new Claim(PanelTokenAuthenticationHandler.ReadOnlyScopeClaim, "true")
+        ],
+        PanelTokenAuthenticationHandler.SchemeName));
+
+    [Fact]
+    public async Task Salt_okunur_anahtar_MCP_yazma_kapisindan_gecemez()
+    {
+        // site_start gibi "yikici sayilmayan" araclar da dahil: kapi kapsami ILK kontrol eder.
+        var hata = await Assert.ThrowsAsync<ModelContextProtocol.McpProtocolException>(
+            () => AdaPanel.Api.Mcp.McpCapability.EnsureWriteAllowedAsync(null!, SaltOkunurAnahtar(), "sites", CancellationToken.None));
+        Assert.Contains("salt okunur", hata.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Tum_MCP_yazma_araclari_ortak_yazma_kapisindan_gecer()
+    {
+        var kaynak = File.ReadAllText(Path.Combine(ScriptTestHost.RepoRoot, "src", "AdaPanel.Api", "Mcp", "AdaPanelWriteTools.cs"));
+        var araclar = System.Text.RegularExpressions.Regex.Matches(kaynak, @"\[McpServerTool\(").Count;
+        var kapilar = System.Text.RegularExpressions.Regex.Matches(kaynak, @"McpCapability\.EnsureWriteAllowedAsync\(").Count;
+        Assert.True(araclar >= 4);
+        Assert.Equal(araclar, kapilar);
+    }
+
+    [Theory]
+    [InlineData("TRACE")]
+    [InlineData("POST")]
+    public void Salt_okunur_kapsamda_TRACE_da_reddedilir(string yontem)
+    {
+        Assert.Throws<AppException>(() => PanelTokenCapabilities.EnsureAllowed(SaltOkunurAnahtar(), yontem, "/api/v1/sites"));
+    }
+
+    [Fact]
+    public void Otuz_iki_IPv6_CIDR_girdisi_sinira_sigar()
+    {
+        var liste = string.Join(',', Enumerable.Range(0, ApiTokenIpAllowList.MaxEntries)
+            .Select(i => $"2001:db8:{i:x}:ffff:ffff:ffff:ffff:ffff/127"));
+        var normal = ApiTokenIpAllowList.Normalize(liste);
+        Assert.NotNull(normal);
+        Assert.True(normal!.Length <= ApiTokenIpAllowList.MaxLength);
+        Assert.Null(ApiTokenIpAllowList.Normalize(liste + ",10.0.0.1"));
+    }
+
+    [Fact]
+    public void DbTools_vekili_yalniz_cerez_semasini_kabul_eder()
+    {
+        var yetki = typeof(AdaPanel.Api.Controllers.DbToolsProxyController)
+            .GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), true)
+            .Cast<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>().Single();
+        Assert.Equal(Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme, yetki.AuthenticationSchemes);
+    }
+
+    [Theory]
+    [InlineData("::ffff:203.0.113.9", "203.0.113.9")]
+    [InlineData("2001:db8:1:2:aaaa:bbbb:cccc:dddd", "2001:db8:1:2::/64")]
+    public async Task Eski_bicimli_yasak_uygulanir_ve_kaldirilabilir(string eskiAnahtar, string yeniAnahtar)
+    {
+        using var k = new BfKurulum();
+        k.TohumYasak(eskiAnahtar);
+        var servis = k.Servis();
+
+        Assert.True(await servis.IsBannedAsync(eskiAnahtar.Replace("aaaa:bbbb:cccc:dddd", "1:2:3:4")));
+        var durum = await servis.GetStatusAsync();
+        Assert.Equal(yeniAnahtar, Assert.Single(durum.BannedIps).IpAddress);
+
+        await servis.UnbanAsync(eskiAnahtar);
+        Assert.Empty((await servis.GetStatusAsync()).BannedIps);
+        Assert.False(await servis.IsBannedAsync(eskiAnahtar.Replace("aaaa:bbbb:cccc:dddd", "1:2:3:4")));
+    }
+
+    [Fact]
+    public async Task Ayni_anahtara_dusen_eski_yasaklardan_en_uzunu_kalir_ve_kurallar_izlenir()
+    {
+        using var k = new BfKurulum();
+        k.TohumIkiYasak();
+        var servis = k.Servis();
+
+        var yasaklar = (await servis.GetStatusAsync()).BannedIps;
+        var tek = Assert.Single(yasaklar);
+        Assert.Null(tek.ExpiresAtUtc); // süresiz olan kazanır
+    }
+
+    [Fact]
+    public async Task Unban_yasak_bulunamazsa_basari_donmez()
+    {
+        using var k = new BfKurulum();
+        var hata = await Assert.ThrowsAsync<AppException>(() => k.Servis().UnbanAsync("203.0.113.77"));
+        Assert.Equal(404, hata.HttpStatusCode);
+    }
+
     // ------------------------------------------------------------------ yardımcılar
 
     private sealed class BfKurulum : IDisposable
@@ -275,6 +371,11 @@ public sealed class W4LowFindingsTests
             "{\"enabled\":true,\"maxFailedAttempts\":10,\"windowMinutes\":15,\"banMinutes\":60,\"whitelistedIps\":[],\"attempts\":[],\"bans\":[{\"ipAddress\":\""
             + anahtar + "\",\"bannedAtUtc\":\"" + DateTime.UtcNow.ToString("o") + "\",\"expiresAtUtc\":\"" + DateTime.UtcNow.AddHours(1).ToString("o")
             + "\",\"failedAttempts\":10,\"firewallRuleName\":\"x\"}]}");
+
+        public void TohumIkiYasak() => File.WriteAllText(Yol,
+            "{\"enabled\":true,\"maxFailedAttempts\":10,\"windowMinutes\":15,\"banMinutes\":60,\"whitelistedIps\":[],\"attempts\":[],\"bans\":["
+            + "{\"ipAddress\":\"::ffff:203.0.113.9\",\"bannedAtUtc\":\"" + DateTime.UtcNow.ToString("o") + "\",\"expiresAtUtc\":null,\"failedAttempts\":10,\"firewallRuleName\":\"kural-a\"},"
+            + "{\"ipAddress\":\"203.0.113.9\",\"bannedAtUtc\":\"" + DateTime.UtcNow.ToString("o") + "\",\"expiresAtUtc\":\"" + DateTime.UtcNow.AddHours(1).ToString("o") + "\",\"failedAttempts\":10,\"firewallRuleName\":\"kural-b\"}]}");
 
         public void TohumBeyazListe(string ip) => File.WriteAllText(Yol,
             "{\"enabled\":true,\"maxFailedAttempts\":10,\"windowMinutes\":15,\"banMinutes\":60,\"whitelistedIps\":[\"" + ip + "\"],\"attempts\":[],\"bans\":[]}");

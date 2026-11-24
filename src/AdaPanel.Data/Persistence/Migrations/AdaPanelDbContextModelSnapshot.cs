@@ -208,7 +208,7 @@ namespace AdaPanel.Data.Persistence.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("AllowedIps")
-                        .HasMaxLength(1024)
+                        .HasMaxLength(1536)
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("CreatedAtUtc")

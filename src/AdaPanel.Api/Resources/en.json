@@ -346,5 +346,6 @@
   "apitoken.invalid_ip_list": "The allowed IP list is invalid. Each entry must be an IP or CIDR (at most 32 entries).",
   "apitoken.ip_not_allowed": "This API key cannot be used from this IP address.",
   "apitoken.read_only_scope": "This API key is read-only; it can only make GET requests.",
-  "apitoken.not_while_impersonating": "API keys cannot be created while signed in on behalf of another user."
+  "apitoken.not_while_impersonating": "API keys cannot be created while signed in on behalf of another user.",
+  "security.bruteforce.ban_not_found": "No ban was found for this address."
 }

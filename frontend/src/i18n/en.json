@@ -4115,7 +4115,7 @@
   "panel.aiConnection.formAllowedIpsPlaceholder": "203.0.113.5, 198.51.100.0/24",
   "panel.aiConnection.formAllowedIpsHint": "IP or CIDR, separated by commas, spaces or new lines. When set, the key only works from these addresses. Empty = no restriction.",
   "panel.aiConnection.formReadOnly": "Read-only (GET requests only)",
-  "panel.aiConnection.formReadOnlyHint": "When on, the key cannot change anything; destructive and terminal permissions are turned off too.",
+  "panel.aiConnection.formReadOnlyHint": "When on, the key can only make read requests (GET); MCP write tools, destructive and terminal permissions are off. phpMyAdmin/Adminer cannot be used with a key anyway.",
   "panel.aiConnection.permReadOnlyScope": "Read-only scope",
   "panel.aiConnection.permIpRestricted": "IP restricted",
   "panel.aiConnection.permTerminal": "Terminal",
@@ -7055,5 +7055,6 @@
   "apitoken.invalid_ip_list": "The allowed IP list is invalid. Each entry must be an IP or CIDR (at most 32 entries).",
   "apitoken.ip_not_allowed": "This API key cannot be used from this IP address.",
   "apitoken.read_only_scope": "This API key is read-only; it can only make GET requests.",
-  "apitoken.not_while_impersonating": "API keys cannot be created while signed in on behalf of another user."
+  "apitoken.not_while_impersonating": "API keys cannot be created while signed in on behalf of another user.",
+  "security.bruteforce.ban_not_found": "No ban was found for this address."
 }

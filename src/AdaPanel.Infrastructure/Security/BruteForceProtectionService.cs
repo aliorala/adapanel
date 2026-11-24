@@ -186,6 +186,12 @@ public sealed class BruteForceProtectionService(
         {
             var state = await LoadAsync(cancellationToken);
             removedBan = state.Bans.FirstOrDefault(ban => ban.IpAddress == ip);
+            if (removedBan is null)
+            {
+                // Sessiz başarı YOK: kaldırılacak yasak bulunamadıysa yönetici bunu bilmeli.
+                throw new AppException("security.bruteforce.ban_not_found", 404, 404);
+            }
+
             state.Bans.RemoveAll(ban => ban.IpAddress == ip);
             state.Attempts.RemoveAll(item => item.IpAddress == ip);
             await SaveAsync(state, cancellationToken);
@@ -195,6 +201,10 @@ public sealed class BruteForceProtectionService(
         if (removedBan is not null)
         {
             await RemoveFirewallBlockAsync(removedBan.FirewallRuleName, cancellationToken);
+            foreach (var extra in removedBan.ExtraRuleNames)
+            {
+                await RemoveFirewallBlockAsync(extra, cancellationToken);
+            }
         }
 
         return status;
@@ -237,6 +247,10 @@ public sealed class BruteForceProtectionService(
             foreach (var ban in expired)
             {
                 await RemoveFirewallBlockAsync(ban.FirewallRuleName, cancellationToken);
+                foreach (var extra in ban.ExtraRuleNames)
+                {
+                    await RemoveFirewallBlockAsync(extra, cancellationToken);
+                }
             }
         }
         catch (Exception exception)
@@ -277,7 +291,69 @@ public sealed class BruteForceProtectionService(
 
     private async Task<BruteForceState> LoadAsync(CancellationToken cancellationToken)
     {
-        return await fileStore.ReadAsync(StatePath, new BruteForceState(), cancellationToken);
+        var state = await fileStore.ReadAsync(StatePath, new BruteForceState(), cancellationToken);
+        MigrateLegacyKeys(state);
+        return state;
+    }
+
+    /// <summary>
+    /// ESKİ ANAHTAR BİÇİMİ → yeni: "::ffff:a.b.c.d" → "a.b.c.d", tam IPv6 → "/64". Bellekte her
+    /// yüklemede uygulanır (idempotent); bir sonraki kayıtla kalıcı olur. Aynı anahtara düşen iki
+    /// yasak varsa EN UZUN süreli (süresiz en uzun) korunur; ötekinin güvenlik duvarı kural adı
+    /// <c>ExtraRuleNames</c>'e taşınır ki Unban/süre dolumu onu da kaldırsın. Yoksa canlıdaki eski
+    /// yasaklar uygulanmaz, süresiz yasak/kural kalıcı olurdu.
+    /// </summary>
+    private static void MigrateLegacyKeys(BruteForceState state)
+    {
+        var bans = new List<BanRecord>();
+        foreach (var ban in state.Bans)
+        {
+            var key = Normalize(ban.IpAddress) ?? ban.IpAddress;
+            var existing = bans.FirstOrDefault(item => string.Equals(item.IpAddress, key, StringComparison.OrdinalIgnoreCase));
+            if (existing is null)
+            {
+                if (!string.Equals(key, ban.IpAddress, StringComparison.Ordinal))
+                {
+                    ban.ExtraRuleNames = [.. ban.ExtraRuleNames];
+                    ban.IpAddress = key;
+                }
+
+                bans.Add(ban);
+                continue;
+            }
+
+            var winner = existing.ExpiresAtUtc is null ? existing
+                : ban.ExpiresAtUtc is null || ban.ExpiresAtUtc > existing.ExpiresAtUtc ? ban : existing;
+            var loser = ReferenceEquals(winner, existing) ? ban : existing;
+            winner.ExtraRuleNames = [.. winner.ExtraRuleNames, .. loser.ExtraRuleNames, loser.FirewallRuleName];
+            winner.IpAddress = key;
+            if (!ReferenceEquals(winner, existing))
+            {
+                bans[bans.IndexOf(existing)] = winner;
+            }
+        }
+
+        state.Bans = bans;
+
+        var attempts = new List<AttemptRecord>();
+        foreach (var attempt in state.Attempts)
+        {
+            var key = Normalize(attempt.IpAddress) ?? attempt.IpAddress;
+            var existing = attempts.FirstOrDefault(item => string.Equals(item.IpAddress, key, StringComparison.OrdinalIgnoreCase));
+            if (existing is null)
+            {
+                attempt.IpAddress = key;
+                attempts.Add(attempt);
+            }
+            else
+            {
+                existing.Count += attempt.Count;
+                existing.FirstSeenUtc = existing.FirstSeenUtc < attempt.FirstSeenUtc ? existing.FirstSeenUtc : attempt.FirstSeenUtc;
+                existing.LastSeenUtc = existing.LastSeenUtc > attempt.LastSeenUtc ? existing.LastSeenUtc : attempt.LastSeenUtc;
+            }
+        }
+
+        state.Attempts = attempts;
     }
 
     private async Task SaveAsync(BruteForceState state, CancellationToken cancellationToken)
@@ -440,5 +516,8 @@ public sealed class BruteForceProtectionService(
         public DateTime? ExpiresAtUtc { get; set; }
         public int FailedAttempts { get; set; }
         public string FirewallRuleName { get; set; } = string.Empty;
+
+        /// <summary>Eski biçimli yasaklar birleştirilirken kalan ek güvenlik duvarı kural adları.</summary>
+        public List<string> ExtraRuleNames { get; set; } = [];
     }
 }

@@ -42,6 +42,16 @@ internal static class McpCapability
     }
 
     /// <summary>Silme/üzerine yazma/servis durdurma gerektiren araçların başında çağrılır.</summary>
+    public static void RequireNotReadOnlyScope(ClaimsPrincipal user)
+    {
+        if (user.FindFirst(PanelTokenAuthenticationHandler.ReadOnlyScopeClaim)?.Value == "true")
+        {
+            throw new McpProtocolException(
+                "Bu anahtar salt okunur kapsamda; yazma araçları kullanılamaz.",
+                McpErrorCode.InvalidRequest);
+        }
+    }
+
     public static void RequireDestructive(ClaimsPrincipal user)
     {
         if (user.FindFirst(PanelTokenAuthenticationHandler.AllowDestructiveClaim)?.Value != "true")
@@ -151,6 +161,10 @@ internal static class McpCapability
         string section,
         CancellationToken cancellationToken)
     {
+        // SALT OKUNUR KAPSAM: /mcp MVC filtresinden (PanelTokenCapabilityFilter) geçmez; kapsam burada
+        // uygulanır. site_start gibi "yıkıcı sayılmayan" yazma araçları da kapsamı aşamaz. Tüm yazma
+        // araçları (site_start/stop, dns_upsert_record, mail_dns_apply) bu kapıdan geçer.
+        RequireNotReadOnlyScope(user);
         try
         {
             await SubscriptionSuspension.EnsureAllowedAsync(scopes, user, "POST", "/mcp", cancellationToken);

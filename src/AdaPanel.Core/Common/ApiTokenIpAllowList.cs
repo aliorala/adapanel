@@ -11,7 +11,7 @@ public static class ApiTokenIpAllowList
 {
     public const int MaxEntries = 32;
 
-    public const int MaxLength = 1024;
+    public const int MaxLength = 1536; // 32 x ("ffff:...:ffff/128" = 43) + ayraçlar
 
     /// <summary>
     /// Girdiyi (virgül/boşluk/satır ayraçlı) doğrular ve normalleştirir. Geçersizse null,
