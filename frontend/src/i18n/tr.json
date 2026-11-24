@@ -5486,6 +5486,8 @@
   "panel.activity.action.update.install.scheduled": "Panel güncellemesi zamanlandı",
   "panel.activity.action.update.install_scheduled": "Panel güncellemesi zamanlandı",
   "panel.activity.action.update.package.download_started": "Güncelleme paketi indirmesi başlatıldı",
+  "panel.activity.action.update.package.download_completed": "Güncelleme paketi indirildi ve doğrulandı",
+  "panel.activity.action.update.package.download_failed": "Güncelleme paketi indirilemedi",
   "panel.activity.action.update.source.changed": "Güncelleme kaynağı değişti",
   "panel.activity.action.users.created": "Kullanıcı oluşturuldu",
   "panel.activity.action.users.delete.site_leftover": "Kullanıcı silindi, sitesi geride kaldı",

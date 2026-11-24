@@ -289,7 +289,7 @@ function followDownload(next: UpdateStatus) {
 
 // Kalıcı "failed" durumu her sayfa açılışında yeniden bildirilmesin: gösterilen hata tarayıcıda
 // (anahtar + zaman damgası) olarak hatırlanır; yeni bir başarısızlık yeni damga taşır.
-const FAILURE_SEEN_KEY = "adapanel.update.failureSeen";
+const FAILURE_SEEN_KEY = `adapanel.update.failureSeen.${actor ?? "anonymous"}`;
 const failureId = (value: UpdateDownload) => `${value.errorKey}|${value.updatedAtUtc ?? ""}`;
 function failureSeen(value: UpdateDownload) {
   try { return window.localStorage?.getItem(FAILURE_SEEN_KEY) === failureId(value); } catch { return false; }

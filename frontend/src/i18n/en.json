@@ -5486,6 +5486,8 @@
   "panel.activity.action.update.install.scheduled": "Panel update scheduled",
   "panel.activity.action.update.install_scheduled": "Panel update scheduled",
   "panel.activity.action.update.package.download_started": "Update package download started",
+  "panel.activity.action.update.package.download_completed": "Update package downloaded and verified",
+  "panel.activity.action.update.package.download_failed": "Update package download failed",
   "panel.activity.action.update.source.changed": "Update source changed",
   "panel.activity.action.users.created": "User created",
   "panel.activity.action.users.delete.site_leftover": "User deleted, site left behind",
