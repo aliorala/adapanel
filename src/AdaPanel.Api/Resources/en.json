@@ -342,5 +342,9 @@
   "backup.test_restore_warning": "Test restore finished with warnings.",
   "backup.test_restore_busy": "Another test restore is already running. Try again when it finishes.",
   "firewall.ipblock_range_too_wide": "This range is too wide. The smallest allowed prefix is /8 for IPv4 and /32 for IPv6.",
-  "ssl.certificate_not_found": "No certificate record was found for this site and host."
+  "ssl.certificate_not_found": "No certificate record was found for this site and host.",
+  "cluster.certificate_approval_required": "This server's certificate has not been approved: read the certificate and approve its fingerprint first. No connection is made without approval.",
+  "cluster.certificate_mismatch": "The server's certificate does not match the approved fingerprint. If it was not renewed someone may be intercepting; if it was, approve it again.",
+  "cluster.certificate_unreadable": "The server's certificate could not be read (no TLS or the handshake failed).",
+  "cluster.certificate_approved": "Certificate approved."
 }

@@ -23,10 +23,10 @@ public sealed class ClusterAddressConcurrencyTests : IDisposable
     {
         using var barrier = new Barrier(2);
         var store = Store(new Protector(barrier));
-        var service = new ClusterService(store, new NoNetwork(), NullLogger<ClusterService>.Instance)
+        var service = new ClusterService(store, new NoNetwork(), new FakeCertificateProber(), NullLogger<ClusterService>.Instance)
         { Resolver = (_, _) => Task.FromResult(new[] { IPAddress.Parse("93.184.216.34") }) };
         async Task<Exception?> Register(string label) => await Record.ExceptionAsync(() => service.RegisterAsync(
-            new RegisterClusterNodeRequest { Label = label, Address = "https://node.example.test:9443", ApiToken = "fixture" }));
+            new RegisterClusterNodeRequest { CertificateFingerprint = FakeCertificateProber.Fingerprint, Label = label, Address = "https://node.example.test:9443", ApiToken = "fixture" }));
         // Protect is called after the service's pre-read duplicate check and before the atomic add.
         var results = await Task.WhenAll(Task.Run(() => Register("node-a")), Task.Run(() => Register("node-b")));
         Assert.Single(results, error => error is null);
