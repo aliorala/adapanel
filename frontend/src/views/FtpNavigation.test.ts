@@ -54,7 +54,7 @@ it.each(["Administrator", "Reseller", "Customer", "Operator"])("restores persist
   const state = mount(SetupWizardView, role);
   await settle();
   (state.restorePanelLocation as () => void)();
-  const allowed = role === "Administrator" || role === "Reseller";
+  const allowed = role === "Administrator" || role === "Reseller" || role === "Customer"; // A6: musteri kendi sitesinin FTP hesaplarini yonetir
   expect((state.dashboardSections as { id: string }[]).some(section => section.id === "ftp")).toBe(allowed);
   expect(state.activeSection).toBe(allowed ? "ftp" : "home");
   if (!allowed) expect(router.replace).toHaveBeenCalledWith({ query: { section: "home" } });

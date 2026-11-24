@@ -16,7 +16,8 @@ function measured<T>(body: unknown, valid: (data: unknown) => data is T): T {
 function isUser(value: unknown): value is FtpUser {
   return record(value) && typeof value.userName === 'string' && value.userName.trim().length > 0
     && ['homePath','siteName','createdAtUtc'].every(key => typeof value[key] === 'string')
-    && typeof value.isEnabled === 'boolean' && typeof value.existsOnSystem === 'boolean';
+    && typeof value.isEnabled === 'boolean' && typeof value.existsOnSystem === 'boolean'
+    && (value.readOnly == null || typeof value.readOnly === 'boolean');
 }
 function sameIdentity(value: unknown, expected: string) { return typeof value === 'string' && value.trim().toLowerCase() === expected.trim().toLowerCase(); }
 function isStatus(value: unknown): value is FtpServerStatus {
@@ -53,6 +54,8 @@ export type FtpUser = {
   /** Oluşturmada ölçülür: true = süre dolumu kapalı, false = açık, null = doğrulanamadı. */
   passwordNeverExpires?: boolean | null;
   isEnabled: boolean;
+  /** Salt-okunur hesap. Listede panel kaydı; güncelleme yanıtında IIS/NTFS'ten geri okunmuş değer. Eski sunucuda yok. */
+  readOnly?: boolean;
   createdAtUtc: string;
 };
 
@@ -165,4 +168,27 @@ export async function setFtpTls(requireSsl: boolean) {
 export async function deleteFtpUser(userName: string) {
   const response = await apiClient.delete<ApiEnvelope<object>>(`/ftp/users/${encodeURIComponent(userName)}`);
   measured(response.data, (value): value is {userName: string} => record(value) && sameIdentity(value.userName, userName));
+}
+
+/**
+ * Ev dizini (site kökü içinde) ve/veya salt-okunur bayrağı. Yanıt, istenen değerleri SUNUCUNUN
+ * ölçtüğü haliyle taşımıyorsa başarı sayılmaz (`panel.ftp.resultUnconfirmed`).
+ */
+function samePath(a: string, b: string) {
+  const norm = (v: string) => v.trim().split("\\").join("/").replace(/\/+$/, "").toLowerCase();
+  return norm(a) === norm(b);
+}
+
+export async function updateFtpUser(userName: string, changes: { homePath?: string; readOnly?: boolean }): Promise<FtpUser> {
+  const response = await apiClient.put<ApiEnvelope<FtpUser>>(`/ftp/users/${encodeURIComponent(userName)}`, { ...changes });
+  return measured(response.data, (value): value is FtpUser => isUser(value) && sameIdentity(value.userName, userName)
+    && (changes.readOnly === undefined || value.readOnly === changes.readOnly)
+    && (!changes.homePath?.trim() || samePath(String(value.homePath), changes.homePath)));
+}
+
+/** Hesabı aç/kapat. Sunucu Windows hesabını geri okur; yanıt istenen durumu doğrulamıyorsa başarı sayılmaz. */
+export async function setFtpUserEnabled(userName: string, enabled: boolean) {
+  const response = await apiClient.post<ApiEnvelope<object>>(`/ftp/users/${encodeURIComponent(userName)}/enabled`, { enabled });
+  measured(response.data, (value): value is { userName: string; enabled: boolean } => record(value)
+    && sameIdentity(value.userName, userName) && value.enabled === enabled);
 }

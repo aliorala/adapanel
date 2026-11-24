@@ -177,13 +177,36 @@
       </div>
     </section>
 
+    <!-- Hesap düzenleme: ev dizini (site kökü içinde) + salt-okunur. Kota YOK: desteklenmiyor, dürüstçe yazılır. -->
+    <section v-if="editing" class="form-surface ftp-edit" aria-labelledby="ftp-edit-heading">
+      <div class="section-head compact-head">
+        <div>
+          <h3 id="ftp-edit-heading">{{ t("panel.ftp.editTitle", { user: editing.userName }) }}</h3>
+          <p class="meta">{{ t("panel.ftp.quotaUnsupported") }}</p>
+        </div>
+      </div>
+      <div class="form-grid ftp-form-grid">
+        <label>
+          <span>{{ t("panel.ftp.homePath") }}</span>
+          <input v-model="editing.homePath" :disabled="accountBusy" autocomplete="off" spellcheck="false" />
+        </label>
+        <label class="ftp-readonly-toggle">
+          <input v-model="editing.readOnly" type="checkbox" :disabled="accountBusy" />
+          <span class="ftp-tls-text">
+            <strong>{{ t("panel.ftp.readOnly") }}</strong>
+            <small>{{ t("panel.ftp.readOnlyHint") }}</small>
+          </span>
+        </label>
+      </div>
+      <div class="row-actions">
+        <button class="compact" v-bind="writeGate(accountBusy)" @click="saveEdit">{{ t("panel.ftp.save") }}</button>
+        <button class="secondary compact" :disabled="accountBusy" @click="editing = null">{{ t("panel.ftp.cancelEdit") }}</button>
+      </div>
+    </section>
+
     <section v-if="accountOperation" :class="['ftp-account-result', `is-${accountOperation.status}`]" aria-labelledby="ftp-account-result-heading" :aria-busy="accountOperation.status === 'running' || accountOperation.status === 'refreshing'">
       <div class="ftp-account-result-head">
-        <h3 id="ftp-account-result-heading" role="status">{{ t(accountOperation.status === 'running'
-          ? accountOperation.kind === 'create' ? 'panel.ftp.accountCreating' : accountOperation.kind === 'password' ? 'panel.ftp.accountChangingPassword' : 'panel.ftp.accountDeleting'
-          : accountOperation.status === 'refreshing' ? 'panel.ftp.accountRefreshing'
-          : accountOperation.status === 'failed' ? 'panel.ftp.accountOperationFailed'
-          : accountOperation.kind === 'create' ? 'panel.ftp.created' : accountOperation.kind === 'password' ? 'panel.ftp.passwordChanged' : 'panel.ftp.deleted') }}</h3>
+        <h3 id="ftp-account-result-heading" role="status">{{ t(operationHeadingKey(accountOperation)) }}</h3>
         <button v-if="accountOperation.status === 'succeeded' || accountOperation.status === 'failed'" class="secondary compact" :aria-label="t('panel.ftp.accountDismissResult')" @click="dismissAccountOperation">×</button>
       </div>
       <dl class="ftp-account-identity">
@@ -241,10 +264,17 @@
           </span>
           <span role="cell" :data-label="t('panel.users.status')"><span :class="['status-pill', user.isEnabled && user.existsOnSystem ? 'ok' : 'warn']">
             {{ user.isEnabled && user.existsOnSystem ? t("panel.status.active") : t("panel.status.inactive") }}
-          </span></span>
+          </span>
+          <span v-if="user.readOnly" class="status-pill warn">{{ t("panel.ftp.readOnly") }}</span></span>
           <span class="row-actions" role="cell" :data-label="t('panel.files.actions')">
             <button class="secondary compact" v-bind="writeGate(accountBusy)" @click="changeFtpPassword(user.userName)">
               {{ changingPassword === user.userName ? t("panel.database.saving") : t("panel.database.changePassword") }}
+            </button>
+            <button class="secondary compact" v-bind="writeGate(accountBusy)" @click="startEdit(user.userName)">
+              {{ t("panel.ftp.edit") }}
+            </button>
+            <button class="secondary compact" v-bind="writeGate(accountBusy)" @click="toggleEnabled(user.userName)">
+              {{ togglingUser === user.userName ? t("panel.ftp.toggling") : t(user.isEnabled ? "panel.ftp.disableAccount" : "panel.ftp.enableAccount") }}
             </button>
             <button class="danger compact" v-bind="writeGate(accountBusy)" @click="removeUser(user.userName)">
               {{ deletingUser === user.userName ? t("panel.database.removing") : t("panel.sites.delete") }}
@@ -273,7 +303,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
-import { applyFtpCertificate, createFtpUser, deleteFtpUser, ensureFtpServer, getFtpStatus, getFtpTls, getFtpUsers, setFtpPassword, setFtpTls, type FtpCertificate, type FtpServerStatus, type FtpUser } from "../api/ftp";
+import { applyFtpCertificate, createFtpUser, deleteFtpUser, ensureFtpServer, getFtpStatus, getFtpTls, getFtpUsers, setFtpPassword, setFtpTls, setFtpUserEnabled, updateFtpUser, type FtpCertificate, type FtpServerStatus, type FtpUser } from "../api/ftp";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
@@ -315,9 +345,12 @@ const serverCheckCompleted = ref(false);
 const creating = ref(false);
 const deletingUser = ref("");
 const changingPassword = ref("");
-const accountBusy = computed(() => Boolean(creating.value || deletingUser.value || changingPassword.value));
+const togglingUser = ref("");
+const updatingUser = ref("");
+const accountBusy = computed(() => Boolean(creating.value || deletingUser.value || changingPassword.value || togglingUser.value || updatingUser.value));
+const editing = ref<{ userName: string; homePath: string; readOnly: boolean } | null>(null);
 type AccountOperation = {
-  kind: 'create' | 'password' | 'delete';
+  kind: 'create' | 'password' | 'delete' | 'update' | 'enable' | 'disable';
   status: 'running' | 'refreshing' | 'succeeded' | 'failed';
   userName: string;
   siteName: string;
@@ -379,6 +412,16 @@ function sameAccountTarget(target: Pick<FtpUser, 'userName' | 'siteName' | 'home
   const normalized = (value: string) => value.trim().replace(/\\/g, '/').toLowerCase();
   return users.value.some(user => normalized(user.userName) === normalized(target.userName)
     && normalized(user.siteName) === normalized(target.siteName) && normalized(user.homePath) === normalized(target.homePath));
+}
+
+function operationHeadingKey(operation: AccountOperation) {
+  const done: Record<AccountOperation['kind'], string> = { create: 'panel.ftp.created', password: 'panel.ftp.passwordChanged', delete: 'panel.ftp.deleted',
+    update: 'panel.ftp.updated', enable: 'panel.ftp.accountEnabled', disable: 'panel.ftp.accountDisabled' };
+  const running: Record<AccountOperation['kind'], string> = { create: 'panel.ftp.accountCreating', password: 'panel.ftp.accountChangingPassword', delete: 'panel.ftp.accountDeleting',
+    update: 'panel.ftp.accountUpdating', enable: 'panel.ftp.accountToggling', disable: 'panel.ftp.accountToggling' };
+  if (operation.status === 'running') return running[operation.kind];
+  if (operation.status === 'refreshing') return 'panel.ftp.accountRefreshing';
+  return operation.status === 'failed' ? 'panel.ftp.accountOperationFailed' : done[operation.kind];
 }
 
 async function runAccountWrite(kind: AccountOperation['kind'], target: Pick<FtpUser, 'userName' | 'siteName' | 'homePath'>,
@@ -491,6 +534,9 @@ watch(
     creating.value = false;
     changingPassword.value = "";
     deletingUser.value = "";
+    togglingUser.value = "";
+    updatingUser.value = "";
+    editing.value = null;
     accountState.value = null;
     accountContext = null;
     users.value = [];
@@ -531,7 +577,8 @@ watch([() => form.siteName, showCreateForm], ([target, open], [previousTarget]) 
 onMounted(async () => {
   const context = ftpContext();
   if (sitesStore.sites.length === 0 && !sitesStore.loading) {
-    await sitesStore.fetchSites().catch(() => undefined);
+    // Site listesi okunamazsa sessizce boş seçim göstermek yerine hata görünür (oluşturma formundaki site seçimi buna bağlı).
+    await sitesStore.fetchSites().catch((error) => { if (context.current()) showApiError(error); });
   }
   if (!context.current()) return;
   mountedReady = true;
@@ -761,6 +808,50 @@ async function changeFtpPassword(userName: string) {
   }
 }
 
+function startEdit(userName: string) {
+  if (!canManageUser(userName)) return;
+  const user = users.value.find(item => item.userName === userName)!;
+  editing.value = { userName, homePath: user.homePath, readOnly: user.readOnly === true };
+}
+
+async function saveEdit() {
+  const draft = editing.value;
+  if (!draft || !canManageUser(draft.userName)) return;
+  const context = ftpContext();
+  const target = { ...users.value.find(user => user.userName === draft.userName)! };
+  const changes: { homePath?: string; readOnly?: boolean } = {};
+  if (draft.homePath.trim() && draft.homePath.trim() !== target.homePath) changes.homePath = draft.homePath.trim();
+  if (draft.readOnly !== (target.readOnly === true)) changes.readOnly = draft.readOnly;
+  if (!changes.homePath && changes.readOnly === undefined) { editing.value = null; return; }
+  updatingUser.value = target.userName;
+  try {
+    await runAccountWrite('update', target, context, async () => {
+      const result = await updateFtpUser(target.userName, changes);
+      if (!context.current()) return;
+      users.value = users.value.map(user => user.userName.toLowerCase() === result.userName.toLowerCase() ? { ...user, ...result } : user);
+      editing.value = null;
+    }, () => showNotice(t("panel.ftp.updated"), false));
+  } finally {
+    if (context.current()) updatingUser.value = "";
+  }
+}
+
+/** Aç/kapat: sunucu Windows hesabını geri okur. Askıdaki abonelikte yazma kapısı (writeGate) düğmeyi zaten kilitler. */
+async function toggleEnabled(userName: string) {
+  if (!canManageUser(userName)) return;
+  const context = ftpContext();
+  const target = { ...users.value.find(user => user.userName === userName)! };
+  const enable = !target.isEnabled;
+  togglingUser.value = userName;
+  try {
+    await runAccountWrite(enable ? 'enable' : 'disable', target, context, async () => {
+      await setFtpUserEnabled(target.userName, enable);
+    }, () => showNotice(t(enable ? "panel.ftp.accountEnabled" : "panel.ftp.accountDisabled"), false));
+  } finally {
+    if (context.current()) togglingUser.value = "";
+  }
+}
+
 /**
  * Silme ONAYSIZ yapılmaz: FTP hesabı Windows kullanıcısıyla birlikte gider ve geri alınamaz.
  * (Parola değiştirmede zaten PromptDialog kullanılıyordu; silmede onay atlanmıştı.)
@@ -869,6 +960,7 @@ function readErrorMessage(prefix: string, error: string) {
   font-size: var(--fs-h4);
 }
 
+.ftp-readonly-toggle { display: flex; gap: var(--sp-8); align-items: flex-start; }
 .ftp-address {
   display: grid;
   gap: var(--sp-2);
