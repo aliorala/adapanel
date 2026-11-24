@@ -36,4 +36,15 @@ public sealed class LicenseOptions
     /// panelin kendi istekleri beklememelidir.
     /// </summary>
     public int TimeoutSeconds { get; set; } = 10;
+
+    /// <summary>
+    /// Lisans sunucusunun YANIT IMZA genel anahtari (taban64 SubjectPublicKeyInfo, ECDSA P-256).
+    /// BOS = yanit imzasi dogrulanmaz (bugunku durum: sunucu imzalamiyor). Dolu = imzasiz/gecersiz
+    /// yanit "ulasilamadi" sayilir (karar uygulanmaz). Anahtar KODA GOMULMEZ; sunucu imzalamaya
+    /// basladiginda yapilandirmadan verilir.
+    /// </summary>
+    public string ResponsePublicKey { get; set; } = string.Empty;
+
+    /// <summary>Imzali yanitin kabul edilen azami yasi (saat); eski yanitin tekrar oynatilmasini sinirlar.</summary>
+    public int ResponseMaxAgeHours { get; set; } = 72;
 }

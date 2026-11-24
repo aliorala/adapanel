@@ -252,6 +252,7 @@
   "store.download_not_found": "Uygulama paketi resmi kaynakta bulunamadı.",
   "store.download_failed": "Uygulama paketi indirilemedi. Internet erişimini ve uzak kaynağı kontrol edin.",
   "store.checksum_mismatch": "Uygulama paketinin veya dosyalarının doğrulama özeti eşleşmiyor.",
+  "store.integrity_unavailable": "Bu uygulama paketi için doğrulama özeti (SHA-256) yok; güvenlik gereği kurulum yapılmadı.",
   "store.checksum_unavailable": "Uygulama için resmi doğrulama bilgisi alınamadı.",
   "store.installed": "Uygulama sablonu kuruldu.",
   "update.downloaded": "Güncelleme paketi indirildi.",

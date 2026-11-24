@@ -137,7 +137,7 @@ public sealed class AppStoreService(
             Description = "store.template.grav.description",
             Runtime = "PHP 8.x",
             Category = "CMS",
-            DownloadUrl = "https://getgrav.org/download/core/grav/latest",
+            DownloadUrl = "https://github.com/getgrav/grav/releases/download/2.2.33/grav-v2.2.33.zip",
             RequiresDatabase = false,
             DefaultRootFolder = "site koku",
             Requirements = ["PHP 8.x"],
@@ -151,7 +151,7 @@ public sealed class AppStoreService(
             Description = "store.template.drupal.description",
             Runtime = "PHP 8.x",
             Category = "CMS",
-            DownloadUrl = "https://www.drupal.org/download-latest/zip",
+            DownloadUrl = "https://ftp.drupal.org/files/projects/drupal-11.4.13.zip",
             RequiresDatabase = true,
             DefaultRootFolder = "site koku",
             Requirements = ["PHP 8.x", "store.requirement.mysql_or_mariadb"],
@@ -316,6 +316,22 @@ public sealed class AppStoreService(
         "mysqli", "pdo_mysql", "mbstring", "gd", "curl", "exif", "intl", "zip", "openssl", "fileinfo"
     };
 
+    /// <summary>
+    /// Surum-pinli katalog paketlerinin SHA256'si (anahtar: sablon kimligi). Pinli adres + pinli ozet:
+    /// "latest" suruklenen adres yok, cunku kaynakta degisen bir paketin ozeti onceden bilinemez.
+    /// Joomla/PrestaShop/Grav ozetleri GitHub'in release asset 'digest' alaniyla birebir ayni;
+    /// Drupal ozeti ftp.drupal.org'dan indirilip hesaplandi (Drupal yalniz MD5 yayinlar).
+    /// Surum yukseltirken URL ve ozet BIRLIKTE degisir; ozetsiz sablon kurulmaz (kapali basarisiz).
+    /// </summary>
+    internal static readonly IReadOnlyDictionary<string, string> PinnedPackageSha256 =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["grav"] = "36f0262d7ad188fd49113bed0b54f7f27d4181c5e9b45d81e00d7eed4878d007",
+            ["drupal"] = "fe50038778f70919fb4e3133cbe62207ce5dc6a462f3afe1f642be45884a9ac5",
+            ["joomla"] = "bc27840f38687da105dc5f8a00f94f688b46526379f075fc67020c8d1d8d6e7a",
+            ["prestashop"] = "0ef5e69fb3d0e37c0993d7ad4f67140c26156f550b1ca91c5b8131b76e17f3ab"
+        };
+
     // Genel indirilebilir PHP uygulaması (Grav, Drupal ...): resmi zip'i geçici alana indir+aç, tek üst
     // klasörü düzleştir, site köküne kopyala. WordPress ile aynı kanıtlanmış akış (workspace→flatten→copy).
     private async Task InstallDownloadableAppAsync(AppTemplateDto template, string destination, CancellationToken cancellationToken)
@@ -324,7 +340,13 @@ public sealed class AppStoreService(
         Directory.CreateDirectory(workspace);
         try
         {
-            await DownloadAndExtractZipAsync(template.DownloadUrl, string.Empty, workspace, cancellationToken);
+            if (!PinnedPackageSha256.TryGetValue(template.Id, out var pinnedSha256))
+            {
+                // KAPALI BASARISIZ: ozeti bilinmeyen paket indirilmez bile.
+                throw new AppException("store.integrity_unavailable", 422, 422, $"Template={template.Id}");
+            }
+
+            await DownloadAndExtractZipAsync(template.DownloadUrl, pinnedSha256, PackageHashKind.Sha256, workspace, cancellationToken);
             FlattenSingleTopDirectory(workspace);
             CopyDirectory(workspace, destination);
         }
@@ -369,6 +391,7 @@ public sealed class AppStoreService(
             await DownloadAndExtractZipAsync(
                 package.DownloadUrl,
                 package.PackageSha1,
+                PackageHashKind.Sha1,
                 workspace,
                 cancellationToken);
             FlattenSingleTopDirectory(workspace);
@@ -639,8 +662,8 @@ public sealed class AppStoreService(
 
         try
         {
-            var downloadUrl = await ResolveRoundcubeDownloadUrlAsync(cancellationToken);
-            await DownloadAndExtractTarGzAsync(downloadUrl, stagingRoot, cancellationToken);
+            var (downloadUrl, downloadSha256) = await ResolveRoundcubeDownloadUrlAsync(cancellationToken);
+            await DownloadAndExtractTarGzAsync(downloadUrl, downloadSha256, stagingRoot, cancellationToken);
             FlattenSingleTopDirectory(stagingRoot);
             ValidateRoundcubeProject(stagingRoot);
             await WriteRoundcubeConfigAsync(stagingRoot, cancellationToken);
@@ -727,7 +750,7 @@ public sealed class AppStoreService(
         return (installed.ComponentId, phpExecutable);
     }
 
-    private async Task<string> ResolveRoundcubeDownloadUrlAsync(CancellationToken cancellationToken)
+    private async Task<(string Url, string Sha256)> ResolveRoundcubeDownloadUrlAsync(CancellationToken cancellationToken)
     {
         var client = httpClientFactory.CreateClient();
         // ResponseHeadersRead ile yalnız bağlan+header fazını sınırlar (gövde indirme sınırsız kalır);
@@ -759,14 +782,24 @@ public sealed class AppStoreService(
                 name.EndsWith("-complete.tar.gz", StringComparison.OrdinalIgnoreCase) &&
                 asset.TryGetProperty("browser_download_url", out var urlElement))
             {
-                return urlElement.GetString() ?? throw new AppException("store.download_not_found", 404, 404);
+                var url = urlElement.GetString() ?? throw new AppException("store.download_not_found", 404, 404);
+                // GitHub asset 'digest' alani ("sha256:<hex>"): ozet yoksa kurulum yapilmaz.
+                var digest = asset.TryGetProperty("digest", out var digestElement) && digestElement.ValueKind == JsonValueKind.String
+                    ? digestElement.GetString() ?? string.Empty
+                    : string.Empty;
+                if (!digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new AppException("store.integrity_unavailable", 422, 422, $"Asset={name}");
+                }
+
+                return (url, digest["sha256:".Length..].Trim());
             }
         }
 
         throw new AppException("store.download_not_found", 404, 404);
     }
 
-    private async Task DownloadAndExtractTarGzAsync(string url, string destination, CancellationToken cancellationToken)
+    private async Task DownloadAndExtractTarGzAsync(string url, string expectedSha256, string destination, CancellationToken cancellationToken)
     {
         var client = httpClientFactory.CreateClient();
         // ResponseHeadersRead ile yalnız bağlan+header fazını sınırlar (gövde indirme sınırsız kalır);
@@ -782,6 +815,8 @@ public sealed class AppStoreService(
             {
                 await response.Content.CopyToAsync(stream, cancellationToken);
             }
+
+            await VerifyPackageHashAsync(tempFile, expectedSha256, PackageHashKind.Sha256, cancellationToken);
 
             await using var archive = File.OpenRead(tempFile);
             await using var gzip = new GZipStream(archive, CompressionMode.Decompress);
@@ -1824,10 +1859,17 @@ public sealed class AppStoreService(
 
     private async Task DownloadAndExtractZipAsync(
         string url,
-        string expectedSha1,
+        string expectedHash,
+        PackageHashKind hashKind,
         string destination,
         CancellationToken cancellationToken)
     {
+        // Ozet OLMADAN indirme yok (kapali basarisiz); bos ozet eskiden "dogrulamayi atla" demekti.
+        if (string.IsNullOrWhiteSpace(expectedHash))
+        {
+            throw new AppException("store.integrity_unavailable", 422, 422, $"Url={url}");
+        }
+
         var client = httpClientFactory.CreateClient();
         // ResponseHeadersRead ile yalnız bağlan+header fazını sınırlar (gövde indirme sınırsız kalır);
         // Infinite'te takılı sunucuya bağlanış sonsuza asılırdı.
@@ -1843,23 +1885,40 @@ public sealed class AppStoreService(
                 await response.Content.CopyToAsync(stream, cancellationToken);
             }
 
-            await using (var stream = File.OpenRead(tempFile))
-            {
-                var actualSha1 = Convert.ToHexString(await SHA1.HashDataAsync(stream, cancellationToken));
-                // Sabit sürüm için SHA1 doğrulanır; "latest" sürükleyen resmi kaynaklarda (sürüm değiştikçe hash
-                // değişir) sha boş bırakılır → yalnız HTTPS/resmi kaynağa güvenilir (components.json'daki boş-sha
-                // bileşen kurulumlarıyla aynı davranış).
-                if (!string.IsNullOrWhiteSpace(expectedSha1) && !string.Equals(actualSha1, expectedSha1, StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new AppException("store.checksum_mismatch", 400, 400);
-                }
-            }
+            await VerifyPackageHashAsync(tempFile, expectedHash, hashKind, cancellationToken);
 
             ZipFile.ExtractToDirectory(tempFile, destination, overwriteFiles: true);
         }
         finally
         {
             File.Delete(tempFile);
+        }
+    }
+
+    internal enum PackageHashKind { Sha256, Sha1 }
+
+    /// <summary>
+    /// Indirilen paketin ozetini dogrular; uyusmazlik ya da bos/bozuk beklenen ozet = ret. SHA256
+    /// varsayilandir; SHA1 YALNIZ WordPress icin kalir, cunku wordpress.org surum ozetini yalniz
+    /// SHA1/MD5 yayinlar (SHA256 yayinlanmadigi icin karsilastirilacak bir deger yok).
+    /// </summary>
+    internal static async Task VerifyPackageHashAsync(
+        string filePath, string expectedHash, PackageHashKind kind, CancellationToken cancellationToken)
+    {
+        var beklenen = (expectedHash ?? string.Empty).Trim();
+        var uzunluk = kind == PackageHashKind.Sha256 ? 64 : 40;
+        if (beklenen.Length != uzunluk || beklenen.Any(c => !Uri.IsHexDigit(c)))
+        {
+            throw new AppException("store.integrity_unavailable", 422, 422);
+        }
+
+        await using var stream = File.OpenRead(filePath);
+        var hash = kind == PackageHashKind.Sha256
+            ? await SHA256.HashDataAsync(stream, cancellationToken)
+            : await SHA1.HashDataAsync(stream, cancellationToken);
+        if (!string.Equals(Convert.ToHexString(hash), beklenen, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new AppException("store.checksum_mismatch", 400, 400);
         }
     }
 

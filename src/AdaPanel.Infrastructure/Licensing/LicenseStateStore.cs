@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
 
@@ -21,14 +24,95 @@ public sealed class LicenseStateStore(JsonFileStore fileStore, ISecretProtector 
     internal Task<T> RunExclusiveAsync<T>(Func<Task<T>> action, CancellationToken token) =>
         lifecycle.RunExclusiveAsync("license:" + fileStore.ResolvePath(StatePath).ToUpperInvariant(), action, token);
 
-    public Task<LicenseRecord> ReadAsync(CancellationToken cancellationToken)
+    internal const string SealKeyPath = "config/license/seal.key";
+    private readonly object sealKeyLock = new();
+
+    public async Task<LicenseRecord> ReadAsync(CancellationToken cancellationToken)
     {
-        return fileStore.ReadAsync(StatePath, new LicenseRecord(), cancellationToken);
+        var record = await fileStore.ReadAsync(StatePath, new LicenseRecord(), cancellationToken);
+        return VerifySeal(record);
     }
 
     public Task<LicenseRecord> UpdateAsync(Func<LicenseRecord, LicenseRecord> mutate, CancellationToken cancellationToken)
     {
-        return fileStore.UpdateAsync(StatePath, new LicenseRecord(), mutate, cancellationToken);
+        // Okunan kayit once muhurden gecer (oynanmissa karar alanlari sifirlanir), degisiklikten sonra
+        // yeniden muhurlenir; boylece disaridan duzenleme bir sonraki yazimda "mesru" hale gelemez.
+        return fileStore.UpdateAsync(StatePath, new LicenseRecord(), existing => Seal(mutate(VerifySeal(existing))), cancellationToken);
+    }
+
+    /// <summary>
+    /// Yerel butunluk: muhur eslesmiyorsa KARAR alanlari (hukum, tarih, SKU, limit, bitis) sifirlanir;
+    /// anahtar korunur, sunucuya yeniden sorulur. Eski (muhursuz) dosya, muhur anahtari DA yokken
+    /// kabul edilir (gecis). Muhur anahtari varken muhursuz dosya, oynanmis sayilir.
+    /// </summary>
+    internal LicenseRecord VerifySeal(LicenseRecord record)
+    {
+        var (key, created) = GetSealKey();
+        if (string.IsNullOrEmpty(record.Seal))
+        {
+            if (created || string.IsNullOrEmpty(record.ProtectedKey))
+            {
+                return record;
+            }
+        }
+        else if (string.Equals(record.Seal, ComputeSeal(key, record), StringComparison.Ordinal))
+        {
+            return record;
+        }
+
+        record.LastVerdict = string.Empty;
+        record.LastVerifiedAtUtc = null;
+        record.Sku = string.Empty;
+        record.MaxSubscriptions = 0;
+        record.ExpiresAtUtc = null;
+        record.LastError = "state_integrity_failed";
+        record.Seal = string.Empty;
+        return record;
+    }
+
+    private LicenseRecord Seal(LicenseRecord record)
+    {
+        record.Seal = ComputeSeal(GetSealKey().Key, record);
+        return record;
+    }
+
+    internal static string ComputeSeal(byte[] key, LicenseRecord record)
+    {
+        var text = string.Join('\n',
+            record.ProtectedKey,
+            record.KeySuffix,
+            record.KeyStoredAtUtc?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture) ?? string.Empty,
+            record.LastVerdict,
+            record.LastVerifiedAtUtc?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture) ?? string.Empty,
+            record.Sku,
+            record.MaxSubscriptions.ToString(CultureInfo.InvariantCulture),
+            record.ExpiresAtUtc?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture) ?? string.Empty);
+        return Convert.ToBase64String(HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(text)));
+    }
+
+    /// <summary>Muhur anahtari: rastgele 32 bayt, DPAPI'ye bagli korumayla saklanir. Okunamazsa yenisi uretilir.</summary>
+    private (byte[] Key, bool Created) GetSealKey()
+    {
+        lock (sealKeyLock)
+        {
+            var path = fileStore.ResolvePath(SealKeyPath);
+            if (File.Exists(path))
+            {
+                try
+                {
+                    return (Convert.FromBase64String(secretProtector.Unprotect(File.ReadAllText(path).Trim())), false);
+                }
+                catch
+                {
+                    // Anahtar klasoru silindi / dosya baska makineden: yenisi uretilir, eski muhurler gecersiz kalir.
+                }
+            }
+
+            var key = RandomNumberGenerator.GetBytes(32);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, secretProtector.Protect(Convert.ToBase64String(key)));
+            return (key, true);
+        }
     }
 
     /// <summary>Anahtarı korunmuş biçimde kaydeder; son dört karakteri gösterim için ayrıca tutar.</summary>

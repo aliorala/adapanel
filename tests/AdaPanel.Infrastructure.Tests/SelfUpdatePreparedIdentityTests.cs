@@ -105,6 +105,21 @@ public sealed class SelfUpdatePreparedIdentityTests
     }
 
     [Fact]
+    public async Task OlderReleaseThanInstalledIsRejectedBeforeAnyDownload()
+    {
+        using var fixture = new Fixture();
+        await fixture.PrepareAsync();
+        var before = await File.ReadAllTextAsync(fixture.PendingPath);
+        fixture.Failure = "downgrade";
+
+        var error = await Assert.ThrowsAsync<AppException>(() => fixture.Service.ApplyUpdateAsync(new ApplyUpdateRequest()));
+
+        Assert.Equal("update.downgrade_rejected", error.MessageKey);
+        Assert.Equal(before, await File.ReadAllTextAsync(fixture.PendingPath));
+        Assert.Empty(Directory.GetFiles(Path.Combine(fixture.Root, "updates"), "AdaPanelUpdate-*.exe"));
+    }
+
+    [Fact]
     public async Task SuccessfulDownloadPublishesItsOwnPreparedIdentity()
     {
         using var fixture = new Fixture();
@@ -482,7 +497,7 @@ public sealed class SelfUpdatePreparedIdentityTests
                     {
                         Content = new StringContent(JsonSerializer.Serialize(new
                         {
-                            tag_name = "v99.0.2", body = "release",
+                            tag_name = fixture.Failure == "downgrade" ? "v0.0.1" : "v99.0.2", body = "release",
                             assets = new[] { new { name = "AdaPanelSetup.exe",
                                 browser_download_url = "https://github.com/aliorala/adapanel/releases/download/v99.0.2/AdaPanelSetup.exe",
                                 digest = "sha256:" + Hash(NewPackage) } }
