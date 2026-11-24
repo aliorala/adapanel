@@ -203,6 +203,8 @@ public sealed class NotificationService(
         await fileStore.UpdateAsync(SettingsPath, new NotificationSettingsDto(), current =>
         {
             current.WebhookSecret = protectedSecret;
+            // Revizyon yenilenir: açık bir ekran eski durumla "kaydet/test" yapıp yenilemeyi görmezden gelmesin.
+            current.SettingsRevision = SettingsRevision.New();
             return current;
         }, cancellationToken);
         return fresh;

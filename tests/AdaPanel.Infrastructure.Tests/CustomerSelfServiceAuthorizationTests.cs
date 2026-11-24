@@ -255,6 +255,34 @@ public sealed class CustomerSelfServiceAuthorizationTests
     }
 
     [Fact]
+    public async Task Musteri_memory_limit_2G_ustunu_yazamaz_ve_istek_KIRACI_kapsaminda_gider()
+    {
+        var (denetleyici, php) = Php("Customer", "benim.test");
+        await Reddedilir(() => denetleyici.UpdateSitePhpSettingsAsync(
+            "benim.test", new UpdateSitePhpSettingsRequest { MemoryLimit = "4G", MaxExecutionTime = 120 }, CancellationToken.None));
+        Assert.DoesNotContain("UpdateSitePhpSettingsAsync", php.Cagrilar);
+
+        var istek = new UpdateSitePhpSettingsRequest { MemoryLimit = "2048M", MaxExecutionTime = 120, OpenBasedirEnabled = true };
+        await denetleyici.UpdateSitePhpSettingsAsync("benim.test", istek, CancellationToken.None);
+        Assert.True(istek.TenantScope);
+
+        // Yönetici sunucu geneli yolda kalır.
+        var (yonetici, _) = Php("Administrator");
+        var yoneticiIstek = new UpdateSitePhpSettingsRequest { MemoryLimit = "4G", MaxExecutionTime = 120 };
+        await yonetici.UpdateSitePhpSettingsAsync("x.test", yoneticiIstek, CancellationToken.None);
+        Assert.False(yoneticiIstek.TenantScope);
+    }
+
+    [Fact]
+    public void PHP_ayar_yazimi_kiraci_basina_hiz_sinirina_tabi()
+    {
+        var metot = typeof(PhpController).GetMethod("UpdateSitePhpSettingsAsync")!;
+        var oznitelik = metot.GetCustomAttribute<Microsoft.AspNetCore.RateLimiting.EnableRateLimitingAttribute>();
+        Assert.Equal(PanelRateLimits.PhpSettings, oznitelik?.PolicyName);
+        Assert.True(PanelRateLimits.Policies.ContainsKey(PanelRateLimits.PhpSettings));
+    }
+
+    [Fact]
     public async Task Musteri_sinirli_normal_PHP_ayarini_kendi_sitesine_yazar()
     {
         var (denetleyici, php) = Php("Customer", "benim.test");
@@ -323,7 +351,10 @@ public sealed class CustomerSelfServiceAuthorizationTests
             if (ad == "UpdateAsync")
             {
                 yazilan = (UpdateSiteHostingSettingsRequest)args[1]!;
-                return new SiteHostingSettingsDto();
+                return new SiteHostingSettingsDto
+                {
+                    WebConfigWrite = new WebConfigWriteMeasurement { Reparsed = true, Matches = true, IisProbed = true, IisAccepted = true }
+                };
             }
 
             return null;
@@ -337,15 +368,18 @@ public sealed class CustomerSelfServiceAuthorizationTests
             ControllerContext = Baglam("Customer")
         };
 
-        await denetleyici.UpdateAsync(
+        var yanit = await denetleyici.UpdateAsync(
             "benim.test",
             new UpdateSiteHostingSettingsRequest { MaximumBandwidthBytesPerSecond = 0, MaximumConnections = 0, HstsEnabled = true },
             CancellationToken.None);
+        var mesaj = ((AdaPanel.Core.Dtos.Common.ApiResponse<SiteHostingSettingsDto>)((OkObjectResult)yanit.Result!).Value!).Message;
 
         Assert.NotNull(yazilan);
         Assert.Equal(1000, yazilan!.MaximumBandwidthBytesPerSecond);
         Assert.Equal(50, yazilan.MaximumConnections);
         Assert.True(yazilan.HstsEnabled);
+        // Yok sayılan alanlar sessiz kalmaz: yanıt mesajı bunu söyler.
+        Assert.Equal("sites.hosting_settings_saved_limits_ignored", mesaj);
     }
 
     [Fact]

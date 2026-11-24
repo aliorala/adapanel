@@ -41,9 +41,12 @@ public sealed class SiteHostingSettingsController(
         // Bant genişliği / bağlantı sınırı yöneticinin kiracıya koyduğu KAPASİTE kısıtıdır; müşteri
         // kendi sınırını kaldırabilseydi plan anlamsızlaşırdı. Müşteri çağrısında bu iki alan istek
         // gövdesinden DEĞİL mevcut ayardan alınır (gövdedeki değer sessizce yok sayılır).
+        var limitsIgnored = false;
         if (User.IsInRole("Customer"))
         {
             var mevcut = await service.GetAsync(siteName, cancellationToken);
+            limitsIgnored = request.MaximumBandwidthBytesPerSecond != mevcut.MaximumBandwidthBytesPerSecond
+                || request.MaximumConnections != mevcut.MaximumConnections;
             request.MaximumBandwidthBytesPerSecond = mevcut.MaximumBandwidthBytesPerSecond;
             request.MaximumConnections = mevcut.MaximumConnections;
         }
@@ -69,7 +72,7 @@ public sealed class SiteHostingSettingsController(
         var notice = settings.WebConfigWrite.NoticeKey;
         return Ok(ApiResponse<SiteHostingSettingsDto>.Ok(
             settings,
-            notice.Length > 0 ? notice : "sites.hosting_settings_saved"));
+            notice.Length > 0 ? notice : limitsIgnored ? "sites.hosting_settings_saved_limits_ignored" : "sites.hosting_settings_saved"));
     }
 
     [HttpPost("composer-install")]

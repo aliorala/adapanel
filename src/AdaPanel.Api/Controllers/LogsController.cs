@@ -64,8 +64,11 @@ public sealed class LogsController(
     [RequireSubUserSection("sites")]
     public async Task<ActionResult<ApiResponse<LogTailDto>>> GetSiteLogAsync(string siteName, [FromQuery] int lines = 120, CancellationToken cancellationToken = default)
     {
-        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
-        var log = await logViewerService.TailSiteLogAsync(siteName.Trim(), lines, cancellationToken);
+        // KAPSAM DENETİMİ VE OKUMA AYNI (kırpılmış) DEĞERLE: farklı değerle sorulursa denetlenen ad
+        // ile okunan ad ayrışabilirdi.
+        var name = siteName.Trim();
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, name, cancellationToken);
+        var log = await logViewerService.TailSiteLogAsync(name, lines, cancellationToken);
         if (!User.IsInRole("Administrator"))
         {
             log.Path = string.Empty;

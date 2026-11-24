@@ -6812,5 +6812,7 @@
   "panel.htaccessModule.repair": "Kaydı onar",
   "panel.htaccessModule.repairHint": "IIS kaydını doğru ad, tür ve ön koşulla yeniden yazar; sunucudaki tüm siteleri etkiler.",
   "panel.htaccessModule.repairConfirm": "Bu işlem sunucu genelindeki IIS yapılandırmasını değiştirir. Devam edilsin mi?",
-  "panel.confirm.repairHtaccessModuleTitle": ".htaccess modül kaydı onarılsın mı?"
+  "panel.confirm.repairHtaccessModuleTitle": ".htaccess modül kaydı onarılsın mı?",
+  "php.max_execution_exceeds_server": "max_execution_time sunucunun FastCGI zaman aşımı sınırını aşıyor; daha düşük bir değer girin ya da yöneticiden sınırı yükseltmesini isteyin.",
+  "sites.hosting_settings_saved_limits_ignored": "Hosting ayarları kaydedildi; bant genişliği ve bağlantı sınırı yalnız yönetici/bayi tarafından değiştirilebildiği için bu iki alan DEĞİŞMEDİ."
 }

@@ -42,6 +42,14 @@ public sealed class SitePhpSettingsDto
 
 public sealed class UpdateSitePhpSettingsRequest
 {
+    /// <summary>
+    /// İstek bir KİRACI (müşteri) adına mı geliyor? Yalnız denetleyici koyar; JSON'dan okunmaz.
+    /// Kiracı yolunda sunucu geneli yan etkiler (tüm php-cgi'yi öldürme, tüm FastCGI zaman aşımını
+    /// yükseltme) KAPALIDIR: bir müşterinin ayar kaydı başka kiracıların PHP'sini kesemez.
+    /// </summary>
+    [global::System.Text.Json.Serialization.JsonIgnore]
+    public bool TenantScope { get; set; }
+
     [Required]
     [RegularExpression(@"^-?\d+[KMG]?$")]
     [StringLength(16)]

@@ -134,6 +134,7 @@ public sealed class PhpController(
     }
 
     [HttpPost("/api/v1/sites/{siteName}/php/settings")]
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting(PanelRateLimits.PhpSettings)]
     public async Task<ActionResult<ApiResponse<SitePhpSettingsDto>>> UpdateSitePhpSettingsAsync(
         string siteName,
         [FromBody] UpdateSitePhpSettingsRequest request,
@@ -156,10 +157,14 @@ public sealed class PhpController(
         // MÜŞTERİ "sınırsız" yazamaz: memory_limit=-1 ve max_execution_time=0 paylaşımlı sunucuda
         // komşu kiracıları aç bırakır; üst sınırı bayi/yönetici koyar. Normal sayısal limitler serbest.
         if (User.IsInRole("Customer")
-            && (request.MemoryLimit.StartsWith('-') || request.MaxExecutionTime == 0))
+            && (request.MemoryLimit.StartsWith('-') || request.MaxExecutionTime == 0 || MemoryBytes(request.MemoryLimit) > CustomerMemoryCeilingBytes))
         {
             throw new AppException("php.limits_staff_only", 403, 403);
         }
+
+        // Yönetici dışı çağrıda sunucu geneli yan etkiler (tüm php-cgi'yi öldürme, tüm FastCGI zaman
+        // aşımını yükseltme) servis katmanında KAPALI; izolasyon yenilemesi yalnız o sitenin havuzunu kapsar.
+        request.TenantScope = !User.IsInRole("Administrator");
 
         var settings = await phpService.UpdateSitePhpSettingsAsync(siteName, request, cancellationToken);
         await auditService.WriteForSubscriptionAsync(
@@ -218,6 +223,26 @@ public sealed class PhpController(
             cancellationToken);
 
         return Ok(ApiResponse<SitePhpSettingsDto>.Ok(settings, "php.settings.success"));
+    }
+
+    /// <summary>Müşterinin yazabileceği memory_limit üst sınırı (2 GB). Yönetici/bayi bunun üstünü verebilir.</summary>
+    internal const long CustomerMemoryCeilingBytes = 2L * 1024 * 1024 * 1024;
+
+    internal static long MemoryBytes(string value)
+    {
+        var text = (value ?? string.Empty).Trim().ToUpperInvariant();
+        if (text.Length == 0 || !long.TryParse(text.TrimEnd('K', 'M', 'G'), out var number) || number < 0)
+        {
+            return long.MaxValue;
+        }
+
+        return text[^1] switch
+        {
+            'K' => number * 1024,
+            'M' => number * 1024 * 1024,
+            'G' => number * 1024 * 1024 * 1024,
+            _ => number
+        };
     }
 
     /// <summary>Yönetici dışına exe yolu verilmez (sunucu düzeni; müşteriye faydası yok).</summary>

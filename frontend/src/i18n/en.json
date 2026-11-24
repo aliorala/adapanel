@@ -6812,5 +6812,7 @@
   "panel.htaccessModule.repair": "Repair registration",
   "panel.htaccessModule.repairHint": "Rewrites the IIS registration with the right name, type and precondition; it affects every site on the server.",
   "panel.htaccessModule.repairConfirm": "This changes the server-wide IIS configuration. Continue?",
-  "panel.confirm.repairHtaccessModuleTitle": "Repair the .htaccess module registration?"
+  "panel.confirm.repairHtaccessModuleTitle": "Repair the .htaccess module registration?",
+  "php.max_execution_exceeds_server": "max_execution_time exceeds the server's FastCGI timeout; enter a lower value or ask your administrator to raise the limit.",
+  "sites.hosting_settings_saved_limits_ignored": "Hosting settings saved; bandwidth and connection limits can only be changed by an administrator or reseller, so those two fields were NOT changed."
 }
