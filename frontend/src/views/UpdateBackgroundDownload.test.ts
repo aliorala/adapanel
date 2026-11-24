@@ -74,14 +74,48 @@ it("shows a translated error when the download failed or was interrupted by a re
   expect(gets()).toHaveLength(1);
 });
 
-it("does not allow installing while the download runs or after it failed, even if an older package is staged", async () => {
+it("does not allow installing while the download runs, but keeps a valid staged package installable after a failed retry", async () => {
   read = () => valid({ ...readyPackage, download: download("downloading") });
   const running = await mount();
   expect(running.canInstall).toBe(false);
   app?.unmount(); app = undefined;
   read = () => valid({ ...readyPackage, download: download("failed", { errorKey: "update.checksum_mismatch" }) });
   const failed = await mount();
-  expect(failed.canInstall).toBe(false);
+  expect(failed.canInstall).toBe(true);
+});
+
+it("announces a persisted failure only once per failure, not on every page open", async () => {
+  const store = new Map<string, string>();
+  const storage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => { store.set(key, value); } };
+  vi.stubGlobal("window", { location: { pathname: "/panel", hostname: "localhost", reload: vi.fn() }, localStorage: storage, setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout });
+  read = () => valid({ download: download("failed", { errorKey: "update.download_interrupted", updatedAtUtc: "2026-10-04T09:00:00Z" }) });
+  const first = await mount();
+  expect(first.notice).toBe("update.download_interrupted");
+  app?.unmount(); app = undefined;
+  const second = await mount();
+  expect(second.notice).toBe("");
+  app?.unmount(); app = undefined;
+  read = () => valid({ download: download("failed", { errorKey: "update.download_interrupted", updatedAtUtc: "2026-10-04T09:30:00Z" }) });
+  expect((await mount()).notice).toBe("update.download_interrupted");
+});
+
+it("retries the status poll with growing delays after a network error, then stops and shows the error", async () => {
+  let fail = false;
+  read = () => { if (fail) throw new Error("network"); return valid({ download: download("downloading", { percent: 10 }) }); };
+  const state = await mount();
+  fail = true;
+  await vi.advanceTimersByTimeAsync(2000);   // 1. deneme başarısız -> 4 sn sonra
+  expect(gets()).toHaveLength(2);
+  await vi.advanceTimersByTimeAsync(4000);   // 2. -> 8 sn
+  expect(gets()).toHaveLength(3);
+  expect(state.noticeError).toBe(false);
+  await vi.advanceTimersByTimeAsync(8000);   // 3. -> 16 sn
+  expect(gets()).toHaveLength(4);
+  await vi.advanceTimersByTimeAsync(16000);  // 4. başarısız: dur ve göster
+  expect(gets()).toHaveLength(5);
+  expect(state.noticeError).toBe(true);
+  await vi.advanceTimersByTimeAsync(60000);
+  expect(gets()).toHaveLength(5);
 });
 
 it("starts the download on the server, returns immediately and surfaces a later failure", async () => {

@@ -108,6 +108,7 @@ import {
   installPreparedUpdate,
   setUpdateGithubRepo,
   type UpdateAttempt,
+  type UpdateDownload,
   type UpdateStatus,
 } from "../api/update";
 import { useConfirm } from "../components/ConfirmDialog.vue";
@@ -141,9 +142,9 @@ const downloadLabel = computed(() => download.value?.state === "verifying"
   : downloadPercent.value === null ? t("panel.update.downloading") : t("panel.update.downloadingPercent", { percent: downloadPercent.value }));
 const canDownload = computed(() => statusConfirmed.value && !!status.value && !downloadRunning.value && !status.value.isCheckFailed && status.value.isUpdateAvailable &&
   !!status.value.downloadUrl && validHash(status.value.packageSha256) && !status.value.isInstallScheduled && !busy.value && !refreshing.value && !monitoring.value);
-// Kurulum YALNIZ indirme "hazır" iken (ya da hiç indirme yokken hazır paket varken) açılır: iş
-// sürerken ya da başarısız olmuşken eski bir paketi kurmak yanlış sürümü kurmak olurdu.
-const downloadAllowsInstall = computed(() => !download.value || download.value.state === "idle" || download.value.state === "ready");
+// Kurulum indirme SÜRERKEN kapalıdır (sunucu da 409 döner). Başarısız bir indirmeden sonra geçerli,
+// hazır bir paket varsa açık kalır: kurulum isteği paket kimliğini sunucuda yeniden doğrular.
+const downloadAllowsInstall = computed(() => !downloadRunning.value);
 const canInstall = computed(() => statusConfirmed.value && prepared(status.value) && downloadAllowsInstall.value && !status.value?.isInstallScheduled && !busy.value && !refreshing.value && !monitoring.value);
 const notice = ref("");
 const noticeError = ref(false);
@@ -276,7 +277,7 @@ function followDownload(next: UpdateStatus) {
   }
   if (state === "failed") {
     stopDownloadPoll();
-    showNotice(translate(next.download!.errorKey || "update.download_failed"), true);
+    announceFailure(next.download!);
     return true;
   }
   if (state === "ready") {
@@ -286,9 +287,24 @@ function followDownload(next: UpdateStatus) {
   return false;
 }
 
+// Kalıcı "failed" durumu her sayfa açılışında yeniden bildirilmesin: gösterilen hata tarayıcıda
+// (anahtar + zaman damgası) olarak hatırlanır; yeni bir başarısızlık yeni damga taşır.
+const FAILURE_SEEN_KEY = "adapanel.update.failureSeen";
+const failureId = (value: UpdateDownload) => `${value.errorKey}|${value.updatedAtUtc ?? ""}`;
+function failureSeen(value: UpdateDownload) {
+  try { return window.localStorage?.getItem(FAILURE_SEEN_KEY) === failureId(value); } catch { return false; }
+}
+function announceFailure(value: UpdateDownload) {
+  if (failureSeen(value)) return;
+  showNotice(translate(value.errorKey || "update.download_failed"), true);
+  try { window.localStorage?.setItem(FAILURE_SEEN_KEY, failureId(value)); } catch { /* depolama kapalı: her açılışta gösterilir */ }
+}
+
 let downloadPollHandle: number | null = null;
 let downloadPollGeneration = 0;
 const DOWNLOAD_POLL_MS = 2000;
+// Geçici ağ hatasında yoklama artan aralıklarla (4, 8, 16 sn) en çok 3 kez yeniden denenir; sonra durur ve hata gösterilir.
+const DOWNLOAD_POLL_RETRIES = 3;
 
 function stopDownloadPoll() {
   downloadPollGeneration++;
@@ -298,6 +314,7 @@ function stopDownloadPoll() {
 function startDownloadPoll() {
   stopDownloadPoll();
   const generation = downloadPollGeneration;
+  let failures = 0;
   const tick = async () => {
     downloadPollHandle = null;
     if (!current() || generation !== downloadPollGeneration) return;
@@ -306,6 +323,7 @@ function startDownloadPoll() {
       if (!current() || generation !== downloadPollGeneration) return;
       status.value = next;
       statusConfirmed.value = true;
+      failures = 0;
       const state = next.download?.state;
       if (state === "downloading" || state === "verifying") {
         downloadPollHandle = window.setTimeout(tick, DOWNLOAD_POLL_MS);
@@ -313,10 +331,15 @@ function startDownloadPoll() {
       }
       stopDownloadPoll();
       if (state === "ready" && prepared(next)) showNotice(t("panel.update.staged"), false);
-      else if (state === "failed") showNotice(translate(next.download!.errorKey || "update.download_failed"), true);
+      else if (state === "failed") announceFailure(next.download!);
       else showNotice(t("panel.update.resultUnconfirmed"), true);
     } catch (error) {
       if (!current() || generation !== downloadPollGeneration) return;
+      if (failures < DOWNLOAD_POLL_RETRIES) {
+        failures++;
+        downloadPollHandle = window.setTimeout(tick, DOWNLOAD_POLL_MS * 2 ** failures);
+        return;
+      }
       stopDownloadPoll();
       statusConfirmed.value = false;
       showNotice(resolveApiMessage(error), true);

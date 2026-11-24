@@ -8,6 +8,9 @@ using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.SelfUpdate;
 
+/// <summary>İndirmeyi başlatan yönetici: iş istekten ayrıldığı için denetim kaydına gerekli bilgi başta yakalanır.</summary>
+public sealed record DownloadActor(Guid? UserId, string? IpAddress);
+
 /// <summary>
 /// Güncelleme paketinin indirilmesini HTTP isteğinden ayırır.
 /// <para>
@@ -66,7 +69,7 @@ public sealed class UpdateDownloadCoordinator(
     /// süren işin durumunu döndürür (Started = false).
     /// </summary>
     public async Task<(UpdateDownloadDto Download, bool Started)> StartDownloadAsync(
-        ApplyUpdateRequest request, CancellationToken requestToken)
+        ApplyUpdateRequest request, CancellationToken requestToken, DownloadActor? actor = null)
     {
         await EnsureLoadedAsync(requestToken);
         await startGate.WaitAsync(requestToken);
@@ -94,7 +97,7 @@ public sealed class UpdateDownloadCoordinator(
                     DownloadUrl = request?.DownloadUrl ?? string.Empty,
                     PackageSha256 = request?.PackageSha256 ?? string.Empty
                 };
-                job = Task.Run(() => RunAsync(copy, stopping.Token), CancellationToken.None);
+                job = Task.Run(() => RunAsync(copy, actor, stopping.Token), CancellationToken.None);
                 return (Snapshot(), true);
             }
         }
@@ -104,7 +107,7 @@ public sealed class UpdateDownloadCoordinator(
         }
     }
 
-    private async Task RunAsync(ApplyUpdateRequest request, CancellationToken token)
+    private async Task RunAsync(ApplyUpdateRequest request, DownloadActor? actor, CancellationToken token)
     {
         try
         {
@@ -113,27 +116,28 @@ public sealed class UpdateDownloadCoordinator(
             var result = await service.ApplyUpdateAsync(request, ReportAsync, token);
             if (result.IsPackageReady && result.Notes == "update.package_staged")
             {
-                await FinishAsync(UpdateDownloadDto.Ready, string.Empty, result.PreparedVersion, keepPartial: true);
+                await FinishAsync(UpdateDownloadDto.Ready, string.Empty, result.PreparedVersion, keepPartial: true, actor,
+                    $"Update package ready: version={result.PreparedVersion}, sha256={result.PreparedPackageSha256}.");
             }
             else
             {
                 var key = string.IsNullOrWhiteSpace(result.Notes) || result.Notes == "update.package_staged"
                     ? "update.download_failed" : result.Notes;
-                await FinishAsync(UpdateDownloadDto.Failed, key, result.LatestVersion, keepPartial: false);
+                await FinishAsync(UpdateDownloadDto.Failed, key, result.LatestVersion, keepPartial: false, actor);
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            await FinishAsync(UpdateDownloadDto.Failed, InterruptedKey, string.Empty, keepPartial: false);
+            await FinishAsync(UpdateDownloadDto.Failed, InterruptedKey, string.Empty, keepPartial: false, actor);
         }
         catch (AppException exception)
         {
-            await FinishAsync(UpdateDownloadDto.Failed, exception.MessageKey, string.Empty, keepPartial: false);
+            await FinishAsync(UpdateDownloadDto.Failed, exception.MessageKey, string.Empty, keepPartial: false, actor);
         }
         catch (Exception exception)
         {
             logger.LogError(exception, "Update package download failed.");
-            await FinishAsync(UpdateDownloadDto.Failed, "update.download_failed", string.Empty, keepPartial: false);
+            await FinishAsync(UpdateDownloadDto.Failed, "update.download_failed", string.Empty, keepPartial: false, actor);
         }
     }
 
@@ -155,7 +159,7 @@ public sealed class UpdateDownloadCoordinator(
         if (toPersist is not null) await fileStore.WriteAsync(StatePath, toPersist, CancellationToken.None);
     }
 
-    private async Task FinishAsync(string finalState, string errorKey, string targetVersion, bool keepPartial)
+    private async Task FinishAsync(string finalState, string errorKey, string targetVersion, bool keepPartial, DownloadActor? actor, string readyDetails = "")
     {
         PersistedState snapshot;
         string partial;
@@ -170,12 +174,34 @@ public sealed class UpdateDownloadCoordinator(
             snapshot.UpdatedAtUtc = DateTime.UtcNow;
             snapshot.PartialPath = string.Empty;
         }
-        if (!keepPartial) DeleteQuietly(partial);
+        // Yayınlanmış paketi (bekleyen kayıt gösteriyorsa) silmez: yeniden başlatma yolundaki kuralın aynısı.
+        if (!keepPartial) await DeleteUnlessPublishedAsync(partial, CancellationToken.None);
         // Önce diske, SONRA belleğe: bellekteki durum "çalışıyor" olmaktan çıkınca yeni bir indirme
         // başlayabilir; bu işin eski yazması yeni işin kaydının üstüne binmemeli.
         try { await fileStore.WriteAsync(StatePath, snapshot, CancellationToken.None); }
         catch (Exception exception) { logger.LogError(exception, "Update download state could not be saved."); }
         lock (sync) state = snapshot;
+
+        // Sonuç denetim kaydına yazılır: iş istekten ayrıldığı için kullanıcı bilgisi başta yakalanmıştı.
+        await WriteAuditAsync(
+            finalState == UpdateDownloadDto.Ready ? "update.package.download_completed" : "update.package.download_failed",
+            finalState == UpdateDownloadDto.Ready ? readyDetails : $"Update package download failed: error={errorKey}.",
+            actor);
+    }
+
+    private async Task WriteAuditAsync(string action, string details, DownloadActor? actor)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var audit = scope.ServiceProvider.GetService<IAuditService>();
+            if (audit is null) return;
+            await audit.WriteForSubscriptionAsync(action, "panel", details, actor?.UserId, null, actor?.IpAddress, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Update download audit record could not be written: {Action}", action);
+        }
     }
 
     private async Task EnsureLoadedAsync(CancellationToken cancellationToken)
@@ -195,7 +221,7 @@ public sealed class UpdateDownloadCoordinator(
                 persisted.Percent = null;
                 persisted.PartialPath = string.Empty;
                 persisted.UpdatedAtUtc = DateTime.UtcNow;
-                await DeleteInterruptedPartialAsync(partial, cancellationToken);
+                await DeleteUnlessPublishedAsync(partial, cancellationToken);
                 fileStore.EnsureDirectory("updates");
                 await fileStore.WriteAsync(StatePath, persisted, cancellationToken);
             }
@@ -204,7 +230,7 @@ public sealed class UpdateDownloadCoordinator(
         finally { startGate.Release(); }
     }
 
-    private async Task DeleteInterruptedPartialAsync(string partial, CancellationToken cancellationToken)
+    private async Task DeleteUnlessPublishedAsync(string partial, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(partial)) return;
         // Yayınlandıktan sonra (bekleyen kayıt bu dosyayı gösteriyorsa) paket artık "yarım" değildir.
@@ -226,7 +252,24 @@ public sealed class UpdateDownloadCoordinator(
     private void DeleteQuietly(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;
-        try { if (File.Exists(path)) File.Delete(path); }
+        try
+        {
+            // Yalnız panelin kendi indirdiği aday dosya: updates klasörü + AdaPanelUpdate-<guid>.exe
+            // (SelfUpdateService.TryDeleteSupersededPackageAsync ile aynı önlem). Durum dosyası
+            // elle değiştirilse bile başka bir yol silinemez.
+            var full = Path.GetFullPath(path);
+            var updates = Path.GetFullPath(fileStore.ResolvePath("updates"));
+            var stem = Path.GetFileNameWithoutExtension(full);
+            if (!string.Equals(Path.GetDirectoryName(full), updates, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(Path.GetExtension(full), ".exe", StringComparison.OrdinalIgnoreCase) ||
+                !stem.StartsWith("AdaPanelUpdate-", StringComparison.OrdinalIgnoreCase) ||
+                !Guid.TryParseExact(stem["AdaPanelUpdate-".Length..], "N", out _))
+            {
+                logger.LogWarning("Partial update path is outside the managed pattern; not deleted.");
+                return;
+            }
+            if (File.Exists(full) && (File.GetAttributes(full) & FileAttributes.ReparsePoint) == 0) File.Delete(full);
+        }
         catch (Exception exception) { logger.LogWarning(exception, "Partial update package could not be deleted."); }
     }
 

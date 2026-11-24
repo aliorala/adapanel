@@ -66,7 +66,9 @@ public sealed class UpdateController(
     // indirme başlatmaz, mevcut işin durumunu döndürür.
     public async Task<ActionResult<ApiResponse<UpdateStatusDto>>> ApplyAsync([FromBody] ApplyUpdateRequest request, CancellationToken cancellationToken)
     {
-        var (download, started) = await downloadCoordinator.StartDownloadAsync(request, cancellationToken);
+        var (download, started) = await downloadCoordinator.StartDownloadAsync(
+            request, cancellationToken,
+            new DownloadActor(HttpAuditExtensions.ResolveUserId(User), HttpContext.Connection.RemoteIpAddress?.ToString()));
 
         if (started)
         {
@@ -88,6 +90,10 @@ public sealed class UpdateController(
         if (request is null || string.IsNullOrWhiteSpace(request.ExpectedVersion) ||
             request.ExpectedPackageSha256?.Length != 64 || request.ExpectedPackageSha256.Any(character => !Uri.IsHexDigit(character)))
             throw new AppException("update.package_changed", 409, 409);
+        // Sunucu tarafı kapı: ön yüz eski kalmış (ikinci sekme) olsa da, indirme sürerken önceki
+        // paket kurdurulamaz.
+        if ((await downloadCoordinator.GetAsync(cancellationToken)).IsRunning)
+            throw new AppException("update.download_in_progress", 409, 409);
         var status = await selfUpdateService.InstallPreparedUpdateAsync(request, cancellationToken);
         status.Download = await downloadCoordinator.GetAsync(cancellationToken);
 
@@ -97,7 +103,7 @@ public sealed class UpdateController(
             HttpContext,
             "update.install.scheduled",
             "panel",
-            $"Panel update installation scheduled: {status.CurrentVersion} → {status.PreparedVersion}.");
+            $"Panel update installation scheduled: {status.CurrentVersion} → {status.PreparedVersion}, sha256={status.PreparedPackageSha256}.");
 
         return Ok(ApiResponse<UpdateStatusDto>.Ok(status, "update.install_scheduled"));
     }

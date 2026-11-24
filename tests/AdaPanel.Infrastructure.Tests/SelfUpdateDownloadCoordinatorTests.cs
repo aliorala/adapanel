@@ -1,9 +1,12 @@
+using AdaPanel.Api.Controllers;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Update;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Options;
 using AdaPanel.Infrastructure.SelfUpdate;
 using AdaPanel.Infrastructure.Support;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -30,10 +33,11 @@ public sealed class SelfUpdateDownloadCoordinatorTests : IDisposable
         try { Directory.Delete(root, recursive: true); } catch { /* temizlik zorunlu değil */ }
     }
 
-    private UpdateDownloadCoordinator Create(FakeUpdateService fake)
+    private UpdateDownloadCoordinator Create(FakeUpdateService fake, RecordingAuditService? audit = null)
     {
         var services = new ServiceCollection();
         services.AddScoped<ISelfUpdateService>(_ => fake);
+        if (audit is not null) services.AddScoped<AdaPanel.Core.Interfaces.IAuditService>(_ => audit);
         return new UpdateDownloadCoordinator(store, services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
             NullLogger<UpdateDownloadCoordinator>.Instance);
     }
@@ -89,7 +93,7 @@ public sealed class SelfUpdateDownloadCoordinatorTests : IDisposable
     [Fact]
     public async Task After_a_restart_an_unfinished_download_becomes_failed_and_the_partial_file_is_removed()
     {
-        var fake = new FakeUpdateService { PartialPath = Path.Combine(root, "updates", "AdaPanelUpdate-partial.exe") };
+        var fake = new FakeUpdateService { PartialPath = Path.Combine(root, "updates", $"AdaPanelUpdate-{Guid.NewGuid():N}.exe") };
         var first = Create(fake);
         await first.StartDownloadAsync(new ApplyUpdateRequest(), CancellationToken.None);
         await fake.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -109,7 +113,7 @@ public sealed class SelfUpdateDownloadCoordinatorTests : IDisposable
     [Fact]
     public async Task Stopping_the_host_stops_the_job_and_reports_it_as_interrupted()
     {
-        var fake = new FakeUpdateService { PartialPath = Path.Combine(root, "updates", "AdaPanelUpdate-stop.exe") };
+        var fake = new FakeUpdateService { PartialPath = Path.Combine(root, "updates", $"AdaPanelUpdate-{Guid.NewGuid():N}.exe") };
         var coordinator = Create(fake);
         await coordinator.StartDownloadAsync(new ApplyUpdateRequest(), CancellationToken.None);
         await fake.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -137,6 +141,83 @@ public sealed class SelfUpdateDownloadCoordinatorTests : IDisposable
         fake.Failure = null;
         var retry = await coordinator.StartDownloadAsync(new ApplyUpdateRequest(), CancellationToken.None);
         Assert.True(retry.Started);
+    }
+
+    [Fact]
+    public async Task Installing_is_rejected_by_the_server_while_a_download_runs()
+    {
+        var fake = new FakeUpdateService();
+        var coordinator = Create(fake);
+        await coordinator.StartDownloadAsync(new ApplyUpdateRequest(), CancellationToken.None);
+        await fake.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var controller = new UpdateController(fake, coordinator, new RecordingAuditService())
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+
+        var error = await Record.ExceptionAsync(() => controller.InstallAsync(
+            new InstallUpdateRequest { ExpectedVersion = "9.9.9", ExpectedPackageSha256 = new string('a', 64) }, CancellationToken.None));
+        fake.Release.TrySetResult();
+
+        var rejected = Assert.IsType<AppException>(error);
+        Assert.Equal("update.download_in_progress", rejected.MessageKey);
+        Assert.Equal(409, rejected.HttpStatusCode);
+    }
+
+    [Fact]
+    public async Task The_outcome_is_audited_with_the_user_who_started_the_download()
+    {
+        var user = Guid.NewGuid();
+        var audit = new RecordingAuditService();
+        var fake = new FakeUpdateService();
+        var coordinator = Create(fake, audit);
+        fake.Release.SetResult();
+
+        await coordinator.StartDownloadAsync(new ApplyUpdateRequest(), CancellationToken.None, new DownloadActor(user, "203.0.113.5"));
+        await WaitForAsync(() => Task.FromResult(audit.Kayitlar.Count == 1));
+        var ready = Assert.Single(audit.Kayitlar);
+        Assert.Equal("update.package.download_completed", ready.Action);
+        Assert.Contains("version=9.9.9", ready.Details);
+        Assert.Contains("sha256=" + new string('b', 64), ready.Details);
+
+        fake.Failure = new AppException("update.checksum_mismatch", 400, 400);
+        await coordinator.StartDownloadAsync(new ApplyUpdateRequest(), CancellationToken.None);
+        await WaitForAsync(() => Task.FromResult(audit.Kayitlar.Count == 2));
+        Assert.Equal("update.package.download_failed", audit.Kayitlar[1].Action);
+        Assert.Contains("update.checksum_mismatch", audit.Kayitlar[1].Details);
+    }
+
+    [Fact]
+    public async Task A_failed_download_never_deletes_a_package_the_pending_record_points_at()
+    {
+        var path = Path.Combine(root, "updates", $"AdaPanelUpdate-{Guid.NewGuid():N}.exe");
+        var fake = new FakeUpdateService { PartialPath = path, Failure = new AppException("update.install_already_scheduled", 409, 409) };
+        var coordinator = Create(fake);
+        fake.Release.SetResult();
+        Directory.CreateDirectory(Path.Combine(root, "updates"));
+        await File.WriteAllTextAsync(Path.Combine(root, "updates", "pending-update.json"),
+            System.Text.Json.JsonSerializer.Serialize(new { packagePath = path }));
+
+        await coordinator.StartDownloadAsync(new ApplyUpdateRequest(), CancellationToken.None);
+        await WaitForAsync(async () => (await coordinator.GetAsync(CancellationToken.None)).State == UpdateDownloadDto.Failed);
+
+        Assert.True(File.Exists(path));
+    }
+
+    [Fact]
+    public async Task Only_managed_candidate_files_are_ever_deleted_even_if_the_state_file_is_tampered_with()
+    {
+        var outside = Path.Combine(root, "updates", "AdaPanelSetup.exe");
+        Directory.CreateDirectory(Path.Combine(root, "updates"));
+        await File.WriteAllBytesAsync(outside, [1]);
+        await File.WriteAllTextAsync(Path.Combine(root, "updates", "download-state.json"),
+            System.Text.Json.JsonSerializer.Serialize(new { state = "downloading", partialPath = outside }));
+
+        var restarted = Create(new FakeUpdateService());
+        var state = await restarted.GetAsync(CancellationToken.None);
+
+        Assert.Equal(UpdateDownloadDto.Failed, state.State);
+        Assert.True(File.Exists(outside));
     }
 
     private sealed class FakeUpdateService : ISelfUpdateService
@@ -167,7 +248,7 @@ public sealed class SelfUpdateDownloadCoordinatorTests : IDisposable
                 throw;
             }
             if (Failure is not null) throw Failure;
-            return new UpdateStatusDto { IsPackageReady = true, Notes = "update.package_staged", PreparedVersion = "9.9.9" };
+            return new UpdateStatusDto { IsPackageReady = true, Notes = "update.package_staged", PreparedVersion = "9.9.9", PreparedPackageSha256 = new string('b', 64) };
         }
 
         public Task<UpdateStatusDto> ApplyUpdateAsync(ApplyUpdateRequest request, CancellationToken cancellationToken = default) =>
