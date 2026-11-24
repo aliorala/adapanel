@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using System.Reflection;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Licensing;
@@ -15,7 +16,8 @@ public sealed class LicenseService(
     LicenseStateStore store,
     IMachineFingerprintProvider fingerprintProvider,
     ILicenseVerificationClient verificationClient,
-    TimeProvider? timeProvider = null) : ILicenseService
+    TimeProvider? timeProvider = null,
+    Microsoft.Extensions.Logging.ILogger<LicenseService>? logger = null) : ILicenseService
 {
     /// <summary>
     /// Sunucuya ulaşılamadığında yeniden deneme aralığı. Doğrulama aralığından (saatler) çok daha
@@ -26,19 +28,95 @@ public sealed class LicenseService(
 
     private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
 
+    /// <summary>
+    /// Durum okuması. AĞ ÇAĞRISI KİLİT DIŞINDA (M4): eskiden doğrulama sunucusuna giden istek
+    /// <c>RunExclusiveAsync</c> içindeydi; yavaş/ulaşılamayan bir lisans sunucusu, her
+    /// <c>EnsureCanCreateAsync</c> çağrısını (ve etkinleştirme/devre dışı bırakmayı) zaman aşımı
+    /// boyunca tıkıyordu. Şimdi kilit yalnız kısa disk adımlarını korur:
+    /// (1) "deneme" damgası atılır (aynı anda gelen diğer istekler ağa gitmez),
+    /// (2) ağ çağrısı kilitsiz yapılır,
+    /// (3) karar kilit altında yazılır — ama anahtar bu arada DEĞİŞTİYSE (etkinleştirme/devre dışı)
+    /// geç gelen karar atılır; eski anahtarın hükmü yeni anahtarın üstüne yazılmaz.
+    /// </summary>
     public async Task<LicenseStatusDto> GetStatusAsync(CancellationToken cancellationToken = default)
     {
-        var record = await LoadAsync(cancellationToken);
-
-        if (ShouldAttemptVerification(record, Now))
+        var (record, claimedKey, attemptedAt) = await store.RunExclusiveAsync(async () =>
         {
-            record = await VerifyAsync(record, licenseKeyOverride: null, cancellationToken);
+            var current = await LoadAsync(cancellationToken);
+            if (!ShouldAttemptVerification(current, Now))
+            {
+                return (current, (string?)null, default(DateTime));
+            }
+
+            var now = Now;
+            var stamped = await store.UpdateAsync(existing =>
+            {
+                existing.LastAttemptAtUtc = now;
+                return existing;
+            }, cancellationToken);
+            stamped.IsConfigured = IsConfigured;
+            return (stamped, current.ProtectedKey, now);
+        }, cancellationToken);
+
+        if (claimedKey is null)
+        {
+            return BuildStatus(record);
         }
+
+        var key = store.UnprotectKey(claimedKey);
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            return BuildStatus(record);
+        }
+
+        // KİLİT DIŞI: ağ.
+        var outcome = await verificationClient.VerifyAsync(NewRequest(key), cancellationToken);
+
+        record = await store.RunExclusiveAsync(async () =>
+        {
+            var updated = await store.UpdateAsync(existing =>
+                string.Equals(existing.ProtectedKey, claimedKey, StringComparison.Ordinal) &&
+                existing.LastAttemptAtUtc == attemptedAt
+                    ? ApplyOutcome(existing, outcome, attemptedAt)
+                    : existing, // anahtar değişti: bu karar ESKİ anahtarındı, uygulanmaz
+                cancellationToken);
+            updated.IsConfigured = IsConfigured;
+            return updated;
+        }, cancellationToken);
 
         return BuildStatus(record);
     }
 
-    public async Task<LicenseStatusDto> ActivateAsync(string licenseKey, CancellationToken cancellationToken = default)
+    private LicenseVerificationRequest NewRequest(string key) => new()
+    {
+        Product = options.Value.ProductCode,
+        LicenseKey = key,
+        Fingerprint = fingerprintProvider.Get(),
+        PanelVersion = PanelVersion
+    };
+
+    private static LicenseRecord ApplyOutcome(LicenseRecord existing, LicenseVerificationOutcome outcome, DateTime attemptedAt)
+    {
+        if (outcome.Response is null)
+        {
+            // ULAŞILAMADI: önceki karar OLDUĞU GİBİ korunur. Ağ hatası bir karar değildir.
+            existing.LastError = outcome.Error;
+            return existing;
+        }
+
+        existing.LastVerdict = outcome.Response.Status.Trim().ToLowerInvariant();
+        existing.LastVerifiedAtUtc = attemptedAt;
+        existing.Sku = outcome.Response.Sku ?? string.Empty;
+        existing.MaxSubscriptions = Math.Max(0, outcome.Response.MaxSubscriptions);
+        existing.ExpiresAtUtc = outcome.Response.ExpiresAtUtc;
+        existing.LastError = outcome.Response.Message ?? string.Empty;
+        return existing;
+    }
+
+    public Task<LicenseStatusDto> ActivateAsync(string licenseKey, CancellationToken cancellationToken = default) =>
+        store.RunExclusiveAsync(() => ActivateCoreAsync(licenseKey, cancellationToken), cancellationToken);
+
+    private async Task<LicenseStatusDto> ActivateCoreAsync(string licenseKey, CancellationToken cancellationToken)
     {
         var trimmed = (licenseKey ?? string.Empty).Trim();
         if (string.IsNullOrWhiteSpace(trimmed))
@@ -57,7 +135,7 @@ public sealed class LicenseService(
 
         // Sunucu anahtarı AÇIKÇA reddettiyse saklamayız: yanlış yazılmış bir anahtarın panelde
         // kalıp her açılışta "geçersiz" demesi kullanıcıyı yanıltır.
-        if (string.Equals(probed.LastVerdict, LicenseVerdicts.Invalid, StringComparison.OrdinalIgnoreCase))
+        if (probed.InvalidResponse)
         {
             await store.UpdateAsync(existing =>
             {
@@ -73,10 +151,13 @@ public sealed class LicenseService(
             throw new AppException("license.invalid", 402, 402);
         }
 
-        return BuildStatus(probed);
+        return BuildStatus(probed.Record);
     }
 
-    public async Task<LicenseStatusDto> DeactivateAsync(CancellationToken cancellationToken = default)
+    public Task<LicenseStatusDto> DeactivateAsync(CancellationToken cancellationToken = default) =>
+        store.RunExclusiveAsync(() => DeactivateCoreAsync(cancellationToken), cancellationToken);
+
+    private async Task<LicenseStatusDto> DeactivateCoreAsync(CancellationToken cancellationToken)
     {
         // Kayıt SİLİNMEZ, SIFIRLANIR: dosyanın var olması "lisans daha önce girilmişti" bilgisini
         // korur ve bir sonraki okuma taze bir kayıt oluşturmak zorunda kalmaz.
@@ -99,7 +180,10 @@ public sealed class LicenseService(
         return BuildStatus(record);
     }
 
-    public async Task<LicenseStatusDto> RefreshAsync(CancellationToken cancellationToken = default)
+    public Task<LicenseStatusDto> RefreshAsync(CancellationToken cancellationToken = default) =>
+        store.RunExclusiveAsync(() => RefreshCoreAsync(cancellationToken), cancellationToken);
+
+    private async Task<LicenseStatusDto> RefreshCoreAsync(CancellationToken cancellationToken)
     {
         var record = await LoadAsync(cancellationToken);
         if (!IsConfigured || string.IsNullOrWhiteSpace(record.ProtectedKey))
@@ -107,7 +191,7 @@ public sealed class LicenseService(
             return BuildStatus(record);
         }
 
-        record = await VerifyAsync(record, licenseKeyOverride: null, cancellationToken);
+        record = (await VerifyAsync(record, licenseKeyOverride: null, cancellationToken)).Record;
         return BuildStatus(record);
     }
 
@@ -187,7 +271,7 @@ public sealed class LicenseService(
     /// Sunucuya sorar ve sonucu diske işler. HİÇBİR koşulda istisna fırlatmaz (iptal hariç):
     /// doğrulama başarısız olmak, panelin çalışmasını durdurmamalı.
     /// </summary>
-    private async Task<LicenseRecord> VerifyAsync(
+    private async Task<(LicenseRecord Record, bool InvalidResponse)> VerifyAsync(
         LicenseRecord record,
         string? licenseKeyOverride,
         CancellationToken cancellationToken)
@@ -195,8 +279,11 @@ public sealed class LicenseService(
         var key = licenseKeyOverride ?? store.UnprotectKey(record.ProtectedKey);
         if (string.IsNullOrWhiteSpace(key))
         {
-            return record;
+            return (record, false);
         }
+
+        var differentKey = licenseKeyOverride is not null &&
+            !string.Equals(licenseKeyOverride, store.UnprotectKey(record.ProtectedKey), StringComparison.Ordinal);
 
         var attemptedAt = Now;
         var outcome = await verificationClient.VerifyAsync(
@@ -209,17 +296,27 @@ public sealed class LicenseService(
             },
             cancellationToken);
 
-        var updated = await store.UpdateAsync(existing =>
+        LicenseRecord updated;
+        try
+        {
+        updated = await store.UpdateAsync(existing =>
         {
             existing.LastAttemptAtUtc = attemptedAt;
 
             // Yeni anahtar deneniyorsa ULAŞILAMASA BİLE saklanır: kurulum anında ağ yoksa
             // müşteri lisansını girip çevrimdışı toleransla çalışmaya başlayabilmeli.
-            if (licenseKeyOverride is not null)
+            if (differentKey)
             {
-                existing.ProtectedKey = store.ProtectKey(licenseKeyOverride);
-                existing.KeySuffix = LicenseStateStore.Suffix(licenseKeyOverride);
+                existing.ProtectedKey = store.ProtectKey(key);
+                existing.KeySuffix = LicenseStateStore.Suffix(key);
                 existing.KeyStoredAtUtc = attemptedAt;
+                // A verdict belongs to the key it verified. A new offline key starts its own
+                // grace period; re-entering the same key must not renew that period.
+                existing.LastVerdict = string.Empty;
+                existing.LastVerifiedAtUtc = null;
+                existing.Sku = string.Empty;
+                existing.MaxSubscriptions = 0;
+                existing.ExpiresAtUtc = null;
             }
 
             if (outcome.Response is null)
@@ -238,9 +335,18 @@ public sealed class LicenseService(
             existing.LastError = outcome.Response.Message ?? string.Empty;
             return existing;
         }, cancellationToken);
+        }
+        catch (IOException exception)
+        {
+            // Mühür anahtarı okunamadı (geçici G/Ç): kayıt MÜHÜRLENEMEDİ ve dosyaya yazılmadı. VerifyAsync
+            // istisna atmaz sözleşmesi gereği önceki karar OLDUĞU GİBİ korunur, uyarı günlüğe yazılır.
+            logger?.LogWarning(exception, "Lisans doğrulama sonucu kaydedilemedi (mühür anahtarı okunamadı); önceki karar korunuyor.");
+            record.IsConfigured = IsConfigured;
+            return (record, false);
+        }
 
         updated.IsConfigured = IsConfigured;
-        return updated;
+        return (updated, string.Equals(outcome.Response?.Status?.Trim(), LicenseVerdicts.Invalid, StringComparison.OrdinalIgnoreCase));
     }
 
     private LicenseStatusDto BuildStatus(LicenseRecord record)

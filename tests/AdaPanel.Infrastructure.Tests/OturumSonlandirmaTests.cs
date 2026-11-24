@@ -318,6 +318,7 @@ public sealed class OturumSonlandirmaTests
             kimlik.AddClaim(new Claim(
                 CookieSessionValidator.CredentialStampClaim,
                 CookieSessionValidator.ComputeStamp(girisAnindakiKarma)));
+            kimlik.AddClaim(new Claim(CookieSessionValidator.TwoFactorStateClaim, "0"));
 
             if (oturumKimligiEkle)
             {

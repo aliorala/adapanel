@@ -70,8 +70,10 @@ function ada_sunucu_baslat($port)
         exit(1);
     }
 
-    $komut = escapeshellarg(PHP_BINARY) . ' -d disable_functions= -S 127.0.0.1:' . $port . ' '
-        . escapeshellarg(__DIR__ . DIRECTORY_SEPARATOR . 'fake-panel.php');
+    // Use the explicit working directory below. On Windows the string command
+    // loses non-ASCII router paths during process creation; the server starts
+    // but serves an error body instead of the test endpoint.
+    $komut = array(PHP_BINARY, '-d', 'disable_functions=', '-S', '127.0.0.1:' . $port, 'fake-panel.php');
 
     // ÇIKTI BORUYA DEGIL DOSYAYA. `php -S` her istek icin stderr'e bir satir yazar; boru
     // okunmazsa isletim sistemi tamponu dolar ve SUNUCU KILITLENIR (ilk denemede tam olarak bu
@@ -516,8 +518,15 @@ ada_senaryo(ada_temel_senaryo(array(
 $GLOBALS['ada_test']['capsuleFirlat'] = true;
 $sonuc = adapanel_UsageUpdate(ada_params());
 $GLOBALS['ada_test']['capsuleFirlat'] = false;
-ada_assert(is_array($sonuc), 'veritabani patlasa da islev cokmedi');
+ada_assert($sonuc['success'] === false && $sonuc['updated'] === 0 && $sonuc['failedWrites'] === 1, 'yazma hatasi eksik sonuc olarak bildirildi');
 ada_assert(count($GLOBALS['ada_test']['moduleLog']) >= 1, 'yazilamayan satir modul gunlugune dustu');
+
+ada_senaryo(ada_temel_senaryo(array(
+    'GET /api/v1/billing/usage' => array('status' => 200, 'body' => ada_zarf(array(
+        'accounts' => array(), 'failedAccountCount' => 2))),
+)));
+$sonuc = adapanel_UsageUpdate(ada_params());
+ada_assert($sonuc['success'] === false && $sonuc['failedReads'] === 2, 'panel okuma hatasi WHMCS sonucuna tasindi');
 
 echo "13) HATA YOLLARI: modul sessizce 'basarili' DEMIYOR\n";
 

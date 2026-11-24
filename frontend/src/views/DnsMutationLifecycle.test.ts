@@ -24,6 +24,8 @@ type State = {
   load(): Promise<void>; saveRecord(): Promise<void>; saveZone(): Promise<void>; editRecord(record: DnsRecord): void;
   removeRecord(id: string): Promise<void>; removeSelectedRecords(): Promise<void>; restoreDefaults(): Promise<void>;
   switchToPrimary(): Promise<void>; switchToSecondary(): Promise<void>; toggleDnssec(enabled: boolean): Promise<void>; installWindowsDns(): Promise<void>;
+  importText: string; importPreview: { previewHash: string } | null; importResult: { isPartial: boolean } | null; importConfirmOverwrite: boolean;
+  previewImport(): Promise<void>; applyImport(): Promise<void>; exportZone(): Promise<void>;
 };
 const record = (id = "one", value = "192.0.2.1"): DnsRecord => ({ id, type: "A", host: id, value, ttl: 3600, priority: null, isManaged: false });
 const zone = (siteName = "a.test"): DnsZone => ({ siteName, zoneName: siteName, nameServers: ["ns1.a.test"], zoneTransferIps: [], masterServers: [], effectiveNotifyServers: [], windowsZoneType: "Primary", records: [record(), record("two")], isSecondary: false, isWindowsDnsAvailable: true, isWindowsZonePresent: true, source: "windows-dns", statusMessage: "dns.windows_zone_present", isDnssecSigned: false, dnssecDsRecords: [] });
@@ -63,6 +65,31 @@ beforeEach(() => {
   apiClient.defaults.adapter = async config => { calls.push(config); return config.method === "get" ? readReply(config) : writeReply(config); };
 });
 afterEach(() => { unmount(); apiClient.defaults.adapter = originalAdapter; invalidateSessionRequests(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+it.each(["", " ", "  MiXeD+/=;  ", "  {domain}  "].flatMap(value => [
+  { value, editing: false }, { value, editing: true }
+]))("preserves the complete TXT value in create/edit requests: %j", async ({ value, editing }) => {
+  const { state } = await mount();
+  if (editing) state.editRecord({ ...record("txt", "previous"), type: "TXT" });
+  else { state.recordForm.type = "TXT"; state.recordForm.host = "_proof"; }
+  state.recordForm.value = value;
+  writeReply = async config => {
+    const body = JSON.parse(String(config.data));
+    return reply(config, { ...zone(), records: [{ ...record(body.id || "created", body.value), type: body.type }] });
+  };
+  await state.saveRecord();
+  expect(writes()).toHaveLength(1);
+  expect(JSON.parse(String(writes()[0]!.data))).toMatchObject({ type: "TXT", value });
+  expect(state.zone?.records[0]?.value).toBe(value);
+  expect(state.noticeError).toBe(false);
+});
+
+it.each(["A", "CNAME", "MX"])("keeps trimming non-TXT %s manual values", async type => {
+  const { state } = await mount();
+  state.recordForm.type = type; state.recordForm.value = "  example.test  ";
+  await state.saveRecord();
+  expect(JSON.parse(String(writes()[0]!.data))).toMatchObject({ type, value: "example.test" });
+});
 
 it("keeps the next editable record draft when the previous record save completes", async () => {
   const { state } = await mount(), pending = deferred<AxiosResponse>(); let request!: InternalAxiosRequestConfig;
@@ -160,8 +187,8 @@ it("keeps reseller record editing but prevents admin-only DNS server actions", a
   const { state } = await mount("Reseller"); await state.installWindowsDns(); await state.toggleDnssec(true); await state.switchToPrimary();
   expect(writes()).toHaveLength(0); state.editRecord(record()); await state.saveRecord(); expect(writes()).toHaveLength(1);
 });
-it("does not call the DNS endpoint for a customer session", async () => {
-  const { state } = await mount("Customer"); await state.load(); await state.saveRecord(); expect(calls).toHaveLength(0);
+it("does not call the DNS endpoint for a role without DNS access", async () => {
+  const { state } = await mount("Operator"); await state.load(); await state.saveRecord(); expect(calls).toHaveLength(0);
 });
 
 it.each([false, true])("reports Windows DNS installation only when the returned measurement is %s", async installed => {
@@ -199,4 +226,73 @@ it("allows a measured empty panel-managed zone and multiline Unicode TXT records
   state.recordForm.type = "TXT"; state.recordForm.value = "özgün metin\nsecond line";
   writeReply = async config => reply(config, { ...zone(), records: [{ ...record(), type: "TXT", value: "özgün metin\nsecond line" }] });
   await state.saveRecord(); expect(writes()).toHaveLength(1); expect(state.noticeError).toBe(false);
+});
+
+// --- A6: Customer kendi sitesinin DNS'ini yonetir; sunucu duzeyi isler gorunmez/calismaz ---
+it("lets a customer read and edit records but never runs server-level DNS actions", async () => {
+  const { state } = await mount("Customer");
+  expect(state.zoneConfirmed).toBe(true);
+  await state.installWindowsDns(); await state.toggleDnssec(true); await state.switchToPrimary(); await state.switchToSecondary(); await state.restoreDefaults();
+  expect(writes()).toHaveLength(0);
+  state.editRecord(record()); await state.saveRecord();
+  expect(writes()).toHaveLength(1); expect(writes()[0]!.url).toContain("/sites/a.test/dns/records");
+});
+
+const previewBody = (over: Record<string, unknown> = {}) => ({
+  zoneName: "a.test", previewHash: "hash-1", addCount: 1, changeCount: 0, unchangedCount: 0, managedConflictCount: 0,
+  items: [{ action: "add", type: "A", host: "www", value: "192.0.2.5", ttl: 3600, priority: null, existingId: null, existingValue: null, existingTtl: null, isMailRelated: false, conflictsWithManaged: false }],
+  ignored: [], errors: [], isSecondary: false, canApply: true, ...over
+});
+const resultBody = (over: Record<string, unknown> = {}) => ({
+  zoneName: "a.test", added: 1, changed: 0, unchanged: 0, skippedManaged: [], failed: [], notAttempted: 0, isPartial: false, zone: zone(), ...over
+});
+
+it("import: preview writes nothing; apply sends the PREVIEWED hash and the overwrite confirmation", async () => {
+  const { state } = await mount("Customer");
+  writeReply = async config => reply(config, config.url!.endsWith("/import/preview") ? previewBody({ managedConflictCount: 1 }) : resultBody());
+  state.importText = "www IN A 192.0.2.5";
+  await state.previewImport();
+  expect(writes()).toHaveLength(1); expect(writes()[0]!.url).toContain("/dns/import/preview");
+  expect(state.importPreview?.previewHash).toBe("hash-1");
+  state.importConfirmOverwrite = true;
+  await state.applyImport();
+  expect(writes()).toHaveLength(2);
+  expect(JSON.parse(String(writes()[1]!.data))).toEqual({ zoneText: "www IN A 192.0.2.5", confirmOverwriteManaged: true, previewHash: "hash-1" });
+  expect(state.importResult?.isPartial).toBe(false); expect(state.noticeError).toBe(false);
+});
+
+it("import: editing the text after the preview invalidates it, so nothing un-previewed can be applied", async () => {
+  const { state } = await mount("Customer");
+  writeReply = async config => reply(config, previewBody());
+  state.importText = "www IN A 192.0.2.5"; await state.previewImport(); expect(state.importPreview).not.toBeNull();
+  state.importText = "www IN A 192.0.2.99"; await flush();
+  expect(state.importPreview).toBeNull();
+  await state.applyImport();
+  expect(writes()).toHaveLength(1);
+});
+
+it("import: a preview with errors cannot be applied", async () => {
+  const { state } = await mount("Administrator");
+  writeReply = async config => reply(config, previewBody({ canApply: false, items: [], errors: [{ line: 1, code: "dns.import_directive_forbidden", detail: "$INCLUDE" }] }));
+  state.importText = "$INCLUDE x"; await state.previewImport(); await state.applyImport();
+  expect(writes()).toHaveLength(1);
+});
+
+it("import: partial success is reported as an error notice, not as success", async () => {
+  const { state } = await mount("Reseller");
+  writeReply = async config => reply(config, config.url!.endsWith("/import/preview") ? previewBody() : resultBody({
+    isPartial: true, failed: [{ type: "A", host: "www", error: "dns.sync_failed" }], notAttempted: 2 }));
+  state.importText = "www IN A 192.0.2.5"; await state.previewImport(); await state.applyImport();
+  expect(state.importResult?.isPartial).toBe(true); expect(state.noticeError).toBe(true);
+});
+
+it("import/export failures are shown to the user instead of being swallowed", async () => {
+  const { state } = await mount("Customer");
+  writeReply = async config => { throw error(config); };
+  state.importText = "www IN A 192.0.2.5"; await state.previewImport();
+  expect(state.noticeError).toBe(true); expect(state.notice).not.toBe("");
+  state.notice = ""; state.noticeError = false;
+  readReply = async config => { if (config.url!.endsWith("/export")) throw error(config); return reply(config, zone(siteOf(config))); };
+  await state.exportZone();
+  expect(state.noticeError).toBe(true); expect(state.notice).not.toBe("");
 });

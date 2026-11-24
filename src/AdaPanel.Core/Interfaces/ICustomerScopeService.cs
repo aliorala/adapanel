@@ -178,6 +178,16 @@ public interface ICustomerScopeService
     /// </remarks>
     Task SuspendAsync(Guid userId, string reason, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Kullanıcıyı PASİFE ALAN tarafın kaydı ("reseller" | "admin"; yok = null). Askıdan (SuspendReason) AYRIDIR:
+    /// bayi yalnız KENDİ pasife aldığını açabilir (denetim G22), /suspend bu kaydı asla yazmaz.
+    /// Varsayılan gövde "kayıt yok / yazma yok": eski sahteler derlenmeye devam eder.
+    /// </summary>
+    Task<string?> GetInactiveSourceAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<string?>(null);
+
+    /// <summary>Pasif kaynağını yazar; null siler.</summary>
+    Task SetInactiveSourceAsync(Guid userId, string? source, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
     /// <summary>Askıyı kaldırır.</summary>
     Task ResumeAsync(Guid userId, CancellationToken cancellationToken = default);
 
@@ -186,4 +196,62 @@ public interface ICustomerScopeService
 
     /// <summary>Plana bağlı olsun olmasın, TOP-LEVEL bütün abonelik kimlikleri (alt-kullanıcılar hariç).</summary>
     Task<IReadOnlyCollection<Guid>> GetSubscriptionUserIdsAsync(CancellationToken cancellationToken = default);
+
+    // --- M2: askının kaynak durumu + dikkat bayrakları (varsayılan gövdeler: eski sahteler derlenir) ---
+
+    /// <summary>Askı sırasında kapatılan kaynakların ÖNCEKİ durumu; yoksa null. Yalnız üst düzey abonelik.</summary>
+    Task<SubscriptionSuspensionState?> GetSuspensionStateAsync(Guid userId, CancellationToken cancellationToken = default)
+        => Task.FromResult<SubscriptionSuspensionState?>(null);
+
+    /// <summary>Askı kaynak durumunu yazar; null siler.</summary>
+    Task SetSuspensionStateAsync(Guid userId, SubscriptionSuspensionState? state, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    /// <summary>Disk aşımı bayrağı (yoksa null).</summary>
+    Task SetDiskOverageAsync(Guid userId, DiskOverageState? state, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    /// <summary>Dikkat gerektiren abonelikler: bekleyen askı adımı olanlar ve diski aşanlar.</summary>
+    Task<IReadOnlyCollection<SubscriptionAttentionState>> GetAttentionStatesAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<SubscriptionAttentionState>>([]);
 }
+
+/// <summary>
+/// Askının kapattığı kaynaklar ve ÖNCEKİ halleri (M2). Açılırken yalnız askıdan ÖNCE açık olan
+/// kaynaklar geri açılır: müşterinin elle durdurduğu site/FTP hesabı/görev kapalı kalır.
+/// </summary>
+/// <remarks>
+/// Listelerdeki ögeler <c>site:ad</c>, <c>ftp:kullanici</c>, <c>cron:gorev</c> biçimindedir.
+/// <see cref="PendingClose"/>/<see cref="PendingRestore"/> yeniden denenir; <see cref="Unsupported"/>
+/// yeniden denenmez ama dikkat öğesi olarak GÖSTERİLİR (panel kapatamadığı şeye "kapattım" demez).
+/// </remarks>
+public sealed class SubscriptionSuspensionState
+{
+    /// <summary>Askıdan önce AÇIK olan kaynaklar (geri açılacaklar).</summary>
+    public List<string> OpenBefore { get; set; } = [];
+
+    /// <summary>Kapatılamayan (hâlâ açık) kaynaklar; her turda yeniden denenir.</summary>
+    public List<string> PendingClose { get; set; } = [];
+
+    /// <summary>Geri açılamayan (hâlâ kapalı) kaynaklar; her turda yeniden denenir.</summary>
+    public List<string> PendingRestore { get; set; } = [];
+
+    /// <summary>Panelin kapatamadığı kaynak türleri (ör. "mail", "database"); yeniden denenmez.</summary>
+    public List<string> Unsupported { get; set; } = [];
+}
+
+/// <summary>Plan disk tavanının aşıldığı tespiti (yalnız bildirim; otomatik askı DEĞİL).</summary>
+public sealed class DiskOverageState
+{
+    public DateTime DetectedAtUtc { get; set; }
+    public long UsageMb { get; set; }
+    public int MaxDiskMb { get; set; }
+}
+
+/// <summary>Bir abonelik için "dikkat" bilgisi.</summary>
+public sealed record SubscriptionAttentionState(
+    Guid UserId,
+    IReadOnlyList<string> PendingClose,
+    IReadOnlyList<string> PendingRestore,
+    IReadOnlyList<string> Unsupported,
+    DiskOverageState? DiskOverage);

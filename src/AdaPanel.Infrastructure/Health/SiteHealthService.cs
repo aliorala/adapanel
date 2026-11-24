@@ -61,6 +61,7 @@ public sealed partial class SiteHealthService(
             var mapping = dnsTemplate.IpMappings.FirstOrDefault(item => site.Bindings.Any(binding => binding.IpAddress == item.PrivateAddress));
             if (mapping is not null) serverAddress = mapping.PublicAddress;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch { /* tercihler okunamazsa sunucu adresi karşılaştırması "unknown" kalır */ }
 
         var report = new SiteHealthDto
@@ -137,8 +138,9 @@ public sealed partial class SiteHealthService(
     /// "IIS bu siteyi doğru döndürüyor mu" ayrı ayrı görülür (canlı doğrulandı: Invoke-WebRequest
     /// Host başlığını reddeder, HttpClient kabul eder).
     /// </summary>
-    private async Task<SiteHealthCheckDto> ProbeHttpAsync(string domain, string serverAddress, CancellationToken cancellationToken)
+    internal async Task<SiteHealthCheckDto> ProbeHttpAsync(string domain, string serverAddress, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var target = ResolveProbeTarget(serverAddress);
         try
         {
@@ -157,6 +159,7 @@ public sealed partial class SiteHealthService(
             var code = (int)response.StatusCode;
             return Check("http", EvaluateHttpStatus(code), $"HTTP {code}", $"{target} (Host: {domain}) → {code} {response.ReasonPhrase}");
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             return Check("http", "fail", "yanıt yok", $"{target} (Host: {domain}): {exception.GetType().Name}: {exception.Message}");
@@ -166,18 +169,23 @@ public sealed partial class SiteHealthService(
     // --- HTTPS / sertifika ---
 
     /// <summary>
-    /// 443'te FİİLEN sunulan sertifikayı TLS el sıkışmasıyla okur (SNI = alan adı). El sıkışma
-    /// başarısızsa panelin kendi <c>config/ssl.json</c> kaydına düşülür — yeni bir ACME çağrısı
+    /// 443'te FİİLEN sunulan sertifikayı TLS el sıkışmasıyla okur (SNI = alan adı).
+    /// Sertifika alınamadıysa panelin kendi <c>config/ssl.json</c> kaydına düşülür. Canlı sunulan
+    /// geçersiz sertifika kayıtlı sertifikayla gizlenmez — yeni bir ACME çağrısı
     /// YAPILMAZ, yalnız mevcut durum okunur.
     /// </summary>
-    private async Task<(SiteHealthCheckDto Check, int? DaysLeft)> ProbeHttpsAsync(
+    internal async Task<(SiteHealthCheckDto Check, int? DaysLeft)> ProbeHttpsAsync(
         string siteName,
         string domain,
         string serverAddress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int port = 443)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var target = ResolveProbeTarget(serverAddress, forceBrackets: false);
         var nameMismatch = false;
+        var policyErrors = SslPolicyErrors.None;
+        var certificateObserved = false;
         int? daysLeft = null;
         var live = false;
         var detail = string.Empty;
@@ -188,48 +196,51 @@ public sealed partial class SiteHealthService(
             timeout.CancelAfter(ProbeTimeout);
 
             using var client = new TcpClient();
-            await client.ConnectAsync(target, 443, timeout.Token);
+            await client.ConnectAsync(target, port, timeout.Token);
 
-            X509Certificate2? served = null;
-            var policyErrors = SslPolicyErrors.None;
             using var stream = new SslStream(
                 client.GetStream(),
                 leaveInnerStreamOpen: false,
-                // Zinciri doğrulamak İÇİN bağlanmıyoruz, sertifikayı GÖRMEK için bağlanıyoruz:
-                // geçersiz/eşleşmeyen sertifikayı da okuyup kullanıcıya sebebiyle raporlayabilmeliyiz.
+                // Record rejected certificates for diagnostics without accepting them.
+                // Snapshot and dispose inside the callback: failed handshakes must not leak a certificate.
                 userCertificateValidationCallback: (_, certificate, _, errors) =>
                 {
                     policyErrors = errors;
                     if (certificate is not null)
                     {
-                        served = new X509Certificate2(certificate);
+                        using var served = new X509Certificate2(certificate);
+                        certificateObserved = true;
+                        nameMismatch = errors.HasFlag(SslPolicyErrors.RemoteCertificateNameMismatch);
+                        var now = DateTime.UtcNow;
+                        daysLeft = DaysLeft(served.NotAfter.ToUniversalTime(), now);
+                        if (served.NotBefore.ToUniversalTime() > now || served.NotAfter.ToUniversalTime() <= now)
+                            policyErrors |= SslPolicyErrors.RemoteCertificateChainErrors;
+                        detail = $"{target}:{port} (SNI: {domain}) → {served.Subject}; bitiş {served.NotAfter.ToUniversalTime():yyyy-MM-dd}"
+                            + (policyErrors == SslPolicyErrors.None ? string.Empty : $"; tls={policyErrors}");
                     }
 
-                    return true;
+                    return certificate is not null && policyErrors == SslPolicyErrors.None;
                 });
 
             await stream.AuthenticateAsClientAsync(
-                new SslClientAuthenticationOptions { TargetHost = domain },
+                new SslClientAuthenticationOptions
+                {
+                    TargetHost = domain,
+                    CertificateRevocationCheckMode = X509RevocationMode.Online
+                },
                 timeout.Token);
 
-            if (served is not null)
-            {
-                live = true;
-                nameMismatch = policyErrors.HasFlag(SslPolicyErrors.RemoteCertificateNameMismatch);
-                daysLeft = DaysLeft(served.NotAfter.ToUniversalTime(), DateTime.UtcNow);
-                detail = $"{target}:443 (SNI: {domain}) → {served.Subject}; bitiş {served.NotAfter.ToUniversalTime():yyyy-MM-dd}"
-                    + (policyErrors == SslPolicyErrors.None ? string.Empty : $"; tls={policyErrors}");
-                served.Dispose();
-            }
+            live = certificateObserved;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
-            detail = $"{target}:443 (SNI: {domain}): {exception.GetType().Name}: {exception.Message}";
+            detail = (detail + $" {target}:{port} (SNI: {domain}): {exception.GetType().Name}: {exception.Message}").Trim();
         }
 
-        if (!live)
+        if (!certificateObserved)
         {
-            // Canlı el sıkışma olmadı → panelin kayıtlı sertifika durumuna düş (ACME çağrısı YOK).
+            // Canlı sertifika alınamadı → panelin kayıtlı durumuna düş (ACME çağrısı YOK).
             try
             {
                 var certificates = await fileStore.ReadAsync(SslStatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
@@ -246,13 +257,14 @@ public sealed partial class SiteHealthService(
                         false => "yok",
                         null => "ölçülemedi"
                     };
-                    detail = $"443'te yanıt yok; panel kaydı: {stored.HostName} ({stored.NotAfterUtc:yyyy-MM-dd}), https bağlaması: {bindingDurumu}. {detail}".Trim();
+                    detail = $"{port}'te sertifika alınamadı; panel kaydı: {stored.HostName} ({stored.NotAfterUtc:yyyy-MM-dd}), https bağlaması: {bindingDurumu}. {detail}".Trim();
                 }
             }
-            catch { /* ssl.json okunamazsa daysLeft null kalır → "sertifika yok" olarak raporlanır */ }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch { /* Stored state cannot establish a successful live TLS connection. */ }
         }
 
-        var status = EvaluateCertificateStatus(daysLeft, nameMismatch, live);
+        var status = EvaluateCertificateStatus(daysLeft, nameMismatch, live, policyErrors);
         var value = daysLeft is null ? "yok" : $"{daysLeft} gün";
         return (Check("https", status, value, detail), daysLeft);
     }
@@ -293,6 +305,7 @@ public sealed partial class SiteHealthService(
                 hosts.Add(host.EndsWith(domain, StringComparison.OrdinalIgnoreCase) ? host : $"{host}.{domain}");
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch { /* mail sunucusu yok/yanıt vermiyor → yaygın seçicilerle devam */ }
 
         foreach (var selector in FallbackDkimSelectors)
@@ -322,6 +335,7 @@ public sealed partial class SiteHealthService(
             var run = await ProcessRunner.RunPowerShellAsync(script.ToString(), cancellationToken);
             return ParseDnsProbe(run.StandardOutput);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch
         {
             return null;
@@ -492,9 +506,10 @@ public sealed partial class SiteHealthService(
     /// Sertifika durumu. Alan adı eşleşmiyorsa tarayıcı zaten uyarı basar → "fail". Kayıt var ama
     /// 443'te sunulmuyorsa (live=false) sertifika fiilen kullanılmıyordur → "warn".
     /// </summary>
-    internal static string EvaluateCertificateStatus(int? daysLeft, bool nameMismatch, bool live)
+    internal static string EvaluateCertificateStatus(int? daysLeft, bool nameMismatch, bool live,
+        SslPolicyErrors policyErrors = SslPolicyErrors.None)
     {
-        if (daysLeft is null)
+        if (daysLeft is null || policyErrors != SslPolicyErrors.None)
         {
             return "fail";
         }
@@ -587,8 +602,12 @@ public sealed partial class SiteHealthService(
 
     // --- Yardımcılar ---
 
-    private static List<SiteHealthCheckDto> BuildMailChecks(DnsProbe? probe)
+    internal static List<SiteHealthCheckDto> BuildMailChecks(DnsProbe? probe)
     {
+        if (probe is null)
+            return new[] { "mail.mx", "mail.spf", "mail.dkim", "mail.dmarc" }
+                .Select(key => Check(key, "unknown", "ölçülemedi", "DNS sorgusu çalıştırılamadı (Resolve-DnsName)."))
+                .ToList();
         var mx = probe?.MxRecords ?? [];
         var spf = probe?.Spf ?? string.Empty;
         var dkim = probe?.Dkim ?? string.Empty;
@@ -611,8 +630,10 @@ public sealed partial class SiteHealthService(
         };
     }
 
-    private static SiteHealthCheckDto BuildMailSummary(IReadOnlyList<SiteHealthCheckDto> records)
+    internal static SiteHealthCheckDto BuildMailSummary(IReadOnlyList<SiteHealthCheckDto> records)
     {
+        if (records.Count == 0 || records.All(record => record.Status == "unknown"))
+            return Check("mail", "unknown", "ölçülemedi", "Posta DNS kayıtları ölçülemedi.");
         bool Found(string key) => records.Any(record => record.Key == key && record.Status == "ok");
 
         var (status, value) = EvaluateMail(Found("mail.mx"), Found("mail.spf"), Found("mail.dkim"), Found("mail.dmarc"));

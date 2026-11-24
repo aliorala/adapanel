@@ -50,6 +50,7 @@ public sealed partial class QueryLogService(
 
     public async Task<int> RecordSampleAsync(ResourceConsumerSnapshotDto snapshot, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         // Liste OKUNAMADIYSA hiçbir şey yapma. Aksi hâlde okunamayan tur "hepsi bitti" sayılır ve
         // hâlâ çalışan sorgular günlüğe bitmiş gibi yazılırdı — ölçememeyi ölçüm saymak.
         if (snapshot is null || !snapshot.Available)
@@ -57,14 +58,25 @@ public sealed partial class QueryLogService(
             return 0;
         }
 
+        // A limited list cannot prove completion. Skip it without accumulating new
+        // entries that could remain open indefinitely under sustained high load.
+        if (snapshot.TotalCount > snapshot.Consumers.Count)
+        {
+            logger.LogDebug("Eksik sorgu geçmişi örneği atlandı: {Observed}/{Total}.",
+                snapshot.Consumers.Count, snapshot.TotalCount);
+            return 0;
+        }
+
         var kaynak = (snapshot.Source ?? string.Empty).Trim().ToLowerInvariant();
+        // Scopes share active queries only within the same data directory.
+        var kapsam = logRoot.ToUpperInvariant() + "\u0001" + kaynak;
         var simdi = DateTime.UtcNow;
 
         var buTur = new Dictionary<string, ResourceConsumerDto>(StringComparer.Ordinal);
         foreach (var tuketici in snapshot.Consumers.Where(item =>
                      string.Equals(item.ResourceType, "database", StringComparison.OrdinalIgnoreCase)))
         {
-            buTur[Anahtar(kaynak, tuketici)] = tuketici;
+            buTur[Anahtar(kapsam, tuketici)] = tuketici;
         }
 
         // 1) Açık kalanları güncelle / yenileri ekle.
@@ -78,7 +90,7 @@ public sealed partial class QueryLogService(
 
         // 2) Bu kaynağa ait olup ARTIK LİSTEDE OLMAYANLAR bitmiştir.
         var bitenler = new List<QueryLogEntryDto>();
-        foreach (var anahtar in Acik.Keys.Where(item => item.StartsWith(kaynak + "", StringComparison.Ordinal)).ToArray())
+        foreach (var anahtar in Acik.Keys.Where(item => item.StartsWith(kapsam + "\u0001", StringComparison.Ordinal)).ToArray())
         {
             if (buTur.ContainsKey(anahtar) || !Acik.TryRemove(anahtar, out var acik))
             {
@@ -93,8 +105,7 @@ public sealed partial class QueryLogService(
             return 0;
         }
 
-        await YazAsync(bitenler, cancellationToken);
-        return bitenler.Count;
+        return await YazAsync(bitenler, cancellationToken) ? bitenler.Count : 0;
     }
 
     /// <summary>
@@ -129,7 +140,7 @@ public sealed partial class QueryLogService(
         return kirpilmis.Length <= MaxStatementLength ? kirpilmis : kirpilmis[..MaxStatementLength] + "…";
     }
 
-    private async Task YazAsync(IReadOnlyCollection<QueryLogEntryDto> kayitlar, CancellationToken cancellationToken)
+    private async Task<bool> YazAsync(IReadOnlyCollection<QueryLogEntryDto> kayitlar, CancellationToken cancellationToken)
     {
         await YazmaKilidi.WaitAsync(cancellationToken);
         try
@@ -148,11 +159,13 @@ public sealed partial class QueryLogService(
 
                 await File.AppendAllTextAsync(yol, govde.ToString(), Encoding.UTF8, cancellationToken);
             }
+            return true;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             // Günlük yazılamazsa panelin izleme akışı DURMAZ; sessiz de geçmez.
             logger.LogWarning(exception, "Sorgu geçmişi yazılamadı ({Adet} kayıt).", kayitlar.Count);
+            return false;
         }
         finally
         {

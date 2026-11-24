@@ -150,6 +150,70 @@ public sealed class QueryLogServiceTests : IDisposable
 
     // --- düzenek ---
 
+    [Fact]
+    public async Task Truncated_snapshot_does_not_mark_unseen_queries_as_finished()
+    {
+        await servis.RecordSampleAsync(Anlik(Sorgu("a", "SELECT active", 3), Sorgu("b", "SELECT other", 7)));
+        var truncated = new ResourceConsumerSnapshotDto
+        {
+            Source = benzersiz, Installed = true, Available = true, TotalCount = 2,
+            Consumers = [Sorgu("b", "SELECT other", 9)]
+        };
+        Assert.Equal(0, await servis.RecordSampleAsync(truncated));
+        Assert.Empty((await servis.QueryAsync(new QueryLogFilterDto())).Entries);
+        Assert.Equal(2, await servis.RecordSampleAsync(Anlik()));
+    }
+
+    [Fact]
+    public async Task Cancelled_sample_preserves_active_queries_for_next_valid_sample()
+    {
+        await servis.RecordSampleAsync(Anlik(Sorgu("a", "SELECT retained", 3)));
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            servis.RecordSampleAsync(Anlik(), cancelled.Token));
+        Assert.Equal(1, await servis.RecordSampleAsync(Anlik()));
+        Assert.Equal("SELECT retained", Assert.Single((await servis.QueryAsync(new QueryLogFilterDto())).Entries).Statement);
+    }
+
+    [Fact]
+    public async Task Repeated_partial_samples_do_not_accumulate_unverifiable_queries()
+    {
+        for (var i = 0; i < 30; i++)
+        {
+            Assert.Equal(0, await servis.RecordSampleAsync(new ResourceConsumerSnapshotDto
+            {
+                Source = benzersiz, Installed = true, Available = true, TotalCount = 201,
+                Consumers = [Sorgu(i.ToString(), "SELECT omitted_by_limit", 3)]
+            }));
+        }
+        Assert.Equal(0, await servis.RecordSampleAsync(Anlik()));
+        Assert.Empty((await servis.QueryAsync(new QueryLogFilterDto())).Entries);
+    }
+
+    [Fact]
+    public async Task Separate_data_roots_do_not_consume_each_others_active_queries()
+    {
+        var other = new QueryLogService(
+            Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = Path.Combine(dataRoot, "other") }),
+            NullLogger<QueryLogService>.Instance);
+        await servis.RecordSampleAsync(Anlik(Sorgu("a", "SELECT private", 3)));
+        Assert.Equal(0, await other.RecordSampleAsync(Anlik()));
+        Assert.Empty((await other.QueryAsync(new QueryLogFilterDto())).Entries);
+        Assert.Equal(1, await servis.RecordSampleAsync(Anlik()));
+    }
+
+    [Fact]
+    public async Task New_service_scope_for_same_root_retains_active_queries()
+    {
+        await servis.RecordSampleAsync(Anlik(Sorgu("a", "SELECT shared", 3)));
+        var nextScope = new QueryLogService(
+            Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = dataRoot }),
+            NullLogger<QueryLogService>.Instance);
+        Assert.Equal(1, await nextScope.RecordSampleAsync(Anlik()));
+        Assert.Single((await servis.QueryAsync(new QueryLogFilterDto())).Entries);
+    }
+
     private ResourceConsumerSnapshotDto Anlik(params ResourceConsumerDto[] tuketiciler) => Anlik(true, tuketiciler);
 
     private ResourceConsumerSnapshotDto Anlik(bool okunabildi, params ResourceConsumerDto[] tuketiciler) => new()

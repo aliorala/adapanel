@@ -18,6 +18,19 @@ public sealed class BackupDatabaseInclusionTests
 {
     private static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PortableExportChoiceIsForwardedAndRetainedInBackupMetadata(bool portable)
+    {
+        using var fixture = new Fixture();
+        var result = await fixture.Service.BackupDatabaseAsync(new BackupDatabaseRequest
+        { Engine = "mariadb", DatabaseName = "shop", PortableDefiners = portable });
+        Assert.Equal(portable, fixture.LastDump?.PortableDefiners);
+        Assert.Equal(portable, result.PortableDefiners);
+        Assert.Equal(portable, Assert.Single(await fixture.Service.GetBackupsAsync()).PortableDefiners);
+    }
+
     [Fact]
     public async Task SiteBackup_OnlyActualNonemptyDumpsAreReturnedAndPersisted()
     {
@@ -127,6 +140,7 @@ public sealed class BackupDatabaseInclusionTests
         public string? EmptyName { get; set; }
         public string? ThrowName { get; set; }
         public int HttpCalls { get; private set; }
+        public DatabaseDumpRequest? LastDump { get; private set; }
         public JsonFileStore Store { get; }
         public BackupService Service { get; }
 
@@ -164,6 +178,7 @@ public sealed class BackupDatabaseInclusionTests
 
         private async Task<DatabaseDumpResultDto> Export(DatabaseDumpRequest request)
         {
+            LastDump = request;
             if (request.DatabaseName == ThrowName) throw new IOException("fake dump failure");
             var contents = request.DatabaseName == EmptyName ? "" : $"-- {request.DatabaseName} dump";
             await File.WriteAllTextAsync(request.FilePath, contents);

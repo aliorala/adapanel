@@ -97,6 +97,13 @@ public sealed class AdvisorService(
                 {
                     items.Add(new AdvisorItemDto { Id = $"ssl-expiring:{cert.HostName}", Severity = "warning", TitleKey = "advisor.ssl.expiring", Detail = detail, ActionSection = "sites" });
                 }
+                else if (SslExpiry.Classify(cert.NotAfterUtc, now) == SslExpiry.RenewalDue
+                    && (string.IsNullOrWhiteSpace(cert.ManagedRenewalId) || cert.RenewalPaused))
+                {
+                    // Yenileme esigi (30 gun): panelin otomatik yenilemedigi (elle yuklenen, kimliksiz ya da
+                    // duraklatilmis) sertifika icin yenilemenin vakti geldi -- kimse yapmazsa dolacak.
+                    items.Add(new AdvisorItemDto { Id = $"ssl-renewal-due:{cert.HostName}", Severity = "info", TitleKey = "advisor.ssl.renewalDue", Detail = detail, ActionSection = "sites" });
+                }
 
                 // BITIS TARIHI TEK BASINA YETMEZ -- canlida olculmus ariza.
                 //
@@ -120,11 +127,12 @@ public sealed class AdvisorService(
 
                     items.Add(new AdvisorItemDto
                     {
-                        Id = $"ssl-binding-drift:{cert.HostName}",
+                        Id = $"ssl-binding-drift:{SslStateReconciler.Key(cert)}",
                         Severity = "critical",
                         TitleKey = "advisor.ssl.bindingDrift",
                         Detail = bagAyrinti,
-                        ActionSection = "sites"
+                        ActionSection = "sites",
+                        SslRepair = new(cert.SiteName, cert.HostName, cert.Port > 0 ? cert.Port : 443)
                     });
                 }
             }

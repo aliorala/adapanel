@@ -22,6 +22,9 @@ public sealed class MailDomainDto
 
     public int AccountCount { get; set; }
 
+    /// <summary>False means the domain mailbox count could not be measured, not zero mailboxes.</summary>
+    public bool AccountCountMeasured { get; set; }
+
     /// <summary>Domain icin azami toplam boyut (MB). 0 = sinirsiz. Panel-tarafi tahsis kotasi (mail.json'da tutulur).</summary>
     public int MaxSizeMB { get; set; }
 

@@ -1,7 +1,10 @@
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Mail;
+using AdaPanel.Infrastructure.Support;
+using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Mail;
 
@@ -26,21 +29,38 @@ public sealed partial class MailService
         // certificate. It never issues another certificate or changes unrelated mail settings.
         using var operation = await MailCertificateLifecycle.EnterAsync(fileStore.ResolvePath(CertificateStatePath), cancellationToken);
         if (beforeMutation is not null) await beforeMutation(cancellationToken);
-        var state = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
-        var trackedHost = state is not null && CertificateNameMatches(hostName, state.HostName);
-        if (!trackedHost && !hostName.StartsWith("mail.", StringComparison.OrdinalIgnoreCase)) return;
+        var states = await ReadCertificateStatesAsync(cancellationToken);
+        var tracked = states.Where(state => CertificateNameMatches(hostName, state.HostName)).ToArray();
+        if (tracked.Length == 0 && !hostName.StartsWith("mail.", StringComparison.OrdinalIgnoreCase)) return;
+        if (tracked.Length == 0)
+            tracked = [new MailCertificateState { Domain = hostName[5..], HostName = hostName.Trim().ToLowerInvariant() }];
+        List<Exception> failures = [];
+        foreach (var state in tracked)
+        {
+            try
+            {
         // A wildcard operation targets only the already configured mail host it covers.
         // Custom names such as smtp.example.test keep their saved domain association.
-        var domain = trackedHost ? state!.Domain : hostName[5..];
-        hostName = trackedHost ? state!.HostName : hostName.Trim().ToLowerInvariant();
-        var material = StoreCertificateLookup(hostName)
+        var domain = state.Domain;
+        var targetHost = state.HostName;
+        var material = StoreCertificateLookup(targetHost)
             ?? throw new AppException("mail.certificate_store_missing", 409, 409);
-        if (state?.HostName == hostName && state.Thumbprint == material.Thumbprint)
+        if (state.Thumbprint == material.Thumbprint)
         {
-            var probes = await Task.WhenAll(new[] { 587, 465 }.Select(port => TlsProbe(hostName, port, material.Thumbprint, cancellationToken)));
-            if (probes.All(p => p.Status == "ok")) return;
+            var probes = await Task.WhenAll(new[] { 587, 465 }.Select(port => TlsProbe(targetHost, port, material.Thumbprint, cancellationToken)));
+            if (probes.All(p => p.Status == "ok")) continue;
         }
-        await ApplyStoreCertificateAsync(domain, hostName, material, cancellationToken, beforeMutation);
+        await ApplyStoreCertificateAsync(domain, targetHost, material, cancellationToken, beforeMutation);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (AppException error) when (error.HttpStatusCode == 403) { throw; }
+            catch (Exception error)
+            {
+                failures.Add(error);
+                logger.LogWarning("Mail certificate synchronization failed for {MailHost}: {ErrorType}", state.HostName, error.GetType().Name);
+            }
+        }
+        ThrowCertificateFailures(failures);
     }
 
     private async Task InspectMailCertificateAsync(MailCertificateDto dto, string? expected, CancellationToken token)
@@ -72,14 +92,14 @@ public sealed partial class MailService
     private async Task<MailCertificateDto> ApplyStoreCertificateAsync(string domain, string host,
         MailCertificateMaterial material, CancellationToken token, Func<CancellationToken, Task>? beforeMutation = null)
     {
-        var previous = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, token);
+        var previous = (await ReadCertificateStatesAsync(token)).SingleOrDefault(state => state.HostName.Equals(host, StringComparison.OrdinalIgnoreCase));
         if (previous?.HostName == host && previous.Thumbprint == material.Thumbprint)
         {
             var current = new MailCertificateDto { Domain = domain, HostName = host, Source = previous.Source, NotAfterUtc = previous.NotAfterUtc };
             await InspectMailCertificateAsync(current, material.Thumbprint, token);
             if (current.Active) return current;
         }
-        await PushCertificateToStalwartAsync(host, material.CertificatePem, material.PrivateKeyPem, token, beforeMutation);
+        var publication = await PushCertificateToStalwartAsync(host, material.CertificatePem, material.PrivateKeyPem, token, beforeMutation);
         var state = new MailCertificateState
         {
             Domain = domain, HostName = host, Source = "windows-store", Thumbprint = material.Thumbprint,
@@ -89,8 +109,60 @@ public sealed partial class MailService
         var dto = new MailCertificateDto { Domain = domain, HostName = host, Source = state.Source, NotAfterUtc = state.NotAfterUtc };
         await InspectMailCertificateAsync(dto, state.Thumbprint, token);
         if (!dto.Active) throw new AppException("mail.certificate_not_activated", 502, 502, host);
-        await fileStore.WriteAsync(CertificateStatePath, state, token);
+        await MailCertificateRegistry.UpsertAsync(fileStore, state, token, publication.InitialPrimary);
         return dto;
+    }
+
+    private async Task<string?> ResolveInitialCertificatePrimaryAsync(CertificateSettings settings, string targetHost, CancellationToken token)
+    {
+        if (!string.IsNullOrWhiteSpace((await MailCertificateRegistry.ReadAsync(fileStore, token)).PrimaryHostName)) return null;
+        var peer = await ReadManagedWebmailPeerAsync(token);
+        var pin = await ReadServerIdentityPinAsync(token);
+        var explicitHost = peer ?? (string.IsNullOrWhiteSpace(pin?.HostName) ? null : pin.HostName);
+        var candidate = (explicitHost ?? settings.DefaultHostname).Trim().ToLowerInvariant();
+        if (Uri.CheckHostName(candidate) != UriHostNameType.Dns || !candidate.Contains('.') || candidate.Contains('*'))
+        {
+            if (explicitHost is not null) throw new AppException("mail.certificate_not_activated", 409, 409);
+            return null; // Fresh native placeholder: the first successful trusted certificate may initialize the primary.
+        }
+        // Renewal of this same explicit name is safe even if its previous certificate expired.
+        if (candidate.Equals(targetHost, StringComparison.OrdinalIgnoreCase)) return candidate;
+        var probes = await Task.WhenAll(new[] { 587, 465 }.Select(port => TlsProbe(candidate, port, null, token)));
+        if (probes.All(p => p.Status == "ok")) return candidate;
+        if (explicitHost is not null)
+            throw new AppException("mail.certificate_not_activated", 409, 409,
+                "The saved mail client identity could not be validated; it was not replaced.");
+        return null; // An untrusted native bootstrap certificate is not an established client identity.
+    }
+
+    private async Task<string?> ReadManagedWebmailPeerAsync(CancellationToken token)
+    {
+        var state = await fileStore.ReadAsync<System.Text.Json.Nodes.JsonObject?>("config/webmail.json", null, token);
+        if (state is null) return null;
+        var entry = MailCertificateRegistry.Field(state, "entryRoot");
+        if (string.IsNullOrWhiteSpace(entry)) return null;
+        if (!Path.IsPathFullyQualified(entry) || Path.GetDirectoryName(entry) is not { } root)
+            throw new AppException("mail.certificate_not_activated", 409, 409);
+        var path = Path.Combine(root, "config", "config.inc.php");
+        if (!File.Exists(path)) return null;
+        using var lease = await MailCertificateLifecycle.EnterAsync(path, token);
+        var config = await File.ReadAllTextAsync(path, token);
+        if (!config.Contains(WebmailTlsConfiguration.Marker, StringComparison.OrdinalIgnoreCase)) return null;
+        var peers = Regex.Matches(config, @"'peer_name'\s*=>\s*'(?<host>[A-Za-z0-9.-]+)'")
+            .Select(match => match.Groups["host"].Value.ToLowerInvariant()).Distinct(StringComparer.Ordinal).ToArray();
+        if (peers.Length > 1 || peers.Length == 0 && config.Contains("peer_name", StringComparison.Ordinal))
+            throw new AppException("mail.certificate_not_activated", 409, 409);
+        return peers.SingleOrDefault();
+    }
+
+    private async Task<MailCertificateState[]> ReadCertificateStatesAsync(CancellationToken token) =>
+        (await MailCertificateRegistry.ReadAsync(fileStore, token)).Records
+            .Select(MailCertificateRegistry.Deserialize<MailCertificateState>).ToArray();
+
+    private static void ThrowCertificateFailures(List<Exception> failures)
+    {
+        if (failures.Count == 1) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        if (failures.Count > 1) throw new AggregateException("Multiple mail certificates could not be synchronized; successful hosts were preserved.", failures);
     }
 
     private sealed record CertificateInventoryRecord(string Id, string[] Names);

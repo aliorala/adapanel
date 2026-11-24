@@ -5,7 +5,7 @@
         <h2>{{ t("panel.billing.title") }}</h2>
         <p class="meta">{{ t("panel.billing.subtitle") }}</p>
       </div>
-      <button class="secondary compact" :disabled="loading" @click="refresh">
+      <button class="secondary compact" :disabled="loading || saving" @click="refresh">
         {{ t("panel.billing.refreshUsage") }}
       </button>
     </div>
@@ -41,11 +41,11 @@
         </span>
       </div>
       <label class="inline-field">
-        <input v-model="enabled" type="checkbox" :disabled="saving" />
+        <input v-model="enabled" type="checkbox" :disabled="saving || !loaded" />
         <span>{{ t("panel.billing.enabled") }}</span>
       </label>
       <div class="row-actions">
-        <button :disabled="saving || enabled === settings?.enabled" @click="save">
+        <button :disabled="saving || !loaded || enabled === settings?.enabled" @click="save">
           {{ t("panel.billing.save") }}
         </button>
       </div>
@@ -182,7 +182,7 @@
 // Faturalama (WHMCS) entegrasyonunun ayar ve tanı ekranı. Sağlama işlemleri (hesap açma,
 // askı, iptal) WHMCS modülünün kendi işidir; burada yalnızca entegrasyonun AÇIK olup olmadığı,
 // son çağrıların ne yaptığı ve faturalama sistemine verilen kullanım değerleri görünür.
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import CodeSample from "../components/CodeSample.vue";
 import {
@@ -192,7 +192,8 @@ import {
   type BillingSettings,
   type BillingUsageReport
 } from "../api/billing";
-import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
+import { getSessionEpoch } from "../api/client";
 import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
@@ -209,38 +210,75 @@ const noticeError = ref(false);
 
 const accessHashSample = computed(() => "entry=panel;token=adap_...");
 
-onMounted(refresh);
+const auth = useAuthStore();
+let disposed = false, generation = 0, request = 0;
+onBeforeUnmount(() => { disposed = true; });
+function context() {
+  const session = auth.session, actor = session?.user?.id, role = session?.user?.role;
+  const version = generation, epoch = getSessionEpoch();
+  return { current: () => !disposed && version === generation && epoch === getSessionEpoch() &&
+    session === auth.session && actor === auth.session?.user?.id && role === auth.session?.user?.role && role === "Administrator" };
+}
 
 async function refresh() {
+  if (disposed || saving.value || auth.session?.user?.role !== "Administrator") return;
+  const target = context(), id = ++request;
   loading.value = true;
   try {
-    settings.value = await getBillingSettings();
-    enabled.value = settings.value.enabled;
+    const result = await getBillingSettings();
+    if (!target.current() || id !== request) return;
+    settings.value = result;
+    enabled.value = result.enabled;
+    usage.value = null;
+    loaded.value = true;
 
     // Kullanım YALNIZCA entegrasyon açıkken okunur: kapalıyken uç 403 döner ve ekran her
     // açılışta gereksiz bir hata gösterirdi.
-    usage.value = settings.value.enabled ? await getBillingUsage() : null;
-    loaded.value = true;
+    const report = result.enabled ? await getBillingUsage() : null;
+    if (target.current() && id === request) usage.value = report;
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (target.current() && id === request) showNotice(resolveApiMessage(error), true);
   } finally {
-    loading.value = false;
+    if (target.current() && id === request) loading.value = false;
   }
 }
 
 async function save() {
+  if (disposed || saving.value || !loaded.value || auth.session?.user?.role !== "Administrator") return;
+  const target = context(), id = ++request;
   saving.value = true;
+  loading.value = false;
+  let saved = false;
   try {
-    settings.value = await updateBillingSettings(enabled.value);
-    enabled.value = settings.value.enabled;
-    usage.value = settings.value.enabled ? await getBillingUsage() : null;
+    const result = await updateBillingSettings(enabled.value);
+    if (!target.current() || id !== request) return;
+    settings.value = result;
+    enabled.value = result.enabled;
+    usage.value = null;
+    saved = true;
+    const report = result.enabled ? await getBillingUsage() : null;
+    if (!target.current() || id !== request) return;
+    usage.value = report;
     showNotice(t("billing.settings_saved"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (target.current() && id === request)
+      showNotice((saved ? `${t("billing.settings_saved")}\n\n` : "") + resolveApiMessage(error), true);
   } finally {
-    saving.value = false;
+    if (target.current() && id === request) saving.value = false;
   }
 }
+
+watch(() => [auth.session, auth.session?.user?.id, auth.session?.user?.role], () => {
+  generation++;
+  request++;
+  settings.value = null;
+  usage.value = null;
+  enabled.value = false;
+  loaded.value = loading.value = saving.value = false;
+  notice.value = "";
+  noticeError.value = false;
+  void refresh();
+}, { immediate: true, flush: "sync" });
 
 /** 0 = sınırsız (panel ve WHMCS aynı kabulü paylaşır). */
 function limitLabel(limitMb: number) {

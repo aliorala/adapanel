@@ -27,6 +27,14 @@ internal interface IDatabaseEngineProvider
         IReadOnlyCollection<string> privileges,
         CancellationToken cancellationToken);
 
+    /// <summary>Verilen veritabanlarına yetkili hesaplar + kilit durumu. Varsayılan: desteklenmiyor.</summary>
+    Task<IReadOnlyCollection<DatabaseUserLockDto>> GetUserLocksAsync(
+        DatabaseConnectionProfile profile, IReadOnlyCollection<string> databaseNames, CancellationToken cancellationToken)
+        => throw new NotSupportedException("Account lock is not supported for this engine.");
+
+    Task SetUserLockedAsync(DatabaseConnectionProfile profile, string userName, string host, bool locked, CancellationToken cancellationToken)
+        => throw new NotSupportedException("Account lock is not supported for this engine.");
+
     // K2: güvensiz yönetici hesaplarını (anonim kullanıcılar + uzak root@'%') kaldırır; root@localhost'a
     // DOKUNMAZ (panel onunla bağlanır). Yalnız MySQL/MariaDB anlamlı uygular; diğer motorlar no-op.
     // Dönüş tipi liste DEĞİL rapor: yalnız BAŞARILANLARIN listesi, başarısızları görünmez kılıyordu

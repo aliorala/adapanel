@@ -15,6 +15,19 @@ public sealed class SslCertificateDto
     public DateTime NotAfterUtc { get; set; }
 
     /// <summary>
+    /// "valid" | "renewal_due" (30 gun ve alti) | "expiring" (7 gun ve alti) | "expired".
+    /// Kayitli degil, <see cref="NotAfterUtc"/>'den HER OKUMADA turetilir; boylece eski kayit
+    /// dosyalari da dogru etiket alir. Yazma tarafi yok sayilir.
+    /// </summary>
+    public string ExpiryStatus => SslExpiry.Classify(NotAfterUtc, DateTime.UtcNow);
+
+    /// <summary>
+    /// Panelin bu kayit icin otomatik yenilemeyi DURAKLATTIGI (panel tetikli yenileme turlari bu
+    /// kaydi atlar). win-acme'nin kendi zamanlanmis gorevi bundan etkilenmez.
+    /// </summary>
+    public bool RenewalPaused { get; set; }
+
+    /// <summary>
     /// "letsencrypt", "self-signed" ya da "manual" (elle içe aktarılmış).
     /// <para>
     /// Sertifikanın KENDİSİNDEN türetilir (veren = konu ise kendinden imzalı). Bir zamanlar
@@ -25,6 +38,13 @@ public sealed class SslCertificateDto
     /// </para>
     /// </summary>
     public string Source { get; set; } = string.Empty;
+
+    // Issuance ownership is published atomically with the certificate. Imported and
+    // legacy discovered certificates deliberately have no panel-managed renewal id.
+    public string? ManagedRenewalId { get; set; }
+    public long? ManagedRenewalSiteId { get; set; }
+    public bool ManagedRenewalStaging { get; set; }
+
 
     /// <summary>
     /// Sitede gerçekten bir HTTPS bağlaması var mı. <c>null</c> = ÖLÇÜLEMEDİ.

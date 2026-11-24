@@ -24,7 +24,10 @@ public sealed class AppRuntimeSiteConfigurationDto
 
     public bool HasHttpPlatformHandler { get; init; }
 
-    public bool ManagedRuntimeDisabled { get; init; }
+    public bool? ManagedRuntimeDisabled { get; init; }
 
     public string[] EnvironmentVariables { get; init; } = [];
+
+    /// <summary>Uygulama havuzunun durumu (Started/Stopped/...); okunamadıysa null — "çalışıyor" diye UYDURULMAZ.</summary>
+    public string? PoolState { get; set; }
 }

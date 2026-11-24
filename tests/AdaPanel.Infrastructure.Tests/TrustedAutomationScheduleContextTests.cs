@@ -31,7 +31,7 @@ public sealed class TrustedAutomationScheduleContextTests
         Assert.Equal(0, f.SslCalls);
         Assert.Equal(0, f.MailCalls);
         Assert.Equal(1, f.BackupCalls);
-        Assert.Equal(1, f.PruneCalls);
+        Assert.Equal(2, f.PruneCalls); // Safe retention runs before production and after publication.
         var current = await f.Read();
         Assert.Equal(changedState["autoSslRenewEnabled"]!.ToJsonString(), current["autoSslRenewEnabled"]!.ToJsonString());
         Assert.Equal(changedState["sslRenewIntervalHours"]!.ToJsonString(), current["sslRenewIntervalHours"]!.ToJsonString());

@@ -432,6 +432,19 @@ public sealed class BackupScheduleTimeTests
         Assert.Equal(Utc(2026, 8, 18, 16, 0), BackupSchedule.SonrakiZaman(plan, son, Utc(2026, 8, 18, 11, 0), Turkiye));
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData(-7)]
+    [InlineData(-6)]
+    public void Due_interval_schedule_displays_now_instead_of_future_or_past(int? hoursSinceNow)
+    {
+        var now = Utc(2026, 10, 20, 12);
+        DateTime? last = hoursSinceNow.HasValue ? now.AddHours(hoursSinceNow.Value) : null;
+        var plan = BackupSchedule.Normalize("interval", 6, 3, 0, 1, 1);
+        Assert.True(BackupSchedule.ZamaniGeldi(plan, last, now, Turkiye));
+        Assert.Equal(now, BackupSchedule.SonrakiZaman(plan, last, now, Turkiye));
+    }
+
     // ---------------------------------------------------------------------------------------
     // 9) NORMALİZASYON SINIRLARI
     // ---------------------------------------------------------------------------------------

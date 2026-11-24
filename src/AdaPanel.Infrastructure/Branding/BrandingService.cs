@@ -2,6 +2,7 @@ using AdaPanel.Core.Dtos.Settings;
 using AdaPanel.Core.Enums;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
+using AdaPanel.Infrastructure.Services;
 
 namespace AdaPanel.Infrastructure.Branding;
 
@@ -30,6 +31,10 @@ public sealed class BrandingService(
 {
     private const string StatePath = "config/branding.json";
     private const string ImageRoot = "branding";
+    internal Func<CancellationToken, Task>? BeforeImageStateWrite { get; init; }
+    private readonly ConcurrencyLock scopeLocks = new();
+    private Task<T> InScopeAsync<T>(BrandingScope scope, Func<Task<T>> action, CancellationToken token) =>
+        scopeLocks.RunExclusiveAsync("branding:" + fileStore.ResolvePath(StatePath).ToUpperInvariant() + ":" + scope.StorageKey, action, token);
 
     public async Task<BrandingDto> GetEffectiveAsync(Guid? userId, UserRole? role, CancellationToken cancellationToken = default)
     {
@@ -69,75 +74,84 @@ public sealed class BrandingService(
         var accentColor = BrandingTextRules.NormalizeAccentColor(request.AccentColor);
         var logoLinkUrl = BrandingTextRules.NormalizeLinkUrl(request.LogoLinkUrl);
 
-        await MutateAsync(scope, entry =>
+        return await InScopeAsync(scope, async () =>
         {
-            entry.PanelName = panelName;
-            entry.AccentColor = accentColor;
-            entry.LogoLinkUrl = logoLinkUrl;
+            await MutateAsync(scope, entry =>
+            {
+                entry.PanelName = panelName;
+                entry.AccentColor = accentColor;
+                entry.LogoLinkUrl = logoLinkUrl;
+            }, cancellationToken);
+            // The index is committed: read back the accepted result while retaining this scope's lease.
+            return await ReadCoreAsync(scope, CancellationToken.None);
         }, cancellationToken);
-
-        return await GetScopeAsync(scope, cancellationToken);
     }
 
     public async Task<BrandingDto> SetImageAsync(BrandingScope scope, BrandingImageKind kind, byte[] content, CancellationToken cancellationToken = default)
     {
-        var format = BrandingImageRules.Validate(kind, content);
-
-        var directory = fileStore.EnsureDirectory($"{ImageRoot}/{scope.StorageKey}");
-        var fileName = (kind == BrandingImageKind.Logo ? "logo" : "favicon") + format.FileExtension;
-        var target = Path.Combine(directory, fileName);
-        await File.WriteAllBytesAsync(target, content, cancellationToken);
-
-        // ÖNCEKİ dosya farklı uzantıdaysa (png → jpg) yetim kalır ve bir sonraki okumada hangisinin
-        // geçerli olduğu kayıttan anlaşılamazdı. Kayıt dosya ADINI tuttuğu için eskisini burada siler.
-        var previous = (await ReadEntryAsync(scope, cancellationToken)).FileName(kind);
-        if (previous.Length > 0 && !string.Equals(previous, fileName, StringComparison.OrdinalIgnoreCase))
+        // Freeze the bytes validated before any asynchronous lease wait.
+        var bytes = content.ToArray();
+        var format = BrandingImageRules.Validate(kind, bytes);
+        return await InScopeAsync(scope, async () =>
         {
-            DeleteImageFile(directory, previous);
-        }
-
-        await MutateAsync(scope, entry =>
-        {
-            if (kind == BrandingImageKind.Logo)
+            var previous = (await ReadEntryAsync(scope, cancellationToken)).FileName(kind);
+            var directory = fileStore.EnsureDirectory($"{ImageRoot}/{scope.StorageKey}");
+            // Immutable versions never truncate a file still referenced by the published index.
+            var fileName = (kind == BrandingImageKind.Logo ? "logo-" : "favicon-") + Guid.NewGuid().ToString("N") + format.FileExtension;
+            var target = Path.Combine(directory, fileName);
+            var committed = false;
+            try
             {
-                entry.LogoFileName = fileName;
-                entry.LogoMediaType = format.MediaType;
+                await File.WriteAllBytesAsync(target, bytes, cancellationToken);
+                if (BeforeImageStateWrite is not null) await BeforeImageStateWrite(cancellationToken);
+                await MutateAsync(scope, entry =>
+                {
+                    if (kind == BrandingImageKind.Logo)
+                    {
+                        entry.LogoFileName = fileName;
+                        entry.LogoMediaType = format.MediaType;
+                    }
+                    else
+                    {
+                        entry.FaviconFileName = fileName;
+                        entry.FaviconMediaType = format.MediaType;
+                    }
+                }, cancellationToken);
+                committed = true;
+                // Only an accepted index publication makes the old version unreferenced.
+                if (previous.Length > 0) DeleteImageFile(directory, previous);
+                return await ReadCoreAsync(scope, CancellationToken.None);
             }
-            else
+            finally
             {
-                entry.FaviconFileName = fileName;
-                entry.FaviconMediaType = format.MediaType;
+                if (!committed) DeleteImageFile(directory, fileName);
             }
         }, cancellationToken);
-
-        return await GetScopeAsync(scope, cancellationToken);
     }
 
     public async Task<BrandingDto> RemoveImageAsync(BrandingScope scope, BrandingImageKind kind, CancellationToken cancellationToken = default)
-    {
-        var entry = await ReadEntryAsync(scope, cancellationToken);
-        var fileName = entry.FileName(kind);
-        if (fileName.Length > 0)
+        => await InScopeAsync(scope, async () =>
         {
-            DeleteImageFile(fileStore.ResolvePath($"{ImageRoot}/{scope.StorageKey}"), fileName);
-        }
-
-        await MutateAsync(scope, current =>
-        {
-            if (kind == BrandingImageKind.Logo)
+            var entry = await ReadEntryAsync(scope, cancellationToken);
+            var fileName = entry.FileName(kind);
+            if (BeforeImageStateWrite is not null) await BeforeImageStateWrite(cancellationToken);
+            await MutateAsync(scope, current =>
             {
-                current.LogoFileName = string.Empty;
-                current.LogoMediaType = string.Empty;
-            }
-            else
-            {
-                current.FaviconFileName = string.Empty;
-                current.FaviconMediaType = string.Empty;
-            }
+                if (kind == BrandingImageKind.Logo)
+                {
+                    current.LogoFileName = string.Empty;
+                    current.LogoMediaType = string.Empty;
+                }
+                else
+                {
+                    current.FaviconFileName = string.Empty;
+                    current.FaviconMediaType = string.Empty;
+                }
+            }, cancellationToken);
+            if (fileName.Length > 0)
+                DeleteImageFile(fileStore.ResolvePath($"{ImageRoot}/{scope.StorageKey}"), fileName);
+            return await ReadCoreAsync(scope, CancellationToken.None);
         }, cancellationToken);
-
-        return await GetScopeAsync(scope, cancellationToken);
-    }
 
     /// <summary>
     /// "Bu kullanıcı KİMİN markasını görür" sorusunun tek cevabı.
@@ -177,7 +191,10 @@ public sealed class BrandingService(
         brand.LogoDataUrl.Length > 0 ||
         brand.FaviconDataUrl.Length > 0;
 
-    private async Task<BrandingDto> ReadAsync(BrandingScope scope, CancellationToken cancellationToken)
+    private Task<BrandingDto> ReadAsync(BrandingScope scope, CancellationToken cancellationToken) =>
+        InScopeAsync(scope, () => ReadCoreAsync(scope, cancellationToken), cancellationToken);
+
+    private async Task<BrandingDto> ReadCoreAsync(BrandingScope scope, CancellationToken cancellationToken)
     {
         var entry = await ReadEntryAsync(scope, cancellationToken);
         return new BrandingDto

@@ -46,7 +46,7 @@ public sealed class ClusterTransportPolicyTests
     public void Yonlendirmeler_KORU_KORUNE_takip_edilmez()
     {
         using var fabrika = Fabrika();
-        using var isleyici = fabrika.BuildHandler(Adres, verifyTlsCertificate: true);
+        using var isleyici = fabrika.BuildHandler(Adres, Parmak);
 
         Assert.False(isleyici.AllowAutoRedirect);
     }
@@ -63,59 +63,87 @@ public sealed class ClusterTransportPolicyTests
     public void Vekil_KULLANILMAZ()
     {
         using var fabrika = Fabrika();
-        using var isleyici = fabrika.BuildHandler(Adres, verifyTlsCertificate: true);
+        using var isleyici = fabrika.BuildHandler(Adres, Parmak);
 
         Assert.False(isleyici.UseProxy);
     }
 
     /// <summary>
-    /// TLS DOGRULAMASI VARSAYILAN ACIK: dogrulama geri cagrisi KURULMAZ, .NET'in kendi dogrulamasi
-    /// isler. Bir geri cagri kurulsaydi (her zaman true donen) sertifika denetimi sessizce olurdu.
+    /// SERTIFIKA HER ZAMAN SABITLEME GERI CAGRISINDAN GECER (G18): geri cagri hic kurulmasaydi
+    /// .NET'in sistem zinciri devreye girer ve parmak izi hic sorulmazdi.
     /// </summary>
     [Fact]
-    public void TLS_dogrulamasi_ACIKKEN_gecersiz_sertifika_KABUL_EDILMEZ()
+    public void TLS_geri_cagrisi_HER_ZAMAN_kurulu()
     {
         using var fabrika = Fabrika();
-        using var isleyici = fabrika.BuildHandler(Adres, verifyTlsCertificate: true);
-
-        Assert.Null(isleyici.SslOptions.RemoteCertificateValidationCallback);
-    }
-
-    /// <summary>
-    /// Dogrulama yalniz ACIKCA kapatildiginda devre disi kalir. Bu, bilerek acilan bir deliktir;
-    /// varsayilani degil, KAPATILABILIRLIGI test ediliyor.
-    /// </summary>
-    [Fact]
-    public void TLS_dogrulamasi_yalniz_ACIKCA_kapatilinca_devre_disi()
-    {
-        using var fabrika = Fabrika();
-        using var isleyici = fabrika.BuildHandler(Adres, verifyTlsCertificate: false);
+        using var isleyici = fabrika.BuildHandler(Adres, Parmak);
 
         Assert.NotNull(isleyici.SslOptions.RemoteCertificateValidationCallback);
     }
 
+    /// <summary>"Her sertifikayi kabul et" kapisi YOKTUR: parmak izi yoksa ya da uyusmuyorsa RED.</summary>
+    [Fact]
+    public void Parmak_izi_yoksa_ya_da_uyusmuyorsa_sertifika_REDDEDILIR()
+    {
+        using var sertifika = Sertifika();
+        var dogru = AdaPanel.Infrastructure.Migration.TrustFingerprint.FromCertificate(sertifika);
+        using var fabrika = Fabrika();
+
+        bool Karar(string? parmak) => fabrika.BuildHandler(Adres, parmak).SslOptions
+            .RemoteCertificateValidationCallback!(this, sertifika, null, System.Net.Security.SslPolicyErrors.None);
+
+        Assert.True(Karar(dogru));
+        Assert.False(Karar(null));
+        Assert.False(Karar(string.Empty));
+        Assert.False(Karar(Parmak));
+    }
+
     /// <summary>
-    /// Iki ayarin isleyicileri AYRI onbellek girdisidir: "dogrulamayi kapat" degisikligi eski
-    /// isleyiciyle sessizce yasamaya devam edemez.
+    /// Zincir GECERLI olsa bile (SslPolicyErrors.None) yanlis parmak izi reddedilir: sabitleme
+    /// CA'nin ikinci bir sertifika basmasina karsidir.
     /// </summary>
     [Fact]
-    public void TLS_karari_degisince_AYRI_isleyici_uretilir()
+    public void Gecerli_zincir_yanlis_parmak_izini_KURTARMAZ()
+    {
+        using var sertifika = Sertifika();
+        using var fabrika = Fabrika();
+
+        var kabul = fabrika.BuildHandler(Adres, Parmak).SslOptions
+            .RemoteCertificateValidationCallback!(this, sertifika, null, System.Net.Security.SslPolicyErrors.None);
+
+        Assert.False(kabul);
+    }
+
+    /// <summary>Onay degisince AYRI isleyici uretilir: eski parmak iziyle yasayan isleyici kalmaz.</summary>
+    [Fact]
+    public void Parmak_izi_degisince_AYRI_isleyici_uretilir()
     {
         using var fabrika = Fabrika();
 
-        var acik = fabrika.Create(Adres, verifyTlsCertificate: true, IstemciZamanAsimi);
-        var kapali = fabrika.Create(Adres, verifyTlsCertificate: false, IstemciZamanAsimi);
+        var eski = fabrika.Create(Adres, Parmak, IstemciZamanAsimi);
+        var yeni = fabrika.Create(Adres, Parmak.Replace("AA:BB", "BB:AA"), IstemciZamanAsimi);
 
-        Assert.NotSame(acik, kapali);
-        acik.Dispose();
-        kapali.Dispose();
+        Assert.NotSame(eski, yeni);
+        eski.Dispose();
+        yeni.Dispose();
+    }
+
+    private const string Parmak = "SHA256:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99";
+
+    private static System.Security.Cryptography.X509Certificates.X509Certificate2 Sertifika()
+    {
+        using var anahtar = System.Security.Cryptography.RSA.Create(2048);
+        var istek = new System.Security.Cryptography.X509Certificates.CertificateRequest(
+            "CN=dugum.ornek.test", anahtar, System.Security.Cryptography.HashAlgorithmName.SHA256,
+            System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+        return istek.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30));
     }
 
     [Fact]
     public void Baglanti_ani_adres_denetimi_KURULU()
     {
         using var fabrika = Fabrika();
-        using var isleyici = fabrika.BuildHandler(Adres, verifyTlsCertificate: true);
+        using var isleyici = fabrika.BuildHandler(Adres, Parmak);
 
         // Geri cagri yoksa ucuncu katman HIC yok demektir; DNS rebinding'i yakalayan tek yer burasi.
         Assert.NotNull(isleyici.ConnectCallback);
@@ -138,7 +166,7 @@ public sealed class ClusterTransportPolicyTests
             Resolver = (_, _) => Task.FromResult(new[] { IPAddress.Parse(ip) })
         };
 
-        using var istemci = fabrika.Create(Adres, verifyTlsCertificate: true, IstemciZamanAsimi);
+        using var istemci = fabrika.Create(Adres, Parmak, IstemciZamanAsimi);
 
         var hata = await Assert.ThrowsAsync<HttpRequestException>(
             () => istemci.GetAsync("api/v1/cluster/node-info"));
@@ -159,7 +187,7 @@ public sealed class ClusterTransportPolicyTests
             Resolver = (_, _) => Task.FromResult(Array.Empty<IPAddress>())
         };
 
-        using var istemci = fabrika.Create(Adres, verifyTlsCertificate: true, IstemciZamanAsimi);
+        using var istemci = fabrika.Create(Adres, Parmak, IstemciZamanAsimi);
 
         var hata = await Assert.ThrowsAsync<HttpRequestException>(
             () => istemci.GetAsync("api/v1/cluster/node-info"));
@@ -183,7 +211,7 @@ public sealed class ClusterTransportPolicyTests
             })
         };
 
-        using var istemci = fabrika.Create(Adres, verifyTlsCertificate: true, IstemciZamanAsimi);
+        using var istemci = fabrika.Create(Adres, Parmak, IstemciZamanAsimi);
 
         var hata = await Assert.ThrowsAsync<HttpRequestException>(
             () => istemci.GetAsync("api/v1/cluster/node-info"));
@@ -203,7 +231,7 @@ public sealed class ClusterTransportPolicyTests
         Assert.True(ClusterNodeClient.ProbeTimeout >= TimeSpan.FromSeconds(3));
 
         using var fabrika = Fabrika();
-        using var istemci = fabrika.Create(Adres, verifyTlsCertificate: true, ClusterNodeClient.ProbeTimeout);
+        using var istemci = fabrika.Create(Adres, Parmak, ClusterNodeClient.ProbeTimeout);
 
         Assert.Equal(ClusterNodeClient.ProbeTimeout, istemci.Timeout);
     }

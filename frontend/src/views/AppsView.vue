@@ -73,7 +73,7 @@
           </p>
         </div>
 
-        <a v-if="siteUrl" class="site-link" :href="siteUrl" target="_blank" rel="noopener">
+        <a v-if="siteUrl" class="site-link" :href="safeHref(siteUrl)" target="_blank" rel="noopener">
           {{ t("panel.apps.openSite") }}
         </a>
       </article>
@@ -216,7 +216,7 @@
                  farkli ritimde akiyordu. -->
             <p class="meta">{{ t("panel.apps.resultHint") }}</p>
           </div>
-          <a v-if="siteUrl" class="site-link" :href="siteUrl" target="_blank" rel="noopener">
+          <a v-if="siteUrl" class="site-link" :href="safeHref(siteUrl)" target="_blank" rel="noopener">
             {{ t("panel.apps.openSite") }}
           </a>
         </div>
@@ -264,11 +264,18 @@
             </div>
             <div>
               <dt>{{ t("panel.apps.managedRuntime") }}</dt>
-              <dd>{{ currentConfiguration.managedRuntimeDisabled ? t("panel.apps.noManagedCode") : t("panel.apps.managedCodePresent") }}</dd>
+              <dd>{{ currentConfiguration.managedRuntimeDisabled == null ? t("panel.apps.runtimeUnknown") : t(currentConfiguration.managedRuntimeDisabled ? "panel.apps.noManagedCode" : "panel.apps.managedCodePresent") }}</dd>
             </div>
           </dl>
         </details>
       </section>
+
+      <!-- Durdur/başlat/yeniden başlat/günlük/kaldır: havuz durumu SUNUCUDA ölçülür (poolState). -->
+      <AppRuntimeControls
+        v-if="currentConfiguration?.isEnabled"
+        :site-name="selectedSiteName"
+        :pool-state="currentConfiguration.poolState"
+        @changed="refreshConfiguration" />
     </template>
 
     <!-- `v-else` İDİ ve BU YÜZDEN AYNI ANDA İKİ ÇELİŞKİLİ CÜMLE ÇİZİLİYORDU.
@@ -285,9 +292,11 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { isCancel } from "axios";
 import { useI18n } from "vue-i18n";
+import AppRuntimeControls from "../components/AppRuntimeControls.vue";
 import CodeSample from "../components/CodeSample.vue";
 import FieldHint from "../components/FieldHint.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
@@ -299,6 +308,7 @@ import { useAppsStore } from "../stores/apps";
 import { useSitesStore } from "../stores/sites";
 import { useSoftwareStore } from "../stores/software";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { primarySiteUrl } from "../utils/siteUrl";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
@@ -452,16 +462,7 @@ const canInstall = computed(() => isActive() && !locked.value && isAdministrator
 // Sonucu görebilmesi için sitenin adresi: nip.io önizleme bağlamalarını atla, asıl domaini göster.
 const siteUrl = computed(() => {
   const site = sitesStore.sites.find((item) => item.name === selectedSiteName.value);
-  if (!site) return "";
-
-  const binding = site.bindings.find((item) => item.hostName && !item.hostName.toLowerCase().endsWith(".nip.io"))
-    ?? site.bindings[0];
-  if (!binding) return "";
-
-  const protocol = (binding.protocol || "http").toLowerCase();
-  const host = binding.hostName || window.location.hostname;
-  const standardPort = (protocol === "http" && binding.port === 80) || (protocol === "https" && binding.port === 443);
-  return `${protocol}://${host}${standardPort ? "" : `:${binding.port}`}`;
+  return primarySiteUrl(site?.bindings ?? [], site?.name);
 });
 
 onMounted(async () => {

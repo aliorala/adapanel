@@ -39,6 +39,12 @@ public sealed class SiteDeletionPlanDto
 
     public bool HasGitDeployment { get; set; }
 
+    /// <summary>Sitede Node/Python barındırma yapılandırması var mı (kaldırılacak).</summary>
+    public bool HasAppRuntime { get; set; }
+
+    /// <summary>Siteyle ilişkili Docker konteynerleri (kaldırılacak); motor yoksa/okunamazsa boş.</summary>
+    public string[] DockerContainers { get; set; } = [];
+
     /// <summary>Bu siteye atanmış müşteri sayısı (atama temizlenecek).</summary>
     public int CustomerAssignments { get; set; }
 
@@ -158,5 +164,6 @@ public static class SiteLeftoverKinds
     public const string MailDomain = "mailDomain";
     public const string FtpUser = "ftpUser";
     public const string DnsZone = "dnsZone";
+    public const string ScopeRecord = "scopeRecord";
     public const string Other = "other";
 }

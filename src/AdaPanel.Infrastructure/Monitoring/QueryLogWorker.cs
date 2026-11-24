@@ -55,35 +55,7 @@ public sealed class QueryLogWorker(
         {
             try
             {
-                await using var scope = scopeFactory.CreateAsyncScope();
-                var attribution = scope.ServiceProvider.GetRequiredService<IResourceAttributionService>();
-                var queryLog = scope.ServiceProvider.GetRequiredService<IQueryLogService>();
-
-                foreach (var kaynak in Kaynaklar)
-                {
-                    stoppingToken.ThrowIfCancellationRequested();
-
-                    // Limit yüksek: geçmişin amacı ne olduğunu KAÇIRMAMAK. Ekrandaki canlı liste
-                    // kısa tutulabilir ama günlüğe yazarken kesmek, tam da aranan yavaş sorguyu
-                    // dışarıda bırakabilirdi.
-                    var snapshot = await attribution.GetConsumersAsync(kaynak, limit: 500, stoppingToken);
-                    if (!snapshot.Installed)
-                    {
-                        continue;
-                    }
-
-                    await queryLog.RecordSampleAsync(snapshot, stoppingToken);
-                }
-
-                if (DateTime.UtcNow - sonTemizlik >= TemizlikAraligi)
-                {
-                    sonTemizlik = DateTime.UtcNow;
-                    var silinen = await queryLog.PurgeExpiredAsync(stoppingToken);
-                    if (silinen > 0)
-                    {
-                        logger.LogInformation("Sorgu geçmişinden {Adet} eski gün dosyası silindi.", silinen);
-                    }
-                }
+                sonTemizlik = await RunCycleAsync(sonTemizlik, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -104,5 +76,46 @@ public sealed class QueryLogWorker(
                 return;
             }
         }
+    }
+
+    internal async Task<DateTime> RunCycleAsync(DateTime lastCleanupUtc, CancellationToken stoppingToken)
+    {
+        stoppingToken.ThrowIfCancellationRequested();
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var attribution = scope.ServiceProvider.GetRequiredService<IResourceAttributionService>();
+        var queryLog = scope.ServiceProvider.GetRequiredService<IQueryLogService>();
+
+        foreach (var kaynak in Kaynaklar)
+        {
+            stoppingToken.ThrowIfCancellationRequested();
+            try
+            {
+                // The service caps the list at 200; TotalCount identifies partial samples.
+                var snapshot = await attribution.GetConsumersAsync(kaynak, limit: 200, stoppingToken);
+                stoppingToken.ThrowIfCancellationRequested();
+                if (snapshot.Installed)
+                    await queryLog.RecordSampleAsync(snapshot, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(exception, "{Source} sorgu geçmişi örneklenemedi; diğer kaynaklar devam edecek.", kaynak);
+            }
+        }
+
+        stoppingToken.ThrowIfCancellationRequested();
+        if (DateTime.UtcNow - lastCleanupUtc >= TemizlikAraligi)
+        {
+            var silinen = await queryLog.PurgeExpiredAsync(stoppingToken);
+            stoppingToken.ThrowIfCancellationRequested();
+            if (silinen > 0)
+                logger.LogInformation("Sorgu geçmişinden {Adet} eski gün dosyası silindi.", silinen);
+            return DateTime.UtcNow;
+        }
+
+        return lastCleanupUtc;
     }
 }

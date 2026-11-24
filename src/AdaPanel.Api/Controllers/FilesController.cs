@@ -1,4 +1,4 @@
-﻿using AdaPanel.Api.Extensions;
+using AdaPanel.Api.Extensions;
 using AdaPanel.Api.Security;
 using System.Security.Claims;
 using AdaPanel.Core.Common;
@@ -120,8 +120,8 @@ public sealed class FilesController(
     // SINIR TEK KAYNAKTAN. Buradaki sayi elle yazildigi surece FORM AYRISTIRICISININ ayri tavani
     // (FormOptions.MultipartBodyLengthLimit, varsayilan 128 MiB) ile hizasiz kaliyordu: uc
     // "200 MiB serbest" derken 128 MiB ustu her yukleme ayristiricida InvalidDataException ile
-    // oluyordu. Ikisi artik ayni sabiti okuyor (bkz. PanelServerLimits.FileUploadMaxBytes).
-    [RequestSizeLimit(PanelServerLimits.FileUploadMaxBytes)]
+    // oluyordu. Dosya/parca siniri ortaktir; tum govde ayrica sinirlayici/baslik payi tasir.
+    [RequestSizeLimit(PanelServerLimits.FileUploadRequestMaxBytes)]
     public async Task<ActionResult<ApiResponse<object>>> UploadAsync([FromQuery] string path, IFormFile file, CancellationToken cancellationToken)
     {
         var virtualPath = $"{(path ?? string.Empty).TrimEnd('/', '\\')}/{file.FileName}".TrimStart('/', '\\');

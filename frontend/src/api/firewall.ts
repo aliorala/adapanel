@@ -70,3 +70,34 @@ export async function blockPort(port: number, protocol: string, ruleName: string
 export async function removeFirewallRule(ruleName: string) {
   await apiClient.delete<ApiEnvelope<object>>(`/firewall/rules/${encodeURIComponent(ruleName)}`);
 }
+
+export type IpBlockEntry = {
+  id: string;
+  /** Tek adres /32 (ya da /128) olarak, CIDR ise ag adresiyle normalize gelir. */
+  target: string;
+  reason: string;
+  createdAtUtc: string;
+  /** null = suresiz. Sure dolunca sunucu engeli kendiliginden kaldirir. */
+  expiresAtUtc: string | null;
+  createdBy: string;
+  ruleName: string;
+  /** applied = kural yazildi ve geri okundu; failed = yazilamadi, adres agda ENGELLENMEDI. */
+  ruleState: "applied" | "failed";
+  ruleError: string;
+};
+
+export type IpBlockList = { entries: IpBlockEntry[]; countryBlockSupported: boolean };
+
+export async function getIpBlocks() {
+  const response = await apiClient.get<ApiEnvelope<IpBlockList>>("/firewall/ip-blocks");
+  return response.data.data;
+}
+
+export async function addIpBlock(payload: { target: string; reason: string; durationMinutes: number | null }) {
+  const response = await apiClient.post<ApiEnvelope<IpBlockEntry>>("/firewall/ip-blocks", payload);
+  return response.data.data;
+}
+
+export async function removeIpBlock(id: string) {
+  await apiClient.delete(`/firewall/ip-blocks/${encodeURIComponent(id)}`);
+}

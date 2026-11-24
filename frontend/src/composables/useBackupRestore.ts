@@ -49,6 +49,8 @@ export function useBackupRestore(context: () => unknown = () => null) {
       auth.session?.isAuthenticated === true && auth.session.user?.id === actorId && auth.session.user?.role === "Administrator";
     clearResult();
     record = { ...record };
+    const definerChoice = { label: t("panel.database.definers.adapt"), hint: t("panel.database.definers.restoreHint"), value: false };
+    const hasDatabase = ["database", "site", "subscription"].includes(record.type);
     restoringId.value = record.id;
     let password = "";
     try {
@@ -66,13 +68,17 @@ export function useBackupRestore(context: () => unknown = () => null) {
       await confirm({
         title: t("panel.confirm.restoreBackupTitle", { name: record.name }),
         message: t("panel.backup.restoreConfirm"),
-        impact: [record.source, record.name, formatBytes(record.size, t), formatDateTime(record.createdAtUtc)].filter(Boolean),
+        checkbox: hasDatabase ? definerChoice : undefined,
+        impact: [record.source, record.name, formatBytes(record.size, t), formatDateTime(record.createdAtUtc),
+          ...(record.portableDefiners ? [t("panel.database.definers.portableBackup")] : [])].filter(Boolean),
         requireText: record.source || record.name,
         confirmLabel: t("panel.backup.restore"), busyLabel: t("panel.backup.restoring"),
         action: async () => {
           if (!isCurrent()) return;
           try {
-            const result = await restoreBackup(record.id, "", password);
+            const result = await (definerChoice.value && hasDatabase
+              ? restoreBackup(record.id, "", password, { adaptDefiners: true })
+              : restoreBackup(record.id, "", password));
             if (!isCurrent()) return;
             resultIsCurrent = isCurrent;
             measuredResult.value = result;

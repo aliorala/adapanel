@@ -72,7 +72,9 @@ public sealed partial class BackupService(
     Microsoft.AspNetCore.Http.IHttpContextAccessor? httpContextAccessor = null,
     TimeProvider? timeProvider = null,
     IMailBackupRuntime? mailBackupRuntime = null,
-    IConcurrencyLock? concurrencyLock = null) : IBackupService
+    IConcurrencyLock? concurrencyLock = null,
+    BackupNetworkTrustService? networkTrust = null,
+    IBackupSnapshotRuntime? snapshotRuntime = null) : IBackupService
 {
     private readonly IConcurrencyLock siteGates = concurrencyLock ?? new AdaPanel.Infrastructure.Services.ConcurrencyLock();
 
@@ -140,7 +142,13 @@ public sealed partial class BackupService(
 
         // DnsSafeHost: IPv6 literalinde köşeli parantezleri atar, IDN adı punycode'a çevirir ve
         // ondalık/sekizlik/onaltılık IPv4 yazımlarını noktalı dörtlüye normalleştirir (ölçüldü).
-        var engellenen = await OutboundAddressGuard.FindBlockedHostAsync(
+        var trustedFtp = target.Type == "ftp" && networkTrust is not null
+            && await networkTrust.IsTrustedAsync(target.Uri, cancellationToken);
+        // (Güvenilen-NAS istisnası YALNIZ düz ftp içindir: NormalizeTarget şeması "ftp" ister.)
+        var engellenen = trustedFtp
+            ? await BackupNetworkTrustService.FindBlockedTrustedHostAsync(target.Uri,
+                outboundResolver ?? OutboundAddressGuard.SystemResolver, cancellationToken)
+            : await OutboundAddressGuard.FindBlockedHostAsync(
             target.Uri.DnsSafeHost,
             outboundResolver ?? OutboundAddressGuard.SystemResolver,
             OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false),
@@ -190,7 +198,51 @@ public sealed partial class BackupService(
     /// Ölçüm ihtiyacı gerçek: 550'nin "dosya yok" mu "izin yok" mu olduğu kararı ancak GERÇEK bir
     /// FTP sunucusuna bağlanmadan denenebilirse korunabilir.
     /// </remarks>
-    internal IBackupFtpCommands FtpCommands { get; init; } = new FtpWebRequestCommands();
+    internal IBackupFtpCommands FtpCommands
+    {
+        get => ftpCommands ??= new RoutingBackupFtpCommands(
+            new FtpWebRequestCommands(new ServicePinner(this)),
+            new FluentFtpBackupCommands(new ServicePinner(this)));
+        init => ftpCommands = value;
+    }
+
+    private IBackupFtpCommands? ftpCommands;
+
+    /// <summary>
+    /// Uzak FTP/FTPS hedefinin adını BİR KEZ çözer, aynı denetimden (SSRF kapısı + güvenilen NAS
+    /// istisnası) geçirir ve bağlanılacak IP'yi döner (G19: DNS rebinding). Denetlenen adres ile
+    /// bağlanılan adres AYNI çözümlemenin ürünüdür.
+    /// </summary>
+    private async Task<IPAddress> ResolveFtpAddressAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        var resolver = outboundResolver ?? OutboundAddressGuard.SystemResolver;
+        OutboundInspection inspection;
+        if (networkTrust is not null && await networkTrust.IsTrustedAsync(uri, cancellationToken))
+        {
+            inspection = await BackupNetworkTrustService.InspectTrustedAsync(uri, resolver, cancellationToken);
+        }
+        else
+        {
+            inspection = await OutboundAddressGuard.InspectAsync(
+                uri.DnsSafeHost,
+                resolver,
+                OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false),
+                cancellationToken);
+        }
+
+        if (inspection.BlockedTarget is not null || inspection.Addresses.Length == 0)
+        {
+            throw new AppException("backup.remote_target_forbidden", 403, 403, inspection.BlockedTarget ?? uri.DnsSafeHost);
+        }
+
+        // IPv4 önce: FTP sunucularının büyük çoğunluğu ve PASV akışı IPv4'te sorunsuz.
+        return inspection.Addresses.OrderBy(address => address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 0 : 1).First();
+    }
+
+    private sealed class ServicePinner(BackupService owner) : IBackupFtpAddressPinner
+    {
+        public Task<IPAddress> ResolveAsync(Uri uri, CancellationToken cancellationToken) => owner.ResolveFtpAddressAsync(uri, cancellationToken);
+    }
 
     private const string IndexPath = "config/backups.json";
 
@@ -451,12 +503,14 @@ public sealed partial class BackupService(
         var encryptedPath = localPath + BackupArchiveCipher.EncryptedExtension;
         try
         {
-            await BackupArchiveCipher.EncryptFileAsync(localPath, encryptedPath, password, cancellationToken);
+            using var output = PendingBackupArtifact.Reserve(encryptedPath + ".tmp-" + Guid.NewGuid().ToString("N"));
+            await BackupArchiveCipher.EncryptFileAsync(localPath, output.Path, password, cancellationToken);
+            File.Move(output.Path, encryptedPath, overwrite: false);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception)
         {
-            TryDeleteFile(encryptedPath);
             TryDeleteFile(localPath);
+            if (exception is OperationCanceledException) throw;
             throw new AppException("backup.encryption_failed", 500, 500, exception.Message);
         }
 
@@ -464,6 +518,27 @@ public sealed partial class BackupService(
         // duran asıl dosya korumasız olurdu.
         TryDeleteFile(localPath);
         return (encryptedPath, fileName + BackupArchiveCipher.EncryptedExtension, true);
+    }
+
+    // Producers reserve with CreateNew before writing; finalization adopts that ownership
+    // and follows wrapper replacements until the completed archive is indexed.
+    private sealed class PendingBackupArtifact(string path) : IDisposable
+    {
+        public string Path { get; set; } = path;
+        private bool keep;
+
+        public static PendingBackupArtifact Reserve(string path)
+        {
+            using var reservation = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            return new PendingBackupArtifact(path);
+        }
+
+        public void Keep() => keep = true;
+
+        public void Dispose()
+        {
+            if (!keep) TryDeleteFile(Path);
+        }
     }
 
     private static void TryDeleteFile(string path)
@@ -509,11 +584,12 @@ public sealed partial class BackupService(
         var compressedPath = localPath + BackupDumpCompression.CompressedExtension;
         try
         {
-            await BackupDumpCompression.CompressFileAsync(localPath, compressedPath, cancellationToken);
+            using var output = PendingBackupArtifact.Reserve(compressedPath + ".tmp-" + Guid.NewGuid().ToString("N"));
+            await BackupDumpCompression.CompressFileAsync(localPath, output.Path, cancellationToken);
+            File.Move(output.Path, compressedPath, overwrite: false);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            TryDeleteFile(compressedPath);
             logger?.LogWarning(exception, "Yedek sikistirilamadi, duz dosya korundu: {File}", fileName);
             warnings.Add(new BackupRestoreWarningDto
             {
@@ -571,7 +647,8 @@ public sealed partial class BackupService(
         int itemCount = 0,
         IReadOnlyCollection<BackupRestoreWarningDto>? contentWarnings = null,
         IReadOnlyCollection<BackupDatabaseRef>? includedDatabases = null,
-        IReadOnlyCollection<BackupComponentRef>? includedComponents = null)
+        IReadOnlyCollection<BackupComponentRef>? includedComponents = null,
+        bool portableDefiners = false)
     {
         // SIRA KİLİTLİ: ÖNCE SIKIŞTIR, SONRA ŞİFRELE.
         //
@@ -581,6 +658,7 @@ public sealed partial class BackupService(
         //
         // İkisi de FinalizeBackupAsync'te toplanmıştır: dört yedek akışının her birinde ayrı ayrı
         // yazılsaydı, biri unutulduğunda o tür sessizce ham (ve/veya şifresiz) kalırdı.
+        using var artifact = new PendingBackupArtifact(localPath);
         var warnings = new List<BackupRestoreWarningDto>();
 
         // BÜTÜNLÜK TAM BURADA, SARMALAYICILARDAN ÖNCE ÖLÇÜLÜR.
@@ -597,9 +675,11 @@ public sealed partial class BackupService(
 
         var (compressedPath, compressedName, compressed) =
             await CompressArchiveAsync(localPath, fileName, format, warnings, cancellationToken);
+        artifact.Path = compressedPath;
 
         var password = await ResolveEncryptionPasswordAsync(request.EncryptionPassword, cancellationToken);
         var (finalPath, finalName, encrypted) = await ProtectArchiveAsync(compressedPath, compressedName, password, cancellationToken);
+        artifact.Path = finalPath;
 
         var target = ResolveTarget(request.TargetType, request.RemoteUrl, request.RemoteUserName, request.RemotePassword, request.RemoteRegion);
         await EnsureRemoteTargetAllowedAsync(target, cancellationToken);
@@ -661,6 +741,7 @@ public sealed partial class BackupService(
             RemoteUri = remoteUri,
             Encrypted = encrypted,
             Compressed = compressed,
+            PortableDefiners = portableDefiners,
             ChainId = chain?.ChainId ?? string.Empty,
             ChainIndex = chain?.ChainIndex ?? 0,
             BackupMode = chain?.Mode ?? BackupChainPlanner.ModeFull,
@@ -692,11 +773,20 @@ public sealed partial class BackupService(
         // İNDEKS YAN KAYDI kayıttan ÖNCE yazılır: kayıt listede görünüp indeksi olmayan bir halka,
         // bir sonraki turda "temel okunamadı" diye zorunlu tam yedeğe düşürür (zararsız ama
         // gereksiz). Yazamazsak da yedek geçerlidir; yalnızca sonraki tur tam yedek olur.
+        using var sidecarArtifact = new PendingBackupArtifact(string.Empty);
+        var sidecarWritten = false;
         if (fileIndex is not null)
         {
             try
             {
+                var sidecarPath = fileStore.ResolvePath(IndexSidecarPath(record.Id));
+                Directory.CreateDirectory(Path.GetDirectoryName(sidecarPath)!);
+                // Reserve before handing the path to JsonFileStore (which replaces files).
+                // A collision never becomes this operation's cleanup responsibility.
+                using (new FileStream(sidecarPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
+                sidecarArtifact.Path = sidecarPath;
                 await fileStore.WriteAsync(IndexSidecarPath(record.Id), fileIndex, CancellationToken.None);
+                sidecarWritten = true;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -746,6 +836,8 @@ public sealed partial class BackupService(
 
         ApplyContentWarnings(record, contentWarnings ?? []);
         await AppendRecordAsync(record, CancellationToken.None);
+        artifact.Keep();
+        if (sidecarWritten) sidecarArtifact.Keep();
         // Preserve cancellation for the caller, after persisting both the archive and warnings.
         if (remoteCancellation is not null)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(remoteCancellation).Throw();
@@ -1194,9 +1286,12 @@ public sealed partial class BackupService(
         // Dosya listesi bir kez taranır: hem indeksin hem de arşive girecek kümenin kaynağı budur.
         // ATLANANLAR tek bir defterde toplanır (tarama + arşivleme aşamaları ayrı ayrı atlayabilir).
         var atlananlar = new BackupSkipLog();
+        await using var snapshot = request.IncludeFiles && snapshotRuntime is not null
+            ? await snapshotRuntime.CaptureAsync([applicationRoot], cancellationToken) : null;
+        var snapshotTime = snapshot?.CapturedAtUtc;
         var taranan = request.IncludeFiles
             ? ScanFiles(
-                applicationRoot,
+                snapshot?.ResolveRoot(applicationRoot) ?? applicationRoot,
                 "files",
                 atlananlar,
                 YeniTaramaButcesi(),
@@ -1215,10 +1310,13 @@ public sealed partial class BackupService(
         var includedDatabases = new List<BackupDatabaseRef>();
         var includedComponents = new List<BackupComponentRef>();
         var mailMessages = MailMessageOutcome.NotRequested;
-        await using (var zipStream = new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write))
+        using var artifact = PendingBackupArtifact.Reserve(targetPath);
+        await using (var zipStream = new FileStream(targetPath, FileMode.Open, FileAccess.Write))
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
         {
-            var yazilan = AddFilesToArchive(archive, taranan, yazilacak, atlananlar);
+            var yazilan = AddFilesToArchive(archive, taranan, yazilacak, atlananlar, cancellationToken);
+            indeks.Complete = !atlananlar.Any;
+            if (snapshot is not null) await snapshot.DisposeAsync();
             if (yazilan > 0)
             {
                 includedParts.Add(artimsal ? $"files(+{yazilan})" : "files");
@@ -1296,6 +1394,7 @@ public sealed partial class BackupService(
             var manifest = System.Text.Json.JsonSerializer.Serialize(new
             {
                 site = site.Name,
+                filesystemSnapshot = new { capturedAtUtc = snapshotTime, consistency = snapshotTime is null ? "not-captured" : "volume-crash-consistent-nowriters", databaseDumpsSameInstant = false },
                 createdAtUtc = DateTime.UtcNow,
                 parts = includedParts,
                 mode = plan.Stamp?.Mode ?? BackupChainPlanner.ModeFull,
@@ -1320,6 +1419,7 @@ public sealed partial class BackupService(
         if (request.IncludeFiles && !atlananlar.Any)
             includedComponents.Add(new() { Kind = "files", Source = site.Name });
 
+        artifact.Keep(); // Ownership passes to finalization, including cancellation after publication.
         return await FinalizeBackupAsync(
             targetPath,
             fileName,
@@ -1468,7 +1568,7 @@ public sealed partial class BackupService(
     // =====================================================================================
 
     /// <summary>Arşive girecek tek bir dosya: arşiv adı + disk yolu + indeks ölçüleri.</summary>
-    private sealed record ArchiveFile(string EntryName, string FullPath, long Size, long ModifiedUtcTicks);
+    private sealed record ArchiveFile(string EntryName, string FullPath, long Size, long ModifiedUtcTicks, string Sha256);
 
     /// <summary>Kayda basılacak zincir damgası.</summary>
     private sealed record ChainStamp(string ChainId, int ChainIndex, string Mode, string BaseBackupId);
@@ -1540,7 +1640,7 @@ public sealed partial class BackupService(
             sonHalka,
             tamYedekZamani,
             request.FullBackupEveryDays,
-            oncekiIndeks is not null,
+            oncekiIndeks is { Complete: true, HashVersion: 1 } && oncekiIndeks.Entries.All(entry => !string.IsNullOrWhiteSpace(entry.Sha256)),
             DateTime.UtcNow);
 
         if (tamGerekli)
@@ -1707,7 +1807,7 @@ public sealed partial class BackupService(
                         return;
                     }
 
-                    sonuc.Add(new ArchiveFile(girdi, bilgi.FullName, bilgi.Length, bilgi.LastWriteTimeUtc.Ticks));
+                    sonuc.Add(new ArchiveFile(girdi, bilgi.FullName, bilgi.Length, bilgi.LastWriteTimeUtc.Ticks, HashFile(bilgi.FullName, cancellationToken)));
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
@@ -1742,17 +1842,33 @@ public sealed partial class BackupService(
         return sonuc;
     }
 
+    private static string HashFile(string path, CancellationToken cancellationToken)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.SequentialScan);
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        var buffer = new byte[128 * 1024];
+        int read;
+        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            hash.AppendData(buffer, 0, read);
+        }
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
     private static BackupFileIndex BuildIndex(ChainStamp? stamp, IReadOnlyCollection<ArchiveFile> files) => new()
     {
         ChainId = stamp?.ChainId ?? string.Empty,
         ChainIndex = stamp?.ChainIndex ?? 0,
         CreatedAtUtc = DateTime.UtcNow,
+        HashVersion = 1,
         Entries = files
             .Select(file => new BackupFileIndexEntry
             {
                 Path = file.EntryName,
                 Size = file.Size,
-                ModifiedUtcTicks = file.ModifiedUtcTicks
+                ModifiedUtcTicks = file.ModifiedUtcTicks,
+                Sha256 = file.Sha256
             })
             .ToList()
     };
@@ -1766,11 +1882,13 @@ public sealed partial class BackupService(
         ZipArchive archive,
         IReadOnlyCollection<ArchiveFile> files,
         HashSet<string> selected,
-        BackupSkipLog skipped)
+        BackupSkipLog skipped,
+        CancellationToken cancellationToken = default)
     {
         var eklenen = 0;
         foreach (var file in files)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!selected.Contains(file.EntryName))
             {
                 continue;
@@ -1778,7 +1896,20 @@ public sealed partial class BackupService(
 
             try
             {
-                archive.CreateEntryFromFile(file.FullPath, file.EntryName, CompressionLevel.Optimal);
+                using var input = new FileStream(file.FullPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    128 * 1024, FileOptions.SequentialScan);
+                var entry = archive.CreateEntry(file.EntryName, CompressionLevel.Optimal);
+                var modified = new DateTime(file.ModifiedUtcTicks, DateTimeKind.Utc);
+                entry.LastWriteTime = modified.Year is < 1980 or > 2107
+                    ? new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero) : new DateTimeOffset(modified);
+                using var output = entry.Open();
+                var buffer = new byte[128 * 1024];
+                int read;
+                while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    output.Write(buffer, 0, read);
+                }
                 eklenen++;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -1830,6 +1961,7 @@ public sealed partial class BackupService(
         var ext = engine.Equals("mssql", StringComparison.OrdinalIgnoreCase) ||
                   engine.Equals("sqlserver", StringComparison.OrdinalIgnoreCase) ? "bak" : "sql";
         var tempDump = Path.Combine(Path.GetTempPath(), $"adabk-{Guid.NewGuid():N}.{ext}");
+        using var dumpArtifact = PendingBackupArtifact.Reserve(tempDump);
         try
         {
             await databaseService.ExportDumpAsync(new AdaPanel.Core.Dtos.Databases.DatabaseDumpRequest
@@ -1931,11 +2063,13 @@ public sealed partial class BackupService(
         // Path.Combine'a verilmesi yedeği hedef klasörün dışına yazabilirdi.
         var fileName = NewArtifactFileName(placement.Source, extension);
         var targetPath = Path.Combine(backupsDirectory, fileName);
+        using var artifact = PendingBackupArtifact.Reserve(targetPath);
         var dump = await databaseService.ExportDumpAsync(new AdaPanel.Core.Dtos.Databases.DatabaseDumpRequest
         {
             Engine = request.Engine,
             DatabaseName = request.DatabaseName,
-            FilePath = targetPath
+            FilePath = targetPath,
+            PortableDefiners = request.PortableDefiners
         }, cancellationToken);
 
         // A whole-engine dump does not identify the individual included databases.
@@ -1948,6 +2082,7 @@ public sealed partial class BackupService(
                 includedDatabases.Add(new BackupDatabaseRef { Engine = dump.Engine, DatabaseName = dump.DatabaseName });
         }
 
+        artifact.Keep(); // Ownership passes to finalization.
         return await FinalizeBackupAsync(
             targetPath,
             fileName,
@@ -1960,7 +2095,8 @@ public sealed partial class BackupService(
             skipped: null,
             cancellationToken,
             includedDatabases: includedDatabases,
-            includedComponents: []);
+            includedComponents: [],
+            portableDefiners: request.PortableDefiners);
     }
 
     /// <summary>
@@ -2045,8 +2181,20 @@ public sealed partial class BackupService(
         var includedParts = new List<string>();
         var includedComponents = new List<BackupComponentRef>();
         var atlananlar = new BackupSkipLog();
+        var taskWarnings = new List<BackupRestoreWarningDto>();
+        var panelRoots = new[] { configDirectory, Path.GetDirectoryName(dbPath)! }.Where(Directory.Exists).ToArray();
+        await using var snapshot = snapshotRuntime is not null && panelRoots.Length > 0
+            ? await snapshotRuntime.CaptureAsync(panelRoots, cancellationToken) : null;
+        var snapshotTime = snapshot?.CapturedAtUtc;
+        if (snapshot is not null)
+        {
+            if (Directory.Exists(configDirectory)) configDirectory = snapshot.ResolveRoot(configDirectory);
+            if (Directory.Exists(Path.GetDirectoryName(dbPath)!))
+                dbPath = Path.Combine(snapshot.ResolveRoot(Path.GetDirectoryName(dbPath)!), Path.GetFileName(dbPath));
+        }
 
-        await using (var zipStream = new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write))
+        using var artifact = PendingBackupArtifact.Reserve(targetPath);
+        await using (var zipStream = new FileStream(targetPath, FileMode.Open, FileAccess.Write))
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
         {
             // adapanel.db (+ WAL/SHM) — çalışan panel kilitleyebilir → paylaşımlı okuma ile ekle.
@@ -2074,9 +2222,11 @@ public sealed partial class BackupService(
                     includedComponents.Add(new() { Kind = "panel-config", Source = "panel" });
             }
 
+            if (snapshot is not null) await snapshot.DisposeAsync();
+
             // Planlı görevler (\AdaPanel\ klasörü): Windows Görev Zamanlayıcı'da yaşarlar, panel dosyalarında DEĞİL —
             // ham görev XML'i (principal/tetikleyici/eylem birebir) yedeğe girer; panel geri yüklemesinde otomatik kaydedilir.
-            var exportedTasks = await TryExportScheduledTasksAsync(cancellationToken);
+            var exportedTasks = await TryExportScheduledTasksAsync(taskWarnings, cancellationToken, TaskExportRunner);
             if (exportedTasks.Count > 0)
             {
                 var index = new List<object>();
@@ -2084,7 +2234,8 @@ public sealed partial class BackupService(
                 {
                     var entryName = $"tasks/{i:000}.xml";
                     AddTextEntry(archive, entryName, exportedTasks[i].Xml);
-                    index.Add(new { name = exportedTasks[i].Name, entry = entryName });
+                    var scripts = await ArchiveTaskScriptsAsync(archive, exportedTasks[i], i, taskWarnings, cancellationToken);
+                    index.Add(new { name = exportedTasks[i].Name, entry = entryName, scripts });
                     includedComponents.Add(new() { Kind = "task", Source = exportedTasks[i].Name });
                 }
 
@@ -2112,15 +2263,19 @@ public sealed partial class BackupService(
             var manifest = System.Text.Json.JsonSerializer.Serialize(new
             {
                 kind = "panel-config",
+                filesystemSnapshot = new { capturedAtUtc = snapshotTime, consistency = snapshotTime is null ? "not-captured" : "volume-crash-consistent-nowriters" },
                 createdAtUtc = DateTime.UtcNow,
                 parts = includedParts,
+                scheduledTasks = new { scope = "\\AdaPanel\\", count = exportedTasks.Count,
+                    status = taskWarnings.Count == 0 ? "complete" : "partial", directScriptsOnly = true },
                 note = "DataProtection keys and certificates are intentionally excluded (machine-bound)."
             }, BackupJsonOptions);
             AddTextEntry(archive, "manifest.json", manifest);
         }
 
+        artifact.Keep();
         return await FinalizeBackupAsync(targetPath, fileName, "panel", "panel", "zip", request, placement, atlananlar, cancellationToken,
-            includedDatabases: [], includedComponents: includedComponents);
+            contentWarnings: taskWarnings, includedDatabases: [], includedComponents: includedComponents);
     }
 
     // =====================================================================================
@@ -2239,11 +2394,7 @@ public sealed partial class BackupService(
                 var site = await siteReservations.CaptureAsync(siteAdi, cancellationToken);
                 siteBilgileri[siteAdi] = site;
 
-                if (request.IncludeFiles)
-                {
-                    var kok = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
-                    taranan.AddRange(ScanFiles(kok, $"sites/{siteAdi}/files", atlananlar, taramaButcesi, cancellationToken));
-                }
+
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
@@ -2258,6 +2409,16 @@ public sealed partial class BackupService(
             }
         }
 
+        var snapshotRoots = siteBilgileri.Values.Select(site => string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath).ToArray();
+        await using var snapshot = request.IncludeFiles && snapshotRoots.Length > 0 && snapshotRuntime is not null
+            ? await snapshotRuntime.CaptureAsync(snapshotRoots, cancellationToken) : null;
+        var snapshotTime = snapshot?.CapturedAtUtc;
+        if (request.IncludeFiles)
+            foreach (var (siteAdi, site) in siteBilgileri)
+            {
+                var root = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
+                taranan.AddRange(ScanFiles(snapshot?.ResolveRoot(root) ?? root, $"sites/{siteAdi}/files", atlananlar, taramaButcesi, cancellationToken));
+            }
         var indeks = BuildIndex(chainPlan.Stamp, taranan);
         var fark = BackupChainPlanner.Diff(chainPlan.PreviousIndex, indeks);
         var yazilacak = fark.Changed.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -2268,10 +2429,14 @@ public sealed partial class BackupService(
         {
             new() { Kind = "subscription", Source = kaynak }
         };
-        await using (var zipStream = new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write))
+        using var artifact = PendingBackupArtifact.Reserve(targetPath);
+        await using (var zipStream = new FileStream(targetPath, FileMode.Open, FileAccess.Write))
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
         {
-            var yazilanDosya = AddFilesToArchive(archive, taranan, yazilacak, atlananlar);
+            AddTextEntry(archive, "filesystem-snapshot.json", System.Text.Json.JsonSerializer.Serialize(new { capturedAtUtc = snapshotTime, consistency = snapshotTime is null ? "not-captured" : "volume-crash-consistent-nowriters", databaseDumpsSameInstant = false }, BackupJsonOptions));
+            var yazilanDosya = AddFilesToArchive(archive, taranan, yazilacak, atlananlar, cancellationToken);
+            indeks.Complete = !atlananlar.Any;
+            if (snapshot is not null) await snapshot.DisposeAsync();
             if (yazilanDosya > 0)
             {
                 parcalar.Add(artimsal ? $"files(+{yazilanDosya})" : $"files({yazilanDosya})");
@@ -2408,6 +2573,7 @@ public sealed partial class BackupService(
         if (request.IncludeFiles && !atlananlar.Any)
             includedComponents.AddRange(siteBilgileri.Keys.Select(site => new BackupComponentRef { Kind = "files", Source = site }));
 
+        artifact.Keep();
         return await FinalizeBackupAsync(
             targetPath,
             fileName,
@@ -2525,23 +2691,27 @@ public sealed partial class BackupService(
         return hedef;
     }
 
-    private sealed record ScheduledTaskExport(string Name, string Xml);
+    internal sealed record ScheduledTaskExport(string Name, string Xml);
 
-    private sealed record ScheduledTaskIndexEntry(string Name, string Entry);
+    private sealed record ScheduledTaskIndexEntry(string Name, string Entry, List<TaskScriptEntry>? Scripts = null);
 
     // Planlı görevlerin ham XML dökümü (best-effort: dışa aktarılamazsa panel yedeği yine de oluşur).
-    private static async Task<List<ScheduledTaskExport>> TryExportScheduledTasksAsync(CancellationToken cancellationToken)
+    internal static async Task<List<ScheduledTaskExport>> TryExportScheduledTasksAsync(
+        List<BackupRestoreWarningDto> warnings, CancellationToken cancellationToken,
+        Func<string, CancellationToken, Task<CommandResult>>? runner = null)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
-            const string script = @"$list = Get-ScheduledTask -TaskPath '\AdaPanel\' -ErrorAction SilentlyContinue | ForEach-Object {
-  [pscustomobject]@{ Name = $_.TaskName; Xml = [string](Export-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath) }
-}
-$list | ConvertTo-Json -Depth 3";
-            var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+            const string script = @"$list = @(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskPath -eq '\AdaPanel\' } | ForEach-Object {
+  [pscustomobject]@{ Name = $_.TaskName; Xml = [string](Export-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath -ErrorAction Stop) }
+})
+ConvertTo-Json -InputObject $list -Depth 3";
+            var result = await (runner ?? ProcessRunner.RunPowerShellStrictAsync)(script, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!result.Success || string.IsNullOrWhiteSpace(result.StandardOutput))
             {
-                return [];
+                throw new IOException("Task export did not return a measured inventory.");
             }
 
             using var document = System.Text.Json.JsonDocument.Parse(result.StandardOutput);
@@ -2550,15 +2720,17 @@ $list | ConvertTo-Json -Depth 3";
             {
                 System.Text.Json.JsonValueKind.Array => System.Text.Json.JsonSerializer.Deserialize<ScheduledTaskExport[]>(root) ?? [],
                 System.Text.Json.JsonValueKind.Object => [System.Text.Json.JsonSerializer.Deserialize<ScheduledTaskExport>(root)!],
-                _ => []
+                _ => throw new IOException("Task inventory is not an array or object.")
             };
 
-            return items
-                .Where(item => !string.IsNullOrWhiteSpace(item.Name) && !string.IsNullOrWhiteSpace(item.Xml))
-                .ToList();
+            if (items.Any(item => item is null || string.IsNullOrWhiteSpace(item.Name) || string.IsNullOrWhiteSpace(item.Xml)))
+                throw new IOException("Task inventory contains an incomplete definition.");
+            return items.ToList();
         }
-        catch
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            // Command output/XML may contain credentials: expose no raw process/exception text.
+            warnings.Add(new() { MessageKey = "backup.task_export_failed", Target = "tasks", Detail = "Zamanlanmış görev envanteri okunamadı; görev yedeği eksik." });
             return [];
         }
     }
@@ -2685,6 +2857,13 @@ $list | ConvertTo-Json -Depth 3";
                 }
 
                 // XML'i base64 taşı: tırnak/özel karakter kaçış derdi tamamen ortadan kalkar.
+                // No archive-controlled absolute write: the owner transfers scripts separately.
+                // Register only when the original script and the archived copy both match.
+                if (item.Scripts is not null && !await TaskScriptsMatchAsync(extractedRoot, item.Scripts, cancellationToken))
+                {
+                    uyarilar.Add(TaskScriptWarning("backup.restore_task_script_missing", item.Name));
+                    continue;
+                }
                 var xml = await File.ReadAllTextAsync(xmlPath, cancellationToken);
                 var sonuc = await kaydedici(item.Name, xml, cancellationToken);
                 if (!sonuc.Success)
@@ -2734,7 +2913,7 @@ $list | ConvertTo-Json -Depth 3";
     {
         var xmlBase64 = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(xml));
         var script = $@"$xml = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{xmlBase64}'))
-Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\' -Xml $xml -Force | Out-Null";
+Register-ScheduledTask -TaskName '{PowerShellQuoting.Escape(ad)}' -TaskPath '\AdaPanel\' -Xml $xml -Force | Out-Null";
         return ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
     }
 
@@ -2767,7 +2946,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     /// bakmadığı bir metin dosyasına gömülüyordu.
     /// </para>
     /// </summary>
-    private async Task TryRestoreIisSitesAsync(
+    internal async Task TryRestoreIisSitesAsync(
         string extractedRoot,
         List<string> report,
         List<BackupRestoreWarningDto> uyarilar,
@@ -2775,6 +2954,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     {
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var snapshotPath = Path.Combine(extractedRoot, "iis", "sites.json");
             if (!File.Exists(snapshotPath))
             {
@@ -2810,12 +2990,18 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                     }
 
                     await iisSiteService.CreateSiteAsync(create, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var restoredBindings = 1;
                     foreach (var binding in extraBindings)
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         try
                         {
                             await iisSiteService.AddBindingAsync(site.Name, binding, cancellationToken);
+                            cancellationToken.ThrowIfCancellationRequested();
+                            restoredBindings++;
                         }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                         catch (Exception bindingException)
                         {
                             report.Add($"  {site.Name}: ek bağlama {binding.HostName}:{binding.Port} eklenemedi — {bindingException.Message}");
@@ -2828,8 +3014,9 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                         }
                     }
 
-                    report.Add($"  {site.Name}: yeniden kuruldu ({1 + extraBindings.Count} http bağlama). İçerik için site yedeğini geri yükleyin; HTTPS'i SSL ekranından yeniden verin.");
+                    report.Add($"  {site.Name}: yeniden kuruldu ({restoredBindings} http bağlama). İçerik için site yedeğini geri yükleyin; HTTPS'i SSL ekranından yeniden verin.");
                 }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception siteException)
                 {
                     report.Add($"  {site.Name}: KURULAMADI — {siteException.Message}");
@@ -2842,6 +3029,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                 }
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             report.Add($"IIS envanteri geri yüklenemedi: {exception.Message}");
@@ -2867,7 +3055,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     /// açılır ve rapora "parolayı FTP ekranından sıfırlayın" düşülür. Hesap zaten varsa parolasına
     /// dokunulmaz (CreateFtpUserAsync mevcut hesapta yalnız ACL/ana dizini tazeler — idempotent).
     /// </summary>
-    private async Task TryRestoreFtpUsersAsync(
+    internal async Task TryRestoreFtpUsersAsync(
         string extractedRoot,
         List<string> report,
         List<BackupRestoreWarningDto> uyarilar,
@@ -2875,6 +3063,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     {
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var snapshotPath = Path.Combine(extractedRoot, "config", "ftp-users.json");
             if (!File.Exists(snapshotPath))
             {
@@ -2907,8 +3096,10 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                         SiteName = user.SiteName,
                         HomePath = user.HomePath
                     }, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                     report.Add($"  FTP {user.UserName}: hazır — parolayı FTP ekranından sıfırlayın (parolalar yedeğe giremez).");
                 }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception exception)
                 {
                     report.Add($"  FTP {user.UserName}: KURULAMADI — {exception.Message}");
@@ -2921,6 +3112,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                 }
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             report.Add($"FTP envanteri geri yüklenemedi: {exception.Message}");
@@ -2944,6 +3136,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         {
             await File.WriteAllLinesAsync(Path.Combine(extractedRoot, "iis-restore-report.txt"), report, cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch
         {
             // rapor yazılamazsa akış bozulmaz
@@ -2986,14 +3179,19 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         var targetPath = Path.Combine(backupsDirectory, fileName);
 
         BackupRestoreWarningDto? postaUyarisi;
+        var archiveProduced = false;
         try
         {
             postaUyarisi = await WithMailOfflineAsync(installDirectory,
-                ct => CreateMailArchiveAsync(dataDirectory, targetPath, ct), cancellationToken);
+                async ct =>
+                {
+                    await CreateMailArchiveAsync(dataDirectory, targetPath, ct);
+                    archiveProduced = true;
+                }, cancellationToken);
         }
         catch
         {
-            TryDeleteFile(targetPath);
+            if (archiveProduced) TryDeleteFile(targetPath);
             throw;
         }
 
@@ -3274,6 +3472,11 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             throw new AppException("backup.file_missing", 410, 410, $"{record.Name} -> {record.Path}");
         }
 
+        // A blocked retry must retain the original SQL error and failed object, rather than
+        // replacing the only durable diagnosis with the generic replay guard message.
+        var previousSqlFailures = (record.Warnings ?? []).Where(warning => warning is not null &&
+            (warning.MessageKey == "database.restore_failed" ||
+             warning.Detail?.StartsWith("database.restore_failed:", StringComparison.Ordinal) == true)).ToArray();
         // Önceki bir geri yüklemeden kalan uyarılar bu çalışmanın sonucu sanılmasın.
         record.Warnings = [];
         record.PreservedPath = string.Empty;
@@ -3331,19 +3534,23 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                     chain,
                     backups,
                     request.EncryptionPassword,
+                    request.AdaptDefiners,
                     durum,
                     cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            catch (OperationCanceledException) when (!durum.MutationStarted) { throw; }
+            catch (Exception exception)
             {
                 await KaydiYarimIsaretleAsync(record, durum, exception);
                 throw;
             }
 
+            PreserveSqlFailureOnBlockedReplay(durum.Warnings, previousSqlFailures);
             record.Warnings = durum.Warnings;
             record.PreservedPath = durum.PreservedPath;
             record.Status = durum.Warnings.Count == 0 ? "restored" : "restored_with_errors";
-            await UpsertRecordAsync(record, cancellationToken);
+            await UpsertRecordAsync(record, CancellationToken.None);
             return record;
         }
 
@@ -3363,15 +3570,19 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                     backups,
                     request.TargetPath,
                     request.EncryptionPassword,
+                    request.AdaptDefiners,
                     durum,
                     cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            catch (OperationCanceledException) when (!durum.MutationStarted) { throw; }
+            catch (Exception exception)
             {
                 await KaydiYarimIsaretleAsync(record, durum, exception);
                 throw;
             }
 
+            PreserveSqlFailureOnBlockedReplay(durum.Warnings, previousSqlFailures);
             record.Warnings = durum.Warnings;
             record.PreservedPath = durum.PreservedPath;
 
@@ -3379,7 +3590,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             // bu durumda kullanıcının elinde ne eski hâl ne de dönmüş bir veritabanı vardır;
             // farkında olmadan devam etmesi en pahalı sonuçtur.
             record.Status = durum.Warnings.Count == 0 ? "restored" : "restored_with_errors";
-            await UpsertRecordAsync(record, cancellationToken);
+            await UpsertRecordAsync(record, CancellationToken.None);
             return record;
         }
 
@@ -3426,17 +3637,36 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         else if (string.Equals(record.Format, "sql", StringComparison.OrdinalIgnoreCase))
         {
             var sourceParts = record.Source.Split(':', 2);
-            await databaseService.ImportDumpAsync(new AdaPanel.Core.Dtos.Databases.DatabaseDumpRequest
+            try
             {
-                Engine = sourceParts[0],
-                DatabaseName = sourceParts.Length > 1 ? sourceParts[1] : string.Empty,
-                FilePath = content.FilePath
-            }, cancellationToken);
+                await databaseService.ImportDumpAsync(new AdaPanel.Core.Dtos.Databases.DatabaseDumpRequest
+                {
+                    Engine = sourceParts[0],
+                    DatabaseName = sourceParts.Length > 1 ? sourceParts[1] : string.Empty,
+                    FilePath = content.FilePath,
+                    AdaptDefiners = request.AdaptDefiners
+                }, cancellationToken);
+            }
+            catch (Exception error)
+            {
+                var progress = new RestoreProgress();
+                if (error is AppException { MessageKey: "database.restore_partial_retry_blocked" })
+                    progress.Warnings.AddRange(previousSqlFailures);
+                await KaydiYarimIsaretleAsync(record, progress, error);
+                throw;
+            }
             record.Status = "restored";
         }
 
         await UpsertRecordAsync(record, cancellationToken);
         return record;
+    }
+
+    private static void PreserveSqlFailureOnBlockedReplay(List<BackupRestoreWarningDto> warnings,
+        IReadOnlyCollection<BackupRestoreWarningDto> previous)
+    {
+        if (warnings.Any(warning => warning.MessageKey == "database.restore_partial_retry_blocked"))
+            warnings.AddRange(previous);
     }
 
     /// <summary>
@@ -3450,10 +3680,9 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     /// kalıyor, <c>PreservedPath</c> boş görünüyor ve kullanıcı sitesinin neden boşaldığını ve
     /// eski içeriğin nerede olduğunu panelde HİÇBİR YERDE göremiyordu.
     /// <para>
-    /// İptal (<see cref="OperationCanceledException"/>) buraya GELMEZ: orada kullanıcı işi kendisi
-    /// durdurmuştur ve <c>CancellationToken.None</c> ile yazmak, iptali yok saymak olurdu — kaydın
-    /// yazımı da bilerek <c>None</c> ile yapılır, çünkü token ZATEN iptal edilmiş olabilir ve o
-    /// durumda dürüstlük notunu yazamamak en kötü sonuçtur.
+    /// Canlı değişiklik başladıktan sonraki iptal de burada kaydedilir. Kayıt yazımı bilerek
+    /// <c>CancellationToken.None</c> kullanır; iptal edilen asıl işlem tekrar fırlatılır,
+    /// yalnız kurtarma konumu ve yarım sonuç iptalden bağımsız olarak korunur.
     /// </para>
     /// </remarks>
     private async Task KaydiYarimIsaretleAsync(BackupRecordDto record, RestoreProgress durum, Exception exception)
@@ -3768,8 +3997,13 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         }
 
         var records = (await GetBackupsAsync(cancellationToken)).ToArray();
-        return await PruneRecordsAsync(records, retentionDays, keepCount: 0, remote, cancellationToken,
+        var result = await PruneRecordsAsync(records, retentionDays, keepCount: 0, remote, cancellationToken,
             beforeMutation: beforeMutation);
+        // A completed archive deletion publishes its index update even if cancellation
+        // arrives during publication. Return that committed result; start no new sweep.
+        if (!cancellationToken.IsCancellationRequested)
+            await PruneExpiredDayFoldersAsync(retentionDays, remote, result, beforeMutation, cancellationToken);
+        return result;
     }
 
     /// <inheritdoc />
@@ -3814,10 +4048,8 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Kararın ayrı olmasının sebebi: budama yalnızca tarihe bakarsa, yedekler HİÇ alınamazken de
-    /// çalışır. Gecelik otomasyon her kaynağı ayrı try/catch ile yedekler ve hepsi patlasa bile
-    /// buraya gelir: MariaDB 14 gün kapalı kalırsa her gece yedek başarısız olur, naif bir budama
-    /// eskiyi silmeye devam eder ve 15. gün geri yüklenecek TEK bir yedek kalmaz.
+    /// Pozitif gün süresi kesin yaş sınırıdır: eski/legacy/son kopya da süre dolunca silinir.
+    /// Süre kapalıyken yalnız adet budaması son kullanılabilir noktayı ve kapsamını korur.
     /// </para>
     /// <para>
     /// Artımsal zincirlerde ikinci bir tuzak vardır: zincirin ortasındaki (özellikle 0 numaralı)
@@ -3851,6 +4083,8 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             result.LocalDeleteFailed += removed.LocalDeleteFailed;
             result.RemoteDeleteFailed += removed.RemoteDeleteFailed;
             result.Failures.AddRange(removed.Failures);
+            result.RetainedExpired += removed.RetainedExpired;
+            result.RetentionNotes.AddRange(removed.RetentionNotes);
         }
         return result;
     }
@@ -3866,9 +4100,10 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     {
         // retentionDays <= 0 → süreye göre silme yok; yalnızca sayı limiti çalışsın diye cutoff
         // ULAŞILAMAZ bir geçmişe alınır (hiçbir kayıt "süresi dolmuş" sayılmaz).
-        var cutoff = retentionDays > 0 ? DateTime.UtcNow.AddDays(-retentionDays) : DateTime.MinValue;
-        var silinecekler = BackupPrunePlanner.Select(records, cutoff, keepCount, IsUsableBackup,
+        var cutoff = BackupRetentionCalendar.GetExclusiveCutoffUtc(DateTime.UtcNow, retentionDays);
+        var analysis = BackupPrunePlanner.Analyze(records, cutoff, keepCount, IsUsableBackup,
             BackupReplacementPolicy.CanReplace);
+        var silinecekler = analysis.Selected;
         var removedIds = new HashSet<string>(StringComparer.Ordinal);
         var selectedIds = silinecekler.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
         // Invalid graph/identity metadata is not permission to remove arbitrary archives.
@@ -3880,7 +4115,20 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         // BAŞARISIZLIK ÇAĞIRANA DA GİDER. Eskiden yalnız günlüğe yazılıyordu; gece işi bunu
         // göremediği için durumunu "completed" bırakıyor ve özetinde yalnız başarıları sayıyordu
         // (bkz. BackupPruneResultDto'nun gerekçesi).
-        var sonuclar = new BackupPruneResultDto();
+        var sonuclar = new BackupPruneResultDto { RetainedExpired = analysis.RetainedExpired.Count };
+        foreach (var retained in analysis.RetainedExpired)
+        {
+            var explanation = retained.Reason switch
+            {
+                "minimum_restore_point_count" => "Asgari geri yukleme noktasi sayisi korundu.",
+                "no_recent_usable_backup" => "Daha yeni kullanilabilir yedek yok.",
+                "unmeasured_coverage" => "Eski yedegin icerik kapsami olculmemis.",
+                _ => "Yeni yedegin ayni kapsami ve kopyalari korudugu dogrulanamadi."
+            };
+            var name = Path.GetFileName(retained.Record.Name.Replace('\\', '/'));
+            name = new string(name.Where(character => !char.IsControl(character)).ToArray());
+            sonuclar.RetentionNotes.Add($"{name}: {retained.Reason}; {explanation}");
+        }
 
         // ÇAĞIRANIN VERDİĞİ KİMLİK VARSAYILANDIR, ama abonelik yedeklerinin kimliği kendi
         // programından gelir: sunucu geneli budama (AutomationService) kapsamına abonelik
@@ -4483,6 +4731,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
 
     private async Task DeleteFtpAsync(Uri uri, BackupPruneRemoteOptions remote, CancellationToken cancellationToken)
     {
+        await EnsureRemoteTargetAllowedAsync(new BackupTarget("ftp", uri, "", "", ""), cancellationToken);
         var credential = new NetworkCredential(remote.UserName, remote.Password);
         var adres = SanitizeUri(uri);
 
@@ -4553,6 +4802,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         NetworkCredential credential,
         CancellationToken cancellationToken)
     {
+        await EnsureRemoteTargetAllowedAsync(new BackupTarget("ftp", uri, "", "", ""), cancellationToken);
         var (dizin, ad) = SplitFtpTarget(uri);
         if (ad.Length == 0)
         {
@@ -5279,13 +5529,13 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     }
 
 #pragma warning disable SYSLIB0014
-    private static async Task UploadFtpAsync(
+    private async Task UploadFtpAsync(
         string localPath,
         Uri uri,
         BackupTarget target,
         CancellationToken cancellationToken)
     {
-        if (uri.Scheme != "ftp")
+        if (!BackupFtpScheme.Is(uri))
         {
             throw new AppException("backup.remote_target_invalid", 400, 400);
         }
@@ -5295,10 +5545,21 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
 
         await BackupFtpRetry.RunAsync(async token =>
         {
-          var dizinSorunu = await EnsureFtpDirectoriesAsync(uri, credential, token);
+          await EnsureRemoteTargetAllowedAsync(new BackupTarget("ftp", uri, "", "", ""), token);
+          // TEK çözümleme: aşağıdaki bütün bağlantılar bu IP'ye gider (DNS rebinding kapalı).
+          var address = await ResolveFtpAddressAsync(uri, token);
+          if (BackupFtpScheme.IsSecure(uri))
+          {
+            // FTPS: klasörler ve dosya tek oturumda (FluentFTP createRemoteDir); düz FTP'ye düşme YOK.
+            await BackupFtpsClient.UploadAsync(uri, address, credential, localPath, RemoteUploadTimeout, RemoteUploadStallTimeout, token);
+            return;
+          }
+
+          var connectUri = BackupFtpScheme.PinToAddress(uri, address);
+          var dizinSorunu = await EnsureFtpDirectoriesAsync(connectUri, credential, token);
           try
           {
-            await StoreFtpFileAsync(localPath, uri, credential, token);
+            await StoreFtpFileAsync(localPath, connectUri, credential, token, uri);
           }
           catch (WebException exception) when (BackupFtpRetry.IsTransient(exception)) { throw; }
           catch (AppException exception) when (dizinSorunu is not null)
@@ -5326,7 +5587,8 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         string localPath,
         Uri uri,
         NetworkCredential credential,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Uri? displayUri = null)
     {
         var request = (FtpWebRequest)WebRequest.Create(uri);
         request.Method = WebRequestMethods.Ftp.UploadFile;
@@ -5366,7 +5628,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                     "backup.remote_upload_failed",
                     (int)response.StatusCode,
                     502,
-                    $"Url={SanitizeUri(uri)}\r\nStatusCode={(int)response.StatusCode} {response.StatusDescription?.Trim()}");
+                    $"Url={SanitizeUri(displayUri ?? uri)}\r\nStatusCode={(int)response.StatusCode} {response.StatusDescription?.Trim()}");
             }
         }
         catch
@@ -5511,7 +5773,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             throw new AppException("backup.remote_target_invalid", 400, 400);
         }
 
-        if (normalizedType == "ftp" && uri.Scheme != "ftp")
+        if (normalizedType == "ftp" && !BackupFtpScheme.Is(uri))
         {
             throw new AppException("backup.remote_target_invalid", 400, 400);
         }
@@ -5874,6 +6136,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     /// </remarks>
     private sealed class RestoreProgress
     {
+        public bool MutationStarted { get; set; }
         public List<BackupRestoreWarningDto> Warnings { get; } = [];
 
         public List<string> Preserved { get; } = [];
@@ -5904,6 +6167,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         IReadOnlyCollection<BackupRecordDto> allRecords,
         string? targetPath,
         string? password,
+        bool adaptDefiners,
         RestoreProgress durum,
         CancellationToken cancellationToken)
     {
@@ -5952,6 +6216,8 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                     // Sonradan atanan bir yerel değişken, çıkarma yarıda patladığında kayboluyordu
                     // ve kullanıcının sitesi BOŞ kalıp eski içeriğin nerede olduğu hiçbir yerde
                     // yazmıyordu (ölçüldü). Artık çağıran, istisna hâlinde de bunu okuyabilir.
+                    cancellationToken.ThrowIfCancellationRequested();
+                    durum.MutationStarted = true;
                     durum.Preserved.Add(SidelineIfArchiveReplacesFiles(archive, "files/", siteRoot));
                 }
 
@@ -5962,7 +6228,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                 // içe aktarmak aynı veritabanını n kez yazmak (ve n kat beklemek) olurdu.
                 if (sonHalka)
                 {
-                    await ImportDatabasesFromArchiveAsync(archive, "databases/", warnings, cancellationToken);
+                    await ImportDatabasesFromArchiveAsync(archive, "databases/", warnings, adaptDefiners, cancellationToken);
 
                     // POSTA da YALNIZ SON HALKADAN: hesap arşivleri her halkada TAM'dır (artımsal
                     // değildir), sırayla uygulamak aynı kutuyu n kez yazmak olurdu.
@@ -6115,6 +6381,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         BackupChainDto chain,
         IReadOnlyCollection<BackupRecordDto> allRecords,
         string? password,
+        bool adaptDefiners,
         RestoreProgress durum,
         CancellationToken cancellationToken)
     {
@@ -6142,6 +6409,8 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                 if (ilkHalka)
                 {
                     ilkHalka = false;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    durum.MutationStarted = true;
                     await ResolveSubscriptionSiteRootsAsync(archive, siteKokleri, warnings, cancellationToken);
 
                     foreach (var (siteAdi, kok) in siteKokleri)
@@ -6163,7 +6432,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
 
                 if (sonHalka)
                 {
-                    await ImportDatabasesFromArchiveAsync(archive, "databases/", warnings, cancellationToken);
+                    await ImportDatabasesFromArchiveAsync(archive, "databases/", warnings, adaptDefiners, cancellationToken);
                     await RestoreSubscriptionMailAsync(archive, warnings, cancellationToken);
                     await RestoreSubscriptionFtpAsync(archive, warnings, cancellationToken);
                 }
@@ -6227,14 +6496,25 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                     continue;
                 }
 
-                siteKokleri[siteAdi] = kok;
                 Directory.CreateDirectory(kok);
+                siteKokleri[siteAdi] = kok;
                 continue;
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            catch (AppException exception) when (exception.HttpStatusCode == 404 && exception.MessageKey == "sites.site_not_found")
             {
                 // Site yok: arşivdeki yapılandırmadan yeniden kurmayı dene.
                 logger?.LogInformation(exception, "Abonelik geri yuklemesi: {Site} IIS'te yok, arsivden kurulacak.", siteAdi);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger?.LogWarning(exception, "Abonelik geri yuklemesi: {Site} hedefi dogrulanamadi.", siteAdi);
+                warnings.Add(new BackupRestoreWarningDto
+                {
+                    MessageKey = "backup.site_target_unavailable",
+                    Target = siteAdi,
+                    Detail = exception.Message
+                });
+                continue;
             }
 
             var kuruldu = await TryRecreateSiteFromArchiveAsync(archive, siteAdi, warnings, cancellationToken);
@@ -6283,11 +6563,6 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             // Panel yedeğindeki tam-sunucu DR yoluyla AYNI kanıtlanmış plan (HTTPS bağlamaları
             // bilerek kurulmaz; sertifika makineye bağlıdır ve SSL ekranından yeniden verilir).
             var (create, extraBindings) = IisSnapshotRestore.ToProvisioningPlan(site);
-            if (!string.IsNullOrWhiteSpace(create.PhysicalPath))
-            {
-                Directory.CreateDirectory(create.PhysicalPath);
-            }
-
             await iisSiteService.CreateSiteAsync(create, cancellationToken);
             foreach (var binding in extraBindings)
             {
@@ -6922,11 +7197,12 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         return warnings;
     }
 
-    /// <summary>Arşivdeki <c>*.sql</c> dökümlerini ilgili motorlara içe aktarır.</summary>
+    /// <summary>Arşivdeki SQL dökümlerini ve SQL Server .bak dosyalarını ilgili motorlara içe aktarır.</summary>
     private async Task ImportDatabasesFromArchiveAsync(
         ZipArchive archive,
         string prefix,
         List<BackupRestoreWarningDto> warnings,
+        bool adaptDefiners,
         CancellationToken cancellationToken)
     {
         foreach (var entry in archive.Entries)
@@ -6934,26 +7210,37 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             cancellationToken.ThrowIfCancellationRequested();
             var ad = NormalizeArchivePath(entry.FullName);
             if (!ad.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
-                !ad.EndsWith(".sql", StringComparison.OrdinalIgnoreCase) ||
                 string.IsNullOrEmpty(entry.Name))
+            {
+                continue;
+            }
+
+            var extension = Path.GetExtension(entry.Name);
+            if (!extension.Equals(".sql", StringComparison.OrdinalIgnoreCase) &&
+                !extension.Equals(".bak", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
             var fileName = Path.GetFileNameWithoutExtension(entry.Name); // "engine-dbname"
             var split = fileName.Split('-', 2);
-            if (split.Length != 2)
+            if (split.Length != 2 || string.IsNullOrWhiteSpace(split[1]) ||
+                (extension.Equals(".bak", StringComparison.OrdinalIgnoreCase) &&
+                 !split[0].Equals("mssql", StringComparison.OrdinalIgnoreCase) &&
+                 !split[0].Equals("sqlserver", StringComparison.OrdinalIgnoreCase)))
             {
                 warnings.Add(new BackupRestoreWarningDto
                 {
                     MessageKey = "backup.invalid_entry_path",
                     Target = entry.FullName,
-                    Detail = "Girdi adi 'motor-veritabani' bicimine uymuyor."
+                    Detail = "Girdi adi veya yedek bicimi motorla uyusmuyor; .bak yalniz SQL Server icindir."
                 });
                 continue;
             }
 
-            var tempDump = Path.Combine(Path.GetTempPath(), $"adabk-restore-{Guid.NewGuid():N}.sql");
+            // SQL Server exports are binary .bak files. Keep the extension and stream
+            // bytes unchanged, just as direct database restore does.
+            var tempDump = Path.Combine(Path.GetTempPath(), $"adabk-restore-{Guid.NewGuid():N}{extension}");
             try
             {
                 entry.ExtractToFile(tempDump, overwrite: true);
@@ -6961,7 +7248,8 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                 {
                     Engine = split[0],
                     DatabaseName = split[1],
-                    FilePath = tempDump
+                    FilePath = tempDump,
+                    AdaptDefiners = adaptDefiners
                 }, cancellationToken);
             }
             catch (OperationCanceledException)

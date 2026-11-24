@@ -33,7 +33,30 @@ public sealed class PhpSettingsPreservationTests : IDisposable
         // IIS işlemi çalıştırılmaz: burada gerçek dosya dönüşümü ve DTO okunması sınanır.
         var gate = DispatchProxy.Create<IConcurrencyLock, Proxy>();
         ((Proxy)(object)gate).Handler = (_, _) => Task.CompletedTask;
-        service = new PhpService(db, null!, gate, sites, NullLogger<PhpService>.Instance);
+        service = new PhpService(db, null!, gate, sites, NullLogger<PhpService>.Instance)
+        {
+            SiteLogConfiguration = new PhpSiteLogConfiguration(_ => "test-pool", (path, _, _, apply) =>
+            {
+                if (apply) Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                return null;
+            }, (_, _, _, _) => Task.FromResult<string?>(null)),
+            SiteLogProbe = new PhpSiteLogProbe { Send = (_, _, _, _) => Task.FromResult(new PhpSiteLogProbe.Reply(503, "")) }
+        };
+    }
+
+    [Fact]
+    public async Task Saving_site_settings_replaces_inherited_runtime_log_with_site_local_logging()
+    {
+        await service.UpdateSitePhpSettingsAsync("fixture.test", new UpdateSitePhpSettingsRequest
+        {
+            MemoryLimit = "256M", PostMaxSize = "0", DisplayErrors = false
+        });
+        var lines = await File.ReadAllLinesAsync(Path.Combine(root, ".user.ini"));
+        Assert.Contains(lines, line => line.Trim().Equals("log_errors = On", StringComparison.OrdinalIgnoreCase));
+        var logLine = Assert.Single(lines, line => line.TrimStart().StartsWith("error_log =", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(root.Replace('\\', '/'), logLine.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("runtimes/php", logLine, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("display_errors = Off", lines);
     }
 
     [Fact]
@@ -49,7 +72,8 @@ public sealed class PhpSettingsPreservationTests : IDisposable
         Assert.Contains("; Application settings", lines);
         Assert.Contains("session.name = CUSTOMSESSION", lines);
         Assert.Contains("auto_prepend_file = bootstrap.php", lines);
-        Assert.Equal("512M", result.MemoryLimit); Assert.True(result.DisplayErrors);
+        Assert.Equal("512M", result.MemoryLimit); Assert.False(result.DisplayErrors);
+        Assert.Equal("unverified", result.ErrorLogging!.Status);
     }
 
     [Theory]

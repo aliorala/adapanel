@@ -34,6 +34,13 @@ namespace AdaPanel.Infrastructure.Mail;
 /// </remarks>
 public static class MailDnsPublication
 {
+    public static void EnsureDomainZone(SiteDnsZoneDto zone, string domain)
+    {
+        if (!string.Equals(zone.ZoneName.Trim().TrimEnd('.'), domain.Trim().TrimEnd('.'), StringComparison.OrdinalIgnoreCase))
+            throw new AdaPanel.Core.Common.AppException("mail.dns_zone_missing", 409, 409,
+                "The managed site's DNS zone does not match the requested mail domain.");
+    }
+
     // Delete only the record we can identify, never all MX/A records sharing its owner name.
     public static bool MatchesRecord(MailDnsRecordDto expected, SiteDnsRecordDto actual)
     {
@@ -77,6 +84,30 @@ public static class MailDnsPublication
     /// <c>ServerAddress</c> ayarlı değilken A kaydının değeri boş kalır ve boş bir A kaydı yazmak
     /// bölgeyi bozardı.
     /// </summary>
+    /// <summary>
+    /// Site oluşturma yolunun posta DNS yazımı: tek toplu yazma + ölçülen hüküm. Hata fırlatmaz;
+    /// <c>Detail</c> boşsa yayınlandı, doluysa nedeni taşır (çağıran bunu UYARI yapar).
+    /// </summary>
+    public static async Task<(bool Published, string Detail)> PublishForSiteAsync(
+        Core.Interfaces.IMailService mailService,
+        Core.Interfaces.IDnsService dnsService,
+        string siteName,
+        string domain,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var requests = BuildRequests(await mailService.GetDnsRecordsAsync(domain, cancellationToken));
+            var zone = requests.Count > 0 ? await dnsService.UpsertRecordsAsync(siteName, requests, cancellationToken) : null;
+            var verdict = Evaluate(zone, requests.Count);
+            return (verdict.Published, verdict.Published ? string.Empty : verdict.StatusKey);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return (false, exception is Core.Common.AppException app ? app.MessageKey : exception.GetType().Name);
+        }
+    }
+
     public static List<UpsertDnsRecordRequest> BuildRequests(MailDnsDto dns) =>
         dns.Records
             .Where(record => !string.IsNullOrWhiteSpace(record.Value))

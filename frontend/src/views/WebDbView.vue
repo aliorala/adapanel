@@ -63,7 +63,7 @@
         </span>
         <span>{{ item.supportedEngines || "-" }}</span>
         <span>{{ accessModeLabel(item.accessMode) }}</span>
-        <a v-if="item.url && item.isDeployed" :href="accessUrl(item)" target="_blank" rel="noreferrer">{{ accessUrl(item) }}</a>
+        <a v-if="item.url && item.isDeployed" :href="safeHref(accessUrl(item))" target="_blank" rel="noreferrer">{{ accessUrl(item) }}</a>
         <span v-else class="muted-cell">{{ item.provider === "pgadmin" ? t("panel.webdb.desktopLaunchHint") : "-" }}</span>
         <div class="row-actions">
           <button
@@ -84,7 +84,7 @@
               {{ openingPma ? t("panel.database.opening") : t("panel.webdb.open") }}
             </button>
           </div>
-          <a v-else-if="item.url && item.isDeployed" class="secondary-link" :href="accessUrl(item)" target="_blank" rel="noreferrer">
+          <a v-else-if="item.url && item.isDeployed" class="secondary-link" :href="safeHref(accessUrl(item))" target="_blank" rel="noreferrer">
             {{ t("panel.webdb.open") }}
           </a>
         </div>
@@ -99,6 +99,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { CanceledError } from "axios";
 import { useI18n } from "vue-i18n";

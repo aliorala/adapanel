@@ -179,6 +179,49 @@ public sealed partial class MailService(
         // bayrak false kalir, yani kota "0 kutu var" varsayimina DUSMEZ.
         var accountsMeasured = false;
 
+        // The sidebar displays every domain, not only the selected one. Query the
+        // mailbox inventory once and count real addresses instead of leaving all
+        // unselected domains at their DTO default (zero).
+        var accountQuery = await QueryAsync(cli, "account", env, cancellationToken);
+        var accountDetails = new Dictionary<string, JsonElement?>();
+        var domainsByName = domains.ToLookup(item => DomainNames.Normalize(item.Name), StringComparer.OrdinalIgnoreCase);
+        var inventoryMeasured = accountQuery.Measured;
+        var countedIds = new HashSet<string>(StringComparer.Ordinal);
+        var countedAddresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var brief in accountQuery.Items)
+        {
+            var kind = IsMailboxRecord(brief);
+            if (kind == false) continue;
+            if (kind is null) { inventoryMeasured = false; continue; }
+            var id = GetField(brief, "id");
+            if (!string.IsNullOrWhiteSpace(id) && !countedIds.Add(id)) continue;
+            var address = GetField(brief, "emailAddress", "name");
+            // Older query summaries omit the variant. The detail can identify
+            // Account/Group even when the summary looks like a mailbox address.
+            if (!IsValidEmailAddress(address) || !brief.TryGetProperty("@type", out _))
+            {
+                if (!string.IsNullOrWhiteSpace(id))
+                {
+                    var detail = await GetObjectAsync(cli, "account", id, env, cancellationToken);
+                    accountDetails[id] = detail;
+                    if (detail is null) { inventoryMeasured = false; continue; }
+                    kind = IsMailboxRecord(brief, detail);
+                    if (kind == false) continue;
+                    if (kind is null) { inventoryMeasured = false; continue; }
+                    address = GetField(detail.Value, "emailAddress", "name");
+                }
+            }
+            if (!IsValidEmailAddress(address))
+            {
+                inventoryMeasured = false;
+                continue;
+            }
+            if (!countedAddresses.Add(address.Trim())) continue;
+            var addressDomain = DomainNames.Normalize(address[(address.LastIndexOf('@') + 1)..]);
+            foreach (var owner in domainsByName[addressDomain]) owner.AccountCount++;
+        }
+        foreach (var item in domains) item.AccountCountMeasured = inventoryMeasured;
+
         if (!string.IsNullOrWhiteSpace(domain))
         {
             var normalized = domain.Trim().ToLowerInvariant();
@@ -195,26 +238,37 @@ public sealed partial class MailService(
             // OLCULDU MU, isaretiyle birlikte tasinir: bos hesap listesi "bu alanda kutu yok"
             // demek olabilecegi gibi "soramadim" da demek olabilir ve KOTA bu ikisini ayirt
             // etmek ZORUNDADIR (bkz. MailQueryResult).
-            var accountQuery = await QueryAsync(cli, "account", env, cancellationToken);
             accountsMeasured = accountQuery.Measured;
+            var selectedIds = new HashSet<string>(StringComparer.Ordinal);
+            var selectedAddresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var brief in accountQuery.Items)
             {
+                var kind = IsMailboxRecord(brief);
+                if (kind == false) continue;
+                if (kind is null) { accountsMeasured = false; continue; }
                 var id = GetField(brief, "id");
                 if (string.IsNullOrWhiteSpace(id))
                 {
                     accountsMeasured = false;
                     continue;
                 }
+                if (!selectedIds.Add(id)) continue;
 
-                var detail = await GetObjectAsync(cli, "account", id, env, cancellationToken);
+                var detail = accountDetails.TryGetValue(id, out var cached)
+                    ? cached
+                    : await GetObjectAsync(cli, "account", id, env, cancellationToken);
                 if (detail is null)
                 {
                     accountsMeasured = false;
                     continue;
                 }
 
+                kind = IsMailboxRecord(brief, detail);
+                if (kind == false) continue;
+                if (kind is null) { accountsMeasured = false; continue; }
                 var address = GetField(detail.Value, "emailAddress", "name");
                 if (!IsValidEmailAddress(address)) accountsMeasured = false;
+                if (!selectedAddresses.Add(address.Trim())) continue;
                 if (BelongsToDomain(address, normalized))
                 {
                     accounts.Add(new MailAccountDto
@@ -222,7 +276,7 @@ public sealed partial class MailService(
                         Address = address,
                         // SABİT true DEĞİL: hesabın kendi nesnesine SORULUR. Alan yoksa null
                         // ("ölçülemedi") döner — bkz. MailAccountDto.Active.
-                        Active = OkunanEtkinlik(detail.Value),
+                        Active = MigrationAccountActive(detail.Value) ?? OkunanEtkinlik(detail.Value),
                         MaxSizeMB = (int)(ReadAccountQuotaBytes(detail.Value) / (1024 * 1024)),
                         CurrentSizeMB = (int)(GetLongField(detail.Value, "usedDiskQuota") / (1024 * 1024))
                     });
@@ -315,10 +369,31 @@ public sealed partial class MailService(
             {
                 selected.AllocatedMB = accounts.Sum(account => Math.Max(0, account.MaxSizeMB));
                 selected.AccountCount = accounts.Count;
+                selected.AccountCountMeasured = accountsMeasured;
             }
         }
 
+        if (workspace.Domains.Any(item => !item.AccountCountMeasured))
+            workspace.StatusMessage = "Bazı alan adlarının posta kutusu sayısı okunamadı. Ölçülemeyen sayılar sıfır değildir; yeniden yenileyin.";
         return workspace;
+    }
+
+    // Missing variants are supported for legacy CLI output; an explicit unknown
+    // variant is never silently treated as a user mailbox. Query account also
+    // returns Account/Group, which has an address but is not a mailbox.
+    private static bool? IsMailboxRecord(JsonElement summary, JsonElement? detail = null)
+    {
+        var source = detail is { } value && value.TryGetProperty("@type", out _) ? value : summary;
+        if (!source.TryGetProperty("@type", out var type)) return true;
+        if (type.ValueKind != JsonValueKind.String) return null;
+        return type.GetString() switch
+        {
+            // JSON uses the short variant; Account/User is the CLI create
+            // object path, retained here for older integration payloads.
+            "User" or "Account/User" => true,
+            "Group" or "Account/Group" => false,
+            _ => null
+        };
     }
 
     public async Task<MailWorkspaceDto> ConfigureAsync(ConfigureMailRequest request, CancellationToken cancellationToken = default)
@@ -371,12 +446,23 @@ public sealed partial class MailService(
         // spam'e duser. Canli sunucuda tam olarak bu oldu: iletiler v1-rsa-*/v1-ed25519-* seciciyle
         // imzaliydi, iki TXT kaydinin ikisi de bolgede yoktu. Plesk de posta acilirken kaydi
         // kendisi yayinlar.
-        await TryPublishDnsRecordsAsync(domain, cancellationToken);
+        var warnings = new List<string>();
+        if (!await TryPublishDnsRecordsAsync(domain, cancellationToken))
+        {
+            warnings.Add(MailDomainWarnings.DnsNotPublished);
+        }
 
         // Gönderen sahteciliği kuralı: ilk alan adı oluşturulduğunda Stalwart yeni kurulmuş
         // olabilir ve açılış işçisi (MailSenderPolicyWorker) çoktan geçmiştir. EN İYİ ÇABA —
         // kural yazılamadıysa alan adı oluşturma DÜŞMEZ, ama sessiz de kalmaz.
-        await TryApplySenderPolicyAsync(cancellationToken);
+        if (!await TryApplySenderPolicyAsync(cancellationToken))
+        {
+            warnings.Add(MailDomainWarnings.SenderPolicyNotApplied);
+        }
+
+        // DURUSTLUK: alan adi olustu ama yan adimlar (DNS, gonderen kurali) tamamlanamadiysa
+        // cevap bunu TASIR; eskiden yalniz gunluge yaziliyor, API duz "basari" donuyordu.
+        workspace.Warnings = warnings;
         return workspace;
     }
 
@@ -388,7 +474,7 @@ public sealed partial class MailService(
     /// başarısız göstermek ve kullanıcıyı ikinci kez denemeye itmek olurdu — ikinci deneme
     /// "zaten var" yoluna girip aynı yerde patlardı.
     /// </remarks>
-    private async Task TryApplySenderPolicyAsync(CancellationToken cancellationToken)
+    private async Task<bool> TryApplySenderPolicyAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -404,13 +490,20 @@ public sealed partial class MailService(
                 logger.LogWarning(
                     "Mail sender policy was WRITTEN but the mail server did not reload it (MtaStageMail.isSenderAllowed) "
                     + "after domain creation; sender forgery protection is not in effect yet.");
+                await SyncDataStageScriptForSenderPolicyAsync(cancellationToken);
+                return false;
             }
 
             await SyncDataStageScriptForSenderPolicyAsync(cancellationToken);
+
+            // YALNIZ yururlukte olan kural "uygulandi" sayilir. Unavailable (asama okunamadi) ve
+            // ForeignExpression (baskasinin ifadesine dokunulmadi) da korumanin YOKLUGU demektir.
+            return result is SenderPolicySyncResult.Applied or SenderPolicySyncResult.AlreadyApplied;
         }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Mail sender policy could not be applied after domain creation.");
+            return false;
         }
     }
 
@@ -422,7 +515,7 @@ public sealed partial class MailService(
     /// Sessiz kalmamak icin sonuc gunlugue yazilir.
     /// </para>
     /// </summary>
-    private async Task TryPublishDnsRecordsAsync(string domain, CancellationToken cancellationToken)
+    private async Task<bool> TryPublishDnsRecordsAsync(string domain, CancellationToken cancellationToken)
     {
         try
         {
@@ -435,7 +528,11 @@ public sealed partial class MailService(
             SiteDnsZoneDto? bolge = null;
             if (yazilacak.Count > 0)
             {
-                bolge = await dnsService.UpsertRecordsAsync(dns.Domain, yazilacak, cancellationToken);
+                // DNS operations accept the technical IIS name, which can differ from the
+                // mail domain for imported sites. Resolve the owner before publishing.
+                var site = ResolveManagedIdentitySite(await iisSiteService.GetSitesAsync(cancellationToken), dns.Domain);
+                MailDnsPublication.EnsureDomainZone(await dnsService.GetZoneAsync(site.Name, cancellationToken), dns.Domain);
+                bolge = await dnsService.UpsertRecordsAsync(site.Name, yazilacak, cancellationToken);
             }
 
             // "Yayinlandi" HUKMU OLCULUR, VARSAYILMAZ. Eski hal cagri patlamadigi surece
@@ -450,6 +547,7 @@ public sealed partial class MailService(
                     "Mail DNS records published for {Domain}: {Count} record(s).",
                     domain,
                     sonuc.AppliedCount);
+                return true;
             }
             else
             {
@@ -459,6 +557,7 @@ public sealed partial class MailService(
                     domain,
                     sonuc.StatusKey,
                     yazilacak.Count);
+                return false;
             }
         }
         catch (Exception exception)
@@ -467,6 +566,7 @@ public sealed partial class MailService(
                 exception,
                 "Mail DNS records could not be published automatically for {Domain}. The zone is probably hosted elsewhere; the records must be added manually.",
                 domain);
+            return false;
         }
     }
 
@@ -486,6 +586,10 @@ public sealed partial class MailService(
         // gider. Stalwart, ÜYESİ olan bir domaini silmeyi REDDEDER; üye kalırsa "delete domain" patlar ve domain
         // UI'de takılı kalır. account turunda ayrıca BAŞKA domaindeki hesaplarda bu domaine işaret eden alias
         // girdileri de temizlenir.
+        var removedMembers = new List<string>();
+        var cleanupFailed = new List<string>();
+        try
+        {
         foreach (var principalType in DomainCascadeTypes)
         {
             // "UYE YOK" ile "UYELERI SORAMADIM" ayrilir: soramadigimizda uyeler SILINMEZ ve
@@ -519,6 +623,25 @@ public sealed partial class MailService(
                 {
                     var deletion = await RunCliAsync(cli, $"delete {principalType} --ids {Arg(memberId)}", env, cancellationToken);
                     if (!deletion.Success) throw MapMailError(deletion);
+                    removedMembers.Add($"{principalType}:{(string.IsNullOrWhiteSpace(memberEmail) ? memberId : memberEmail)}");
+                    if (!string.IsNullOrWhiteSpace(memberEmail))
+                    {
+                        // Uye gitti: yarida kesilse bile kaydi kalmasin. Liste uyesinin politikasi da gider.
+                        var removedAddress = memberEmail.Trim();
+                        if (principalType == "account")
+                        {
+                            await TryCleanupAsync(
+                                () => RemoveAutoRespondersAsync(key => string.Equals(key, removedAddress, StringComparison.OrdinalIgnoreCase), cancellationToken),
+                                removedAddress, cleanupFailed);
+                        }
+                        else if (principalType == MailingListObject)
+                        {
+                            await TryCleanupAsync(
+                                () => UpdateListPoliciesAsync(store => store.Remove(removedAddress), cancellationToken),
+                                removedAddress, cleanupFailed);
+                        }
+                    }
+
                     continue;
                 }
 
@@ -542,8 +665,36 @@ public sealed partial class MailService(
         {
             throw new AppException("mail.operation_failed", 500, 500, CombineError(result));
         }
+        }
+        catch (AppException failure) when (removedMembers.Count > 0 && failure.MessageKey != "mail.domain_delete_partial")
+        {
+            // ORTADA KALDI: bazi uyeler silindi, alan adi hala duruyor. Geri alma YOK (silinen posta
+            // kutulari geri getirilemez) -- bu yuzden "basarisiz" demek yetmez; ne gittigi ve ne
+            // kaldigi acikca soylenir. Gidenlerin otomatik yanitlari yukarida zaten dusuruldu.
+            logger.LogWarning(failure, "Mail domain {Domain} deletion stopped midway; removed: {Removed}.", domain, string.Join(", ", removedMembers));
+            throw new AppException(
+                "mail.domain_delete_partial",
+                502,
+                502,
+                $"{domain}; removed: {string.Join(", ", removedMembers)}; remaining: domain and unprocessed members; cause: {failure.MessageKey} {failure.Details}");
+        }
 
-        return await GetWorkspaceAsync(null, cancellationToken);
+        // Alan adi gitti: kalan otomatik yanit ve liste politikasi kayitlari da gider; yoksa ayni
+        // adres yeniden acildiginda eski kayit geri gelirdi.
+        var suffix = "@" + domain;
+        // Alan adi ZATEN silindi: temizlik hatasi 500'e cevrilmez, "artik var" uyarisi olur.
+        await TryCleanupAsync(() => RemoveAutoRespondersAsync(key => key.EndsWith(suffix, StringComparison.OrdinalIgnoreCase), cancellationToken), domain, cleanupFailed);
+        await TryCleanupAsync(() => UpdateListPoliciesAsync(store =>
+        {
+            var keys = store.Keys.Where(key => key.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)).ToList();
+            foreach (var key in keys) store.Remove(key);
+            return keys.Count > 0;
+        }, cancellationToken), domain, cleanupFailed);
+        await TrySyncDataStageScriptAfterCleanupAsync(domain, cancellationToken);
+
+        var finalWorkspace = await GetWorkspaceAsync(null, cancellationToken);
+        if (cleanupFailed.Count > 0) finalWorkspace.Warnings = [MailDomainWarnings.StateCleanupFailed];
+        return finalWorkspace;
     }
 
     // Bir hesabın alias map'inden verilen domainId'ye ait tüm girdileri çıkarır.
@@ -627,7 +778,48 @@ public sealed partial class MailService(
         var normalized = address.Trim().ToLowerInvariant();
         var domain = ExtractDomain(normalized);
         var id = await FindIdAsync("account", "emailAddress", normalized, cancellationToken) ?? normalized;
-        return await MutateAsync(domain, $"delete account --ids {Arg(id)}", cancellationToken);
+        var workspace = await MutateAsync(domain, $"delete account --ids {Arg(id)}", cancellationToken);
+
+        // Hesap gitti: otomatik yanit kaydi da gider; yoksa ayni adres yeniden acilinca eski yanit
+        // (belki aylar once birakilmis bir "tatildeyim" iletisi) sessizce geri gelirdi.
+        var cleanupFailed = new List<string>();
+        await TryCleanupAsync(
+            () => RemoveAutoRespondersAsync(key => string.Equals(key, normalized, StringComparison.OrdinalIgnoreCase), cancellationToken),
+            normalized, cleanupFailed);
+        await TrySyncDataStageScriptAfterCleanupAsync(normalized, cancellationToken);
+        if (cleanupFailed.Count > 0) workspace.Warnings = [MailDomainWarnings.StateCleanupFailed];
+        return workspace;
+    }
+
+    /// <summary>Silme sonrasi durum temizligi EN IYI CABA: hata silmeyi 500 yapmaz, <paramref name="failed"/>'e yazilir.</summary>
+    private async Task TryCleanupAsync(Func<Task> cleanup, string subject, List<string> failed)
+    {
+        try
+        {
+            await cleanup();
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Mail state cleanup failed after deleting {Subject}; stale autoresponder/list-policy entries may remain.", subject);
+            failed.Add(subject);
+        }
+    }
+
+    /// <summary>
+    /// Silme sonrasi script yenilemesi EN IYI CABA: hesap/alan adi zaten silindi; yenileme
+    /// patlarsa silmeyi basarisiz gostermek yaniltici olur. Bayat kural var olmayan adrese
+    /// eslesir (zararsiz) ve sonraki otomatik yanit/liste islemi script'i yeniden yazar.
+    /// </summary>
+    private async Task TrySyncDataStageScriptAfterCleanupAsync(string subject, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await SyncDataStageScriptAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "DATA stage script could not be refreshed after removing {Subject}.", subject);
+        }
     }
 
     public async Task<MailWorkspaceDto> SetAccountPasswordAsync(SetMailAccountPasswordRequest request, CancellationToken cancellationToken = default)
@@ -792,11 +984,7 @@ public sealed partial class MailService(
         // Politika kaydı da gider: liste silindikten sonra script'te ARTIK OLMAYAN bir adrese
         // kural kalsaydı, aynı adres yeniden açıldığında eski (belki çok dar) politika sessizce
         // geri gelirdi.
-        var store = await ReadListPoliciesAsync(cancellationToken);
-        if (store.Remove(normalized))
-        {
-            await fileStore.WriteAsync(ListPolicyStorePath, store, cancellationToken);
-        }
+        await UpdateListPoliciesAsync(store => store.Remove(normalized), cancellationToken);
 
         await SyncListPolicyScriptAsync(cancellationToken);
         // Liste silindi -> ona ait List-Unsubscribe kurali da script'ten dusmeli.
@@ -1342,19 +1530,21 @@ public sealed partial class MailService(
             throw new AppException("mail.list_policy_invalid", 400, 400, policy);
         }
 
-        var store = await ReadListPoliciesAsync(cancellationToken);
-        var entry = store.TryGetValue(address, out var existing) ? existing : new ListPolicyEntry();
-
-        entry.Policy = MailListPostingPolicy.Normalize(policy ?? entry.Policy);
-        if (allowedSenders is not null)
+        await UpdateListPoliciesAsync(store =>
         {
-            // İzinli gönderenler de doğrulanır: script'e teslim edilemez bir adres yazmak, o satırı
-            // hiçbir zaman eşleşmeyen ölü bir kurala çevirir.
-            entry.AllowedSenders = [.. NormalizeRecipients(allowedSenders, domain)];
-        }
+            var entry = store.TryGetValue(address, out var existing) ? existing : new ListPolicyEntry();
 
-        store[address] = entry;
-        await fileStore.WriteAsync(ListPolicyStorePath, store, cancellationToken);
+            entry.Policy = MailListPostingPolicy.Normalize(policy ?? entry.Policy);
+            if (allowedSenders is not null)
+            {
+                // İzinli gönderenler de doğrulanır: script'e teslim edilemez bir adres yazmak, o satırı
+                // hiçbir zaman eşleşmeyen ölü bir kurala çevirir.
+                entry.AllowedSenders = [.. NormalizeRecipients(allowedSenders, domain)];
+            }
+
+            store[address] = entry;
+            return true;
+        }, cancellationToken);
     }
 
     /// <summary>
@@ -1831,6 +2021,66 @@ public sealed partial class MailService(
     // Bilinen sınırlar: gönderen-başına frekans kısıtı yok (duplicate trusted'da desteklenmez) ve
     // yanıtın From başlığı Stalwart'ın bildirim varsayılanıdır (mailto from parametresi RFC 5436 gereği yok sayılır).
     private const string AutoResponderStorePath = "config/mail-autoresponders.json";
+
+    /// <summary>
+    /// Otomatik yanit ve liste politikasi dosyalarinin oku-degistir-yaz KAPISI. Kapi olmadan iki
+    /// es zamanli istek ayni eski kopyayi okuyup ikisi de yazar; sonuncu oncekini sessizce ezerdi.
+    /// Surece ozgu (tek panel sureci); iki dosya TEK kapiyi paylasir, cunku ikisi de ayni kisa
+    /// sureli is. Kapi tutulurken CLI/ag cagrisi YAPILMAZ (yalniz dosya okuma/yazma).
+    /// </summary>
+    private static readonly SemaphoreSlim MailStoreGate = new(1, 1);
+
+    /// <summary>Otomatik yanit deposunu kilit altinda degistirir; <paramref name="mutate"/> true donerse yazar.</summary>
+    internal async Task UpdateAutoRespondersAsync(
+        Func<Dictionary<string, AutoResponderEntry>, bool> mutate,
+        CancellationToken cancellationToken)
+    {
+        await MailStoreGate.WaitAsync(cancellationToken);
+        try
+        {
+            var store = await ReadAutoRespondersAsync(cancellationToken);
+            if (mutate(store))
+            {
+                await fileStore.WriteAsync(AutoResponderStorePath, store, cancellationToken);
+            }
+        }
+        finally
+        {
+            MailStoreGate.Release();
+        }
+    }
+
+    /// <summary>Liste politikasi deposunu kilit altinda degistirir; <paramref name="mutate"/> true donerse yazar.</summary>
+    internal async Task UpdateListPoliciesAsync(
+        Func<Dictionary<string, ListPolicyEntry>, bool> mutate,
+        CancellationToken cancellationToken)
+    {
+        await MailStoreGate.WaitAsync(cancellationToken);
+        try
+        {
+            var store = await ReadListPoliciesAsync(cancellationToken);
+            if (mutate(store))
+            {
+                await fileStore.WriteAsync(ListPolicyStorePath, store, cancellationToken);
+            }
+        }
+        finally
+        {
+            MailStoreGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Silinen hesabin (ya da alan adinin) otomatik yanit kaydini dusurur. Kalirsa ayni adres
+    /// yeniden acildiginda ESKI otomatik yanit sessizce geri gelirdi.
+    /// </summary>
+    private Task RemoveAutoRespondersAsync(Func<string, bool> matches, CancellationToken cancellationToken)
+        => UpdateAutoRespondersAsync(store =>
+        {
+            var keys = store.Keys.Where(matches).ToList();
+            foreach (var key in keys) store.Remove(key);
+            return keys.Count > 0;
+        }, cancellationToken);
     private const string AutoResponderScriptName = "adapanel-autoreply";
 
     internal sealed class AutoResponderEntry
@@ -1861,22 +2111,21 @@ public sealed partial class MailService(
         _ = await FindIdAsync("account", "emailAddress", normalized, cancellationToken)
             ?? throw new AppException("mail.account_not_found", 404, 404);
 
-        var store = await ReadAutoRespondersAsync(cancellationToken);
-        if (request.Enabled)
+        await UpdateAutoRespondersAsync(store =>
         {
-            store[normalized] = new AutoResponderEntry
+            if (request.Enabled)
             {
-                Enabled = true,
-                Subject = request.Subject.Trim(),
-                Message = request.Message.Trim()
-            };
-        }
-        else
-        {
-            store.Remove(normalized);
-        }
+                store[normalized] = new AutoResponderEntry
+                {
+                    Enabled = true,
+                    Subject = request.Subject.Trim(),
+                    Message = request.Message.Trim()
+                };
+                return true;
+            }
 
-        await fileStore.WriteAsync(AutoResponderStorePath, store, cancellationToken);
+            return store.Remove(normalized);
+        }, cancellationToken);
         await SyncDataStageScriptAsync(cancellationToken);
 
         return await GetAutoResponderAsync(normalized, cancellationToken);
@@ -2529,17 +2778,34 @@ public sealed partial class MailService(
     public async Task<MailDiagnosticsDto> GetDiagnosticsAsync(string domain, CancellationToken cancellationToken = default)
         => await MailDiagnosticsRunner.RunAsync(await GetDnsRecordsAsync(domain, cancellationToken), cancellationToken);
 
-    public async Task<MailCertificateDto> GetCertificateStatusAsync(CancellationToken cancellationToken = default)
+    public Task<MailCertificateDto> GetCertificateStatusAsync(CancellationToken cancellationToken = default) =>
+        GetCertificateStatusCoreAsync(null, cancellationToken);
+
+    public Task<MailCertificateDto> GetCertificateStatusForDomainAsync(string domain, CancellationToken cancellationToken = default) =>
+        GetCertificateStatusCoreAsync(domain, cancellationToken);
+
+    private async Task<MailCertificateDto> GetCertificateStatusCoreAsync(string? selectedDomain, CancellationToken cancellationToken)
     {
         // Keep the saved certificate, listener probes and provider registry in one panel
         // lifecycle. A concurrent renewal must finish before this snapshot is inspected.
         using var operation = await MailCertificateLifecycle.EnterAsync(
             fileStore.ResolvePath(CertificateStatePath), cancellationToken);
         var state = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(selectedDomain))
+        {
+            selectedDomain = selectedDomain.Trim().ToLowerInvariant();
+            if (Uri.CheckHostName(selectedDomain) != UriHostNameType.Dns || selectedDomain.Contains('*'))
+                throw new AppException("mail.invalid_domain", 400, 400);
+            var states = await ReadCertificateStatesAsync(cancellationToken);
+            state = states.FirstOrDefault(item => item.Domain.Equals(selectedDomain, StringComparison.OrdinalIgnoreCase)
+                && item.HostName.Equals($"mail.{selectedDomain}", StringComparison.OrdinalIgnoreCase))
+                ?? states.FirstOrDefault(item => item.Domain.Equals(selectedDomain, StringComparison.OrdinalIgnoreCase));
+        }
         var savedContact = await fileStore.ReadAsync<Support.AcmeContactSettings?>(Support.AcmeContactSettings.Path, null, cancellationToken);
         var suggestedEmail = savedContact?.Email?.Trim() ?? string.Empty;
         var dto = state is null
-            ? new MailCertificateDto { Active = false, SuggestedContactEmail = suggestedEmail }
+            ? new MailCertificateDto { Active = false, Domain = selectedDomain ?? "",
+                HostName = selectedDomain is null ? "" : $"mail.{selectedDomain}", SuggestedContactEmail = suggestedEmail }
             : new MailCertificateDto
             {
                 Active = false,
@@ -2549,9 +2815,9 @@ public sealed partial class MailService(
                 NotAfterUtc = state.NotAfterUtc,
                 SuggestedContactEmail = suggestedEmail
             };
-        if (state is not null)
+        if (!string.IsNullOrWhiteSpace(dto.HostName))
         {
-            await InspectMailCertificateAsync(dto, state.Thumbprint, cancellationToken);
+            await InspectMailCertificateAsync(dto, state?.Thumbprint, cancellationToken);
         }
         return dto;
     }
@@ -2567,6 +2833,13 @@ public sealed partial class MailService(
             fileStore.ResolvePath(CertificateStatePath), cancellationToken);
         // Cancellation can arrive after acquisition while this caller's continuation is queued.
         cancellationToken.ThrowIfCancellationRequested();
+        return await IssueCertificateCoreAsync(request, cancellationToken);
+    }
+
+    // Caller owns MailCertificateLifecycle; identity preparation must not acquire it twice.
+    private async Task<MailCertificateDto> IssueCertificateCoreAsync(IssueMailCertificateRequest request, CancellationToken cancellationToken,
+        bool persistContact = true)
+    {
         var domain = request.Domain.Trim().ToLowerInvariant();
         var hostName = string.IsNullOrWhiteSpace(request.HostName)
             ? $"mail.{domain}"
@@ -2600,7 +2873,7 @@ public sealed partial class MailService(
         if (issued)
         {
             source = "letsencrypt";
-            if (!string.IsNullOrWhiteSpace(contactEmail))
+            if (persistContact && !string.IsNullOrWhiteSpace(contactEmail))
             {
                 await fileStore.WriteAsync(
                     Support.AcmeContactSettings.Path,
@@ -2615,7 +2888,7 @@ public sealed partial class MailService(
 
         var (certificatePem, privateKeyPem) = ReadPemPair(pemDirectory);
         var notAfter = TryGetNotAfterUtc(certificatePem);
-        var endpoints = await PushCertificateToStalwartAsync(hostName, certificatePem, privateKeyPem, cancellationToken);
+        var (endpoints, initialPrimary) = await PushCertificateToStalwartAsync(hostName, certificatePem, privateKeyPem, cancellationToken);
 
         var state = new MailCertificateState
         {
@@ -2627,7 +2900,7 @@ public sealed partial class MailService(
             NotAfterUtc = notAfter,
             Thumbprint = endpoints[0].Thumbprint
         };
-        await fileStore.WriteAsync(CertificateStatePath, state, cancellationToken);
+        await MailCertificateRegistry.UpsertAsync(fileStore, state, cancellationToken, initialPrimary);
 
         var published = new MailCertificateDto
         {
@@ -2654,13 +2927,37 @@ public sealed partial class MailService(
     {
         using var operation = await MailCertificateLifecycle.EnterAsync(
             fileStore.ResolvePath(CertificateStatePath), cancellationToken);
-        var state = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
+        var states = await ReadCertificateStatesAsync(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (beforeMutation is not null)
         {
             await beforeMutation(cancellationToken);
         }
 
+        List<Exception> failures = [];
+        MailCertificateDto? lastChanged = null;
+        foreach (var state in states)
+        {
+            try
+            {
+                var changed = await SyncCertificateStateAsync(state, beforeMutation, cancellationToken);
+                if (changed is not null) lastChanged = changed;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (AppException error) when (error.HttpStatusCode == 403) { throw; }
+            catch (Exception error)
+            {
+                failures.Add(error);
+                logger.LogWarning("Mail certificate synchronization failed for {MailHost}: {ErrorType}", state.HostName, error.GetType().Name);
+            }
+        }
+        ThrowCertificateFailures(failures);
+        return lastChanged;
+    }
+
+    private async Task<MailCertificateDto?> SyncCertificateStateAsync(MailCertificateState state,
+        Func<CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
+    {
         if (state is null
             || (state.Source != "windows-store" &&
                 !string.Equals(state.Source, "letsencrypt", StringComparison.OrdinalIgnoreCase)))
@@ -2690,17 +2987,17 @@ public sealed partial class MailService(
                 if (beforeMutation is not null) await beforeMutation(cancellationToken);
                 state.Thumbprint = leaf.Thumbprint;
                 state.NotAfterUtc = leaf.NotAfter.ToUniversalTime();
-                await fileStore.WriteAsync(CertificateStatePath, state, cancellationToken);
+                await MailCertificateRegistry.UpsertAsync(fileStore, state, cancellationToken);
             }
             return null;
         }
 
         // win-acme zamanlanmış görevi sertifikayı yenilemiş; Stalwart'a yeniden bas.
-        var endpoints = await PushCertificateToStalwartAsync(state.HostName, certificatePem, privateKeyPem, cancellationToken, beforeMutation);
+        var (endpoints, initialPrimary) = await PushCertificateToStalwartAsync(state.HostName, certificatePem, privateKeyPem, cancellationToken, beforeMutation);
         state.ContentHash = hash;
         state.Thumbprint = leaf.Thumbprint;
         state.NotAfterUtc = TryGetNotAfterUtc(certificatePem);
-        await fileStore.WriteAsync(CertificateStatePath, state, cancellationToken);
+        await MailCertificateRegistry.UpsertAsync(fileStore, state, cancellationToken, initialPrimary);
 
         return new MailCertificateDto
         {
@@ -2715,7 +3012,10 @@ public sealed partial class MailService(
 
     public async Task<bool> EnsureServerHostnameAsync(bool applyChanges = true, CancellationToken cancellationToken = default)
     {
-        var state = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
+        using var operation = await MailCertificateLifecycle.EnterAsync(fileStore.ResolvePath(CertificateStatePath), cancellationToken);
+        var identity = await ReadServerIdentityPinAsync(cancellationToken);
+        if (identity is not null) return await EnsurePinnedIdentityAsync(identity, applyChanges, cancellationToken);
+        var registry = await MailCertificateRegistry.ReadAsync(fileStore, cancellationToken);
         // ONCE TERS DNS (PTR): karsilama adi sertifikayla degil, PTR ILE tutmali.
         //
         // Teslim edilebilirligin aradigi sey "ileri-dogrulanmis ters DNS"tir: sunucunun kendini
@@ -2728,7 +3028,7 @@ public sealed partial class MailService(
         // ve panel, kullaniciyi PTR'sini degistirmeye zorlamis oluyordu. Oysa dogrusu, zaten
         // dogrulanmis olan adi kullanmak.
         var hostName = await ResolveVerifiedReverseNameAsync(cancellationToken)
-                       ?? state?.HostName?.Trim().ToLowerInvariant();
+                       ?? registry.PrimaryHostName.Trim().ToLowerInvariant();
 
         var (cli, env) = await RequireCliAsync(cancellationToken);
         var settings = await GetObjectAsync(cli, "SystemSettings", "singleton", env, cancellationToken);
@@ -2746,25 +3046,7 @@ public sealed partial class MailService(
         // silindiginde oluyor). Guncelleme TUM nesneyi yeniden dogruladigi icin bu sarkan referans
         // SystemSettings uzerindeki HER degisikligi engeller ve hata mesaji ("defaultDomainId:
         // required") sebebi hic anlatmaz. Bu yuzden once gecerli bir alana onariliyor.
-        var alanSorgusu = await QueryAsync(cli, "domain", env, cancellationToken);
-        if (!alanSorgusu.Measured)
-        {
-            // "ALAN YOK" DEGIL, "SORAMADIM". Ikisi de false donuyordu ve DENETIM MODUNDA
-            // (applyChanges: false) bu, "onarilacak bir sey yok" demek oluyordu: onarma dugmesi
-            // hic cikmiyor, yanlis karsilama adi kalici hale geliyordu.
-            logger.LogWarning(
-                "Posta karsilama adi DENETLENEMEDI: alan adi listesi okunamadi. "
-                + "Karsilama adinin dogru olup olmadigi bu turda OLCULMEDI.");
-            throw new IOException("SMTP hostname inspection could not read the mail domain inventory.");
-        }
-
-        var domainIds = alanSorgusu.Items
-            .Select(item => GetField(item, "id"))
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .ToList();
-
-        if (domainIds.Count != alanSorgusu.Items.Count)
-            throw new IOException("SMTP hostname inspection received an incomplete mail domain inventory.");
+        var domainIds = await ReadIdentityDomainIdsAsync(cli, env, cancellationToken);
 
         if (domainIds.Count == 0)
         {
@@ -2924,7 +3206,11 @@ public sealed partial class MailService(
         }
     }
 
-    private async Task<bool> TryIssueWithWinAcmeAsync(
+    internal Func<string, string, CancellationToken, Task<CommandResult>>? AcmeProcessRunner { get; init; }
+    internal Func<IReadOnlyCollection<string>, CancellationToken, Task> AcmeHttpPreflight { get; init; } =
+        Ssl.AcmeHttpPreflight.VerifySelfHostingAsync;
+
+    internal async Task<bool> TryIssueWithWinAcmeAsync(
         string domain,
         string hostName,
         string contactEmail,
@@ -2934,7 +3220,7 @@ public sealed partial class MailService(
     {
         if (string.IsNullOrWhiteSpace(contactEmail))
         {
-            return false;
+            throw new AppException("mail.certificate_acme_failed", 502, 502, "win-acme was not started: an ACME contact email is required.");
         }
 
         // İkisi de wacs.exe'nin KOMUT SATIRINA giriyor. Kabuk yok (UseShellExecute=false), ama
@@ -2944,53 +3230,88 @@ public sealed partial class MailService(
         if (!Ssl.AcmeArgumentRules.IsCommandSafeHost(hostName)
             || !Ssl.AcmeArgumentRules.IsCommandSafeEmail(contactEmail))
         {
-            return false;
+            throw new AppException("mail.certificate_acme_failed", 502, 502, "win-acme was not started: the hostname or contact email is invalid.");
         }
 
         var wacs = await ResolveComponentExecutableAsync("win-acme", "wacs.exe", cancellationToken);
         if (wacs is null)
         {
-            return false;
+            throw new AppException("mail.certificate_acme_failed", 502, 502, "win-acme was not started: the installed wacs.exe executable could not be found.");
         }
 
         Core.Dtos.Sites.SiteDto site;
         try
         {
-            site = await iisSiteService.GetSiteAsync(domain, cancellationToken);
+            site = ResolveManagedIdentitySite(await iisSiteService.GetSitesAsync(cancellationToken), domain, hostName);
+            if (site.Id <= 0) throw new AppException("mail.invalid_domain", 409, 409, "The managed IIS site has no valid native site ID.");
         }
-        catch
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception error)
         {
             // Domain panelde site olarak yönetilmiyorsa HTTP-01 doğrulaması yapılamaz.
-            return false;
+            var reason = error is AppException rule ? rule.MessageKey + ": " + rule.Details : error.GetType().Name;
+            throw new AppException("mail.certificate_acme_failed", 502, 502,
+                SecretRedactor.SanitizeDetails($"win-acme was not started: IIS site '{domain}' could not be resolved for HTTP-01. {reason}"));
         }
 
-        // HTTP-01 doğrulamasının mail hostname'ine ulaşabilmesi için sitede 80 portuna
-        // hostname bağlaması bulunmalı; yoksa eklenir (varsa AddBinding sessizce çakışma döner).
-        try
+        // Resolve the technical IIS site once, then verify the exact HTTP-01 binding before wacs.
+        if (!HasMailHttpBinding(site, hostName))
         {
-            await iisSiteService.AddBindingAsync(site.Name, new Core.Dtos.Sites.SiteBindingRequest
+            try
             {
-                Protocol = "http",
-                HostName = hostName,
-                IpAddress = "*",
-                Port = 80
-            }, cancellationToken);
-        }
-        catch
-        {
-            // Bağlama zaten varsa ya da eklenemediyse win-acme yine de denenir.
+                await iisSiteService.AddBindingAsync(site.Name, new Core.Dtos.Sites.SiteBindingRequest
+                { Protocol = "http", HostName = hostName, IpAddress = "*", Port = 80 }, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception error)
+            {
+                throw new AppException("mail.certificate_acme_failed", 502, 502,
+                    $"win-acme was not started: HTTP-01 binding preparation failed for IIS site '{site.Name}' ({error.GetType().Name}).");
+            }
+            var confirmed = ResolveManagedIdentitySite(await iisSiteService.GetSitesAsync(cancellationToken), domain, hostName);
+            if (confirmed.Id != site.Id || !HasMailHttpBinding(confirmed, hostName))
+                throw new AppException("mail.certificate_acme_failed", 502, 502, "win-acme was not started: the exact HTTP-01 binding could not be verified.");
+            site = confirmed;
         }
 
         var baseUri = useStaging
             ? "https://acme-staging-v02.api.letsencrypt.org/"
             : "https://acme-v02.api.letsencrypt.org/";
         var args =
-            $"--target iis --siteid {site.Id} --host \"{hostName.Trim()}\" --installation none " +
+            $"--target iis --siteid {site.Id} --host \"{hostName.Trim()}\" --validation selfhosting --installation none " +
             $"--store pemfiles --pemfilespath \"{pemDirectory}\" " +
             $"--emailaddress \"{contactEmail.Trim()}\" --accepttos --baseuri {baseUri}";
-        var result = await ProcessRunner.RunAsync(wacs, args, cancellationToken: cancellationToken);
+        var result = await Ssl.AcmeHttpPreflight.ExclusiveAsync(async () =>
+        {
+            await AcmeHttpPreflight([hostName.Trim()], cancellationToken);
+            var latest = ResolveManagedIdentitySite(await iisSiteService.GetSitesAsync(cancellationToken), domain, hostName);
+            if (latest.Id != site.Id || !HasMailHttpBinding(latest, hostName))
+                throw new AppException("mail.certificate_acme_failed", 409, 409, "The IIS validation site changed during the external HTTP-01 probe.");
+            return await (AcmeProcessRunner is { } runner ? runner(wacs, args, cancellationToken)
+                : ProcessRunner.RunAsync(wacs, args, cancellationToken: cancellationToken));
+        }, cancellationToken);
+        if (!result.Success || !Directory.EnumerateFiles(pemDirectory, "*-key.pem").Any())
+            throw new AppException("mail.certificate_acme_failed", 502, 502, WinAcmeFailureDetails(result));
+        return true;
+    }
 
-        return result.Success && Directory.EnumerateFiles(pemDirectory, "*-key.pem").Any();
+    internal static string WinAcmeFailureDetails(CommandResult result)
+    {
+        static string Output(string value)
+        {
+            // Redact BEFORE taking a tail: cutting a PEM block first could expose its remainder.
+            var safe = SecretRedactor.Redact(value);
+            safe = System.Text.RegularExpressions.Regex.Replace(safe,
+                @"(?i)(/\.well-known/acme-challenge/)[A-Za-z0-9_-]+", "$1" + SecretRedactor.Mask,
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+            return safe.Length <= 800 ? safe : "[earlier output omitted] " + safe[^800..];
+        }
+        var stdout = Output(result.StandardOutput);
+        var stderr = Output(result.StandardError);
+        return SecretRedactor.SanitizeDetails($"win-acme exit code: {result.ExitCode}. "
+            + (result.Success ? "The expected PEM private-key file was not produced." : "Certificate issuance did not complete.")
+            + (stderr.Length == 0 ? "" : Environment.NewLine + "stderr: " + stderr)
+            + (stdout.Length == 0 ? "" : Environment.NewLine + "stdout: " + stdout));
     }
 
     private static void WriteSelfSignedPem(string hostName, string pemDirectory)
@@ -3078,7 +3399,7 @@ public sealed partial class MailService(
                 ? RunCliAsync(cli, command, env, cancellationToken)
                 : RunCliJsonAsync(cli, command, json, env, cancellationToken);
 
-    private async Task<MailTlsEndpointDto[]> PushCertificateToStalwartAsync(string hostName, string certificatePem, string privateKeyPem,
+    private async Task<(MailTlsEndpointDto[] Endpoints, string? InitialPrimary)> PushCertificateToStalwartAsync(string hostName, string certificatePem, string privateKeyPem,
         CancellationToken cancellationToken, Func<CancellationToken, Task>? beforeMutation = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -3115,6 +3436,8 @@ public sealed partial class MailService(
 
         var settingsRead = MailQueryResult.Olc(await RunCertificateCommandAsync(cli, "get SystemSettings --json", null, env, cancellationToken));
         var settings = ReadCertificateSettings(settingsRead);
+        // Capture the pre-publication client identity, while its old certificate is still served.
+        var initialPrimary = await ResolveInitialCertificatePrimaryAsync(settings, hostName, cancellationToken);
         // A read can block. Revalidate directly before the first provider mutation.
         if (beforeMutation is not null) await beforeMutation(cancellationToken);
 
@@ -3175,7 +3498,7 @@ public sealed partial class MailService(
         if (probes.Any(p => p.Status != "ok"))
             throw new AppException("mail.certificate_not_activated", 502, 502,
                 string.Join("; ", probes.Select(p => $"{p.Port}: {p.Status} {p.Detail}")));
-        return probes;
+        return (probes, initialPrimary);
     }
 
     private async Task<string?> ResolveComponentExecutableAsync(string componentId, string executableName, CancellationToken cancellationToken)
@@ -3775,9 +4098,8 @@ public sealed partial class MailService(
     // Değeri JSON string/number literal'ine çevirir (tırnaklama + kaçışlar dahil).
     private static string JsonValue(string value) => JsonSerializer.Serialize(value);
 
-    // Komut satırında JSON taşıyan tek argüman: iç tırnaklar MSVC kuralıyla kaçırılır.
-    private static string CliJsonArg(string value) =>
-        "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    // JSON kaçışlarını koru: yalnız tırnaktan ve kapanıştan önceki ters bölüler ikilenir.
+    private static string CliJsonArg(string value) => WindowsArgument.Quote(value);
 
     private static string NormalizeAddress(string address, string domain)
     {
@@ -4300,6 +4622,7 @@ public sealed partial class MailService(
     /// <inheritdoc />
     public async Task<MailRelayDto> SetRelayAsync(SetMailRelayRequest request, CancellationToken cancellationToken = default)
     {
+        if (request.RecoverOnly) throw new AppException("mail.relay_recovery_unsupported", 409, 409);
         var (cli, env) = await RequireCliAsync(cancellationToken);
 
         if (request.Enabled && string.IsNullOrWhiteSpace(request.Host))
@@ -4345,7 +4668,21 @@ public sealed partial class MailService(
             // panelin kendi kaydi da onunla ayni hikayeyi anlatmali. Once firlatsaydik panel
             // "role acik" der, sunucuda role olmazdi.
             var kapatmaYukleme = await ReloadMailSettingsAsync(cli, env, cancellationToken);
-            await fileStore.WriteAsync(RelayStorePath, yeniKayit, cancellationToken);
+            try
+            {
+                await fileStore.WriteAsync(RelayStorePath, yeniKayit, cancellationToken);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                // Server changes have already happened. Keep the old local file intact and
+                // report the incomplete cleanup; repeating disable safely finishes it.
+                // Do not return the exception text/path or any stored credentials to clients.
+                logger.LogError(error,
+                    "Relay route removed but local configuration cleanup failed. HResult={HResult}; Reload={ReloadOutcome}",
+                    $"0x{error.HResult:X8}", kapatmaYukleme);
+                throw new AppException("mail.relay_cleanup_incomplete", 503, 503,
+                    $"HResult=0x{error.HResult:X8}; Reload={kapatmaYukleme}");
+            }
 
             var kapali = await GetRelayAsync(cancellationToken);
             if (kapali.Enabled)
@@ -4781,11 +5118,16 @@ public sealed partial class MailService(
         string domain,
         CancellationToken cancellationToken)
     {
-        var sertifika = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
-        if (!string.IsNullOrWhiteSpace(sertifika?.HostName))
+        var registry = await MailCertificateRegistry.ReadAsync(fileStore, cancellationToken);
+        var sertifika = registry.Records.FirstOrDefault(record =>
+            MailCertificateRegistry.Field(record, "domain").Equals(domain, StringComparison.OrdinalIgnoreCase));
+        if (sertifika is not null)
         {
-            return sertifika!.HostName.Trim().ToLowerInvariant();
+            return MailCertificateRegistry.Field(sertifika, "hostName").Trim().ToLowerInvariant();
         }
+
+        // Keep previously working shared-host client settings for domains without their own certificate.
+        if (!string.IsNullOrWhiteSpace(registry.PrimaryHostName)) return registry.PrimaryHostName.Trim().ToLowerInvariant();
 
         var ayarlar = await GetObjectAsync(cli, "SystemSettings", "singleton", env, cancellationToken);
         var karsilama = ayarlar is null ? string.Empty : GetField(ayarlar.Value, "defaultHostname");

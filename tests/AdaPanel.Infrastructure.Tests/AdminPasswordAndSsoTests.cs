@@ -549,6 +549,7 @@ public sealed class AdminPasswordAndSsoTests
                     new Claim(ClaimTypes.Name, kullanici.UserName),
                     new Claim(ClaimTypes.Role, kullanici.Role.ToString()),
                     new Claim(CookieSessionValidator.CredentialStampClaim, damga),
+                    new Claim(CookieSessionValidator.TwoFactorStateClaim, "0"),
                     OturumTestOrtami.OturumKimligiTalebi()
                 ],
                 CookieAuthenticationDefaults.AuthenticationScheme);
@@ -720,7 +721,7 @@ public sealed class AdminPasswordAndSsoTests
     }
 
     /// <summary>Çerez doğrulayıcısı reddettiğinde SignOutAsync çağırır; burada sessizce yutulur.</summary>
-    private sealed class SessizKimlikServisi : IAuthenticationService
+    internal sealed class SessizKimlikServisi : IAuthenticationService
     {
         public Task<AuthenticateResult> AuthenticateAsync(HttpContext context, string? scheme) => throw new NotSupportedException();
         public Task ChallengeAsync(HttpContext context, string? scheme, AuthenticationProperties? properties) => throw new NotSupportedException();

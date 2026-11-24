@@ -25,6 +25,8 @@ public sealed class BillingUsageReportDto
     /// trafik, faturalanmayan bir trafiktir.
     /// </summary>
     public int UnmeasuredTrafficCount { get; set; }
+
+    public int FailedAccountCount { get; set; }
 }
 
 /// <summary>

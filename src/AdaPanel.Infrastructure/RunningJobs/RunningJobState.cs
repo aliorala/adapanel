@@ -3,13 +3,15 @@ namespace AdaPanel.Infrastructure.RunningJobs;
 /// <summary>
 /// SÜREN bir uzun işin sunucudaki kaydı (<c>config/running-jobs.json</c> içindeki bir yuva).
 /// <para>
-/// Alan düzeni <c>Antivirus/AntivirusRunningScanState.cs</c> ile BİLEREK aynıdır: aynı sorunun
-/// (sayfa yenilenince "sürüyor" bilgisinin kaybolması) 0.6.6'da kanıtlanmış çözümü budur ve
-/// yeni bir mekanizma icat etmenin hiçbir kazancı yoktur.
+/// Süreç sahipliği <c>Antivirus/AntivirusRunningScanState.cs</c> ile aynı PID/başlangıç anı
+/// çiftini kullanır. JobId, geciken temizliğin aynı zaman damgalı başka bir işe dokunmasını önler.
 /// </para>
 /// </summary>
 public sealed class RunningJobState
 {
+    /// <summary>Bu işin tekil kimliği; aynı saat damgasına sahip sonraki işlerle karışmaz.</summary>
+    public string JobId { get; init; } = string.Empty;
+
     /// <summary>İş türü: <c>backup</c> | <c>restore</c> | <c>migration</c> | <c>software</c>.</summary>
     public string Kind { get; init; } = string.Empty;
 

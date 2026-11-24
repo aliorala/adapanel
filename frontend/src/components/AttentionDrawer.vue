@@ -48,6 +48,7 @@
       </div>
 
       <p v-if="loadError" class="notice error" role="alert">{{ loadError }}</p>
+      <p v-if="repairResult" :class="['notice', { error: !repairResult.verified }]" role="status">{{ repairResult.message }}</p>
 
       <p v-if="summary && summary.failedSources.length" class="notice" role="status">
         {{ t("panel.attention.failedSources") }}: {{ summary.failedSources.join(", ") }}
@@ -75,6 +76,7 @@
             <strong>{{ t(item.titleKey) }}</strong>
             <p v-if="item.descriptionKey" class="attention-detail">{{ t(item.descriptionKey) }}</p>
             <p v-if="item.detail" class="attention-detail"><code>{{ item.detail }}</code></p>
+            <SslBindingRepair v-if="item.sslRepair" :target="item.sslRepair" @result="repairResult = $event" @refresh="emit('refresh')" />
             <p v-if="actionState[item.id]" :class="['attention-result', actionState[item.id].kind]">
               {{ actionState[item.id].message }}
             </p>
@@ -108,6 +110,7 @@ import { hasQuickFix, runAttentionAction, type AttentionItem, type AttentionSeve
 import { extractApiMessage } from "../stores/auth";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 import { formatDateTime } from "../utils/datetime";
+import SslBindingRepair from './SslBindingRepair.vue';
 
 const props = defineProps<{
   open: boolean;
@@ -125,6 +128,7 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+const repairResult = ref<{ message: string; verified: boolean } | null>(null);
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
 const { writeGate } = useSubscriptionGate();

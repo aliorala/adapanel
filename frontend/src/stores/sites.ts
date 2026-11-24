@@ -28,7 +28,7 @@ function sortSites(sites: SiteRecord[]): SiteRecord[] {
 
 type BusyKey = "creating" | "importing" | "busySiteName" | "busyBindingKey";
 type SiteState = {
-  sites: SiteRecord[]; selectedSiteName: string; loaded: boolean; loading: boolean;
+  sites: SiteRecord[]; selectedSiteName: string; loaded: boolean; refreshFailed: boolean; loading: boolean;
   creating: boolean; importing: boolean; busySiteName: string; busyBindingKey: string;
   fetchSites(): Promise<SiteRecord[]>;
 };
@@ -114,13 +114,27 @@ async function mutate<T>(store: SiteState, busy: BusyKey, target: string | null,
         if (reconcile) {
           // Refresh failure must not discard credentials, partial-success diagnostics,
           // or the original mutation error. loaded remains false until a valid read.
-          await store.fetchSites().catch(() => undefined);
+          // Yutulan hata ARTIK görünür: `refreshFailed` ekrana "liste tazelenemedi" dedirtir; eskiden
+          // işlem başarılı göründüğü için kullanıcı eski listeye bakıp güncel sanıyordu.
+          await refreshQuietly(store);
         } else store.loaded = true;
       }
       if (requests.epoch === getSessionEpoch()) { requests.pending.delete(id); syncBusy(store, requests); }
     }
     // Logout can occur while the follow-up read is pending, after the write succeeded.
     assertSession(requests);
+  }
+}
+
+/**
+ * Yazma sonrası tazeleme. Hata ASIL işlemin sonucunu (başarı ya da özgün hata) gölgelemesin diye
+ * fırlatılmaz, ama artık `refreshFailed` bayrağıyla GÖRÜNÜR kılınır (önceden tamamen yutuluyordu).
+ */
+async function refreshQuietly(store: { fetchSites(): Promise<unknown>; refreshFailed: boolean }) {
+  try {
+    await store.fetchSites();
+  } catch {
+    store.refreshFailed = true;
   }
 }
 
@@ -140,6 +154,8 @@ export const useSitesStore = defineStore("sites", {
      * "hiç siteniz yok" gibi KESİN bir cümleye dönüşürdü. Bu bayrak yalnız BAŞARIDA true olur.
      */
     loaded: false,
+    /** Başarılı bir yazmadan sonraki liste tazelemesi başarısız oldu: ekrandaki liste ESKİ olabilir. */
+    refreshFailed: false,
     creating: false,
     importing: false,
     busySiteName: "",
@@ -171,6 +187,7 @@ export const useSitesStore = defineStore("sites", {
         // yerine "yükleniyor" demeye devam eder.
         requests.publishedList = id;
         this.loaded = requests.activeWrites.size === 0;
+        this.refreshFailed = false;
         selectExisting(this);
 
         return this.sites;
@@ -195,7 +212,7 @@ export const useSitesStore = defineStore("sites", {
           upsert(this, site);
           if (requests.selection === id) this.selectedSiteName = site.name;
           if (requests.activeWrites.size > 0) requests.reconcile = true;
-          else if (this.loading) await this.fetchSites().catch(() => undefined);
+          else if (this.loading) await refreshQuietly(this);
         }
         assertSession(requests);
         return site;
@@ -246,7 +263,7 @@ export const useSitesStore = defineStore("sites", {
       requests.siteWrites.set(site.name, ++requests.sequence);
       upsert(this, site);
       if (requests.activeWrites.size > 0) requests.reconcile = true;
-      else if (this.loading) void this.fetchSites().catch(() => undefined);
+      else if (this.loading) void refreshQuietly(this);
     }
   }
 });

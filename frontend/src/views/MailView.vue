@@ -4,6 +4,7 @@
       <div>
         <h2>{{ t("panel.mail.title") }}</h2>
         <p class="meta">{{ t("panel.mail.subtitle") }}</p>
+        <p v-if="workspace?.provider" class="meta">{{ t("panel.mail.activeProvider") }}: {{ workspace.provider === 'mailenable' ? 'MailEnable' : 'Stalwart' }}</p>
       </div>
       <button class="secondary compact" :disabled="loading" @click="refresh">{{ t("panel.mail.refresh") }}</button>
     </div>
@@ -55,7 +56,7 @@
           </div>
           <div v-for="item in domainPager.items.value" :key="item.name" class="data-row maildomain-row">
             <strong>{{ item.name }}</strong>
-            <span>{{ item.active ? item.accountCount : "—" }}</span>
+            <span :data-label="t('panel.mail.mailboxes')">{{ item.active ? (item.countMeasured ? item.accountCount : t("panel.mail.mailboxCountUnmeasured")) : "—" }}</span>
             <span :class="['status-pill', item.active ? 'ok' : 'warn']">
               {{ item.active ? t("panel.status.enabled") : t("panel.mail.mailOff") }}
             </span>
@@ -71,12 +72,16 @@
       <div v-if="selectedDomain" class="module-toolbar mail-domain-bar">
         <button class="secondary compact" @click="backToDomains">← {{ t("panel.mail.allDomains") }}</button>
         <strong class="current-domain">{{ selectedDomain }}</strong>
-        <button class="danger compact" v-bind="writeGate(busy)" @click="removeDomain">
+        <button class="danger compact" v-bind="writeGate(busy || !domainWorkspaceReady)" @click="removeDomain">
           {{ t("panel.mail.deleteDomain") }}
         </button>
       </div>
 
-      <template v-if="selectedDomain">
+      <div v-if="selectedDomain && domainLoading" class="empty-state mail-loading" role="status">
+        <span class="mail-spinner" aria-hidden="true"></span>
+        {{ t("panel.mail.loadingWorkspace") }}
+      </div>
+      <template v-if="selectedDomain && domainWorkspaceReady && !domainLoading">
       <!--
         ALAN ADI ÇALIŞMA ALANININ SIRASI = KULLANICININ SORU SIRASI.
 
@@ -204,7 +209,7 @@
                  1024*1024'e bölerek üretiyor ve kotayı `MaxSizeMB * 1024 * 1024` ile geri yazıyor.
                  Sayı ÖLÇEKLENMEZ (kutu kotası formda MiB olarak girilir, kart onun yankısıdır);
                  düzeltilen tek şey koda gömülü etiketin yanlış tabanı. -->
-            <span>{{ account.currentSizeMB }} / {{ account.maxSizeMB ? `${account.maxSizeMB} ${t("panel.units.mib")}` : "∞" }}</span>
+            <span :data-label="t('panel.mail.maxSize')">{{ account.currentSizeMB }} / {{ account.maxSizeMB ? `${account.maxSizeMB} ${t("panel.units.mib")}` : "∞" }}</span>
             <!-- UC DURUM, IKIYE INDIRILMEZ: `active === null` "sunucuya soruldu ama cevap
                  alinamadi" demek. Eskiden backend sabit `true` donduruyordu ve HER kutu yesil
                  "Etkin" goruluyordu; kapali bir kutu panelde saglikli gorunuyordu. -->
@@ -215,6 +220,9 @@
               {{ account.active ? t("panel.status.enabled") : t("panel.status.disabled") }}
             </span>
             <div class="row-actions">
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="openWebmail(account.address)">
+                {{ t("panel.mail.webmailOpen") }}
+              </button>
               <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="changeAccountQuota(account.address, account.maxSizeMB)">
                 {{ t("panel.mail.quota") }}
               </button>
@@ -224,12 +232,18 @@
               <button class="secondary compact row-button" :disabled="busy" @click="openAutoResponder(account.address)">
                 {{ t("panel.mail.autoResponder") }}
               </button>
+              <button class="secondary compact row-button" :disabled="busy" @click="openForward(account.address)">
+                {{ t("panel.mail.forward") }}
+              </button>
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="toggleAccountActive(account.address, account.active === false)">
+                {{ account.active === false ? t("panel.mail.reactivate") : t("panel.mail.suspend") }}
+              </button>
               <button class="danger compact row-button" v-bind="writeGate(busy)" @click="removeAccount(account.address)">
                 {{ t("panel.mail.delete") }}
               </button>
             </div>
           </div>
-          <p v-if="workspace.accounts.length === 0" class="empty-state">{{ t("panel.mail.noMailboxes") }}</p>
+          <p v-if="workspace.accounts.length === 0" class="empty-state">{{ t(workspace.accountsMeasured === false ? "panel.mail.mailboxesUnmeasured" : "panel.mail.noMailboxes") }}</p>
         </div>
         <TablePager :state="accountPager" :disabled="busy || bulk.busy.value" />
 
@@ -263,6 +277,35 @@
               {{ busy ? t("panel.database.saving") : t("panel.common.save") }}
             </button>
             <button class="secondary compact" @click="autoResponderFor = ''">{{ t("panel.common.cancel") }}</button>
+          </div>
+        </section>
+
+        <section v-if="forwardFor" class="form-surface">
+          <div class="section-head">
+            <div>
+              <h3>{{ t("panel.mail.forward") }}</h3>
+              <p class="meta">{{ forwardFor }}</p>
+            </div>
+            <label class="toggle-field">
+              <input v-model="forwardForm.enabled" type="checkbox" />
+              <span>{{ t("panel.mail.aliasActive") }}</span>
+            </label>
+          </div>
+          <div v-if="forwardForm.enabled" class="form-grid one">
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.forwardTarget") }}</span>
+              <input v-model.trim="forwardForm.target" type="email" placeholder="info@example.com" />
+            </label>
+            <label class="toggle-field">
+              <input v-model="forwardForm.keepCopy" type="checkbox" />
+              <span>{{ t("panel.mail.forwardKeepCopy") }}</span>
+            </label>
+          </div>
+          <div class="row-actions">
+            <button class="compact" v-bind="writeGate(busy || (forwardForm.enabled && !forwardForm.target))" @click="saveForward">
+              {{ busy ? t("panel.database.saving") : t("panel.common.save") }}
+            </button>
+            <button class="secondary compact" @click="forwardFor = ''">{{ t("panel.common.cancel") }}</button>
           </div>
         </section>
 
@@ -310,10 +353,18 @@
           </div>
           <div v-for="alias in workspace.aliases" :key="alias.address" class="data-row alias-row">
             <strong>{{ alias.address }}</strong>
-            <span>{{ alias.target }}</span>
-            <button class="danger compact row-button" v-bind="writeGate(busy)" @click="removeAlias(alias.address)">
-              {{ t("panel.mail.delete") }}
-            </button>
+            <span :data-label="t('panel.mail.aliasTarget')">{{ alias.target }}</span>
+            <div class="row-actions">
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="editAliasTarget(alias.address, alias.target)">
+                {{ t("panel.mail.aliasEdit") }}
+              </button>
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="toggleAlias(alias.address, alias.active === false)">
+                {{ alias.active === false ? t("panel.mail.reactivate") : t("panel.mail.suspend") }}
+              </button>
+              <button class="danger compact row-button" v-bind="writeGate(busy)" @click="removeAlias(alias.address)">
+                {{ t("panel.mail.delete") }}
+              </button>
+            </div>
           </div>
           <p v-if="workspace.aliases.length === 0" class="empty-state">{{ t("panel.mail.noAliases") }}</p>
         </div>
@@ -343,7 +394,7 @@
             </label>
             <label class="stacked-field">
               <span class="field-label">{{ t("panel.mail.listDescription") }}</span>
-              <input v-model.trim="listForm.description" :placeholder="t('panel.mail.listDescriptionPlaceholder')" maxlength="512" />
+              <input v-model.trim="listForm.description" :placeholder="t('panel.mail.listDescriptionPlaceholder')" :maxlength="isMailEnable ? 256 : 512" />
             </label>
             <label class="stacked-field">
               <span class="field-label">{{ t("panel.mail.listSubscribers") }}</span>
@@ -354,10 +405,10 @@
               <span class="field-label">{{ t("panel.mail.listPostingPolicy") }}</span>
               <select v-model="listForm.postingPolicy">
                 <option value="anyone">{{ t("panel.mail.listPolicyAnyone") }}</option>
-                <option value="subscribers">{{ t("panel.mail.listPolicySubscribers") }}</option>
-                <option value="allowed">{{ t("panel.mail.listPolicyAllowed") }}</option>
+                <option v-if="!isMailEnable" value="subscribers">{{ t("panel.mail.listPolicySubscribers") }}</option>
+                <option v-if="!isMailEnable" value="allowed">{{ t("panel.mail.listPolicyAllowed") }}</option>
               </select>
-              <small class="field-hint">{{ t("panel.mail.listPostingPolicyHint") }}</small>
+              <small class="field-hint">{{ t(isMailEnable ? "panel.mail.mailEnableListPolicyHint" : "panel.mail.listPostingPolicyHint") }}</small>
             </label>
             <label v-if="listForm.postingPolicy !== 'anyone'" class="stacked-field">
               <span class="field-label">{{ t("panel.mail.listAllowedSenders") }}</span>
@@ -407,7 +458,7 @@
                 </span>
               </span>
             </div>
-            <div class="list-subscribers">
+            <div class="list-subscribers" :data-label="t('panel.mail.listSubscribers')">
               <!-- Her abone tek tek cikarilabilir: tum listeyi elle yeniden yazmak, bir adresi
                    yanlis kopyalayip o kisiyi sessizce dusurmek demekti. -->
               <span v-for="subscriber in list.recipients" :key="subscriber" class="subscriber-chip">
@@ -432,7 +483,7 @@
               <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="addListAlias(list.address)">
                 {{ t("panel.mail.listAddAlias") }}
               </button>
-              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="editListPolicy(list)">
+              <button v-if="!isMailEnable" class="secondary compact row-button" v-bind="writeGate(busy)" @click="editListPolicy(list)">
                 {{ t("panel.mail.listPostingPolicy") }}
               </button>
               <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="editListRecipients(list.address, list.recipients)">
@@ -503,9 +554,11 @@
             <button class="secondary compact" v-bind="writeGate(busy)" @click="saveDomainQuota">{{ t("panel.common.save") }}</button>
           </div>
 
+          <p v-if="isMailEnable" class="field-hint">{{ t("panel.mail.mailEnableAllocationHint") }}</p>
+
           <!-- GİDEN POSTA LİMİTİ: sunucunun itibarını koruyan sınır. Yalnız yönetici değiştirebilir —
                kendi limitini müşterinin yükseltebilmesi korumayı anlamsız kılardı. -->
-          <div v-if="isAdmin" class="quota-strip">
+          <div v-if="isAdmin && !isMailEnable" class="quota-strip">
             <label class="inline-field">
               <span class="field-label">{{ t("panel.mail.outboundLimit") }}</span>
               <input v-model.number="outboundLimit" type="number" min="0" />
@@ -527,13 +580,13 @@
             v-if="isAdmin && outboundLimitLoad.message.value"
             :message="outboundLimitLoad.message.value"
             @retry="loadOutboundLimit" />
-          <p class="field-hint">{{ t("panel.mail.outboundLimitHint") }}</p>
+          <p class="field-hint">{{ t(isMailEnable ? "panel.mail.mailEnableOutboundHint" : "panel.mail.outboundLimitHint") }}</p>
 
           <!-- SAHTECİLİK KURALI: sunucu, kimliksiz bir bağlantının buradaki alan adları adına
                göndermesini reddeder. Bu KIRDIĞIMIZ bir akış (PHP'nin ayarsız mail() çağrısı) ve
                sessiz ölmemesi gerekiyor: kullanıcı reddi gördüğünde alternatifi (kimlik
                doğrulamalı gönderim) burada yazılı bulur. Gerekçe: Mail/MailSenderPolicy. -->
-          <p class="field-hint">
+          <p v-if="!isMailEnable" class="field-hint">
             <strong>{{ t("panel.mail.senderPolicyTitle") }}</strong>
             {{ t("panel.mail.senderPolicyHint") }}
           </p>
@@ -547,7 +600,7 @@
               <p class="meta">{{ t("panel.mail.webmailHint") }}</p>
             </div>
             <span class="row-actions">
-              <button class="compact" v-bind="writeGate(busy)" @click="openWebmail">
+              <button class="compact" v-bind="writeGate(busy)" @click="openWebmail()">
                 {{ busy && webmailOpening ? t("panel.mail.webmailOpening") : t("panel.mail.webmailOpen") }}
               </button>
               <!-- TANILA: uç ve çevirisi vardı ama çağıran yoktu. "Webmail açılmıyor" durumunda
@@ -709,7 +762,7 @@
               <h4>{{ t("panel.mail.autoconfig.probeUrls") }}</h4>
               <ul class="autoconfig-probes">
                 <li v-for="url in autoconfig.probeUrls" :key="url">
-                  <a :href="url" target="_blank" rel="noopener noreferrer">{{ url }}</a>
+                  <a :href="safeHref(url)" target="_blank" rel="noopener noreferrer">{{ url }}</a>
                   <button class="secondary compact row-button" @click="copyDnsValue(url)">
                     {{ t("panel.mail.dnsCopy") }}
                   </button>
@@ -788,6 +841,7 @@
           <div class="row-actions">
             <button class="secondary compact" :disabled="busy" @click="loadDns">{{ t("panel.mail.dnsShow") }}</button>
             <button v-if="dns" class="compact" v-bind="writeGate(busy)" @click="applyDns">{{ t("panel.mail.dnsApply") }}</button>
+            <button v-if="dns" class="secondary compact" v-bind="writeGate(busy)" @click="rotateDkim">{{ t("panel.mail.dkimRotate") }}</button>
           </div>
         </div>
 
@@ -846,7 +900,7 @@
         <div class="form-surface">
           <p v-if="certificate?.active" class="meta">
             <span :class="['status-pill', certificate.active && certificate.source !== 'self-signed' ? 'ok' : 'warn']">
-              {{ certificate.source === "windows-store" ? t("panel.mail.certWindowsStore") : certificate.source === "letsencrypt" ? "Let's Encrypt" : t("panel.mail.certSelfSigned") }}
+              {{ certificate.source === "windows-store" ? t("panel.mail.certWindowsStore") : certificate.source === "letsencrypt" ? "Let's Encrypt" : certificate.source === "self-signed" ? t("panel.mail.certSelfSigned") : t("panel.mail.certSourceUnknown") }}
             </span>
             {{ certificate.hostName }}
             <template v-if="certificate.notAfterUtc">
@@ -867,6 +921,9 @@
               <span :class="['status-pill', endpoint.status === 'ok' ? 'ok' : 'warn']">{{ endpoint.port }} {{ endpoint.protocol }}: {{ endpoint.status === 'ok' ? t('panel.mail.certVerified') : t('panel.mail.certUnverified') }}</span>
               {{ endpoint.subject }} · {{ endpoint.issuer }} · {{ endpoint.notAfterUtc }}
               {{ endpoint.thumbprint }} {{ endpoint.detail }}
+              <span v-if="endpoint.subjectAlternativeNames?.length"> · SAN: {{ endpoint.subjectAlternativeNames.join(", ") }}</span>
+              <span v-if="endpoint.notBeforeUtc"> · {{ t("panel.mail.certValidFrom") }}: {{ endpoint.notBeforeUtc }}</span>
+              <span v-if="endpoint.chainStatus?.length"> · {{ t("panel.mail.certChain") }}: {{ endpoint.chainStatus.join(", ") }}</span>
             </p>
             <p class="meta">{{ t('panel.mail.certRegistry') }}: {{ certificate.configurationStatus || 'unknown' }} · {{ certificate.certificateId || '-' }} · {{ t('panel.mail.certDefault') }}: {{ certificate.defaultCertificateId || '-' }}</p>
           </template>
@@ -891,6 +948,7 @@
       </template>
 
       <SectionLoadError v-if="spamLoad.message.value" :message="spamLoad.message.value" @retry="loadSpam" />
+      <p v-if="isMailEnable" class="field-hint">{{ t("panel.mail.mailEnableSpamHint") }}</p>
 
       <section v-if="spam && spam.installed && spam.configured" class="form-surface">
         <div class="section-head">
@@ -953,13 +1011,15 @@
       -->
       <template v-if="isAdmin && !props.domain && workspace.installed && workspace.configured">
         <MailQueueCard />
-        <MailRelayCard />
+        <MailRelayCard :provider="workspace?.provider" />
+        <MailServerIdentityCard :is-admin="isAdmin" :domains="mailDomains" />
       </template>
     </template>
   </section>
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { getFormattingLocale } from '../utils/locale';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -983,6 +1043,11 @@ import {
   removeMailListAlias,
   deleteMailAccount,
   deleteMailAlias,
+  setMailAccountActive,
+  updateMailAlias,
+  getMailForward,
+  setMailForward,
+  rotateMailDkim,
   deleteMailDomain,
   getMailCertificate,
   getMailClientSettings,
@@ -1021,11 +1086,11 @@ import {
   type MailAutodiscoverPublication
 } from "../api/autodiscover";
 import { webmailPage } from "../utils/webmailPage";
-import { toReachableUrl } from "../utils/url";
 import { UserFacingError } from "../utils/apiError";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import MailQueueCard from "../components/MailQueueCard.vue";
 import MailRelayCard from "../components/MailRelayCard.vue";
+import MailServerIdentityCard from "../components/MailServerIdentityCard.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import TablePager from "../components/TablePager.vue";
@@ -1036,6 +1101,7 @@ import { usePagination } from "../composables/usePagination";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { copyToClipboard } from "../utils/clipboard";
+import { siteWebDomain } from "../utils/siteDomain";
 
 // Site bağlamından (Web Siteleri > site > Mail) gelindiğinde o sitenin alan adını
 // önceden seçmek için opsiyonel prop (profesyonel paneller gibi domain-içi Mail sekmesi).
@@ -1046,17 +1112,60 @@ const { confirm } = useConfirm();
 const { prompt } = usePrompt();
 // Askıdaki abonelikte YAZMA düğmeleri baştan devre dışı + sebebi title/aria ile söylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma düğmeleri (yenile, tanıla, göster) kapıya girmez.
-const { writeGate } = useSubscriptionGate();
+const { writeGate, locked: subscriptionLocked } = useSubscriptionGate();
 const sitesStore = useSitesStore();
 const authStore = useAuthStore();
 // Sunucu seviyesi mail araçları (dinleyiciler, rDNS, sertifika, spam) yalnız admin'e gösterilir;
 // müşteri/bayide bu uçlar 403 döner.
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const workspace = ref<MailWorkspace | null>(null);
-const selectedDomain = ref((props.domain ?? "").toLowerCase());
+const isMailEnable = computed(() => workspace.value?.provider === "mailenable");
+const selectedDomain = ref("");
+const domainWorkspaceReady = computed(() => !domainLoading.value && !!selectedDomain.value &&
+  workspace.value?.selectedDomain?.toLowerCase() === selectedDomain.value.toLowerCase());
+const domainLoading = ref(false);
+let domainOpenRequest = 0;
+let workspaceContext = 0;
+let workspaceRead = 0;
+let loadingRequest = 0;
+let workspaceDisposed = false;
+let operationRequest = 0;
+watch(() => [selectedDomain.value, authStore.session?.isAuthenticated, authStore.session?.user?.id,
+  authStore.session?.user?.role], (current, previous) => {
+  workspaceContext++; workspaceRead++;
+  // A new domain/session cannot inherit the previous domain's editable objects.
+  const actorChanged = current.slice(1).some((value, index) => value !== previous[index + 1]);
+  if (workspace.value && (!domainWorkspaceReady.value || actorChanged)) {
+    workspace.value = { ...workspace.value, selectedDomain: "", accounts: [], aliases: [], lists: [] };
+  }
+  resetDomainForms();
+  diagnostics.value = null; dns.value = null; rdns.value = null; rdnsHost.value = "";
+  clientSettings.value = null; clientSettingsLoad.clear();
+  outboundLimitState.value = null; outboundLimitLoad.clear();
+  domainQuota.value = 0; outboundLimit.value = 0;
+  autoconfig.value = null; autoconfigDomain.value = ""; autoconfigLoad.clear();
+  // A measurement for the previous domain no longer owns the new domain's spinner.
+  diagLoading.value = false;
+  autoconfigBusy.value = false;
+  autoconfigPublishing.value = false;
+}, { flush: "sync" });
+onBeforeUnmount(() => { workspaceDisposed = true; workspaceContext++; workspaceRead++; });
+function currentWorkspaceContext() {
+  const context = workspaceContext;
+  return () => !workspaceDisposed && context === workspaceContext;
+}
+const sectionReads = new Map<string, number>();
+function beginSectionRead(section: string) {
+  const context = currentWorkspaceContext();
+  const request = (sectionReads.get(section) ?? 0) + 1;
+  sectionReads.set(section, request);
+  return () => context() && sectionReads.get(section) === request;
+}
 const adminPassword = ref("");
 const accountForm = reactive({ localPart: "", password: "", maxSizeMB: 1024 });
 const autoResponderFor = ref("");
+const forwardFor = ref("");
+const forwardForm = reactive({ enabled: false, target: "", keepCopy: true });
 const autoResponderForm = reactive({ enabled: false, subject: "", message: "" });
 const aliasForm = reactive({ localPart: "", target: "" });
 const spam = ref<MailSpamSettings | null>(null);
@@ -1075,9 +1184,13 @@ watch(() => [selectedDomain.value, authStore.session?.isAuthenticated, authStore
   ++certificateRequest;
   certificate.value = null;
   certificateLoad.clear();
+  certForm.hostName = "";
 }, { flush: "sync" });
 onBeforeUnmount(() => { certificateDisposed = true; ++certificateRequest; });
 const webmailOpening = ref(false);
+let webmailContext = 0;
+watch(selectedDomain, () => { ++webmailContext; }, { flush: "sync" });
+onBeforeUnmount(() => { ++webmailContext; });
 const webmailDiagnosing = ref(false);
 const webmailReport = ref("");
 
@@ -1103,15 +1216,19 @@ const clientSettingsLoad = useSectionError();
  * dağıtmak, hiç göstermemekten kötüdür.
  */
 async function loadClientSettings() {
+  const isCurrent = beginSectionRead("client-settings");
   if (!selectedDomain.value) {
     clientSettings.value = null;
     clientSettingsLoad.clear();
     return;
   }
   try {
-    clientSettings.value = await getMailClientSettings(selectedDomain.value);
+    const result = await getMailClientSettings(selectedDomain.value);
+    if (!isCurrent()) return;
+    clientSettings.value = result;
     clientSettingsLoad.clear();
   } catch (error) {
+    if (!isCurrent()) return;
     clientSettings.value = null;
     clientSettingsLoad.capture(error);
   }
@@ -1155,6 +1272,7 @@ const autoconfigContactEmail = ref("");
  * autodiscover'a güvendirirdi.
  */
 async function loadAutoconfig() {
+  const isCurrent = beginSectionRead("autoconfig");
   if (!selectedDomain.value || !isAdmin.value) {
     autoconfig.value = null;
     autoconfigDomain.value = "";
@@ -1166,13 +1284,16 @@ async function loadAutoconfig() {
   autoconfigDomain.value = domain;
   autoconfigBusy.value = true;
   try {
-    autoconfig.value = await getMailAutoconfig(domain);
+    const result = await getMailAutoconfig(domain);
+    if (!isCurrent()) return;
+    autoconfig.value = result;
     autoconfigLoad.clear();
   } catch (error) {
+    if (!isCurrent()) return;
     autoconfig.value = null;
     autoconfigLoad.capture(error);
   } finally {
-    autoconfigBusy.value = false;
+    if (isCurrent()) autoconfigBusy.value = false;
   }
 }
 
@@ -1182,44 +1303,52 @@ async function loadAutoconfig() {
  * (`isPublished`) bakar — yarım kalmış bir zinciri yeşil göstermek yalan olurdu.
  */
 async function publishAutoconfig() {
-  if (!selectedDomain.value) return;
+  if (!domainTargetContext()()) return;
+  const isCurrent = beginSectionRead("autoconfig");
   autoconfigPublishing.value = true;
   autoconfigBusy.value = true;
   try {
     const envelope = await publishMailAutoconfig(selectedDomain.value, autoconfigContactEmail.value);
+    if (!isCurrent()) return;
     autoconfig.value = envelope.data;
     autoconfigDomain.value = selectedDomain.value;
     autoconfigLoad.clear();
     showNotice(translateKey(envelope.message), !envelope.data.isPublished);
   } catch (error) {
-    showError(error);
+    if (isCurrent()) showError(error);
   } finally {
-    autoconfigPublishing.value = false;
-    autoconfigBusy.value = false;
+    if (isCurrent()) {
+      autoconfigPublishing.value = false;
+      autoconfigBusy.value = false;
+    }
   }
 }
 
 /** Yayını geri alır. Yıkıcı olduğu için ONAY ZORUNLU: istemciler ayarı bir daha bulamaz. */
 async function unpublishAutoconfig() {
   const domain = selectedDomain.value;
-  if (!domain) return;
+  const context = domainTargetContext();
+  if (!domain || !context()) return;
 
   await confirm({
     title: t("panel.mail.autoconfig.unpublishConfirmTitle"),
     message: t("panel.mail.autoconfig.unpublishConfirmMessage"),
     impact: [`${t("panel.mail.domain")}: ${domain}`, `${t("panel.mail.autoconfig.site")}: ${autoconfig.value?.siteName || "—"}`],
     action: async () => {
+      if (!context()) return;
+      const isCurrent = beginSectionRead("autoconfig");
       autoconfigBusy.value = true;
       try {
         const envelope = await unpublishMailAutoconfig(domain);
+        if (!isCurrent()) return;
         autoconfig.value = envelope.data;
         autoconfigDomain.value = domain;
         autoconfigLoad.clear();
         showNotice(translateKey(envelope.message), false);
       } catch (error) {
-        showError(error);
+        if (isCurrent()) showError(error);
       } finally {
-        autoconfigBusy.value = false;
+        if (isCurrent()) autoconfigBusy.value = false;
       }
     }
   });
@@ -1271,31 +1400,45 @@ const outboundLimitState = ref<MailOutboundLimit | null>(null);
 const outboundLimitLoad = useSectionError();
 
 async function loadOutboundLimit() {
+  const isCurrent = beginSectionRead("outbound-limit");
+  if (isMailEnable.value) {
+    outboundLimitState.value = null;
+    outboundLimitLoad.clear();
+    return;
+  }
   if (!selectedDomain.value || !isAdmin.value) {
     outboundLimitState.value = null;
     outboundLimitLoad.clear();
     return;
   }
   try {
-    outboundLimitState.value = await getOutboundLimit(selectedDomain.value);
+    const result = await getOutboundLimit(selectedDomain.value);
+    if (!isCurrent()) return;
+    outboundLimitState.value = result;
     outboundLimit.value = outboundLimitState.value.messagesPerHour;
     outboundLimitLoad.clear();
   } catch (error) {
     // Okunamadıysa "limitsiz" GÖSTERMİYORUZ: durum bilinmiyor demek, bilgi vermek değil.
     // Hata da YUTULMUYOR: aksi halde boş alan "limit yok" sanılırdı.
+    if (!isCurrent()) return;
     outboundLimitState.value = null;
     outboundLimitLoad.capture(error);
   }
 }
 
 async function saveOutboundLimit() {
+  if (!domainTargetContext()()) return;
+  const isCurrent = beginSectionRead("outbound-limit");
+  const draft = outboundLimit.value;
   busy.value = true;
   try {
-    outboundLimitState.value = await setOutboundLimit(selectedDomain.value, outboundLimit.value);
+    const result = await setOutboundLimit(selectedDomain.value, outboundLimit.value);
+    if (!isCurrent() || draft !== outboundLimit.value) return;
+    outboundLimitState.value = result;
     outboundLimit.value = outboundLimitState.value.messagesPerHour;
     showNotice(t("mail.outbound_limit_saved"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
   } finally {
     busy.value = false;
   }
@@ -1306,21 +1449,39 @@ const notice = ref("");
 const noticeError = ref(false);
 const noticeDetails = ref("");
 
+function resetDomainForms() {
+  Object.assign(accountForm, { localPart: "", password: "", maxSizeMB: 1024 });
+  Object.assign(aliasForm, { localPart: "", target: "" });
+  Object.assign(listForm, { localPart: "", description: "", recipients: "", postingPolicy: "anyone", allowedSenders: "" });
+  autoResponderFor.value = "";
+  Object.assign(autoResponderForm, { enabled: false, subject: "", message: "" });
+  showAccountForm.value = false; showAliasForm.value = false; showListForm.value = false;
+  accountSelection.clear();
+}
+
+// Capture before opening a dialog, then recheck identity and current membership.
+function domainTargetContext(collection?: "accounts" | "aliases" | "lists", address?: string) {
+  const context = currentWorkspaceContext();
+  const domain = selectedDomain.value.trim().toLowerCase();
+  const mailbox = address?.trim().toLowerCase();
+  return () => context() && !!domain && selectedDomain.value.trim().toLowerCase() === domain &&
+    domainWorkspaceReady.value && (!collection || (!!mailbox && mailbox.split("@").length === 2 &&
+      mailbox.split("@")[1] === domain &&
+      workspace.value![collection].some(item => item.address.trim().toLowerCase() === mailbox)));
+}
+
 // panel: posta domain listesi = mevcut mail domainleri (Stalwart) + henuz postasi acilmamis
 // web sitesi alan adlari birlesimi. Boylece kullanici ayri bir "olustur" adimi gormeden
 // listeden secip yonetir; postasi yoksa secince otomatik etkinlesir (openDomain).
 const mailDomains = computed(() => {
-  const map = new Map<string, { name: string; accountCount: number; active: boolean }>();
+  const map = new Map<string, { name: string; accountCount: number; countMeasured: boolean; active: boolean }>();
   for (const domain of workspace.value?.domains ?? []) {
-    map.set(domain.name.toLowerCase(), { name: domain.name, accountCount: domain.accountCount, active: true });
+    map.set(domain.name.toLowerCase(), { name: domain.name, accountCount: domain.accountCount,
+      countMeasured: domain.accountCountMeasured === true && Number.isSafeInteger(domain.accountCount) && domain.accountCount >= 0, active: true });
   }
   for (const site of sitesStore.sites) {
-    for (const binding of site.bindings ?? []) {
-      const host = (binding.hostName ?? "").trim().toLowerCase();
-      if (!host || !host.includes(".")) continue;
-      const bare = host.startsWith("www.") ? host.slice(4) : host;
-      if (!map.has(bare)) map.set(bare, { name: bare, accountCount: 0, active: false });
-    }
+    const domain = siteWebDomain(site);
+    if (domain && !map.has(domain)) map.set(domain, { name: domain, accountCount: 0, countMeasured: false, active: false });
   }
 
   // Servis alt alanlarını GİZLE: mail./webmail./autodiscover. gibi host'lar posta sunucusunun KENDİ adresleridir
@@ -1355,8 +1516,8 @@ const visibleAccountAddresses = computed(() => accountPager.items.value.map((acc
  * toplu ucu yoktur: adresler tek tek denenir, biri patlarsa döngü durmaz ve özet dürüst kalır.
  */
 async function removeSelectedAccounts() {
-  const targetDomain = selectedDomain.value;
-  const isCurrent = () => selectedDomain.value === targetDomain;
+  const isCurrent = domainTargetContext();
+  if (!isCurrent()) return;
   const targets = mailAccounts.value.filter((account) => accountSelection.isSelected(account.address));
   if (targets.length === 0) {
     return;
@@ -1376,6 +1537,7 @@ async function removeSelectedAccounts() {
     targets,
     (account) => account.address,
     async (account) => {
+      if (!domainTargetContext("accounts", account.address)()) throw new UserFacingError("panel.common.invalidLink");
       const result = await deleteMailAccount(account.address);
       if (isCurrent()) apply(result);
     }, isCurrent
@@ -1388,25 +1550,48 @@ async function removeSelectedAccounts() {
 // Listeden bir alan adi secilince: postasi yoksa otomatik olustur (profesyonel paneller gibi), sonra
 // o domaini yukle ve DNS kayitlarini hazirla.
 async function openDomain(name: string) {
-  const lower = name.toLowerCase();
-  await run(async () => {
-    const exists = (workspace.value?.domains ?? []).some((item) => item.name.toLowerCase() === lower);
-    if (!exists) {
-      apply(await createMailDomain(lower));
-    }
-    selectedDomain.value = lower;
-    // Domaine özgü durumları sıfırla ki önceki domainin sonucu yanlışlıkla görünmesin.
-    diagnostics.value = null;
-    certForm.hostName = "";
-    // Önceki alan adında yapılan seçim taşınmaz: başka domainin kutularını silmeye yol açardı.
-    accountSelection.clear();
-    accountPager.reset();
-    apply(await getMailWorkspace(lower));
-    dns.value = await getMailDns(lower).catch(() => null);
-  });
+  const lower = name.trim().toLowerCase();
+  const exists = (workspace.value?.domains ?? []).some(item => item.name.toLowerCase() === lower);
+  const request = ++domainOpenRequest;
+  selectedDomain.value = lower;
+  resetDomainForms();
+  // Also invalidate a previous failed/same-domain load before starting a retry.
+  workspaceContext++; workspaceRead++;
+  if (workspace.value) workspace.value = { ...workspace.value, selectedDomain: "", accounts: [], aliases: [], lists: [] };
+  diagnostics.value = null; dns.value = null; certForm.hostName = "";
+  clientSettings.value = null; clientSettingsLoad.clear();
+  accountPager.reset();
+  domainLoading.value = true;
+  try {
+    await run(async (isCurrent) => {
+      if (!exists) {
+        const created = await createMailDomain(lower);
+        await applyWorkspace(Promise.resolve(created), isCurrent);
+        const warnings = created.warnings ?? [];
+        if (warnings.length) showNotice(mailWarningText("mail.domain.completed_with_warnings", warnings), true);
+      }
+      await applyWorkspace(getMailWorkspace(lower), isCurrent);
+      let records: Awaited<ReturnType<typeof getMailDns>> | null = null;
+      try {
+        records = await getMailDns(lower);
+      } catch (error) {
+        // DNS kayıtları okunamadı: sessizce boş bırakma, kullanıcıya göster.
+        if (isCurrent()) showNotice(t("panel.mail.refreshFailed", { message: resolveApiMessage(error) }), true);
+      }
+      if (isCurrent()) dns.value = records;
+    });
+  } finally {
+    if (!workspaceDisposed && request === domainOpenRequest) domainLoading.value = false;
+  }
+}
+
+function mailWarningText(headlineKey: string, codes: string[]) {
+  return `${t(headlineKey)} ${codes.map((code) => t(`panel.mail.warning.${code}`)).join(" ")}`;
 }
 
 function backToDomains() {
+  ++domainOpenRequest; domainLoading.value = false;
+  resetDomainForms();
   selectedDomain.value = "";
   dns.value = null;
   rdns.value = null;
@@ -1425,15 +1610,18 @@ function backToDomains() {
 
 onMounted(async () => {
   if (sitesStore.sites.length === 0) {
-    await sitesStore.fetchSites().catch(() => undefined);
+    try {
+      await sitesStore.fetchSites();
+    } catch (error) {
+      showNotice(t("panel.mail.refreshFailed", { message: resolveApiMessage(error) }), true);
+    }
   }
   await refresh();
   await ensureSiteDomain();
   await loadPublicBaseUrl();
 });
 
-// profesyonel paneller gibi: site bağlamından gelince (domain prop) o alan adı için mail otomatik etkin olsun;
-// kullanıcı ayrıca "alan adı ekle" adımı görmesin.
+// Opening a site tab only selects existing mail. Creation requires the list's explicit Manage action.
 async function ensureSiteDomain() {
   const target = (props.domain ?? "").trim().toLowerCase();
   if (!target || !workspace.value?.installed || workspace.value?.statusMessage) {
@@ -1441,25 +1629,27 @@ async function ensureSiteDomain() {
   }
   const exists = workspace.value.domains.some((item) => item.name.toLowerCase() === target);
   if (exists) {
+    selectedDomain.value = target;
+    await refresh();
     return;
   }
-  try {
-    apply(await createMailDomain(target));
-    selectedDomain.value = target;
-    apply(await getMailWorkspace(target));
-  } catch {
-    // Otomatik oluşturma başarısızsa kullanıcı listeden elle seçebilir.
-  }
+  selectedDomain.value = "";
+  showNotice(`${target}: ${t("panel.mail.mailOff")}`, false);
 }
 
 async function refresh() {
+  const context = currentWorkspaceContext();
+  const request = ++workspaceRead;
+  loadingRequest = request;
+  const isCurrent = () => context() && request === workspaceRead;
   loading.value = true;
   try {
-    apply(await getMailWorkspace(selectedDomain.value || undefined));
+    const next = await getMailWorkspace(selectedDomain.value || undefined);
+    if (isCurrent()) apply(next);
   } catch (error) {
-    showError(error);
+    if (isCurrent()) showError(error);
   } finally {
-    loading.value = false;
+    if (!workspaceDisposed && request === loadingRequest) loading.value = false;
   }
 }
 
@@ -1474,27 +1664,33 @@ const rdnsClass = computed(() => {
 });
 
 async function runRdns() {
-  await run(async () => {
+  await run(async (isCurrent) => {
     const host = rdnsHost.value || `mail.${selectedDomain.value}`;
-    rdns.value = await checkRdns(host);
+    const result = await checkRdns(host);
+    if (isCurrent()) rdns.value = result;
   });
 }
 
 async function loadDns() {
-  await run(async () => {
-    dns.value = await getMailDns(selectedDomain.value);
+  await run(async (isCurrent) => {
+    const result = await getMailDns(selectedDomain.value);
+    if (isCurrent()) dns.value = result;
   });
 }
 
 async function loadListeners() {
-  await run(async () => {
-    listeners.value = await getMailListeners();
+  await run(async (isCurrent) => {
+    const result = await getMailListeners();
+    if (isCurrent()) listeners.value = result;
   });
 }
 
 async function applyDns() {
-  await run(async () => {
+  const targetCurrent = domainTargetContext();
+  if (!targetCurrent()) return;
+  await run(async (isCurrent) => {
     const result = await applyMailDns(selectedDomain.value);
+    if (!isCurrent()) return;
     // DURUM OLCULUR: "cagri patlamadi" ile "kayitlar bolgeye yazildi" ayni sey degildir.
     // Ikincil bolgede ve DNS rolu kurulu degilken yazma basariyla doner ama hicbir sey
     // yayinlanmaz; eski ekran bu durumda da "N kayit uygulandi" yaziyordu.
@@ -1506,7 +1702,7 @@ async function applyDns() {
         true,
       );
     }
-  });
+  }, targetCurrent);
 }
 
 async function loadCertificate() {
@@ -1517,8 +1713,12 @@ async function loadCertificate() {
   certificate.value = null;
   certificateLoad.clear();
   try {
-    const result = await getMailCertificate();
+    const result = await getMailCertificate(domain || undefined);
     if (!current()) return;
+    if (domain && result.domain.trim().toLowerCase() !== domain.trim().toLowerCase()) {
+      if (!certForm.hostName) certForm.hostName = `mail.${domain}`;
+      throw new UserFacingError("panel.mail.certWrongDomain");
+    }
     certificate.value = result;
     certificateLoad.clear();
     // Formu otomatik doldur ki kullanıcı mail sunucu adını/e-postayı elle yazmasın.
@@ -1557,6 +1757,9 @@ async function issueCert(reuseExistingOnly = false) {
   try {
     const result = await issueMailCertificate(domain, host, email, reuseExistingOnly);
     if (!current()) return;
+    if (result.domain.trim().toLowerCase() !== domain.trim().toLowerCase() ||
+      result.hostName.trim().toLowerCase() !== host.trim().toLowerCase())
+      throw new UserFacingError("panel.mail.certWrongDomain");
     certificate.value = result;
     certificateLoad.clear();
     showNotice(
@@ -1572,10 +1775,17 @@ async function issueCert(reuseExistingOnly = false) {
   }
 }
 
-// Tek tık webmail (profesyonel paneller gibi): Roundcube kurulu/yayında değilse panel otomatik kurar,
-// sonra yeni sekmede açar. Kullanıcı tam e-posta adresi + şifresiyle giriş yapar.
-async function openWebmail() {
-  if (webmailOpening.value) return;
+// Genel düğme alan adının giriş ekranını; kutu düğmesi tek kullanımlık POST teslimini açar.
+async function openWebmail(address?: string) {
+  if (busy.value || webmailOpening.value || subscriptionLocked.value) return;
+  const domain = selectedDomain.value.trim().toLowerCase();
+  const context = webmailContext;
+  const mailbox = address?.trim().toLowerCase();
+  if (!domainTargetContext()() || !domain || (address !== undefined && (!mailbox || mailbox.split("@").length !== 2 || mailbox.split("@")[1] !== domain ||
+    !workspace.value?.accounts.some(account => account.address.trim().toLowerCase() === mailbox)))) {
+    showNotice(t("panel.common.invalidLink"), true);
+    return;
+  }
   // Pop-up engelleyiciye takılmamak için sekmeyi tıklama anında aç, URL gelince yönlendir.
   const tab = window.open("", "_blank");
   if (!tab) {
@@ -1593,19 +1803,34 @@ async function openWebmail() {
     tab.document.close();
   }
   webmailOpening.value = true;
-  await run(async () => {
+  await run(async (isCurrent) => {
     try {
-      const result = await openWebmailApi();
-      const url = toReachableUrl(result.url);
-      // `toReachableUrl` http(s) DIŞINDAKİ her şeye boş dizge döner. Boşu atamak sessizce
-      // YANLIŞ olurdu: `location.href = ""` gezinmez, bulunduğu sayfayı YENİDEN YÜKLER —
-      // yani `window.location` dalında yönetici panelin kendisini tazeler ve "açılmadı"
-      // sanır. Boş adres bir adres değildir; aşağıdaki catch'e düşsün, sekmede neden yazılsın.
-      if (!url) {
+      const result = await openWebmailApi({ domain, ...(mailbox ? { address: mailbox } : {}) });
+      let url: URL;
+      try { url = new URL(result.url); } catch { throw new UserFacingError("panel.common.invalidLink"); }
+      if (context !== webmailContext || selectedDomain.value.trim().toLowerCase() !== domain || url.protocol !== "https:" ||
+        url.hostname !== `webmail.${domain}` || url.port || url.username || url.password || url.search || url.hash) {
         throw new UserFacingError("panel.common.invalidLink");
       }
       if (tab.closed) throw new UserFacingError("panel.common.popupClosed");
-      tab.location.replace(url);
+      if (mailbox) {
+        if (!result.handoffToken || !/^[A-Za-z0-9_-]{64}$/.test(result.handoffToken)) {
+          throw new UserFacingError("panel.common.invalidLink");
+        }
+        const form = tab.document.createElement("form");
+        form.method = "POST";
+        // Boş sekme panel CSP'sini miras alır. Aynı kökenli köprü, tokenı webmail'e kendi dar CSP'siyle iletir.
+        form.action = new URL("/api/v1/mail/webmail/handoff", window.location.origin).href;
+        const token = tab.document.createElement("input");
+        token.type = "hidden";
+        token.name = "adapanel_sso";
+        token.value = result.handoffToken;
+        form.appendChild(token);
+        tab.document.body.appendChild(form);
+        form.submit();
+      } else {
+        tab.location.replace(url.href);
+      }
     } catch (error) {
       // Sekmeyi sessizce kapatma → kullanıcı ne olduğunu anlamaz. Nedeni sekmede göster.
       if (!tab.closed && tab.document?.body) {
@@ -1622,13 +1847,15 @@ async function openWebmail() {
 // Panel domainin yayınlanmış mail kayıtlarını canlı kontrol eder; kullanıcı eksiği kendi aramaz.
 async function runDiagnostics() {
   if (!selectedDomain.value) return;
+  const isCurrent = beginSectionRead("diagnostics");
   diagLoading.value = true;
   try {
-    diagnostics.value = await getMailDiagnostics(selectedDomain.value);
+    const result = await getMailDiagnostics(selectedDomain.value);
+    if (isCurrent()) diagnostics.value = result;
   } catch (error) {
-    showError(error);
+    if (isCurrent()) showError(error);
   } finally {
-    diagLoading.value = false;
+    if (isCurrent()) diagLoading.value = false;
   }
 }
 
@@ -1639,8 +1866,8 @@ async function copyDnsValue(value: string) {
 }
 
 async function configure() {
-  await run(async () => {
-    apply(await configureMail(adminPassword.value));
+  await run(async (isCurrent) => {
+    await applyWorkspace(configureMail(adminPassword.value), isCurrent);
     adminPassword.value = "";
     showNotice(t("panel.mail.configured"), false);
   });
@@ -1649,6 +1876,8 @@ async function configure() {
 async function removeDomain() {
   const domain = selectedDomain.value;
   if (!domain) return;
+  const confirmationContext = domainTargetContext();
+  if (!confirmationContext()) return;
 
   const impact = [
     `${t("panel.mail.domainName")}: ${domain}`,
@@ -1664,31 +1893,39 @@ async function removeDomain() {
     impact,
     requireText: domain,
     action: async () => {
-      await run(async () => {
-        apply(await deleteMailDomain(domain));
+      if (!confirmationContext()) return;
+      await run(async (isCurrent) => {
+        const deleted = await deleteMailDomain(domain);
+        await applyWorkspace(Promise.resolve(deleted), isCurrent);
+        const leftovers = deleted.warnings ?? [];
         selectedDomain.value = "";
-        showNotice(t("panel.mail.domainDeleted"), false);
+        if (leftovers.length) showNotice(mailWarningText("mail.domain.delete_completed_with_leftovers", leftovers), true);
+        else showNotice(t("panel.mail.domainDeleted"), false);
       });
     },
   });
 }
 
 async function addAccount() {
+  const targetCurrent = domainTargetContext();
+  if (!targetCurrent()) return;
   // Plesk gibi: kısa parolayı SUNUCUYA göndermeden net uyar (yoksa Stalwart reddi sağır "işlem tamamlanamadı" olurdu).
   if ((accountForm.password ?? "").trim().length < 8) {
     showNotice(t("mail.weak_password"), true);
     return;
   }
-  await run(async () => {
-    apply(await createMailAccount(selectedDomain.value, accountForm.localPart, accountForm.password, accountForm.maxSizeMB));
+  await run(async (isCurrent) => {
+    await applyWorkspace(createMailAccount(selectedDomain.value, accountForm.localPart, accountForm.password, accountForm.maxSizeMB), isCurrent);
     accountForm.localPart = "";
     accountForm.password = "";
     showAccountForm.value = false;
     showNotice(t("panel.mail.mailboxCreated"), false);
-  });
+  }, targetCurrent);
 }
 
 async function removeAccount(address: string) {
+  const targetCurrent = domainTargetContext("accounts", address);
+  if (!targetCurrent()) return;
   const account = workspace.value?.accounts.find((item) => item.address === address) ?? null;
   const impact = [`${t("panel.mail.mailboxes")}: ${address}`];
   if (account) {
@@ -1703,47 +1940,170 @@ async function removeAccount(address: string) {
     message: t("panel.mail.confirmDelete"),
     impact,
     action: async () => {
-      await run(async () => {
-        apply(await deleteMailAccount(address));
-        showNotice(t("panel.mail.mailboxDeleted"), false);
-      });
+      await run(async (isCurrent) => {
+        const deleted = await deleteMailAccount(address);
+        await applyWorkspace(Promise.resolve(deleted), isCurrent);
+        const leftovers = deleted.warnings ?? [];
+        if (leftovers.length) showNotice(mailWarningText("mail.account.delete_completed_with_leftovers", leftovers), true);
+        else showNotice(t("panel.mail.mailboxDeleted"), false);
+      }, targetCurrent);
     },
   });
 }
 
 // Otomatik yanıt: panel yönetir (backend sistem sieve script'i üretir; Plesk autoresponder paritesi).
+let autoResponderRead = 0;
 async function openAutoResponder(address: string) {
+  const targetCurrent = domainTargetContext("accounts", address);
+  if (!targetCurrent()) return;
+  const request = ++autoResponderRead;
+  const currentRead = () => targetCurrent() && request === autoResponderRead && autoResponderFor.value === address;
   autoResponderFor.value = address;
   autoResponderForm.enabled = false;
   autoResponderForm.subject = "";
   autoResponderForm.message = "";
   try {
     const current = await getAutoResponder(address);
+    if (!currentRead()) return;
     autoResponderForm.enabled = current.enabled;
     autoResponderForm.subject = current.subject;
     autoResponderForm.message = current.message;
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (currentRead()) showNotice(resolveApiMessage(error), true);
   }
 }
 
 async function saveAutoResponder() {
+  const targetCurrent = domainTargetContext("accounts", autoResponderFor.value);
+  if (!targetCurrent()) return;
   if (!autoResponderFor.value) return;
-  await run(async () => {
+  await run(async (isCurrent) => {
     const saved = await setAutoResponder({
       address: autoResponderFor.value,
       enabled: autoResponderForm.enabled,
       subject: autoResponderForm.subject,
       message: autoResponderForm.message
     });
+    if (!isCurrent()) return;
     autoResponderForm.enabled = saved.enabled;
     autoResponderForm.subject = saved.subject;
     autoResponderForm.message = saved.message;
     showNotice(t("panel.mail.autoResponderSaved"), false);
+  }, targetCurrent);
+}
+
+async function toggleAccountActive(address: string, reactivate: boolean) {
+  const targetCurrent = domainTargetContext("accounts", address);
+  if (!targetCurrent()) return;
+  await confirm({
+    title: t(reactivate ? "panel.mail.reactivate" : "panel.mail.suspend") + ": " + address,
+    message: address,
+    impact: [address],
+    action: async () => {
+      await run(async (isCurrent) => {
+        await applyWorkspace(setMailAccountActive(address, reactivate), isCurrent);
+        showNotice(t(reactivate ? "mail.account_reactivated" : "mail.account_suspended"), false);
+      }, targetCurrent);
+    },
+  });
+}
+
+async function toggleAlias(address: string, reactivate: boolean) {
+  const targetCurrent = domainTargetContext("aliases", address);
+  if (!targetCurrent()) return;
+  await run(async (isCurrent) => {
+    await applyWorkspace(updateMailAlias(address, { active: reactivate }), isCurrent);
+    showNotice(t("mail.alias_updated"), false);
+  }, targetCurrent);
+}
+
+async function editAliasTarget(address: string, current: string) {
+  const targetCurrent = domainTargetContext("aliases", address);
+  if (!targetCurrent()) return;
+  const target = await prompt({
+    title: t("panel.mail.aliasEdit"),
+    message: address,
+    label: t("panel.mail.aliasTarget"),
+    defaultValue: current,
+  });
+  if (!target || target.trim().toLowerCase() === current.trim().toLowerCase()) return;
+  await run(async (isCurrent) => {
+    await applyWorkspace(updateMailAlias(address, { target: target.trim() }), isCurrent);
+    showNotice(t("mail.alias_updated"), false);
+  }, targetCurrent);
+}
+
+let forwardRead = 0;
+async function openForward(address: string) {
+  const targetCurrent = domainTargetContext("accounts", address);
+  if (!targetCurrent()) return;
+  const request = ++forwardRead;
+  const currentRead = () => targetCurrent() && request === forwardRead && forwardFor.value === address;
+  forwardFor.value = address;
+  forwardForm.enabled = false;
+  forwardForm.target = "";
+  forwardForm.keepCopy = true;
+  try {
+    const current = await getMailForward(address);
+    if (!currentRead()) return;
+    forwardForm.enabled = current.enabled;
+    forwardForm.target = current.target;
+    forwardForm.keepCopy = current.keepCopy;
+  } catch (error) {
+    if (currentRead()) showNotice(resolveApiMessage(error), true);
+  }
+}
+
+async function saveForward() {
+  const address = forwardFor.value;
+  const targetCurrent = domainTargetContext("accounts", address);
+  if (!address || !targetCurrent()) return;
+  await run(async (isCurrent) => {
+    const saved = await setMailForward({
+      address,
+      enabled: forwardForm.enabled,
+      target: forwardForm.target,
+      keepCopy: forwardForm.keepCopy
+    });
+    if (!isCurrent()) return;
+    forwardForm.enabled = saved.enabled;
+    forwardForm.target = saved.target;
+    forwardForm.keepCopy = saved.keepCopy;
+    showNotice(t(saved.enabled ? "mail.forward_saved" : "mail.forward_removed"), false);
+  }, targetCurrent);
+}
+
+async function rotateDkim() {
+  const targetCurrent = domainTargetContext();
+  if (!targetCurrent()) return;
+  const domain = selectedDomain.value;
+  await confirm({
+    title: t("panel.mail.dkimRotate") + ": " + domain,
+    message: t("panel.mail.dkimRotateConfirm"),
+    impact: [domain],
+    action: async () => {
+      await run(async (isCurrent) => {
+        const result = await rotateMailDkim(domain);
+        if (!isCurrent()) return;
+        showNotice(t("panel.mail.dkimRotated", {
+          old: result.oldSelector,
+          new: result.newSelector,
+          when: new Date(result.retireAfterUtc).toLocaleDateString()
+        }), false);
+        // Yeni kayıtlar listede görünsün; yenileme hatası YUTULMAZ (kullanıcıya gösterilir).
+        try {
+          dns.value = await getMailDns(domain);
+        } catch (error) {
+          showNotice(t("panel.mail.refreshFailed", { message: resolveApiMessage(error) }), true);
+        }
+      }, targetCurrent);
+    },
   });
 }
 
 async function changePassword(address: string) {
+  const targetCurrent = domainTargetContext("accounts", address);
+  if (!targetCurrent()) return;
   // window.prompt DEĞİL: posta parolası açıkta görünüyordu.
   const password = await prompt({
     title: t("panel.mail.enterNewPassword"),
@@ -1757,23 +2117,27 @@ async function changePassword(address: string) {
     showNotice(t("mail.weak_password"), true);
     return;
   }
-  await run(async () => {
-    apply(await setMailAccountPassword(address, password));
+  await run(async (isCurrent) => {
+    await applyWorkspace(setMailAccountPassword(address, password), isCurrent);
     showNotice(t("panel.mail.passwordChanged"), false);
-  });
+  }, targetCurrent);
 }
 
 async function addAlias() {
-  await run(async () => {
-    apply(await createMailAlias(selectedDomain.value, aliasForm.localPart, aliasForm.target));
+  const targetCurrent = domainTargetContext();
+  if (!targetCurrent()) return;
+  await run(async (isCurrent) => {
+    await applyWorkspace(createMailAlias(selectedDomain.value, aliasForm.localPart, aliasForm.target), isCurrent);
     aliasForm.localPart = "";
     aliasForm.target = "";
     showAliasForm.value = false;
     showNotice(t("panel.mail.aliasCreated"), false);
-  });
+  }, targetCurrent);
 }
 
 async function removeAlias(address: string) {
+  const targetCurrent = domainTargetContext("aliases", address);
+  if (!targetCurrent()) return;
   const alias = workspace.value?.aliases.find((item) => item.address === address) ?? null;
   const impact = [`${t("panel.mail.aliasAddress")}: ${address}`];
   if (alias?.target) {
@@ -1786,10 +2150,10 @@ async function removeAlias(address: string) {
     message: t("panel.mail.confirmDelete"),
     impact,
     action: async () => {
-      await run(async () => {
-        apply(await deleteMailAlias(address));
+      await run(async (isCurrent) => {
+        await applyWorkspace(deleteMailAlias(address), isCurrent);
         showNotice(t("panel.mail.aliasDeleted"), false);
-      });
+      }, targetCurrent);
     },
   });
 }
@@ -1803,16 +2167,22 @@ function parseRecipients(text: string): string[] {
 }
 
 async function addList() {
-  await run(async () => {
-    apply(
-      await createMailList(
+  const targetCurrent = domainTargetContext();
+  if (!targetCurrent()) return;
+  if (isMailEnable.value && listForm.postingPolicy !== "anyone") {
+    showError(t("panel.mail.mailEnableListPolicyHint"));
+    return;
+  }
+  await run(async (isCurrent) => {
+    await applyWorkspace(
+      createMailList(
         selectedDomain.value,
         listForm.localPart,
         parseRecipients(listForm.recipients),
         listForm.description,
         listForm.postingPolicy,
         parseRecipients(listForm.allowedSenders)
-      )
+      ), isCurrent
     );
     listForm.localPart = "";
     listForm.description = "";
@@ -1821,7 +2191,7 @@ async function addList() {
     listForm.allowedSenders = "";
     showListForm.value = false;
     showNotice(t("panel.mail.listCreated"), false);
-  });
+  }, targetCurrent);
 }
 
 // Panelin genel adresi (yalniz yonetici). Bos = List-Unsubscribe basligi eklenmez.
@@ -1838,7 +2208,7 @@ async function loadPublicBaseUrl() {
 }
 
 async function savePublicBaseUrl() {
-  await run(async () => {
+  await run(async (isCurrent) => {
     publicBaseUrl.value = await setMailPublicBaseUrl(publicBaseUrl.value);
     showNotice(t("panel.mail.publicBaseUrlSaved"), false);
   });
@@ -1847,11 +2217,19 @@ async function savePublicBaseUrl() {
 function policyLabel(policy: MailListPostingPolicy) {
   if (policy === "subscribers") return t("panel.mail.listPolicySubscribers");
   if (policy === "allowed") return t("panel.mail.listPolicyAllowed");
-  return t("panel.mail.listPolicyAnyone");
+  if (policy === "native-members") return t("panel.mail.listPolicyNativeMembers");
+  if (policy === "native-password") return t("panel.mail.listPolicyNativePassword");
+  if (policy === "native-moderated") return t("panel.mail.listPolicyNativeModerated");
+  if (policy === "native-disabled") return t("panel.mail.listPolicyNativeDisabled");
+  if (policy === "native-unknown") return t("panel.mail.listPolicyNativeUnknown");
+  return policy === "anyone" ? t("panel.mail.listPolicyAnyone") : policy;
 }
 
 // Gonderim politikasi degistirme. Aboneler DEGISTIRILMEZ; yalnizca kural gonderilir.
 async function editListPolicy(list: MailList) {
+  const targetCurrent = domainTargetContext("lists", list.address);
+  if (!targetCurrent()) return;
+  if (isMailEnable.value) return;
   const value = await prompt({
     title: t("panel.mail.listPostingPolicyPrompt"),
     message: `${list.address} — ${t("panel.mail.listPostingPolicyOptions")}`,
@@ -1881,14 +2259,16 @@ async function editListPolicy(list: MailList) {
     allowed = parseRecipients(senders);
   }
 
-  await run(async () => {
-    apply(await setMailListPolicy(list.address, policy, allowed));
+  await run(async (isCurrent) => {
+    await applyWorkspace(setMailListPolicy(list.address, policy, allowed), isCurrent);
     showNotice(t("panel.mail.listPolicySaved"), false);
-  });
+  }, targetCurrent);
 }
 
 // Tek abone ekleme: sunucu guncel kumeyi okuyup ustune ekler; ekrandaki kopya gonderilmez.
 async function subscribe(address: string) {
+  const targetCurrent = domainTargetContext("lists", address);
+  if (!targetCurrent()) return;
   const value = await prompt({
     title: t("panel.mail.listAddSubscriberPrompt"),
     message: address,
@@ -1899,24 +2279,26 @@ async function subscribe(address: string) {
   const subscriber = value.trim();
   if (!subscriber) return;
 
-  await run(async () => {
-    apply(await subscribeToMailList(address, subscriber));
+  await run(async (isCurrent) => {
+    await applyWorkspace(subscribeToMailList(address, subscriber), isCurrent);
     showNotice(t("panel.mail.listSubscribed", { address: subscriber }), false);
-  });
+  }, targetCurrent);
 }
 
 // Abonelikten cikarma. Onay istenir cunku geri donusu YOKTUR: cikarilan kisi, bir daha
 // eklenene kadar listeye giden hicbir duyuruyu almaz ve bunu fark etmesinin bir yolu da yoktur.
 async function unsubscribe(address: string, subscriber: string) {
+  const targetCurrent = domainTargetContext("lists", address);
+  if (!targetCurrent()) return;
   await confirm({
     title: t("panel.confirm.unsubscribeMailListTitle", { name: subscriber }),
     message: t("panel.mail.confirmUnsubscribe"),
     impact: [`${t("panel.mail.listAddress")}: ${address}`, `${t("panel.mail.listSubscribers")}: ${subscriber}`],
     action: async () => {
-      await run(async () => {
-        apply(await unsubscribeFromMailList(address, subscriber));
+      await run(async (isCurrent) => {
+        await applyWorkspace(unsubscribeFromMailList(address, subscriber), isCurrent);
         showNotice(t("panel.mail.listUnsubscribed", { address: subscriber }), false);
-      });
+      }, targetCurrent);
     }
   });
 }
@@ -1925,6 +2307,8 @@ async function unsubscribe(address: string, subscriber: string) {
 // de yazilabilir, ama alan adi kullanicinin kapsaminda olmak ZORUNDA -- sunucu bunu dogruluyor,
 // arayuz o kontrolu tekrar etmiyor (iki yerde yazilan kural, birinde gevserdi).
 async function addListAlias(listAddress: string) {
+  const targetCurrent = domainTargetContext("lists", listAddress);
+  if (!targetCurrent()) return;
   const value = await prompt({
     title: t("panel.mail.listAddAliasPrompt"),
     message: `${listAddress} — ${t("panel.mail.listAliasesHint")}`,
@@ -1935,29 +2319,33 @@ async function addListAlias(listAddress: string) {
   const alias = value.trim();
   if (!alias) return;
 
-  await run(async () => {
-    apply(await addMailListAlias(listAddress, alias));
+  await run(async (isCurrent) => {
+    await applyWorkspace(addMailListAlias(listAddress, alias), isCurrent);
     showNotice(t("panel.mail.listAliasAdded", { address: alias }), false);
-  });
+  }, targetCurrent);
 }
 
 // EK ADRES kaldirma. Onay istenir cunku sessiz bir hizmet kesintisidir: o adrese yazanlar
 // bundan sonra teslim edilemedi hatasi alir ve listeye yazdiklarini sanmaya devam ederler.
 async function removeListAlias(listAddress: string, alias: string) {
+  const targetCurrent = domainTargetContext("lists", listAddress);
+  if (!targetCurrent()) return;
   await confirm({
     title: t("panel.confirm.removeMailListAliasTitle", { name: alias }),
     message: t("panel.mail.confirmRemoveAlias"),
     impact: [`${t("panel.mail.listAddress")}: ${listAddress}`, `${t("panel.mail.listAliases")}: ${alias}`],
     action: async () => {
-      await run(async () => {
-        apply(await removeMailListAlias(listAddress, alias));
+      await run(async (isCurrent) => {
+        await applyWorkspace(removeMailListAlias(listAddress, alias), isCurrent);
         showNotice(t("panel.mail.listAliasRemoved", { address: alias }), false);
-      });
+      }, targetCurrent);
     }
   });
 }
 
 async function editListRecipients(address: string, current: string[]) {
+  const targetCurrent = domainTargetContext("lists", address);
+  if (!targetCurrent()) return;
   const value = await prompt({
     title: t("panel.mail.listEditPrompt"),
     message: address,
@@ -1968,13 +2356,15 @@ async function editListRecipients(address: string, current: string[]) {
     allowEmpty: true
   });
   if (value === null) return;
-  await run(async () => {
-    apply(await setMailListRecipients(address, parseRecipients(value)));
+  await run(async (isCurrent) => {
+    await applyWorkspace(setMailListRecipients(address, parseRecipients(value)), isCurrent);
     showNotice(t("panel.mail.listUpdated"), false);
-  });
+  }, targetCurrent);
 }
 
 async function removeList(address: string) {
+  const targetCurrent = domainTargetContext("lists", address);
+  if (!targetCurrent()) return;
   const list = workspace.value?.lists.find((item) => item.address === address) ?? null;
   const impact = [`${t("panel.mail.listAddress")}: ${address}`];
   if (list?.recipients.length) {
@@ -1987,26 +2377,43 @@ async function removeList(address: string) {
     message: t("panel.mail.confirmDelete"),
     impact,
     action: async () => {
-      await run(async () => {
-        apply(await deleteMailList(address));
+      await run(async (isCurrent) => {
+        await applyWorkspace(deleteMailList(address), isCurrent);
         showNotice(t("panel.mail.listDeleted"), false);
-      });
+      }, targetCurrent);
     },
   });
 }
 
-async function run(operation: () => Promise<void>) {
+async function run(operation: (isCurrent: () => boolean) => Promise<void>, targetCurrent: () => boolean = () => true) {
+  if (!targetCurrent()) return;
+  const request = ++operationRequest;
+  const context = currentWorkspaceContext();
+  const draftKey = () => JSON.stringify([accountForm, aliasForm, listForm, autoResponderFor.value, autoResponderForm, forwardFor.value, forwardForm, adminPassword.value]);
+  const draft = draftKey();
+  const isCurrent = () => context() && targetCurrent() && draft === draftKey();
   busy.value = true;
   try {
-    await operation();
+    await operation(isCurrent);
   } catch (error) {
-    showError(error);
+    if (!workspaceDisposed && error !== staleWorkspaceResult && (isCurrent() || error instanceof UserFacingError)) showError(error);
   } finally {
-    busy.value = false;
+    if (!workspaceDisposed && request === operationRequest) busy.value = false;
   }
 }
 
+const staleWorkspaceResult = Symbol("stale mail workspace");
+async function applyWorkspace(result: Promise<MailWorkspace>, isCurrent: () => boolean) {
+  const next = await result;
+  if (!isCurrent()) throw staleWorkspaceResult;
+  workspaceRead++; // Reads started before a mutation finished cannot overwrite its result.
+  apply(next);
+}
+
 function apply(next: MailWorkspace) {
+  if (next.listsMeasured === false && workspace.value?.selectedDomain === next.selectedDomain) {
+    next = { ...next, lists: workspace.value.lists };
+  }
   workspace.value = next;
   if (next.selectedDomain) {
     selectedDomain.value = next.selectedDomain;
@@ -2044,20 +2451,24 @@ async function loadSpam() {
 
 async function saveSpam() {
   if (!spam.value) return;
-  await run(async () => {
+  await run(async (isCurrent) => {
     spam.value = await updateMailSpam(spam.value as MailSpamSettings);
     showNotice(t("panel.mail.spamSaved"), false);
   });
 }
 
 async function saveDomainQuota() {
-  await run(async () => {
-    apply(await setMailDomainQuota(selectedDomain.value, domainQuota.value));
+  const targetCurrent = domainTargetContext();
+  if (!targetCurrent()) return;
+  await run(async (isCurrent) => {
+    await applyWorkspace(setMailDomainQuota(selectedDomain.value, domainQuota.value), isCurrent);
     showNotice(t("panel.mail.quotaSaved"), false);
-  });
+  }, targetCurrent);
 }
 
 async function changeAccountQuota(address: string, currentMax: number) {
+  const targetCurrent = domainTargetContext("accounts", address);
+  if (!targetCurrent()) return;
   const value = await prompt({
     title: t("panel.mail.enterQuota"),
     message: address,
@@ -2067,10 +2478,10 @@ async function changeAccountQuota(address: string, currentMax: number) {
   if (value === null) return;
   const mb = Number(value);
   if (Number.isNaN(mb) || mb < 0) return;
-  await run(async () => {
-    apply(await setMailAccountQuota(address, mb));
+  await run(async (isCurrent) => {
+    await applyWorkspace(setMailAccountQuota(address, mb), isCurrent);
     showNotice(t("panel.mail.quotaSaved"), false);
-  });
+  }, targetCurrent);
 }
 
 /**
@@ -2658,6 +3069,84 @@ function showError(error: unknown) {
 }
 
 @media (max-width: 760px) {
+  /* Keep wide advanced tables inside their own scroll container. Ordinary mail
+     rows become cards, so mailbox actions cannot squeeze status into letters. */
+  .mail-panel > *,
+  .mail-panel .form-surface > * {
+    min-width: 0;
+  }
+
+  .maildomain-row,
+  .mail-row,
+  .alias-row,
+  .list-row {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: start;
+  }
+
+  .maildomain-row.table-head,
+  .mail-row.table-head,
+  .alias-row.table-head,
+  .list-row.table-head {
+    display: none;
+  }
+
+  .mail-row {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+
+  .mail-row > :not(.select-cell) {
+    grid-column: 2;
+  }
+
+  .mail-row .select-cell {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: start;
+  }
+
+  [data-label]::before {
+    content: attr(data-label) ": ";
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+  }
+
+  .list-subscribers::before {
+    flex-basis: 100%;
+  }
+
+  .mail-row .status-pill,
+  .maildomain-row .status-pill {
+    max-width: 100%;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .mail-domain-bar .current-domain,
+  .address-field span,
+  .subscriber-chip,
+  .alias-chip {
+    overflow-wrap: anywhere;
+    min-width: 0;
+  }
+
+  .address-field {
+    flex-wrap: wrap;
+  }
+
+  .address-field span {
+    white-space: normal;
+  }
+
+  .mail-domain-bar .danger {
+    margin-left: 0;
+  }
+
+  .diag-row {
+    flex-wrap: wrap;
+  }
+
   .rdns-meta,
   .autoconfig-meta {
     grid-template-columns: 1fr;

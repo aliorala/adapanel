@@ -58,6 +58,7 @@ public sealed class ComponentPackageAuditScriptTests : IDisposable
     [InlineData("redis")]        // GitHub releases
     [InlineData("adminer")]
     [InlineData("stalwart-mail")]
+    [InlineData("mailenable-standard")]
     [InlineData("win-acme")]
     public void Canli_adres_cozen_bilesenler_kaynaktan_turetilir(string bilesenId)
     {
@@ -78,7 +79,6 @@ public sealed class ComponentPackageAuditScriptTests : IDisposable
     [InlineData("phpmyadmin")]
     [InlineData("docker-engine")]
     [InlineData("vc-redist-x64")]
-    [InlineData("mailenable-standard")]
     [InlineData("url-rewrite")]
     public void Adresi_manifeste_bagli_bilesenler_turetilen_listeye_GIRMEZ(string bilesenId)
     {

@@ -15,7 +15,8 @@ public sealed partial class DnsService(
     IIisSiteService iisSiteService,
     IPanelPreferencesService panelPreferencesService,
     JsonFileStore fileStore,
-    ILogger<DnsService> logger) : IDnsService
+    ILogger<DnsService> logger,
+    IFtpService? ftpService = null) : IDnsService
 {
     private readonly DnsAvailabilityProbe dnsAvailability = new();
     internal Func<string, CancellationToken, Task<CommandResult>> NativeCommand { get; set; }
@@ -1336,10 +1337,16 @@ public sealed partial class DnsService(
         {
             var type = (record.Type ?? string.Empty).Trim().ToUpperInvariant();
             var host = (record.Host ?? string.Empty).Trim();
-            var value = (record.Value ?? string.Empty).Trim();
-            if (!allowed.Contains(type) || host.Length == 0 || value.Length == 0)
+            var value = type == "TXT"
+                ? record.Value ?? throw new AppException("dns.invalid_record_value", 400, 400)
+                : (record.Value ?? string.Empty).Trim();
+            if (!allowed.Contains(type) || host.Length == 0 || type != "TXT" && value.Length == 0)
             {
                 continue;
+            }
+            if (type == "TXT")
+            {
+                ValidateRecordValue(type, value, record.Priority);
             }
 
             clean.Records.Add(new DnsTemplateRecordDto
@@ -1554,13 +1561,15 @@ public sealed partial class DnsService(
         var records = new List<DnsRecordState>();
         foreach (var tpl in template.Records)
         {
+            var isTxt = string.Equals(tpl.Type, "TXT", StringComparison.OrdinalIgnoreCase);
             var host = ExpandPlaceholders(tpl.Host, zoneName, ip, ns1, ns2);
-            var value = ExpandPlaceholders(tpl.Value, zoneName, ip, ns1, ns2);
+            var value = ExpandPlaceholders(tpl.Value, zoneName, ip, ns1, ns2, preserveWhitespace: isTxt);
             // {ip} çözülemediyse (sunucu IPv4 yok) A/AAAA gibi kayıtlar boş value'lu olur → atla (geçersiz kayıt yazma).
-            if (host.Length == 0 || value.Length == 0)
+            if (host.Length == 0 || !isTxt && value.Length == 0)
             {
                 continue;
             }
+            if (isTxt) ValidateRecordValue("TXT", value, tpl.Priority);
 
             records.Add(new DnsRecordState
             {
@@ -1578,7 +1587,8 @@ public sealed partial class DnsService(
         return records.Count > 0 ? records : CreateDefaultRecords(site, zoneName, serverAddress).ToList();
     }
 
-    private static string ExpandPlaceholders(string input, string zone, string ip, string ns1, string ns2)
+    private static string ExpandPlaceholders(string input, string zone, string ip, string ns1, string ns2,
+        bool preserveWhitespace = false)
     {
         var text = input ?? string.Empty;
 
@@ -1593,12 +1603,12 @@ public sealed partial class DnsService(
             text = text.Replace(" ip4:{ip}", string.Empty, StringComparison.OrdinalIgnoreCase);
         }
 
-        return text
+        var expanded = text
             .Replace("{domain}", zone, StringComparison.OrdinalIgnoreCase)
             .Replace("{ip}", ip, StringComparison.OrdinalIgnoreCase)
             .Replace("{ns1}", ns1, StringComparison.OrdinalIgnoreCase)
-            .Replace("{ns2}", ns2, StringComparison.OrdinalIgnoreCase)
-            .Trim();
+            .Replace("{ns2}", ns2, StringComparison.OrdinalIgnoreCase);
+        return preserveWhitespace ? expanded : expanded.Trim();
     }
 
     private static IEnumerable<DnsRecordState> CreateDefaultRecords(SiteDto site, string zoneName, string preferredServerAddress)
@@ -2226,6 +2236,7 @@ public sealed partial class DnsService(
 
         var satirlar = new List<string>
         {
+            NativeTxtFunctions,
             $"$adaAd = {adLiteral}",
             $"$adaTam = {tamDeger}",
             $"$adaCrlf = {crlfBirlesik}",
@@ -2244,8 +2255,10 @@ public sealed partial class DnsService(
             // Ayni konakta baska bir TXT bulunmasi yeterdi (ornegin '@' konagindaki SPF): olcum
             // true doner, kalan yollar atlanir ve panel kayit yazilmamisken TAM BASARI raporlardi.
             // Windows uzun TXT'i parcalara boldugu icin parcalar birlestirilip karsilastiriliyor.
-            "$adaOlcum = { [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue | " +
-            "Where-Object { ($_.RecordData.DescriptiveText -join '') -eq $adaTam }) }",
+            "$adaOlcum = { [bool](Get-AdaNativeTxt $zoneName | ForEach-Object { Convert-AdaNativeTxt $_ $zoneName } | " +
+            "Where-Object { $_.Host -ieq $adaAd -and $_.Value -ceq $adaTam }) }",
+            // A failed complete read must stop before trying any write strategy.
+            "$null = @(Get-AdaNativeTxt $zoneName | ForEach-Object { Convert-AdaNativeTxt $_ $zoneName })",
             "$adaEskiEap = $ErrorActionPreference",
             "$ErrorActionPreference = 'Continue'",
             // TRY/FINALLY: asagidaki yollardan biri sonlandirici bir hata firlatirsa (ornegin
@@ -2363,7 +2376,7 @@ public sealed partial class DnsService(
     }
 
     /// <summary>Tek tirnakli PowerShell dizesi icin kacis: yalnizca tek tirnak ikilenir.</summary>
-    private static string EscapeSingleQuoted(string value) => value.Replace("'", "''");
+    private static string EscapeSingleQuoted(string value) => PowerShellQuoting.Escape(value);
 
     internal static string BuildSrvLine(string host, string value, int? priority, int ttl)
     {
@@ -2493,8 +2506,8 @@ public sealed partial class DnsService(
         }
 
         var host = NormalizeHost(record.Host, zoneName);
-        var value = record.Value.Trim();
-        if (string.IsNullOrWhiteSpace(value))
+        var value = type == "TXT" ? record.Value : record.Value.Trim();
+        if (value is null || type != "TXT" && string.IsNullOrWhiteSpace(value))
         {
             throw new AppException("dns.invalid_record_value", 400, 400);
         }
@@ -2657,6 +2670,7 @@ public sealed partial class DnsService(
             "SRV" => FormatSrvValue(ParseSrvValue(value)),
             "CAA" => FormatCaaValue(ParseCaaValue(value)),
             "TLSA" => FormatTlsaValue(ParseTlsaValue(value)),
+            "TXT" => value,
             _ => value.Trim()
         };
     }
@@ -2786,7 +2800,7 @@ public sealed partial class DnsService(
 
     private static string EscapePowerShellLiteral(string value)
     {
-        return value.Replace("'", "''");
+        return PowerShellQuoting.Escape(value);
     }
 
     private static string BuildCommandDetails(CommandResult result)

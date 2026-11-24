@@ -459,7 +459,7 @@ public sealed class ArgumentInjectionTests
     {
         var kaynak = OkuKaynak("src", "AdaPanel.Infrastructure", "Mail", "WebmailService.cs");
         Assert.DoesNotContain("-HostHeader '{{webmailHost}}'", kaynak, StringComparison.Ordinal);
-        Assert.Contains("webmailHost.Replace(\"'\", \"''\")", kaynak, StringComparison.Ordinal);
+        Assert.Contains("-HostHeader '{{PowerShellQuoting.Escape(webmailHost)}}'", kaynak, StringComparison.Ordinal);
     }
 
     // --- düzenek ---------------------------------------------------------------------------

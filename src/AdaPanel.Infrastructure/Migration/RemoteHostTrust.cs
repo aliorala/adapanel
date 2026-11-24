@@ -198,8 +198,12 @@ public sealed class RemoteTrustFailure
 /// kapatmaya çalıştığımız küresel anahtarın yavaş biçimidir.
 /// </para>
 /// </remarks>
-public sealed class RemoteCertificateTrustGate(string? pinnedFingerprint)
+public sealed class RemoteCertificateTrustGate(string? pinnedFingerprint, string? expectedHost = null)
 {
+    // G19: panel adı BİR KEZ çözüp IP'ye bağlandığında TLS ana makine adı olarak IP'yi görür ve
+    // "ad uyuşmazlığı" der. expectedHost verilmişse, YALNIZ ad uyuşmazlığı varsa ve sertifika
+    // özgün adı gerçekten kapsıyorsa o hata yok sayılır; başka her hata (zincir, süre) aynen kalır.
+
     /// <summary>Reddedilen kimlik (yoksa <c>null</c>). İLK ret saklanır: sonrakiler teşhisi bulandırır.</summary>
     public RemoteTrustFailure? Failure { get; private set; }
 
@@ -235,6 +239,7 @@ public sealed class RemoteCertificateTrustGate(string? pinnedFingerprint)
             return false;
         }
 
+        errors = Support.CertificateHostMatcher.ForgiveNameMismatchFor(certificate, errors, expectedHost);
         if (errors == SslPolicyErrors.None)
         {
             return true;
@@ -297,17 +302,26 @@ public sealed class RemoteCertificateTrustGate(string? pinnedFingerprint)
         return sebepler.Distinct(StringComparer.Ordinal).ToList();
     }
 
+    /// <summary>
+    /// Expiry comes from the typed <c>NotAfter</c>, never from a <c>CurrentCulture</c> parse of the display
+    /// string, which made "expired" vs "not yet valid" depend on the server's regional settings.
+    /// </summary>
+    internal static bool CertificateExpiryPassed(X509Certificate certificate, DateTime nowUtc)
+    {
+        // GetExpirationDateString() is rendered in the CURRENT culture, so it must not be re-parsed;
+        // the typed NotAfter is culture-free. A plain X509Certificate is wrapped to reach it.
+        if (certificate is X509Certificate2 typed) return typed.NotAfter.ToUniversalTime() < nowUtc;
+        using var wrapped = new X509Certificate2(certificate);
+        return wrapped.NotAfter.ToUniversalTime() < nowUtc;
+    }
+
     private static IEnumerable<string> ZincirSebebi(X509ChainStatusFlags status, X509Certificate certificate)
     {
         if (status.HasFlag(X509ChainStatusFlags.NotTimeValid))
         {
             // "Süresi geçmiş" ile "henüz geçerli değil" farklı arızalardır: ilki unutulmuş bir
             // yenileme, ikincisi çoğu zaman sunucu saatinin yanlış olması demektir.
-            yield return DateTime.TryParse(
-                certificate.GetExpirationDateString(),
-                CultureInfo.CurrentCulture,
-                DateTimeStyles.None,
-                out var bitis) && bitis < DateTime.Now
+            yield return CertificateExpiryPassed(certificate, DateTime.UtcNow)
                 ? "expired"
                 : "not_yet_valid";
         }

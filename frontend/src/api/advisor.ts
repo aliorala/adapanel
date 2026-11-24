@@ -14,6 +14,7 @@ export type AdvisorItem = {
   detailKey: string;
   detail: string;
   actionSection: string;
+  sslRepair?: import('./sslRepair').SslRepairTarget | null;
 };
 
 export type AdvisorReport = {

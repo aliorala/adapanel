@@ -39,7 +39,14 @@ public sealed class SiteCascadeDeletionService(
     IOptions<PanelRuntimeOptions> runtimeOptions,
     JsonFileStore fileStore,
     ILogger<SiteCascadeDeletionService> logger,
-    IConcurrencyLock concurrencyLock) : ISiteCascadeDeletionService
+    IConcurrencyLock concurrencyLock,
+    // Takma adlar: kayıt (site-aliases.json) + bağlamalar + yönlendirme kuralı. Opsiyonel: yoksa adım atlanır.
+    ISiteAliasService? siteAliasService = null,
+    // Node/Python barındırma, Docker konteynerleri ve Git dağıtımı (panel git dizini, anahtar/jeton) temizliği.
+    // Opsiyonel: yoksa ilgili adım atlanır (eski davranış).
+    IAppRuntimeService? appRuntimeService = null,
+    IDockerService? dockerService = null,
+    IGitDeploymentService? gitDeploymentService = null) : ISiteCascadeDeletionService
 {
     private static readonly string[] DatabaseEngines = ["mysql", "mariadb", "postgresql", "mssql"];
 
@@ -61,6 +68,8 @@ public sealed class SiteCascadeDeletionService(
             HasReverseProxy = await SafeBoolAsync(async () => (await reverseProxyService.GetSiteConfigurationAsync(site.Name, cancellationToken)).IsProxyEnabled),
             HasDiskQuota = await SafeBoolAsync(async () => (await diskQuotaService.GetQuotaAsync(site.Name, cancellationToken)).QuotaEnabled),
             HasGitDeployment = File.Exists(fileStore.ResolvePath(GitConfigRelativePath(site.Name))),
+            HasAppRuntime = appRuntimeService is not null && await SafeBoolAsync(async () => (await appRuntimeService.GetSiteConfigurationAsync(site.Name, cancellationToken)).IsEnabled),
+            DockerContainers = dockerService is null ? [] : await SafeContainersAsync(dockerService, site.Name, cancellationToken),
             CustomerAssignments = await CountCustomerAssignmentsAsync(site.Name, cancellationToken),
             ScheduledTasks = await CountScheduledTasksAsync(site, cancellationToken)
         };
@@ -198,8 +207,9 @@ public sealed class SiteCascadeDeletionService(
                 siteName);
         }
 
-        // 7) SSL durumu (panelin ssl.json'undaki o siteye ait sertifika kayıtları).
-        await StepAsync(result, "SSL kayıtları", () => sslService.RemoveSiteAsync(siteName, cancellationToken));
+        // 7) SSL temizliği IIS sitesi kaldırıldıktan SONRA yapılır (adım 9b): sertifikanın başka
+        //    bağlama/FTPS tarafından kullanılıp kullanılmadığı canlı IIS'ten ölçülür ve bu siteninki
+        //    o ölçümden düşmüş olmalıdır.
 
         // 8) Müşteri atamaları.
         await StepAsync(result, "Müşteri atamaları", () => customerScopeService.RemoveSiteFromAllScopesAsync(siteName, cancellationToken));
@@ -207,8 +217,57 @@ public sealed class SiteCascadeDeletionService(
         // 8b) Site↔DB bağ kayıtları (site gidince öksüz bağ kalmasın; bağlı DB'ler yukarıda 2. adımda zaten silindi).
         await StepAsync(result, "Veritabanı bağları", () => RemoveSiteDatabaseLinksAsync(siteName, cancellationToken));
 
-        // 8) Git dağıtım yapılandırması.
-        TryDeleteFile(result, "Git dağıtım yapılandırması", fileStore.ResolvePath(GitConfigRelativePath(siteName)));
+        // 8) Git dağıtım yapılandırması (+ panelin git dizini, geçmiş, dağıtım anahtarı/jetonu).
+        if (gitDeploymentService is not null)
+        {
+            await StepAsync(result, "Git dağıtımı (yapılandırma, git dizini, anahtar/jeton)", async () =>
+            {
+                var removal = await gitDeploymentService.RemoveAsync(siteName, cancellationToken);
+                if (removal.Leftovers.Length > 0) throw new IOException(string.Join("; ", removal.Leftovers));
+            }, SiteLeftoverKinds.Other, $"git:{siteName}");
+        }
+        else
+        {
+            TryDeleteFile(result, "Git dağıtım yapılandırması", fileStore.ResolvePath(GitConfigRelativePath(siteName)));
+        }
+
+        // 8a) Docker: siteyle ilişkili (etiketli) konteynerler. Motor yoksa yapacak şey yoktur; motor kurulu ama
+        //     kapalıysa konteynerlerin olup olmadığı ÖLÇÜLEMEZ → sessiz geçilmez, kalıntı olarak bildirilir.
+        if (dockerService is not null)
+        {
+            try
+            {
+                var docker = await dockerService.RemoveSiteContainersAsync(siteName, cancellationToken);
+                foreach (var name in docker.Removed) result.Removed.Add($"Docker konteyneri ({name})");
+                foreach (var failure in docker.Failed)
+                {
+                    result.Warnings.Add($"Docker konteyneri: {failure}");
+                    Kalinti(result, SiteLeftoverKinds.Other, $"docker:{failure.Split(':')[0]}", failure);
+                }
+                if (docker.Installed && !docker.DaemonRunning)
+                {
+                    result.Warnings.Add("Docker motoruna ulaşılamadı; siteyle ilişkili konteynerler kontrol edilemedi.");
+                    Kalinti(result, SiteLeftoverKinds.Other, $"docker:{siteName}", "Docker motoru çalışmıyor; ilişkili konteyner olup olmadığı ölçülemedi");
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                result.Warnings.Add($"Docker konteynerleri: {exception.Message}");
+                Kalinti(result, SiteLeftoverKinds.Other, $"docker:{siteName}", exception.Message);
+            }
+        }
+
+        // 8h) Node/Python barındırma: süreç dosyaları kilitlemesin diye IIS sitesi ve dosyalar silinmeden ÖNCE.
+        //     Silme işaretini bu akış tutar; bu yüzden korumalı (Capture'lı) uç değil silme yolu kullanılır.
+        if (appRuntimeService is not null && site is not null &&
+            await SafeBoolAsync(async () => (await appRuntimeService.GetSiteConfigurationAsync(siteName, cancellationToken)).IsEnabled))
+        {
+            await StepAsync(result, "Node/Python uygulaması", async () =>
+            {
+                var removal = await appRuntimeService.RemoveAppForSiteDeletionAsync(site, deleteLogs: true, cancellationToken);
+                if (removal.Leftovers.Length > 0) throw new IOException(string.Join("; ", removal.Leftovers));
+            }, SiteLeftoverKinds.Other, $"apphost:{siteName}");
+        }
 
         // 8c) Barındırma ayarları + ARKA PLAN GÖREVLERİ (kuyruk işçisi, Laravel zamanlayıcı).
         //     Bunlar zamanlanmış görevdir: site gitse de tetiklenmeye devam ederler.
@@ -241,6 +300,26 @@ public sealed class SiteCascadeDeletionService(
             });
         }
 
+        // 8g) Takma adlar. IIS sitesi silinmeden ÖNCE: RemoveAliasAsync siteyi okur, bağlamaları ve
+        //     yönlendirme kuralını kaldırır; kayıt kalırsa aynı adla açılan yeni site eski yönlendirmeyi geri getirirdi.
+        if (siteAliasService is not null && site is not null)
+        {
+            try
+            {
+                foreach (var alias in (await siteAliasService.GetAliasesAsync(siteName, cancellationToken)).Aliases.ToArray())
+                {
+                    await StepAsync(result, $"Takma ad ({alias.HostName})",
+                        () => siteAliasService.RemoveAliasAsync(siteName, alias.HostName, cancellationToken),
+                        SiteLeftoverKinds.Other, $"alias:{alias.HostName}");
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                result.Warnings.Add($"Takma adlar: {exception.Message}");
+                Kalinti(result, SiteLeftoverKinds.Other, $"alias:{siteName}", exception.Message);
+            }
+        }
+
         // SİLME POLİTİKASI IIS SİTESİ KALDIRILMADAN ÖNCE ÖLÇÜLÜR: "bu klasör başka bir siteye de
         // ait mi?" sorusunun cevabı IIS'in site listesinden gelir ve o liste birazdan değişecek.
         var silmePolitikasi = deleteFiles
@@ -254,6 +333,18 @@ public sealed class SiteCascadeDeletionService(
             () => iisSiteService.DeleteSiteAsync(siteName, cancellationToken),
             SiteLeftoverKinds.Site,
             siteName);
+
+        // 9b) SSL: win-acme yenilemesini iptal et + panel kaydını sil + sertifikayı (kullanan yoksa) depodan çıkar.
+        //     IIS sitesi gitmediyse atlanır: site hâlâ o sertifikayı kullanıyor olabilir, kayıtları da duruyor.
+        if (!result.Leftovers.Any(l => l.Kind == SiteLeftoverKinds.Site))
+        {
+            await StepAsync(
+                result,
+                "SSL kayıtları ve yenileme",
+                () => sslService.RemoveSiteAsync(siteName, cancellationToken),
+                SiteLeftoverKinds.Other,
+                $"ssl:{siteName}");
+        }
 
         // 10) Dosyalar (en son; site kaldırıldıktan sonra). Uygulama kökü, fiziksel yolu
         //     da kapsıyorsa onunla birlikte gider.
@@ -1256,6 +1347,12 @@ public sealed class SiteCascadeDeletionService(
                     $"sahiplik kaydı güncellenemedi, silinmiş '{siteName}' sitesine bağlı görünüyor — {exception.Message}");
             }
         }
+    }
+
+    private static async Task<string[]> SafeContainersAsync(IDockerService docker, string siteName, CancellationToken cancellationToken)
+    {
+        try { return (await docker.ListSiteContainersAsync(siteName, cancellationToken)).ToArray(); }
+        catch (Exception exception) when (exception is not OperationCanceledException) { return []; }
     }
 
     private static string GitConfigRelativePath(string siteName)

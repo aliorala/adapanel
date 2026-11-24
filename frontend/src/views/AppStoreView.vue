@@ -44,7 +44,7 @@
 
     <div v-if="wpAdmin.adminPassword" class="notice wp-creds" role="status">
       <strong>{{ t("panel.appStore.wpReady") }}</strong>
-      <div class="wp-cred-line">{{ t("panel.appStore.wpAdminUrl") }}: <a :href="wpAdmin.adminUrl" target="_blank" rel="noopener">{{ wpAdmin.adminUrl }}</a></div>
+      <div class="wp-cred-line">{{ t("panel.appStore.wpAdminUrl") }}: <a :href="safeHref(wpAdmin.adminUrl)" target="_blank" rel="noopener">{{ wpAdmin.adminUrl }}</a></div>
       <div class="wp-cred-line">{{ t("panel.appStore.wpUser") }}: <code>{{ wpAdmin.adminUser }}</code></div>
       <div class="wp-cred-line">{{ t("panel.appStore.wpPass") }}: <code>{{ wpAdmin.adminPassword }}</code></div>
       <small>{{ t("panel.appStore.wpCredHint") }}</small>
@@ -200,6 +200,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getAppTemplates, installAppTemplate, type AppTemplate } from "../api/store";
@@ -400,14 +401,15 @@ async function install(templateId: string) {
     wpAdmin.adminUrl = result.adminUrl || "";
     wpAdmin.adminUser = result.adminUser || "";
     wpAdmin.adminPassword = result.adminPassword || "";
-    showNotice(t("panel.appStore.installed"), false);
+    const installationMessage = t(result.requiresManualSetup ? "panel.appStore.manualSetupRequired" : "panel.appStore.installed");
+    showNotice(installationMessage, result.requiresManualSetup === true);
     try {
       await sitesStore.fetchSites();
     } catch (error) {
       if (current()) {
         sitesReady.value = false;
         sitesUnavailable.value = true;
-        showNotice(`${t("panel.appStore.installedRefreshFailed")}\n\n${resolveApiMessage(error)}`, true, extractApiDetails(error));
+        showNotice(`${installationMessage}\n\n${t("panel.appStore.installedRefreshFailed")}\n\n${resolveApiMessage(error)}`, true, extractApiDetails(error));
       }
     }
   } catch (error) {

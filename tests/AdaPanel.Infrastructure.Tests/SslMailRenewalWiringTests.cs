@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Core.Entities;
@@ -54,8 +54,9 @@ public sealed class SslMailRenewalWiringTests
     {
         using var f = new Fixture(false);
         f.FailMail = true;
-        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.RenewAllAsync(f.Area.Iptal));
-        Assert.Equal("mail.certificate_not_activated", error.MessageKey);
+        var result = await f.Service.RenewAllAsync(f.Area.Iptal);
+        Assert.Contains("mail.certificate_not_activated", result.FailureReason);
+        Assert.Contains("mail.certificate_not_activated", result.Output);
     }
 
     private sealed class Fixture : IDisposable

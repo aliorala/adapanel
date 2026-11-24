@@ -29,7 +29,7 @@ public sealed class PanelAccessStatusDto
     /// <summary>Ters vekilin ilettiği yerel panel adresi (ör. https://localhost:8890).</summary>
     public string BackendUrl { get; set; } = string.Empty;
 
-    /// <summary>443'te FİİLEN sunulan sertifikanın kaynağı: letsencrypt | self-signed | none.</summary>
+    /// <summary>443'te FİİLEN sunulan sertifikanın kaynağı: letsencrypt | manual | self-signed | none.</summary>
     public string CertificateSource { get; set; } = "none";
 
     /// <summary>Sunulan sertifika kendinden imzalı mı — yapay zeka istemcilerinin reddettiği durum.</summary>

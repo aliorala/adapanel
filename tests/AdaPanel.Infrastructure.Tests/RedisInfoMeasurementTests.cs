@@ -193,13 +193,153 @@ public sealed class RedisInfoMeasurementTests : IDisposable
         }
     }
 
-    private CacheService Service(Stream stream, ILogger<CacheService>? logger = null) => new(context, logger)
+    [Fact]
+    public async Task Database_usage_and_restart_identity_are_measured()
+    {
+        var before = DateTimeOffset.UtcNow;
+        var runId = new string('a', 40);
+        using var stream = new ResponseStream(Frame(Info.Replace("# Server", "# Server\r\nrun_id:" + runId)));
+        var metrics = await Read(Service(stream));
+        AssertMeasured(metrics);
+        Assert.InRange(metrics!.MeasuredAtUtc, before, DateTimeOffset.UtcNow);
+        Assert.Equal(runId, metrics.RunId);
+        Assert.Collection(metrics.Databases,
+            db => { Assert.Equal(0, db.Index); Assert.Equal(7, db.Keys); Assert.Equal(1, db.Expires); Assert.Equal(12, db.AverageTtlMilliseconds); },
+            db => { Assert.Equal(2, db.Index); Assert.Equal(5, db.Keys); Assert.Equal(0, db.Expires); Assert.Equal(0, db.AverageTtlMilliseconds); });
+    }
+
+    [Theory]
+    [InlineData("expires=-1,avg_ttl=bad")]
+    [InlineData("expires=8,avg_ttl=9223372036854775808")]
+    [InlineData("expires=1,expires=2,avg_ttl=1,avg_ttl=2")]
+    [InlineData("other=1")]
+    public async Task Invalid_or_missing_optional_usage_fields_remain_unknown(string fields)
+    {
+        using var stream = new ResponseStream(Frame(Info.Replace("expires=1,avg_ttl=12", fields)));
+        var metrics = await Read(Service(stream));
+        AssertMeasured(metrics);
+        Assert.Null(metrics!.Databases[0].Expires);
+        Assert.Null(metrics.Databases[0].AverageTtlMilliseconds);
+    }
+
+    [Theory]
+    [InlineData("db2147483648:keys=1")]
+    [InlineData("db00:keys=1")]
+    public async Task Unrepresentable_or_duplicate_database_indices_are_not_silently_ignored(string row)
+    {
+        using var stream = new ResponseStream(Frame(Info + row + "\r\n"));
+        Assert.Null(await Read(Service(stream)));
+    }
+
+    [Fact]
+    public async Task Client_projection_excludes_own_socket_and_private_fields()
+    {
+        using var info = new ResponseStream(Frame(Info));
+        using var clients = new ResponseStream(Frame("id=1 addr=127.0.0.1:10 name= db=0 idle=0 cmd=client|list\n" +
+            "id=2 addr=192.0.2.1:20 name=worker db=2 idle=17 cmd=secret-command user=private\n"), 1);
+        var metrics = await Read(Service(info, clients: clients));
+        AssertMeasured(metrics);
+        var client = Assert.Single(metrics!.Clients!);
+        Assert.Equal("worker", client.Name);
+        Assert.Equal(2, client.DatabaseIndex);
+        Assert.Equal(17, client.IdleSeconds);
+        Assert.Equal("CLIENT LIST\r\n", Encoding.ASCII.GetString(clients.Written.ToArray()));
+        var json = System.Text.Json.JsonSerializer.Serialize(metrics.Clients);
+        Assert.DoesNotContain("192.0.2", json);
+        Assert.DoesNotContain("secret-command", json);
+    }
+
+    [Fact]
+    public async Task Only_the_panel_connection_is_a_measured_zero_external_clients()
+    {
+        using var info = new ResponseStream(Frame(Info));
+        using var clients = new ResponseStream(Frame("addr=127.0.0.1:10 name= db=0 idle=0\n"));
+        var metrics = await Read(Service(info, clients: clients));
+        Assert.NotNull(metrics!.Clients);
+        Assert.Empty(metrics.Clients);
+    }
+
+    [Theory]
+    [InlineData("-NOPERM private-response\r\n")]
+    [InlineData("$131073\r\n")]
+    [InlineData("$100\r\ntruncated")]
+    public async Task Client_list_failure_preserves_INFO_without_leaking_response(string response)
+    {
+        using var info = new ResponseStream(Frame(Info));
+        using var clients = new ResponseStream(Encoding.ASCII.GetBytes(response));
+        var logger = new KayitTutanGunlukcu<CacheService>();
+        var metrics = await Read(Service(info, logger, clients));
+        AssertMeasured(metrics);
+        Assert.Null(metrics!.Clients);
+        Assert.DoesNotContain("private-response", logger.TumMetin);
+    }
+
+    [Theory]
+    [InlineData("addr=other name= db=0 idle=0\n")]
+    [InlineData("addr=127.0.0.1:10\naddr=other name= db=-1 idle=0\n")]
+    [InlineData("addr=127.0.0.1:10\naddr=other name= db=0 idle=bad\n")]
+    public async Task Unverified_client_rows_do_not_become_a_measured_count(string response)
+    {
+        using var info = new ResponseStream(Frame(Info));
+        using var clients = new ResponseStream(Frame(response));
+        var metrics = await Read(Service(info, clients: clients));
+        AssertMeasured(metrics);
+        Assert.Null(metrics!.Clients);
+    }
+
+    [Fact]
+    public async Task Client_read_cancellation_propagates_and_timeout_keeps_INFO()
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var info = new ResponseStream(Frame(Info));
+        using var clients = new ResponseStream([], beforeRead: cancellation.Cancel);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Read(Service(info, clients: clients), cancellationToken: cancellation.Token));
+
+        using var secondInfo = new ResponseStream(Frame(Info));
+        using var hangingClients = new ResponseStream([], blockAtEnd: true);
+        var metrics = await Read(Service(secondInfo, clients: hangingClients));
+        AssertMeasured(metrics);
+        Assert.Null(metrics!.Clients);
+    }
+
+    [Fact]
+    public async Task Real_client_socket_filters_itself_after_INFO_socket_is_closed()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var peerTask = Reply();
+        var metrics = await Read(new CacheService(context), ((IPEndPoint)listener.LocalEndpoint).Port, deadline.Token);
+        await peerTask;
+        AssertMeasured(metrics);
+        Assert.Equal("external", Assert.Single(metrics!.Clients!).Name);
+
+        async Task Reply()
+        {
+            using var infoPeer = await listener.AcceptTcpClientAsync(deadline.Token);
+            var infoStream = infoPeer.GetStream();
+            await infoStream.ReadExactlyAsync(new byte[6], deadline.Token);
+            await infoStream.WriteAsync(Frame(Info), deadline.Token);
+            using var listPeer = await listener.AcceptTcpClientAsync(deadline.Token);
+            Assert.Equal(0, await infoStream.ReadAsync(new byte[1], deadline.Token));
+            var listStream = listPeer.GetStream();
+            var command = new byte[13];
+            await listStream.ReadExactlyAsync(command, deadline.Token);
+            Assert.Equal("CLIENT LIST\r\n", Encoding.ASCII.GetString(command));
+            var body = $"addr={listPeer.Client.RemoteEndPoint} name= db=0 idle=0\naddr=192.0.2.1:15 name=external db=3 idle=9\n";
+            var frame = Frame(body);
+            foreach (var part in frame.Chunk(7)) await listStream.WriteAsync(part, deadline.Token);
+        }
+    }
+
+    private CacheService Service(Stream stream, ILogger<CacheService>? logger = null, Stream? clients = null) => new(context, logger)
     {
         OpenRedisInfoStreamAsync = (port, _) =>
         {
             Assert.Equal(0, port);
             return Task.FromResult(stream);
-        }
+        },
+        OpenRedisClientsStreamAsync = clients is null ? null : (_, _) => Task.FromResult((clients, "127.0.0.1:10"))
     };
 
     private static Task<CacheMetricsDto?> Read(CacheService service, int port = 0, CancellationToken cancellationToken = default)

@@ -1,6 +1,7 @@
 using AdaPanel.Core.Entities;
 using AdaPanel.Data.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Audit;
 
@@ -20,6 +21,17 @@ namespace AdaPanel.Infrastructure.Audit;
 /// Yazımın iki kuralı (sır temizliği ve başarısız kaydın İZLEMEDEN ÇIKARILMASI) burada, tek yerde
 /// duruyor: kopyalansaydı, birinde uygulanıp diğerinde unutulması an meselesiydi.
 /// </para>
+/// <para>
+/// HATA POLİTİKASI (bilinçli karar): VARSAYILAN = hata ATILIR. Mevcut çağıranlar denetim yazımını
+/// işlemin ATOMİK parçası sayar ve buna dayanır (2FA kurtarma kodları, SSL içe aktarma, durum
+/// değiştiren her uç: AuditCoverageTests, AuthTwoFactorLifecycleTests, SslImportLifecycleTests);
+/// varsayılanı yutmaya çevirmek bu sözleşmeyi 40+ çağrı yerinde sessizce bozardı. Her başarısızlık
+/// ayrıca günlüğe yazılır ve <see cref="AuditFailureMonitor"/> sayacını artırır (görünür boşluk).
+/// <c>propagateFailure: false</c> (en-iyi-çaba) yalnız, sistem değişikliği ZATEN yapılmış ve geri
+/// alınamayan çağıranlar için açık bir seçimdir: bekleyen başka değişiklik yoksa hata yutulur (sayaç
+/// artar); başka bekleyen değişiklik varsa yine atılır, çünkü aynı SaveChanges onları da taşır ve
+/// yutmak veri kaybını başarı gibi gösterirdi.
+/// </para>
 /// </remarks>
 internal static class AuditWriter
 {
@@ -31,8 +43,12 @@ internal static class AuditWriter
         Guid? userId,
         Guid? subscriptionUserId,
         string? ipAddress,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool propagateFailure = true,
+        ILogger? logger = null)
     {
+        var hadOtherPendingChanges = dbContext.ChangeTracker.HasChanges();
+
         // SIR TEMİZLİĞİ + KIRPMA burada, yazma yolunun tek geçidinde. Gerekçe: AuditSecretRedactor.
         var entry = new AuditLog
         {
@@ -51,13 +67,27 @@ internal static class AuditWriter
         {
             await dbContext.SaveChangesAsync(cancellationToken);
         }
-        catch
+        catch (Exception exception)
         {
             // Yazılamayan kaydı İZLEMEDEN ÇIKAR. Aksi hâlde aynı DbContext'i kullanan bir sonraki
             // SaveChanges (asıl işlemin kendi kaydı) bu bozuk girişi tekrar denerdi; yani denetim
             // yazımının hatası, alakasız bir işlemi de düşürürdü.
             dbContext.Entry(entry).State = EntityState.Detached;
-            throw;
+
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                AuditFailureMonitor.Record();
+                logger?.LogError(
+                    exception,
+                    "Denetim kaydı yazılamadı (eylem {Action}). Toplam başarısız yazım: {Count}.",
+                    entry.Action,
+                    AuditFailureMonitor.FailureCount);
+            }
+
+            if (propagateFailure || hadOtherPendingChanges || cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
         }
     }
 }

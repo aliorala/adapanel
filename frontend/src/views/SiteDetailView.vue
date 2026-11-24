@@ -85,7 +85,7 @@
           </button>
 
           <template v-if="preview">
-            <a class="preview-url" :href="preview.url" target="_blank" rel="noopener" :title="preview.url">
+            <a class="preview-url" :href="safeHref(preview.url)" target="_blank" rel="noopener" :title="preview.url">
               {{ preview.url }} ↗
             </a>
             <button
@@ -251,6 +251,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { primarySiteUrl } from "../utils/siteUrl";
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
@@ -261,10 +262,11 @@ import { useAuthStore } from "../stores/auth";
 import { useSectionError } from "../composables/useNotice";
 import { copyToClipboard } from "../utils/clipboard";
 import { siteToolIcon } from "../utils/siteToolIcons";
+import { canUseSiteTool } from "../utils/siteToolAccess";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 // Site oluşturma içeren işlemler (subdomain) + server-level araçlar yalnız admin'e gösterilir.
-const isAdmin = computed(() => useAuthStore().session?.user?.role === "Administrator");
+const authStore = useAuthStore();
 
 const props = defineProps<{
   site: SiteRecord | null;
@@ -296,8 +298,7 @@ const siteTools = computed(() => [
   { id: "asp", label: t("panel.sites.tools.asp") },
   { id: "mail", label: t("panel.sites.tools.mail") },
   { id: "ssl", label: t("panel.sites.tools.ssl") },
-  // Veritabanları (admin-only): site iş alanında DB ekle/sil + phpMyAdmin (SiteDatabasesView).
-  ...(isAdmin.value ? [{ id: "webdb", label: t("panel.sites.tools.domaindb") }] : []),
+  { id: "webdb", label: t("panel.sites.tools.domaindb") },
   { id: "ftp", label: t("panel.sites.tools.ftp") },
   { id: "dns", label: t("panel.sites.tools.dns") },
   { id: "stats", label: t("panel.sites.tools.stats") },
@@ -305,9 +306,10 @@ const siteTools = computed(() => [
   { id: "protected", label: t("panel.sites.tools.protected") },
   { id: "backup", label: t("panel.sites.tools.backup") },
   { id: "apps", label: t("panel.sites.tools.apps") },
-  // yazılım mağazası server-level (admin-only).
-  ...(isAdmin.value ? [{ id: "store", label: t("panel.sites.tools.store") }] : [])
-]);
+  { id: "store", label: t("panel.sites.tools.store") }
+  // Rol süzgeci TEK haritadan (utils/siteToolAccess.ts): yetkisiz kart hiç çizilmez. Eskiden kartlar
+  // kendi listesinden geliyordu ve rolün kullanamadığı kart tıklanınca hiçbir şey yapmıyordu.
+].filter((tool) => canUseSiteTool(tool.id, authStore.session?.user?.role)));
 
 const bindingForm = reactive<SiteBindingPayload>({
   protocol: "http",
@@ -389,7 +391,7 @@ const gercekBaglamalar = computed(() =>
  * Adresi ACMA isi ust baglam cubugundaki baglantiya devredildi; buradaki `openSite`
  * sarmalayicisi o dugmeyle birlikte kalkti.
  */
-const primaryUrl = computed(() => primarySiteUrl(props.site?.bindings ?? []));
+const primaryUrl = computed(() => primarySiteUrl(props.site?.bindings ?? [], props.site?.name));
 
 function submitBinding() {
   if (!props.site) {

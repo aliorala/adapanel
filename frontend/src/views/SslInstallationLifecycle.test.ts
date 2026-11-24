@@ -77,6 +77,14 @@ it("allows an intentionally imported self-signed certificate with measured insta
   const { state } = await prepare("import"); writeReply = async config => { latest = certificate("self-signed"); return response(config, latest); };
   await state.submitImport(); expect(state.noticeError).toBe(false); expect(state.notice).toBe("panel.ssl.imported");
 });
+it("keeps a successful import's preserved-redirect warning visible after refreshing its certificate", async () => {
+  const { state } = await prepare("import");
+  writeReply = async config => { latest = { ...certificate(), fallbackReason: "ssl.https_redirect_preserved" }; return response(config, latest); };
+  await state.submitImport();
+  expect(state.noticeError).toBe(true);
+  expect(state.notice).toBe("ssl.https_redirect_preserved");
+  expect(state.workspace?.certificates[0]?.isCertificateBound).toBe(true);
+});
 it("accepts a measured wildcard issuance for the requested base domain", async () => {
   const { state } = await prepare("issue"); state.issueForm.wildcard = true; writeReply = async config => { latest = { ...certificate("letsencrypt"), hostName: "*.a.test" }; return response(config, latest); };
   await state.issue(); expect(state.noticeError).toBe(false);

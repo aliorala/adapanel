@@ -40,6 +40,7 @@ public sealed class AttentionItemDto
 
     /// <summary>Düzeltme ucunun HTTP metodu (POST). ActionEndpoint boşsa anlamsızdır.</summary>
     public string ActionMethod { get; set; } = string.Empty;
+    public AdaPanel.Core.Dtos.Ssl.SslRepairTarget? SslRepair { get; set; }
 
     /// <summary>Düzeltme çağrısının gövdesi gerekiyorsa hazır JSON alanları (ör. {"name":"W3SVC"}).</summary>
     public IReadOnlyDictionary<string, string> ActionPayload { get; set; } = new Dictionary<string, string>();

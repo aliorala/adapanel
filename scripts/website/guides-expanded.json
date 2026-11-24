@@ -1,0 +1,2530 @@
+{
+  "aspnet_deploy": {
+    "category": "apps",
+    "updated": "2026-10-22",
+    "related": [
+      "web_runtime",
+      "iis_errors",
+      "staging",
+      "isolation"
+    ],
+    "tr": {
+      "path": "/aspnet-core-iis-yayinlama/",
+      "title": "ASP.NET Core uygulamasını IIS üzerinde yayınlama | AdaPanel",
+      "heading": "ASP.NET Core uygulamasını IIS üzerinde yayınlama",
+      "description": "Windows Server üzerinde ASP.NET Core yayını: Hosting Bundle, publish çıktısı, IIS havuzu, ortam ayarları ve gerçek istekle doğrulama adımları.",
+      "intro": "ASP.NET Core yayını için yalnız dosyaları kopyalamak yetmez. Uygulamanın hedef çalışma zamanı, IIS entegrasyonu, havuz kimliği ve üretim ayarları birlikte doğrulanmalıdır. AdaPanel ile yönettiğiniz IIS sitesini bu kontrol sırasıyla değerlendirin.",
+      "sections": [
+        {
+          "id": "paket",
+          "heading": "Kaynak kod yerine hangi çıktı yayınlanır?",
+          "paragraphs": [
+            "Dağıtım paketini projenin yayınlama işlemiyle oluşturun. Paket kimliğini, hedef .NET sürümünü, işlemci mimarisini ve bağımlı mı bağımsız mı yayınlandığını kaydedin. Geliştirme bilgisayarındaki bin klasöründen rastgele dosya seçmek, eksik bağımlılıkların üretimde ortaya çıkmasına yol açabilir.",
+            "Framework-dependent yayın sunucudaki uyumlu çalışma zamanını kullanır. Self-contained yayın çalışma zamanını paketler; IIS ile entegrasyon gereksinimini ortadan kaldırmaz. Eski çalışan paketi ve ortam ayarlarını geri dönüş için ayrı tutun."
+          ]
+        },
+        {
+          "id": "iis",
+          "heading": "IIS tarafında doğrulanacak bileşenler",
+          "columns": [
+            "Katman",
+            "Doğrulama"
+          ],
+          "rows": [
+            [
+              "Hosting Bundle",
+              "ASP.NET Core Module ve uygulamaya uygun barındırma bileşenleri mevcut mu?"
+            ],
+            [
+              "Fiziksel klasör",
+              "IIS sitesi doğrulanmış publish çıktısını mı gösteriyor?"
+            ],
+            [
+              "Uygulama havuzu",
+              "Mimari, kimlik ve seçilen barındırma modeli birbiriyle uyumlu mu?"
+            ],
+            [
+              "web.config",
+              "Yayın aracının ürettiği süreç yolu ve argümanlar gerçek paketle eşleşiyor mu?"
+            ]
+          ]
+        },
+        {
+          "id": "ortam",
+          "heading": "Üretim ayarlarını paketten ayrı yönetin",
+          "paragraphs": [
+            "Bağlantı dizelerini, dış servis anahtarlarını ve ortam değişkenlerini envanterleyin; bunları halka açık tanılama sayfalarında göstermeyin. Üretim veritabanına yanlışlıkla bağlanan bir test sitesi, yalnız arayüz kontrolünde fark edilmeyen veri değişiklikleri yapabilir.",
+            "Havuz kimliğine uygulama dosyalarını okuma, yalnız gerekli günlük ve yükleme klasörlerine yazma izni verin. Uygulamanın açılması için bütün siteye veya bütün müşterilere geniş yazma izni vermek yerine erişim hatasının yolunu belirleyin."
+          ]
+        },
+        {
+          "id": "test",
+          "heading": "Yayın kabul testi",
+          "steps": [
+            "Test alan adında ana sayfa, statik varlık ve API yanıtını ayrı ayrı açın; yalnız 200 durumunu değil beklenen içeriği kontrol edin.",
+            "Giriş yapın, güvenli bir test kaydı oluşturun ve veritabanından tekrar okuyun. Oturum çerezi ve HTTPS davranışını sınayın.",
+            "Havuzu kontrollü olarak yeniden başlatıp ilk isteği tekrarlayın; yalnız sıcak süreçte çalışan bir uygulamayı başarılı saymayın.",
+            "Kullanılan sürümü, test saatini ve günlüklerdeki hata durumunu kaydedin. DNS geçişinden sonra aynı testleri dış ağdan tekrarlayın."
+          ]
+        },
+        {
+          "id": "hata",
+          "heading": "Başlangıç hatasında hangi kanıt toplanır?",
+          "paragraphs": [
+            "500.30 veya 502.5 görüldüğünde IIS alt durumunu, Windows olay kaydını ve uygulamanın başlangıç hatasını birlikte inceleyin. Eksik çalışma zamanı, erişim izni veya uygulama yapılandırması farklı düzeltmeler gerektirir; yalnız durum kodundan kesin neden çıkarılmaz.",
+            "Geçici ayrıntılı günlük açarsanız erişimini sınırlayın ve teşhis sonrası kapatın. Veritabanı şeması da değiştiyse dosyaları eski sürüme döndürmenin yeterli olacağını varsaymayın; veri uyumunu geri dönüş planına dahil edin."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "AdaPanel kurmak uygulamayı otomatik olarak uyumlu yapar mı?",
+          "Hayır. Projenin .NET hedefi, bağımlılıkları ve IIS barındırma gereksinimleri ayrıca doğrulanmalıdır. Panel üzerinden site yönetimi bu uygulama testlerinin yerine geçmez."
+        ],
+        [
+          "Self-contained yayın için IIS bileşeni gerekir mi?",
+          "Evet. Çalışma zamanını paketlemek ile IIS entegrasyonu farklıdır. Seçtiğiniz yayın modeline uygun ASP.NET Core Module gereksinimini kontrol edin."
+        ],
+        [
+          "Ana sayfanın açılması yeterli mi?",
+          "Hayır. Giriş, veritabanı, yükleme ve yeniden başlatma sonrası ilk istek de çalışmalıdır. Kritik işlemler için ölçülebilir bir kabul listesi kullanın."
+        ],
+        [
+          "Geri dönüşte yalnız eski dosyaları kopyalayabilir miyim?",
+          "Şema ve veri biçimi değişmediyse bu planın bir parçası olabilir. Veritabanı değişiklikleri varsa eski uygulamanın mevcut veriyle uyumunu ayrıca doğrulayın."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: IIS üzerinde ASP.NET Core",
+          "https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/"
+        ],
+        [
+          "Microsoft: IIS başlangıç hataları",
+          "https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/azure-iis-errors-reference"
+        ]
+      ]
+    },
+    "en": {
+      "path": "/en/aspnet-core-iis-deployment/",
+      "title": "Deploy ASP.NET Core on IIS | AdaPanel",
+      "heading": "Deploy ASP.NET Core on IIS",
+      "description": "Deploy ASP.NET Core on Windows Server with a repeatable check of publish output, Hosting Bundle, IIS identity, production settings and application behavior.",
+      "intro": "An ASP.NET Core deployment needs more than a file copy. Check the target runtime, IIS integration, application pool identity and production configuration together. Use this workflow when evaluating an IIS site managed through AdaPanel.",
+      "sections": [
+        {
+          "id": "package",
+          "heading": "Choose a reproducible deployment package",
+          "paragraphs": [
+            "Create the package through the project’s publish workflow. Record its identifier, target .NET version, processor architecture and deployment model. Copying selected files out of a development bin directory makes missing dependencies harder to diagnose in production.",
+            "Framework-dependent deployment uses a compatible runtime on the server. Self-contained deployment includes a runtime, but still needs the appropriate IIS integration. Retain the previous working package and environment configuration as separate recovery inputs."
+          ]
+        },
+        {
+          "id": "iis",
+          "heading": "Verify the IIS hosting layers",
+          "columns": [
+            "Layer",
+            "Evidence to collect"
+          ],
+          "rows": [
+            [
+              "Hosting Bundle",
+              "ASP.NET Core Module and hosting components appropriate for the app are installed."
+            ],
+            [
+              "Physical directory",
+              "The site points to the verified publish output."
+            ],
+            [
+              "Application pool",
+              "Architecture, identity and hosting model are compatible."
+            ],
+            [
+              "web.config",
+              "The generated process path and arguments match the actual package."
+            ]
+          ]
+        },
+        {
+          "id": "environment",
+          "heading": "Keep production settings under control",
+          "paragraphs": [
+            "Inventory connection strings, external service credentials and environment variables without exposing them in public diagnostic pages. A staging site connected to production storage can modify real data even when its homepage appears harmless.",
+            "Give the application identity read access to its code and write access only to required log or upload directories. If startup fails with access denied, identify the exact resource instead of granting broad write access across customer sites."
+          ]
+        },
+        {
+          "id": "acceptance",
+          "heading": "Run an application acceptance test",
+          "steps": [
+            "Open a page, a static asset and an API route on a test hostname. Check expected content as well as the HTTP status.",
+            "Sign in, create a harmless test record and read it back. Verify session cookies and HTTPS behavior.",
+            "Restart the application pool in a controlled window and repeat the first request to test a cold start.",
+            "Record the deployed build, test time and log results. Repeat critical checks from an external network after the DNS switch."
+          ]
+        },
+        {
+          "id": "failure",
+          "heading": "Diagnose startup before changing settings",
+          "paragraphs": [
+            "For 500.30 or 502.5, correlate the IIS result with Windows events and the application startup error. A missing runtime, denied resource and invalid application setting require different remedies; the status alone does not identify the root cause.",
+            "Restrict any temporary diagnostic logs and disable verbose collection after investigation. If the deployment also changes the database schema, restoring old files may not restore compatibility. Include the data transition in the rollback procedure."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Does installing AdaPanel make every .NET app compatible?",
+          "No. Validate the project target, dependencies and IIS hosting requirements. Site management through a control panel does not replace application acceptance tests."
+        ],
+        [
+          "Does self-contained hosting still need IIS integration?",
+          "Yes. Packaging the runtime and integrating with IIS are separate concerns. Check the ASP.NET Core Module requirements for the selected deployment model."
+        ],
+        [
+          "Is a working homepage enough?",
+          "No. Test authentication, database access, uploads and a cold start. Define a small acceptance list around the application’s critical operations."
+        ],
+        [
+          "Can rollback consist of copying the previous files?",
+          "Only if the old application remains compatible with the current configuration and data. Database changes need a separate compatibility and recovery decision."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: Host ASP.NET Core on IIS",
+          "https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/"
+        ],
+        [
+          "Microsoft: IIS startup error reference",
+          "https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/azure-iis-errors-reference"
+        ]
+      ]
+    }
+  },
+  "laravel_deploy": {
+    "category": "apps",
+    "updated": "2026-10-22",
+    "related": [
+      "web_runtime",
+      "php_diagnostics",
+      "uploads",
+      "staging"
+    ],
+    "tr": {
+      "path": "/laravel-windows-iis-yayinlama/",
+      "title": "Laravel’i Windows ve IIS üzerinde yayınlama | AdaPanel",
+      "heading": "Laravel’i Windows ve IIS üzerinde yayınlama",
+      "description": "Laravel için Windows IIS yayın kontrolü: public kökü, PHP uzantıları, ortam dosyası, yazılabilir dizinler, kuyruk ve zamanlanmış işlerin doğrulanması.",
+      "intro": "Laravel’i IIS üzerinde değerlendirirken web kökünü public klasörüne sınırlandırın; PHP, veritabanı ve arka plan işleri için ayrı kontroller yapın. Bu rehber uygulama dağıtımını açıklar; her Laravel işinin AdaPanel tarafından otomatik yapılandırıldığını varsaymaz.",
+      "sections": [
+        {
+          "id": "gereksinim",
+          "heading": "Önce uygulamanın bağımlılıklarını çıkarın",
+          "paragraphs": [
+            "composer.json ve kilit dosyasından uygulamanın PHP ve uzantı gereksinimlerini belirleyin. Geliştirme bilgisayarındaki PHP ile IIS FastCGI motorunun aynı sürüm ve uzantıları kullandığını varsaymayın. Hazırlanan pakette üretim bağımlılıkları ve derlenmiş ön yüz varlıkları bulunmalıdır.",
+            "Kullandığınız Laravel sürümünün dağıtım belgesini esas alın. Linux’a özel süreç, yol veya sistem aracı kullanan paketlerin Windows üzerinde çalışmasını test edin. Uyumlu olmayan bir bağımlılık panel ayarıyla kendiliğinden düzelmez."
+          ]
+        },
+        {
+          "id": "webroot",
+          "heading": "Web kökü ve yazma izinleri",
+          "columns": [
+            "Konum",
+            "Beklenen yaklaşım"
+          ],
+          "rows": [
+            [
+              "public",
+              "IIS üzerinden yayınlanan giriş noktası ve statik varlıklar."
+            ],
+            [
+              ".env ve uygulama kaynakları",
+              "Doğrudan web kökünün dışında; hassas ayarlar yayın paketince ezilmez."
+            ],
+            [
+              "storage ve bootstrap/cache",
+              "Uygulama kimliğinin gerekli yazma izni bulunur."
+            ],
+            [
+              "Kullanıcı dosyaları",
+              "Erişim politikası ve çalıştırılabilir dosya kısıtları ayrıca doğrulanır."
+            ]
+          ]
+        },
+        {
+          "id": "rota",
+          "heading": "IIS yönlendirmesini ve ortamı test edin",
+          "paragraphs": [
+            "Ana sayfa yanında gerçek bir Laravel rotasını ve var olmayan bir yolu deneyin. Apache için hazırlanmış .htaccess dosyasının IIS tarafından uygulanacağını düşünmeyin; IIS kuralı uygulamanın giriş noktasına uygun olmalıdır.",
+            "Üretimde ayrıntılı hata gösterimini kapalı tutun. Mevcut uygulama anahtarını ve ortam dosyasını güncellemede koruyun; anahtarı gelişigüzel yenilemek şifrelenmiş veriye erişimi etkileyebilir. Önbelleğe alınan yapılandırmayı dağıtım sırasının parçası olarak yenileyip kullanılan değerleri güvenli biçimde doğrulayın."
+          ]
+        },
+        {
+          "id": "jobs",
+          "heading": "Kuyruk ve zamanlanmış işleri ayrı değerlendirin",
+          "steps": [
+            "Uygulamanın hangi işleri HTTP isteği dışında çalıştırdığını listeleyin: e-posta, rapor, bildirim veya dosya dönüştürme.",
+            "Her iş için yürütülebilir PHP yolunu, çalışma klasörünü, hesabı ve ortam ayarlarını kaydedin.",
+            "Mevcut Windows görevi veya hizmeti varsa aynı işi ikinci bir yöneticiyle başlatmayın; tek sahip belirleyin.",
+            "Test işini kuyruğa ekleyip gerçekten tamamlandığını ve hata kaydının izlenebildiğini doğrulayın. Web sayfasının açılması işleyicinin çalıştığını kanıtlamaz."
+          ]
+        },
+        {
+          "id": "kabul",
+          "heading": "Yayın öncesi son kontrol",
+          "paragraphs": [
+            "Giriş, oturum, veritabanına yazma, dosya yükleme ve bir arka plan işini birlikte sınayın. .env ve özel depolama dosyalarının URL ile indirilemediğini kontrol edin. Beklenen 404 sayfasının gerçekten 404 döndürdüğünü de doğrulayın.",
+            "Şema değişikliği içeren yayında yedek ve geri dönüş kararını önce hazırlayın. Test ortamında gerçek alıcılara posta, ödeme veya webhook göndermeyi engelleyin; başarılı denemeyi sürüm ve tarih bilgisiyle kaydedin."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Laravel proje kökü IIS fiziksel yolu olabilir mi?",
+          "Genel yaklaşım public klasörünü web kökü yapmaktır. Uygulama kaynaklarını ve .env dosyasını doğrudan yayınlamak yerine erişim sınırını dizin yapısıyla kurun."
+        ],
+        [
+          ".htaccess IIS üzerinde yeterli mi?",
+          "Hayır. Apache kuralları IIS’e kendiliğinden uygulanmaz. Gerçek uygulama rotalarıyla IIS yönlendirmesini doğrulayın."
+        ],
+        [
+          "Site açılıyor ama işler çalışmıyor, neden?",
+          "HTTP süreci ile kuyruk işleyicisi farklıdır. İşleyicinin hesabını, PHP yolunu, ortamını ve hata kaydını ayrı kontrol edin."
+        ],
+        [
+          "Güncellemede .env yeniden oluşturulur mu?",
+          "Mevcut üretim ayarlarını koruyun. Yeni değişkenleri kontrollü ekleyin; örnek ortam dosyasını üretim dosyasının üzerine kopyalamayın."
+        ]
+      ],
+      "sources": [
+        [
+          "Laravel dağıtım rehberi",
+          "https://laravel.com/docs/12.x/deployment"
+        ],
+        [
+          "Laravel kuyruklar",
+          "https://laravel.com/docs/12.x/queues"
+        ],
+        [
+          "IIS URL Rewrite",
+          "https://learn.microsoft.com/en-us/iis/extensions/url-rewrite-module/using-the-url-rewrite-module"
+        ]
+      ]
+    },
+    "en": {
+      "path": "/en/laravel-windows-iis-deployment/",
+      "title": "Deploy Laravel on Windows IIS | AdaPanel",
+      "heading": "Deploy Laravel on Windows IIS",
+      "description": "A Laravel deployment checklist for Windows IIS covering the public root, PHP dependencies, environment preservation, writable paths and queue workers.",
+      "intro": "When evaluating Laravel on IIS, use the public directory as the web root and verify PHP, database access and background jobs separately. This is an application deployment workflow, not a promise that AdaPanel automatically configures every Laravel component.",
+      "sections": [
+        {
+          "id": "requirements",
+          "heading": "Start with the application dependency contract",
+          "paragraphs": [
+            "Use composer.json and the lock file to identify required PHP versions and extensions. Do not assume the PHP executable on a developer machine matches the IIS FastCGI runtime. The deployment package needs production dependencies and built frontend assets.",
+            "Consult the deployment documentation for the Laravel version in use. Test packages that depend on Linux-specific processes, paths or system tools on Windows. A control panel setting cannot compensate for an incompatible application dependency."
+          ]
+        },
+        {
+          "id": "root",
+          "heading": "Separate published and writable directories",
+          "columns": [
+            "Location",
+            "Expected treatment"
+          ],
+          "rows": [
+            [
+              "public",
+              "Published entry point and static assets."
+            ],
+            [
+              ".env and application source",
+              "Outside the directly served web root; production values survive updates."
+            ],
+            [
+              "storage and bootstrap/cache",
+              "Required write access for the application identity."
+            ],
+            [
+              "User uploads",
+              "An explicit access policy and protection against script execution."
+            ]
+          ]
+        },
+        {
+          "id": "routing",
+          "heading": "Verify routing and effective configuration",
+          "paragraphs": [
+            "Test a real Laravel route and a nonexistent path in addition to the homepage. An Apache .htaccess file is not an IIS routing configuration; the IIS rules must match the application entry point.",
+            "Keep detailed error display disabled in production. Preserve the existing application key and environment file during updates; arbitrary key replacement can affect encrypted data. Refresh cached configuration as part of deployment and verify effective settings without exposing secrets."
+          ]
+        },
+        {
+          "id": "jobs",
+          "heading": "Treat workers as independently operated processes",
+          "steps": [
+            "List operations that run outside HTTP requests, including notifications, reports and media processing.",
+            "Record the PHP executable, working directory, account and environment for each job.",
+            "Identify any existing Windows service or scheduled task. Choose one process owner rather than starting the same worker from competing managers.",
+            "Submit a harmless test job and confirm completion and visible failure handling. A working website does not prove that its worker is healthy."
+          ]
+        },
+        {
+          "id": "acceptance",
+          "heading": "Check the entire publishing boundary",
+          "paragraphs": [
+            "Exercise login, sessions, a database write, file upload and a background job. Confirm that .env and private storage are not downloadable through public URLs. A missing route should return a real 404 status as well as a suitable error page.",
+            "Plan database recovery before a release that changes schema. Prevent staging from sending real mail, charging payments or firing production webhooks. Record the tested package and date so the next deployment can repeat the same acceptance checks."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Should the IIS site point at the Laravel project root?",
+          "Use public as the web root. Keep source code and .env outside the directly published directory instead of relying on an accidental file-serving restriction."
+        ],
+        [
+          "Is .htaccess enough for IIS?",
+          "No. IIS does not automatically apply Apache rules. Verify the IIS routing configuration using actual application routes."
+        ],
+        [
+          "Why can the site work while queued jobs fail?",
+          "The HTTP application and queue worker are separate processes. Check the worker account, PHP executable, environment and error log independently."
+        ],
+        [
+          "Should an update replace .env?",
+          "Preserve the current production configuration. Add required new settings deliberately instead of copying a sample file over the live environment file."
+        ]
+      ],
+      "sources": [
+        [
+          "Laravel deployment",
+          "https://laravel.com/docs/12.x/deployment"
+        ],
+        [
+          "Laravel queues",
+          "https://laravel.com/docs/12.x/queues"
+        ],
+        [
+          "IIS URL Rewrite",
+          "https://learn.microsoft.com/en-us/iis/extensions/url-rewrite-module/using-the-url-rewrite-module"
+        ]
+      ]
+    }
+  },
+  "php_diagnostics": {
+    "category": "apps",
+    "updated": "2026-10-22",
+    "related": [
+      "web_runtime",
+      "updates",
+      "uploads",
+      "iis_errors"
+    ],
+    "tr": {
+      "path": "/iis-php-surum-phpini-teshisi/",
+      "title": "IIS PHP sürümü ve php.ini sorunlarını teşhis etme | AdaPanel",
+      "heading": "IIS PHP sürümü ve php.ini sorunlarını teşhis etme",
+      "description": "Terminaldeki PHP ile IIS PHP neden farklı? FastCGI yolu, etkin php.ini, uzantı uyumu ve güvenli sürüm doğrulaması için adım adım teşhis rehberi.",
+      "intro": "PHP güncellendiği halde site eski sürümü kullanıyorsa önce IIS’in hangi yürütülebilir dosyayı çağırdığını bulun. Terminal çıktısı, dosya sürümü ve gerçek web isteği üç ayrı kanıttır; birbirinin yerine kullanılmamalıdır.",
+      "sections": [
+        {
+          "id": "envanter",
+          "heading": "Aynı sunucudaki PHP kurulumlarını ayırın",
+          "paragraphs": [
+            "Bir Windows sunucusunda uygulama paketi, sistem PATH kaydı ve IIS FastCGI eşlemesi farklı PHP klasörlerine işaret edebilir. Sorun yaşayan sitenin adını, havuzunu, işleyici eşlemesini ve mutlak PHP yolunu kaydedin. Çalışan diğer siteleri değiştirmeden önce bu bağımlılık haritasını çıkarın.",
+            "AdaPanel’de bileşen sürümünün güncel görünmesi önemli bir işarettir; ancak siteye özel bir eski eşleme bulunabilir. Önce ilgili siteyi ölçün, sonra gerekirse yalnız o eşlemeyi düzeltin. Bütün PHP klasörlerini silerek teşhis yapmayın."
+          ]
+        },
+        {
+          "id": "kanit",
+          "heading": "Üç ölçümün anlamı",
+          "columns": [
+            "Ölçüm",
+            "Ne söyler?",
+            "Ne söylemez?"
+          ],
+          "rows": [
+            [
+              "Mutlak yoldan PHP sürümü",
+              "Seçilen dosyanın sürümü",
+              "Web isteğinin o dosyaya gittiği"
+            ],
+            [
+              "Yüklenen yapılandırma yolu",
+              "İlgili sürecin kullandığı php.ini",
+              "Başka süreç veya site için aynı değer"
+            ],
+            [
+              "Korumalı HTTP sürüm kontrolü",
+              "Gerçek sitenin kullandığı motor",
+              "Uygulamanın bütün işlemlerinin doğru olduğu"
+            ]
+          ]
+        },
+        {
+          "id": "ayar",
+          "heading": "php.ini değişikliği neden görünmez?",
+          "paragraphs": [
+            "Yanlış dosyayı düzenlemiş, ek yapılandırma dosyasını gözden kaçırmış veya çalışan süreçte eski ayarı ölçmüş olabilirsiniz. PHP belgesindeki yapılandırma arama sırasını kendi kurulumunuzla karşılaştırın. Düzenlemeden önce etkin dosyanın yedeğini ve değiştireceğiniz anahtarın mevcut değerini alın.",
+            "Değişikliği ilgili süreçlere uygulamak için gereken kontrollü yeniden başlatmayı bakım planına dahil edin. Sonrasında aynı HTTP kontrolünü yeniden çalıştırın. Yalnız düzenlediğiniz metni okumak, etkin değerin değiştiğini kanıtlamaz."
+          ]
+        },
+        {
+          "id": "uzanti",
+          "heading": "Uzantı hatasını sürüm hatasından ayırın",
+          "steps": [
+            "Uygulamanın ihtiyaç duyduğu veritabanı, görüntü ve diğer PHP uzantılarını listeleyin.",
+            "DLL dosyasının PHP dalı, mimari ve derleme türüyle uyumunu resmi paket bilgisi üzerinden kontrol edin.",
+            "PHP hata günlüğünde yüklenemeyen uzantının adını ve bağımlılık hatasını bulun; rastgele DLL indirmeyin.",
+            "Bir veritabanı sorgusu veya görüntü işlemi gibi uzantıyı gerçekten kullanan küçük bir uygulama testi yapın."
+          ]
+        },
+        {
+          "id": "kapat",
+          "heading": "Tanılamayı güvenli biçimde tamamlayın",
+          "paragraphs": [
+            "Tam phpinfo çıktısı yolları ve ortam ayrıntılarını açığa çıkarabilir. Gerekli ölçümü erişim kontrollü, sınırlı çıktıyla yapın; geçici uç noktayı iş bitince kaldırın ve artık erişilemediğini doğrulayın.",
+            "Son kayıtta site adı, etkin PHP yolu, ölçülen sürüm, kullanılan ini dosyası ve uygulama test sonucu bulunsun. Hata devam ederse hangi katmanın çalıştığını belirten bu kayıt, tekrar tekrar aynı güncellemeyi denemekten daha yararlıdır."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "php -v yeni sürüm gösteriyor; IIS de güncel mi?",
+          "Kesin değil. PATH üzerindeki PHP ile IIS FastCGI yolu farklı olabilir. Site eşlemesini ve o siteye yapılan korumalı HTTP isteğini doğrulayın."
+        ],
+        [
+          "php.ini dosyasını değiştirmek yeterli mi?",
+          "Doğru dosyanın düzenlendiğini ve ilgili sürecin yeni değeri kullandığını ölçmek gerekir. Süreç yaşam döngüsünü ve ek yapılandırmayı da kontrol edin."
+        ],
+        [
+          "Bütün PHP klasörlerini kaldırmalı mıyım?",
+          "Hayır. Önce her site ve görevin hangi yolu kullandığını belirleyin. Kullanılan bir kurulumu silmek başka uygulamaları durdurabilir."
+        ],
+        [
+          "Tanılama sayfasını açık bırakabilir miyim?",
+          "Geçici tanılamayı kaldırın veya sıkı erişim kontrolü uygulayın. Genel erişime açık ayrıntılı PHP yapılandırması yayınlamayın."
+        ]
+      ],
+      "sources": [
+        [
+          "PHP yapılandırma dosyası",
+          "https://www.php.net/manual/en/configuration.file.php"
+        ],
+        [
+          "PHP Windows uzantıları",
+          "https://www.php.net/manual/en/install.pecl.windows.php"
+        ]
+      ]
+    },
+    "en": {
+      "path": "/en/iis-php-version-configuration-diagnostics/",
+      "title": "Diagnose IIS PHP versions and php.ini | AdaPanel",
+      "heading": "Diagnose IIS PHP versions and php.ini",
+      "description": "Find why IIS and the command line use different PHP versions. Verify FastCGI paths, loaded configuration, extension compatibility and real HTTP execution.",
+      "intro": "If a site still uses old PHP after an update, identify the executable called by IIS first. Command-line output, file version and a real HTTP request provide different evidence; none should silently substitute for another.",
+      "sections": [
+        {
+          "id": "inventory",
+          "heading": "Map PHP installations before changing them",
+          "paragraphs": [
+            "A Windows server can have separate PHP installations for an application bundle, the system PATH and IIS FastCGI. Record the affected site, pool, handler mapping and absolute executable path. Establish these relationships before touching other working sites.",
+            "A current component version in AdaPanel is useful evidence, but a site-specific mapping can still point elsewhere. Measure the affected site, then correct the relevant mapping if necessary. Removing every PHP directory is not a diagnostic method."
+          ]
+        },
+        {
+          "id": "evidence",
+          "heading": "Understand what each measurement proves",
+          "columns": [
+            "Measurement",
+            "It establishes",
+            "It does not establish"
+          ],
+          "rows": [
+            [
+              "PHP version at an absolute path",
+              "The selected executable version",
+              "That the site uses it"
+            ],
+            [
+              "Loaded configuration path",
+              "The configuration for that process",
+              "The value used by another site"
+            ],
+            [
+              "Protected HTTP version check",
+              "The runtime serving the real site",
+              "That every application feature works"
+            ]
+          ]
+        },
+        {
+          "id": "configuration",
+          "heading": "Why a php.ini edit may have no effect",
+          "paragraphs": [
+            "The edited file may be unused, an additional configuration file may apply, or a running process may still hold previous settings. Compare the documented configuration search behavior with your installation. Save the effective file and original setting before editing.",
+            "Include any required process restart in a maintenance plan, then repeat the same HTTP measurement. Reading the modified text on disk proves only that the file changed, not that the site is running with the new value."
+          ]
+        },
+        {
+          "id": "extensions",
+          "heading": "Separate extension failures from runtime selection",
+          "steps": [
+            "List database, image and other extensions actually required by the application.",
+            "Check the DLL against the PHP branch, architecture and build type using official package information.",
+            "Find the extension name and dependency error in the PHP log. Do not install arbitrary DLL files found in search results.",
+            "Run a small application operation that exercises the extension, such as a database query or image transformation."
+          ]
+        },
+        {
+          "id": "finish",
+          "heading": "Close the diagnostic exposure",
+          "paragraphs": [
+            "Full phpinfo output can reveal paths and environment details. Use a protected check that returns only the needed evidence. Remove temporary diagnostic endpoints afterwards and verify that they are no longer publicly accessible.",
+            "Keep a final record of the site, effective PHP path, measured version, loaded configuration and application result. If the issue persists, this makes the next investigation precise instead of repeating the same update without knowing which runtime is involved."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Does a new php -v result prove IIS is updated?",
+          "No. PHP on PATH can differ from the IIS FastCGI executable. Check the site mapping and a protected HTTP request to that site."
+        ],
+        [
+          "Is editing php.ini sufficient?",
+          "Verify that the file is used and that the relevant process reads the new value. Account for process lifetime and any additional configuration."
+        ],
+        [
+          "Should I remove all old PHP directories?",
+          "First identify the path used by every site and task. Removing an installation that is still referenced can break unrelated applications."
+        ],
+        [
+          "Can I leave the diagnostic page online?",
+          "Remove temporary diagnostics or enforce strict access control. Detailed PHP configuration should not be published to unauthenticated visitors."
+        ]
+      ],
+      "sources": [
+        [
+          "PHP configuration file",
+          "https://www.php.net/manual/en/configuration.file.php"
+        ],
+        [
+          "PHP extensions on Windows",
+          "https://www.php.net/manual/en/install.pecl.windows.php"
+        ]
+      ]
+    }
+  },
+  "iis_errors": {
+    "category": "publish",
+    "updated": "2026-10-22",
+    "related": [
+      "iis",
+      "aspnet_deploy",
+      "php_diagnostics",
+      "reverse_proxy"
+    ],
+    "tr": {
+      "path": "/iis-500-502-503-hata-teshisi/",
+      "title": "IIS 500, 502 ve 503 hatalarını ayırma | AdaPanel",
+      "heading": "IIS 500, 502 ve 503 hatalarını ayırma",
+      "description": "IIS 500.19, ASP.NET Core 500.30, reverse proxy 502 ve 503 hataları için alt durum, süreç, olay kaydı ve uygulama günlüklerini eşleştirme rehberi.",
+      "intro": "IIS’te 500, 502 veya 503 görmek tek başına hatanın nedenini söylemez. Önce isteği karşılayan katmanı, alt durum kodunu ve aynı zamandaki günlükleri belirleyin; sonra yalnız kanıtın işaret ettiği ayarı değiştirin.",
+      "sections": [
+        {
+          "id": "kayit",
+          "heading": "İlk kayıtta hangi bilgiler olmalı?",
+          "paragraphs": [
+            "Hatanın saati ve saat dilimi, istenen alan adı ve yol, HTTP yöntemi ve tekrar sıklığını kaydedin. IIS günlüklerindeki durum, alt durum ve Win32 durum alanlarını ilgili istekle eşleştirin. Kullanıcı parolası, oturum çerezi ve özel sorgu parametrelerini destek çıktısına koymayın.",
+            "Birden fazla site varsa doğru site günlüğünü okuduğunuzu doğrulayın. Aynı sunucudaki başka bir sitenin çalışması ağın tamamen kapalı olmadığını gösterebilir; sorunlu sitenin havuzunu, uygulamasını veya sertifikasını doğrulamaz."
+          ]
+        },
+        {
+          "id": "ayirim",
+          "heading": "Hata ailesine göre ilk kontrol",
+          "columns": [
+            "Belirti",
+            "İlk araştırma",
+            "Kaçınılacak varsayım"
+          ],
+          "rows": [
+            [
+              "500.19",
+              "Yapılandırma dosyası, modül ve ayrıntılı hata kodu",
+              "Her zaman dosya iznidir"
+            ],
+            [
+              "500.30",
+              "ASP.NET Core başlangıç ve olay kayıtları",
+              "Yalnız IIS yeniden başlatılmalıdır"
+            ],
+            [
+              "502 / 502.5",
+              "Proxy arka ucu veya uygulama süreç hatası",
+              "DNS kesin bozuktur"
+            ],
+            [
+              "503",
+              "Havuz, hizmet, kapasite ve durdurulma nedeni",
+              "Uygulama dosyaları kesin eksiktir"
+            ]
+          ]
+        },
+        {
+          "id": "daralt",
+          "heading": "Sorunu katman katman daraltın",
+          "steps": [
+            "Dış alan adı ile yerel siteyi aynı Host adı ve uygun TLS doğrulamasıyla karşılaştırın.",
+            "Statik dosya ve dinamik uygulama isteğini ayrı sınayın. Yalnız dinamik yol bozuksa ilgili çalışma zamanına odaklanın.",
+            "Reverse proxy varsa uygulamayı kendi yerel portunda kontrol edin; doğrudan ve proxy üzerinden sonuçları ayırın.",
+            "Havuzun durumu ve son durma sebebiyle olay kaydını eşleştirin. Tekrarlanan çökmelerde koruma mekanizmalarını gelişigüzel devre dışı bırakmayın."
+          ]
+        },
+        {
+          "id": "degisiklik",
+          "heading": "Bir değişiklik, bir doğrulama",
+          "paragraphs": [
+            "Mevcut yapılandırmanın yedeğini alın ve bir seferde yalnız kanıtla ilişkili değişikliği uygulayın. Çalışan bütün havuzları yeniden başlatmak hem diğer müşterileri etkiler hem de teşhis için gerekli anlık durumu kaybettirebilir.",
+            "Örneğin 500.19 ayrıntısı tanınmayan yapılandırma bölümünü işaret ediyorsa o bölüme ait bileşeni araştırın. Erişim reddi gösteriyorsa gerçek süreç kimliğini ve ilgili dosya iznini inceleyin. Aynı üst durum kodu farklı çözümlere götürür."
+          ]
+        },
+        {
+          "id": "sonuc",
+          "heading": "Düzeldi kararının ölçütü",
+          "paragraphs": [
+            "Önceden başarısız olan isteği aynı koşullarda tekrar çalıştırın. Sonra giriş, veri işlemi ve varsa dosya yükleme gibi kritik yolları deneyin. Hata kaydının durduğunu ve komşu sitelerin çalıştığını kontrol edin.",
+            "Bulgu, yapılan değişiklik, test sonucu ve geri alma yolunu kısa bir olay notunda saklayın. Yeniden oluşan hatalarda ilk kez araştırıyormuş gibi başlamak yerine önce aynı imzanın dönüp dönmediğine bakın.",
+            "Uygulama istek kimliği üretiyorsa aynı kimliği günlüklerle ilişkilendirin. Böylece benzer anda oluşan iki farklı hatayı tek olay sanmazsınız."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "500 hatası uygulama kodu hatası mıdır?",
+          "Her zaman değil. Yapılandırma, eksik modül, başlangıç veya uygulama istisnası farklı 500 sonuçları üretebilir. Alt durum ve günlük gerekir."
+        ],
+        [
+          "IIS’i yeniden başlatmak kalıcı çözüm mü?",
+          "Bazen geçici erişimi geri getirebilir; fakat nedenin giderildiğini kanıtlamaz. Önce kanıtı kaydedin ve mümkünse yalnız etkilenen siteye müdahale edin."
+        ],
+        [
+          "Proxy 502 veriyor ama uygulama yerelde çalışıyor, neye bakılır?",
+          "Hedef adresi, portu, proxy yapılandırmasını ve zaman aşımını inceleyin. Aynı isteğin iki yol üzerinden davranışını karşılaştırın."
+        ],
+        [
+          "Başarılı HTTP kodu yeterli mi?",
+          "Beklenen içerik ve kritik kullanıcı işlemleri de doğrulanmalıdır. Bir hata sayfasının yanlışlıkla 200 döndürmesi başarı değildir."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: IIS 500.19",
+          "https://learn.microsoft.com/en-us/troubleshoot/developer/webapps/iis/site-behavior-performance/http-error-500-19-webpage"
+        ],
+        [
+          "Microsoft: IIS ve ASP.NET Core hata başvurusu",
+          "https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/azure-iis-errors-reference"
+        ]
+      ]
+    },
+    "en": {
+      "path": "/en/iis-500-502-503-troubleshooting/",
+      "title": "Troubleshoot IIS 500, 502 and 503 errors | AdaPanel",
+      "heading": "Troubleshoot IIS 500, 502 and 503 errors",
+      "description": "Distinguish IIS configuration failures, ASP.NET Core startup errors, reverse proxy failures and unavailable pools using substatus codes and correlated logs.",
+      "intro": "An IIS 500, 502 or 503 response is a starting point, not a root cause. Identify the responding layer, detailed status and matching log entries before changing the setting implicated by the evidence.",
+      "sections": [
+        {
+          "id": "record",
+          "heading": "Capture enough context to reproduce the failure",
+          "paragraphs": [
+            "Record time and timezone, hostname, request path, method and frequency. Match the request to IIS status, substatus and Win32 status fields. Keep passwords, cookies and private query values out of shared diagnostic output.",
+            "On a multi-site server, confirm that you are reading the affected site’s log. Another working site may show that the entire network is not down; it does not validate the failing application’s pool, runtime or certificate."
+          ]
+        },
+        {
+          "id": "classify",
+          "heading": "Choose the first investigation by error family",
+          "columns": [
+            "Symptom",
+            "First investigation",
+            "Avoid assuming"
+          ],
+          "rows": [
+            [
+              "500.19",
+              "Configuration details, module and error code",
+              "It is always an ACL problem"
+            ],
+            [
+              "500.30",
+              "ASP.NET Core startup and event logs",
+              "A full IIS restart is the remedy"
+            ],
+            [
+              "502 / 502.5",
+              "Proxy backend or application process",
+              "DNS must be broken"
+            ],
+            [
+              "503",
+              "Pool state, service and capacity",
+              "Application files must be missing"
+            ]
+          ]
+        },
+        {
+          "id": "isolate",
+          "heading": "Narrow the failure by layer",
+          "steps": [
+            "Compare external and local access while retaining the intended hostname and valid TLS verification.",
+            "Test a static asset separately from a dynamic route. If only dynamic requests fail, investigate their runtime.",
+            "For a reverse proxy, check the backend at its local port and compare direct and proxied results.",
+            "Correlate pool state and the reason it stopped with Windows events. Do not disable crash protection just to hide repeated failures."
+          ]
+        },
+        {
+          "id": "change",
+          "heading": "Make a reversible, evidence-based correction",
+          "paragraphs": [
+            "Save the current configuration and change one relevant setting at a time. Restarting every pool can interrupt other customers and remove useful evidence about the original failure.",
+            "For example, a 500.19 detail naming an unrecognized configuration section points toward the component owning that section. An access-denied detail calls for checking the effective identity and resource ACL. The same top-level status can require very different corrections."
+          ]
+        },
+        {
+          "id": "verify",
+          "heading": "Define what resolved means",
+          "paragraphs": [
+            "Repeat the previously failing request under the same conditions. Then exercise login, a data operation and any upload flow. Confirm that new matching errors have stopped and neighboring sites remain healthy.",
+            "Keep a short incident record with the finding, correction, acceptance result and rollback route. If the issue returns, compare its signature to the previous incident instead of starting with another indiscriminate restart.",
+            "If the application provides a request identifier, correlate it with the logs. This avoids treating unrelated failures at similar times as one incident."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Does HTTP 500 always mean an application code bug?",
+          "No. Invalid configuration, missing modules, startup failures and application exceptions can all produce server errors. Use detailed status and logs to distinguish them."
+        ],
+        [
+          "Is restarting IIS a permanent fix?",
+          "A restart may restore temporary availability without removing the cause. Capture evidence first and limit intervention to the affected site where possible."
+        ],
+        [
+          "What if a proxy returns 502 but the backend works locally?",
+          "Compare the destination, port, proxy configuration and timeout against the direct request. Reproduce the same operation through both paths."
+        ],
+        [
+          "Is a successful HTTP code enough to close the incident?",
+          "Verify expected content and critical user operations too. An error page accidentally served with HTTP 200 is not a successful application result."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: IIS 500.19",
+          "https://learn.microsoft.com/en-us/troubleshoot/developer/webapps/iis/site-behavior-performance/http-error-500-19-webpage"
+        ],
+        [
+          "Microsoft: IIS and ASP.NET Core errors",
+          "https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/azure-iis-errors-reference"
+        ]
+      ]
+    }
+  },
+  "isolation": {
+    "category": "operations",
+    "updated": "2026-10-22",
+    "related": [
+      "roles",
+      "security",
+      "files",
+      "aspnet_deploy"
+    ],
+    "tr": {
+      "path": "/iis-uygulama-havuzu-site-izolasyonu/",
+      "title": "IIS uygulama havuzu ve müşteri sitelerini ayırma | AdaPanel",
+      "heading": "IIS uygulama havuzu ve müşteri sitelerini ayırma",
+      "description": "Çok müşterili Windows hosting için IIS havuz kimliği, NTFS izinleri, veritabanı hesapları ve çapraz site erişimini sınayan izolasyon kontrol listesi.",
+      "intro": "Panelde müşterileri ayrı göstermek, dosya ve süreç erişiminin de ayrıldığı anlamına gelmez. Windows hosting izolasyonunu IIS havuz kimliği, NTFS izinleri, veri hesapları ve gerçek erişim testleriyle değerlendirin.",
+      "sections": [
+        {
+          "id": "sinir",
+          "heading": "Yönetim rolü ile işletim sistemi kimliği farklıdır",
+          "paragraphs": [
+            "AdaPanel’de bayi veya müşteri rolü, kullanıcının panelde yapabildiği işlemlerle ilgilidir. Web uygulamasının dosya okuma yetkisi ise çalışan sürecin Windows kimliği ve klasör izinleri üzerinden değerlendirilir. İki kontrolü aynı kabul listesinde ayrı maddeler olarak tutun.",
+            "Uygulama havuzlarını ayırmak süreç sınırı kurmanıza yardımcı olur. Bunun sanal makine düzeyinde bir güvenlik sınırı olmadığını da hesaba katın: aynı işletim sistemi, yöneticiler ve ortak hizmetler paylaşılabilir. Gereken ayrım düzeyini müşterinin veri ve uygulama riskine göre seçin."
+          ]
+        },
+        {
+          "id": "matris",
+          "heading": "En az yetki için erişim matrisi",
+          "columns": [
+            "Kaynak",
+            "Site A kimliği",
+            "Site B kimliği"
+          ],
+          "rows": [
+            [
+              "Site A uygulama dosyaları",
+              "Gerekli okuma/çalıştırma",
+              "İş gereği yoksa erişim yok"
+            ],
+            [
+              "Site A yüklemeleri",
+              "Gerekli yazma; dosya çalıştırma engeli",
+              "İş gereği yoksa erişim yok"
+            ],
+            [
+              "Site B dosyaları",
+              "İş gereği yoksa erişim yok",
+              "Kendi uygulamasına gereken yetki"
+            ],
+            [
+              "Yedek ve özel anahtarlar",
+              "Açıkça ihtiyaç duyulan işlemle sınırlı",
+              "Açıkça ihtiyaç duyulan işlemle sınırlı"
+            ]
+          ]
+        },
+        {
+          "id": "envanter",
+          "heading": "Mevcut sunucuda güvenli inceleme sırası",
+          "steps": [
+            "Site → uygulama havuzu → süreç kimliği → fiziksel klasör eşlemesini çıkarın.",
+            "Klasörün doğrudan ve kalıtımla gelen izinlerini inceleyin; ortak grupların verdiği yetkileri de hesaba katın.",
+            "Veritabanı, FTP, görev hesabı ve dış depolama kimliklerini aynı müşteri sınırı açısından kontrol edin.",
+            "Değişiklikten önce ACL yedeği ve uygulama kabul testi hazırlayın; geniş izinleri körlemesine kaldırmayın."
+          ]
+        },
+        {
+          "id": "deneme",
+          "heading": "İzolasyonu nasıl kanıtlarsınız?",
+          "paragraphs": [
+            "Kontrollü testte bir site kimliğinin kendi dosyasını okuyabildiğini, gereken alana yazabildiğini ve başka müşterinin test dosyasını okuyamadığını doğrulayın. Sınama için zararsız işaret dosyaları kullanın; gerçek müşteri sırlarını çıktıya taşımayın.",
+            "Kendi dosyasını okuyamamak da bir hatadır. İzolasyon testi yalnız erişim engelini değil, meşru uygulama işlemlerinin çalışmasını birlikte ölçmelidir. Bir müşteriyle yapılan test bütün hesapların doğru yapılandırıldığını kanıtlamaz."
+          ]
+        },
+        {
+          "id": "bakim",
+          "heading": "Yeni site ve güncellemede sınırı koruyun",
+          "paragraphs": [
+            "Yeni site şablonlarını, taşıma adımlarını ve yedekten dönüşü aynı matrisle kontrol edin. Başka sunucudan gelen izinler veya ortak hizmet hesabı, ilk kurulumda sağlanan ayrımı sonradan bozabilir.",
+            "Ajans tesliminde hangi hesabın neye eriştiğini kaydedin. Personel ayrıldığında panel hesabının yanında FTP, veritabanı ve zamanlanmış görev kimliklerini de gözden geçirin. Doğrulanmış yetki haritası, yalnız kullanıcı listesine bakmaktan daha kapsamlıdır.",
+            "Müşteri rolü testinde başka müşterinin kaynak kimliğini kullanarak erişim reddini de sınayın. Arayüzde bağlantının gizli olması sunucu tarafındaki yetki kontrolünün kanıtı değildir."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Ayrı panel hesabı dosya izolasyonu sağlar mı?",
+          "Tek başına sağlamaz. Panel yetkisi ile Windows süreç kimliği ve NTFS izinleri farklı katmanlardır; her biri test edilmelidir."
+        ],
+        [
+          "Her siteye ayrı havuz yeterli mi?",
+          "İyi bir başlangıçtır, fakat geniş ortak klasör veya veritabanı izinleri ayrımı bozabilir. Dosya, veri ve görev erişimini de denetleyin."
+        ],
+        [
+          "Hata çözmek için Everyone yazma izni verilebilir mi?",
+          "Böyle geniş bir izin yerine uygulamanın gerçek kimliğini ve ihtiyacı olan dar klasörü belirleyin. Sonrasında hem işlevi hem erişim sınırını test edin."
+        ],
+        [
+          "Taşınan sitelerde izinler tekrar kontrol edilir mi?",
+          "Evet. Yeni sunucudaki kimlikler ve kalıtılmış izinler eski ortamdan farklı olabilir. Geri yüklenen uygulamayı erişim matrisiyle yeniden sınayın."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: Uygulama havuzu kimlikleri",
+          "https://learn.microsoft.com/en-us/iis/manage/configuring-security/application-pool-identities"
+        ],
+        [
+          "Microsoft: Site güvenlik izolasyonu",
+          "https://learn.microsoft.com/en-us/iis/manage/configuring-security/ensure-security-isolation-for-web-sites"
+        ]
+      ]
+    },
+    "en": {
+      "path": "/en/iis-application-pool-site-isolation/",
+      "title": "IIS application pools and customer site isolation | AdaPanel",
+      "heading": "IIS application pools and customer site isolation",
+      "description": "Evaluate Windows hosting isolation with application pool identities, NTFS permissions, separate data accounts and cross-site access tests for customer sites.",
+      "intro": "Separate customers in a panel do not automatically prove separate file and process access. Evaluate Windows hosting isolation through effective IIS identities, NTFS permissions, data accounts and controlled access tests.",
+      "sections": [
+        {
+          "id": "boundary",
+          "heading": "Distinguish panel roles from process identities",
+          "paragraphs": [
+            "An AdaPanel customer or reseller role concerns actions available through the management interface. A web application’s file access is evaluated through its Windows process identity and filesystem permissions. Keep these as separate acceptance criteria.",
+            "Separate pools help establish process separation, but are not a virtual-machine security boundary. Sites can still share an operating system, administrators and services. Choose the required separation level according to application and customer data risk."
+          ]
+        },
+        {
+          "id": "matrix",
+          "heading": "Build a least-privilege access matrix",
+          "columns": [
+            "Resource",
+            "Site A identity",
+            "Site B identity"
+          ],
+          "rows": [
+            [
+              "Site A code",
+              "Required read/execute",
+              "No access unless explicitly needed"
+            ],
+            [
+              "Site A uploads",
+              "Required writes; prevent code execution",
+              "No access unless explicitly needed"
+            ],
+            [
+              "Site B files",
+              "No access unless explicitly needed",
+              "Permissions needed by its application"
+            ],
+            [
+              "Backups and private keys",
+              "Limited to a defined operational need",
+              "Limited to a defined operational need"
+            ]
+          ]
+        },
+        {
+          "id": "inventory",
+          "heading": "Inspect an existing server safely",
+          "steps": [
+            "Map site to pool, process identity and physical directory.",
+            "Inspect direct and inherited permissions, including access granted through shared groups.",
+            "Check database, FTP, scheduled-task and external storage identities against the same customer boundary.",
+            "Prepare an ACL backup and application acceptance checks before changing permissions; do not blindly remove inherited access."
+          ]
+        },
+        {
+          "id": "test",
+          "heading": "Prove the boundary with harmless fixtures",
+          "paragraphs": [
+            "Under controlled conditions, verify that a site identity can read its own files, write to its designated directory and cannot read another customer’s test file. Use harmless markers rather than exposing actual customer secrets in diagnostic output.",
+            "An application unable to read its own files is also a failed result. Test legitimate operations and denied cross-customer access together. A successful test for one customer does not establish correct permissions for every account."
+          ]
+        },
+        {
+          "id": "maintain",
+          "heading": "Preserve isolation through change",
+          "paragraphs": [
+            "Apply the matrix to new-site templates, migrations and restore procedures. Permissions imported from another server or a shared service account can weaken an originally sound boundary.",
+            "For agency handover, record which accounts can access which resources. When staff leave, review FTP, database and task accounts as well as panel access. A tested permission map is more useful than a user list alone.",
+            "When testing customer roles, verify that a request for another customer’s resource is denied. A hidden interface link does not establish server-side authorization."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Does a separate panel account prove filesystem isolation?",
+          "No. Panel authorization, Windows process identities and NTFS permissions are distinct layers that need separate validation."
+        ],
+        [
+          "Is one application pool per site enough?",
+          "It helps, but broad shared folder or database permissions can bypass the intended separation. Check files, data and background tasks too."
+        ],
+        [
+          "Should I grant Everyone write access to resolve errors?",
+          "Identify the effective application identity and the narrow writable location it needs instead. Test functionality and isolation after the correction."
+        ],
+        [
+          "Do restored sites need another permission review?",
+          "Yes. Identities and inherited permissions can differ on the destination server. Repeat the access matrix tests after restoration."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: Application pool identities",
+          "https://learn.microsoft.com/en-us/iis/manage/configuring-security/application-pool-identities"
+        ],
+        [
+          "Microsoft: Website security isolation",
+          "https://learn.microsoft.com/en-us/iis/manage/configuring-security/ensure-security-isolation-for-web-sites"
+        ]
+      ]
+    }
+  },
+  "bindings": {
+    "category": "publish",
+    "updated": "2026-10-22",
+    "related": [
+      "dns",
+      "ssl",
+      "iis",
+      "isolation"
+    ],
+    "tr": {
+      "path": "/iis-coklu-site-ssl-sni/",
+      "title": "Tek IP üzerinde çoklu IIS sitesi, SSL ve SNI | AdaPanel",
+      "heading": "Tek IP üzerinde çoklu IIS sitesi, SSL ve SNI",
+      "description": "Bir Windows sunucusunda birden fazla alan adı yayınlama: IIS binding, SNI, www yönlendirmesi ve her hostname için gerçek TLS sertifikası doğrulaması.",
+      "intro": "Tek IP üzerinde birden fazla HTTPS sitesi için DNS, IIS binding ve SNI eşleşmelerini birlikte planlayın. Sertifikanın depoda bulunması yeterli değildir; her alan adına bağlandığınızda doğru sertifikanın sunulduğunu ölçün.",
+      "sections": [
+        {
+          "id": "harita",
+          "heading": "Alan adı ve site eşlemesini yazın",
+          "paragraphs": [
+            "Her hostname için DNS hedefi, IIS site adı, yerel IP/port, fiziksel yol ve beklenen sertifika adlarını listeleyin. NAT arkasında yerel binding adresi ile genel DNS adresi farklı olabilir. Bu farkı kayıt altına almak yanlış siteye yayın riskini azaltır.",
+            "Kök alan adı, www ve uygulama alt alan adını aynı isim saymayın. Her birinin DNS, HTTPS ve içerik davranışını ayrı kararlaştırın. Kullanılmayan host adlarının yanlış müşteriye düşmesini de test planına ekleyin."
+          ]
+        },
+        {
+          "id": "sni",
+          "heading": "SNI ve binding neyi seçer?",
+          "paragraphs": [
+            "SNI, TLS bağlantısında istenen sunucu adını ileterek aynı IP ve porttaki sertifika seçimini destekler. IIS binding ise site, protokol, adres, port ve host adı eşleşmesini tanımlar. Sertifikanın kapsadığı isimler bunlarla uyumlu olmalıdır.",
+            "IP adresini tarayıcıda açmak, alan adına yapılan HTTPS testinin yerini tutmaz. Doğru hostname ile bağlanın; alan adı, zincir ve geçerlilik süresini birlikte doğrulayın. Sertifika uyarısını atlayarak kabul testi tamamlanmış sayılmaz."
+          ]
+        },
+        {
+          "id": "tablo",
+          "heading": "Her alan adı için kabul matrisi",
+          "columns": [
+            "İstek",
+            "Beklenen sonuç"
+          ],
+          "rows": [
+            [
+              "https://example.com",
+              "Seçilen site, geçerli isim ve güven zinciri"
+            ],
+            [
+              "https://www.example.com",
+              "Kapsanan sertifika; tercih edilen adrese kontrollü yönlendirme"
+            ],
+            [
+              "http://example.com",
+              "Planlanan HTTPS adresine yönlendirme"
+            ],
+            [
+              "Başka müşterinin alan adı",
+              "Kendi sitesi ve kendi beklenen sertifikası"
+            ]
+          ]
+        },
+        {
+          "id": "sirala",
+          "heading": "Değişikliği diğer siteleri bozmadan yapın",
+          "steps": [
+            "Mevcut binding ve sertifika eşlemelerini yedekleyin; hangi sitelerin aynı IP/portu kullandığını belirleyin.",
+            "Yeni alan adının DNS ve dış erişimini doğrulayın; sertifika alma yönteminin gereksinimlerini karşılayın.",
+            "Hedef sitenin eşlemesini oluşturun veya düzeltin. Başka sitelerin çalışan binding kayıtlarını topluca değiştirmeyin.",
+            "Yeni siteyi ve en az bir mevcut komşu siteyi dış ağdan kontrol edin. Yönlendirme zincirinde döngü olmadığını ölçün."
+          ]
+        },
+        {
+          "id": "yenileme",
+          "heading": "Yenileme sonrası neden tekrar bağlantı testi yapılır?",
+          "paragraphs": [
+            "Yeni sertifikanın üretilmesi, aktif bağlamanın onu kullanmaya başladığını tek başına kanıtlamaz. Yenileme sonrası gerçek hostname bağlantısında sunulan sertifikanın tarihini ve eşleşmesini kontrol edin.",
+            "Web sertifikası ile SMTP veya IMAP servisinin kullandığı sertifika farklı yapılandırmalar olabilir. IIS testinin geçmesi posta TLS testinin de geçtiği anlamına gelmez. Hizmetleri ayrı envanterleyin ve ayrı doğrulayın.",
+            "Test kaydına sertifikanın parmak izini eklemek, yenileme öncesi ve sonrasında sunulan sertifikayı karşılaştırmayı kolaylaştırır. Özel anahtarı bu kayda eklemeyin."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Her HTTPS sitesi için ayrı IP gerekir mi?",
+          "SNI destekleyen IIS ve istemcilerle bir IP üzerinde birden fazla HTTPS sitesi yayınlanabilir. Hostname ve sertifika eşlemeleri doğru olmalıdır."
+        ],
+        [
+          "www yönlendirmesi için sertifika gerekli mi?",
+          "HTTPS ile www adresine gelen istemci önce TLS kurar, sonra HTTP yönlendirmesini alır. O bağlantıda da uygun sertifika sunulmalıdır."
+        ],
+        [
+          "IP üzerinden test yeterli mi?",
+          "Hayır. Alan adı ve SNI davranışını sınamak için beklenen hostname ile bağlantı kurun. IP testi farklı bir site veya sertifika seçebilir."
+        ],
+        [
+          "IIS SSL düzeldiyse posta SSL de düzelir mi?",
+          "Otomatik olarak varsaymayın. Posta hizmetinin sertifika seçimi ve yeniden yükleme davranışı ayrıca kontrol edilmelidir."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: IIS SNI",
+          "https://learn.microsoft.com/en-us/iis/get-started/whats-new-in-iis-8/iis-80-server-name-indication-sni-ssl-scalability"
+        ],
+        [
+          "Microsoft: IIS binding",
+          "https://learn.microsoft.com/en-us/iis/configuration/system.applicationhost/sites/site/bindings/binding"
+        ]
+      ]
+    },
+    "en": {
+      "path": "/en/iis-multiple-sites-ssl-sni/",
+      "title": "Multiple IIS sites, SSL and SNI on one IP | AdaPanel",
+      "heading": "Multiple IIS sites, SSL and SNI on one IP",
+      "description": "Plan multiple HTTPS domains on Windows IIS with explicit bindings, SNI certificate selection, www redirects and real TLS verification for every hostname.",
+      "intro": "For multiple HTTPS sites on one IP, plan DNS, IIS bindings and SNI together. A certificate in the store is not enough: connect to each intended hostname and verify the certificate actually presented.",
+      "sections": [
+        {
+          "id": "map",
+          "heading": "Write down the hostname-to-site mapping",
+          "paragraphs": [
+            "For each hostname, list its DNS destination, IIS site, local IP and port, physical directory and expected certificate names. Behind NAT, the local binding address may differ from public DNS. Recording this distinction prevents publishing to the wrong destination.",
+            "Treat the apex name, www and application subdomains as separate entry points. Decide the DNS, HTTPS and content behavior of each. Include unexpected hostnames in the test plan so they do not accidentally display another customer’s site."
+          ]
+        },
+        {
+          "id": "sni",
+          "heading": "Understand certificate and site selection",
+          "paragraphs": [
+            "SNI carries the requested server name during TLS negotiation and enables certificate selection on a shared IP and port. An IIS binding associates a site with protocol, address, port and hostname. The certificate names must match the intended connection.",
+            "Opening the IP address in a browser is not equivalent to testing the domain over HTTPS. Connect with the correct hostname and validate name, trust chain and expiry together. Bypassing a certificate warning does not complete an acceptance test."
+          ]
+        },
+        {
+          "id": "matrix",
+          "heading": "Define expected behavior for each entry point",
+          "columns": [
+            "Request",
+            "Expected outcome"
+          ],
+          "rows": [
+            [
+              "https://example.com",
+              "Intended site with valid name and trust chain"
+            ],
+            [
+              "https://www.example.com",
+              "Valid certificate before a controlled redirect"
+            ],
+            [
+              "http://example.com",
+              "Redirect to the planned HTTPS address"
+            ],
+            [
+              "Another customer domain",
+              "That customer’s site and expected certificate"
+            ]
+          ]
+        },
+        {
+          "id": "change",
+          "heading": "Avoid breaking neighboring sites",
+          "steps": [
+            "Back up current bindings and certificate assignments; identify sites sharing the same endpoint.",
+            "Verify external DNS and reachability for the new hostname and satisfy the certificate issuance method.",
+            "Create or correct the target site’s mapping without rewriting other working bindings.",
+            "Check the new site and an existing neighboring site externally. Confirm that redirects terminate without a loop."
+          ]
+        },
+        {
+          "id": "renewal",
+          "heading": "Repeat connection tests after renewal",
+          "paragraphs": [
+            "Issuing a replacement certificate does not by itself prove that the active binding now uses it. After renewal, inspect the dates and name match of the certificate returned by a real hostname connection.",
+            "The certificate used by SMTP or IMAP can be configured independently from IIS. A successful web TLS test does not establish that mail TLS is correct. Inventory and verify each service separately.",
+            "Record the public certificate fingerprint to distinguish the certificate presented before and after renewal. Never include the private key in that record."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Does each HTTPS site need its own IP?",
+          "SNI-capable IIS and clients can serve multiple HTTPS sites on one IP. Hostname bindings and certificate assignments must be correct."
+        ],
+        [
+          "Does an HTTPS www redirect need a certificate?",
+          "Yes. TLS is established before the client receives the HTTP redirect, so the www connection must present an appropriate certificate too."
+        ],
+        [
+          "Can I test only by IP address?",
+          "No. Use the expected hostname to exercise certificate name and SNI behavior. An IP request may select another site or certificate."
+        ],
+        [
+          "Does fixing IIS SSL also fix SMTP TLS?",
+          "Do not assume that. Verify the mail service’s certificate selection and reload behavior separately."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: IIS SNI",
+          "https://learn.microsoft.com/en-us/iis/get-started/whats-new-in-iis-8/iis-80-server-name-indication-sni-ssl-scalability"
+        ],
+        [
+          "Microsoft: IIS binding",
+          "https://learn.microsoft.com/en-us/iis/configuration/system.applicationhost/sites/site/bindings/binding"
+        ]
+      ]
+    }
+  },
+  "uploads": {
+    "category": "apps",
+    "updated": "2026-10-22",
+    "related": [
+      "web_runtime",
+      "reverse_proxy",
+      "files",
+      "security"
+    ],
+    "tr": {
+      "path": "/iis-php-dosya-yukleme-limitleri/",
+      "title": "IIS ve PHP dosya yükleme limitlerini düzenleme | AdaPanel",
+      "heading": "IIS ve PHP dosya yükleme limitlerini düzenleme",
+      "description": "Büyük dosya yüklemesi neden başarısız? IIS, PHP, proxy ve uygulama sınırlarını ayıran; geçici depolama, süre ve güvenli yükleme davranışını test eden rehber.",
+      "intro": "Dosya yükleme sınırı tek bir ayardan oluşmaz. IIS, proxy, PHP veya başka bir çalışma zamanı ve uygulama kendi sınırını uygulayabilir. En erken engelleyen katmanı günlüklerden bulun; bütün limitleri sınırsıza çıkarmayın.",
+      "sections": [
+        {
+          "id": "belirti",
+          "heading": "Hangi yüklemeler başarısız oluyor?",
+          "paragraphs": [
+            "Başarılı ve başarısız dosyanın boyutunu, türünü, istek süresini ve dönen HTTP durumunu kaydedin. Küçük dosyanın geçmesi büyük dosyanın da aynı yoldan işleneceğini kanıtlamaz. Birden fazla dosya ve form alanları toplam istek boyutunu artırır.",
+            "İstek IIS’te reddediliyorsa uygulama günlüğüne hiç ulaşmayabilir. Uygulama isteği alıp sonradan hata veriyorsa geçici dizin, hedef disk, izin veya işleme aşamasına bakın. Süre aşımı ile boyut sınırını ayrı hipotezler olarak değerlendirin."
+          ]
+        },
+        {
+          "id": "katman",
+          "heading": "Sınırları aynı birime çevirin",
+          "columns": [
+            "Katman",
+            "Kontrol"
+          ],
+          "rows": [
+            [
+              "IIS request filtering",
+              "maxAllowedContentLength gibi istek boyutu sınırları"
+            ],
+            [
+              "PHP",
+              "upload_max_filesize ve post_max_size ilişkisi"
+            ],
+            [
+              "Proxy ve uygulama",
+              "İstek gövdesi, süre ve uygulamaya özel dosya kuralları"
+            ],
+            [
+              "Depolama",
+              "Geçici alan, hedef disk, kota ve süreç kimliğinin yazma izni"
+            ]
+          ]
+        },
+        {
+          "id": "butce",
+          "heading": "Boyut ve süre bütçesi belirleyin",
+          "paragraphs": [
+            "İzin verilen tek dosya boyutunu, aynı istekteki dosya sayısını ve form ek yükünü birlikte hesaplayın. Örneğin ürününüz 20 MiB dosyayı kabul edecekse toplam istek sınırını tam dosya boyutuna eşitlemek sınırdaki geçerli istekleri reddedebilir. Bu örnek bir ürün kararıdır; bütün sunucular için önerilen limit değildir.",
+            "Yavaş bağlantı, virüs taraması veya dönüştürme süresi yükleme süresinden farklıdır. Uzun süren işlem için kabul edildi yanıtı ve takip edilebilir arka plan işi tasarlamak gerekebilir. Zaman aşımını büyütmek işlem tamamlandığını garanti etmez."
+          ]
+        },
+        {
+          "id": "deneme",
+          "heading": "Sınır testleri ve geri dönüş",
+          "steps": [
+            "Mevcut değerleri ve kapsamlarını kaydedin; değişikliği önce test sitesinde uygulayın.",
+            "Sınırın altında, sınırda ve üstünde dosyalarla beklenen kabul veya ret sonucunu ölçün.",
+            "Birden fazla dosya, yavaş aktarım ve yarıda kesilen bağlantıyı deneyin; geçici dosyaların temizlendiğini kontrol edin.",
+            "Aynı sunucudaki diğer sitelerin limitlerinin değişmediğini ve disk tüketiminin kontrol altında olduğunu doğrulayın."
+          ]
+        },
+        {
+          "id": "guvenlik",
+          "heading": "Yüklemeyi kabul etmek dosyayı güvenli yapmaz",
+          "paragraphs": [
+            "İzin verilen dosya türlerini iş ihtiyacına göre sınırlandırın. Kullanıcının verdiği dosya adını doğrudan çalıştırılabilir web yoluna dönüştürmeyin. Özel yüklemeler için yetki kontrollü indirme ve güvenli saklama tasarlayın.",
+            "Test sonucunda kullanıcıya açık bir hata mesajı gösterin; ayrıntılı sistem yollarını veya yapılandırmayı ifşa etmeyin. Disk doluluğu, reddedilen yüklemeler ve başarısız arka plan işlemleri ayrı izlenebilir sonuçlar olmalıdır.",
+            "Paylaşılan sunucuda müşteri başına depolama sınırını da değerlendirin. Tek kullanıcının geçerli yüklemeleri bütün sitelerin disk alanını tüketmemelidir."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "PHP limitini artırdım, neden hâlâ hata var?",
+          "IIS, proxy veya uygulama daha erken reddediyor olabilir. İsteğin ulaştığı son katmanı durum ve günlüklerle belirleyin."
+        ],
+        [
+          "post_max_size ile dosya boyutu aynı mı olmalı?",
+          "Toplam POST verisi dosyanın yanında form ve çok parçalı aktarım ek yükünü de içerir. Dosya ve toplam istek bütçesini birlikte planlayın."
+        ],
+        [
+          "Limitleri sınırsız yapmak doğru mu?",
+          "İş ihtiyacına göre sınır belirleyin. Sınırsız kabul; disk, bellek ve işleme kaynakları üzerindeki yükü denetlemeyi zorlaştırır."
+        ],
+        [
+          "Yükleme tamamlandıysa dönüştürme de tamamlandı mı?",
+          "Hayır. Aktarım, dosyayı kaydetme ve arka planda işleme ayrı aşamalar olabilir. Kullanıcıya hangi aşamanın tamamlandığını doğru gösterin."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: IIS request limits",
+          "https://learn.microsoft.com/en-us/iis/configuration/system.webserver/security/requestfiltering/requestlimits/"
+        ],
+        [
+          "PHP: Dosya yükleme hataları",
+          "https://www.php.net/manual/en/features.file-upload.common-pitfalls.php"
+        ]
+      ]
+    },
+    "en": {
+      "path": "/en/iis-php-file-upload-limits/",
+      "title": "Configure IIS and PHP file upload limits | AdaPanel",
+      "heading": "Configure IIS and PHP file upload limits",
+      "description": "Diagnose large upload failures across IIS, PHP, proxies and application rules with request budgets, temporary storage checks and boundary acceptance tests.",
+      "intro": "Upload size is not controlled by one setting. IIS, a proxy, PHP or another runtime, and the application may each enforce a limit. Find the first rejecting layer from evidence instead of making every limit unlimited.",
+      "sections": [
+        {
+          "id": "symptom",
+          "heading": "Compare successful and failed uploads",
+          "paragraphs": [
+            "Record file size, type, request duration and HTTP status for a passing and a failing case. A small upload does not prove that a large one will complete. Multiple files and form fields increase total request size.",
+            "If IIS rejects the request first, the application may never log it. If the application receives it and fails later, investigate temporary storage, destination space, permissions and processing. Treat a timeout and a size rejection as separate hypotheses."
+          ]
+        },
+        {
+          "id": "layers",
+          "heading": "Normalize limits before comparing them",
+          "columns": [
+            "Layer",
+            "What to inspect"
+          ],
+          "rows": [
+            [
+              "IIS request filtering",
+              "Request size settings such as maxAllowedContentLength"
+            ],
+            [
+              "PHP",
+              "The relationship between upload_max_filesize and post_max_size"
+            ],
+            [
+              "Proxy and application",
+              "Body size, duration and application-specific file rules"
+            ],
+            [
+              "Storage",
+              "Temporary space, destination quota and write permissions"
+            ]
+          ]
+        },
+        {
+          "id": "budget",
+          "heading": "Define a size and duration budget",
+          "paragraphs": [
+            "Account for the permitted file size, file count per request and form overhead. For example, if a product accepts a 20 MiB file, setting the total request limit to exactly that size can reject a valid boundary case. This is an illustrative product requirement, not a universal server setting.",
+            "Slow transfer, scanning and transformation have different time budgets. Long processing may require a tracked background job after upload acceptance. Raising a timeout does not prove that processing finishes successfully."
+          ]
+        },
+        {
+          "id": "test",
+          "heading": "Test boundaries and recovery behavior",
+          "steps": [
+            "Record current values and their scope, then apply the change on a test site.",
+            "Try files below, at and above the intended boundary and verify the expected acceptance or rejection.",
+            "Test multiple files, slow transfers and interrupted connections; check temporary-file cleanup.",
+            "Verify that other sites retain their limits and storage consumption remains controlled."
+          ]
+        },
+        {
+          "id": "safety",
+          "heading": "Separate acceptance from safe handling",
+          "paragraphs": [
+            "Limit allowed types to the business requirement. Do not map a user-provided filename directly into an executable web location. Private uploads need deliberate storage and authorization for download.",
+            "Return a useful user-facing error without exposing filesystem paths or configuration. Track disk pressure, rejected requests and failed processing jobs as separate outcomes so a completed transfer cannot conceal a later failure.",
+            "On shared hosting, evaluate per-customer storage budgets too. One user’s otherwise valid uploads should not consume the disk space required by every site."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Why does an upload fail after increasing the PHP limit?",
+          "IIS, a proxy or the application may reject it earlier. Use status details and logs to identify the last layer reached."
+        ],
+        [
+          "Should post_max_size equal the file limit?",
+          "Total POST data includes form fields and multipart overhead as well as the file. Plan file and total request budgets together."
+        ],
+        [
+          "Should all upload limits be unlimited?",
+          "Set a boundary justified by the product. Unlimited acceptance makes storage, memory and processing load harder to control."
+        ],
+        [
+          "Does upload completion prove conversion is complete?",
+          "No. Transfer, storage and background processing can be separate stages. Report the stage that has actually completed."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: IIS request limits",
+          "https://learn.microsoft.com/en-us/iis/configuration/system.webserver/security/requestfiltering/requestlimits/"
+        ],
+        [
+          "PHP: Upload pitfalls",
+          "https://www.php.net/manual/en/features.file-upload.common-pitfalls.php"
+        ]
+      ]
+    }
+  },
+  "reverse_proxy": {
+    "category": "apps",
+    "updated": "2026-10-22",
+    "related": [
+      "app_runtime",
+      "uploads",
+      "iis_errors",
+      "bindings"
+    ],
+    "tr": {
+      "path": "/iis-arr-reverse-proxy-yerel-uygulama/",
+      "title": "IIS ARR reverse proxy ile yerel uygulama yayınlama | AdaPanel",
+      "heading": "IIS ARR reverse proxy ile yerel uygulama yayınlama",
+      "description": "Windows IIS arkasındaki Python veya Node.js uygulamasını değerlendirin: URL Rewrite, ARR, localhost portu, süreç sahipliği, health kontrolü ve proxy testleri.",
+      "intro": "Reverse proxy, dış HTTPS isteğini yerel uygulamaya iletir; uygulama sürecini tek başına çalıştırmaz. IIS yönlendirmesi ile uygulama ve worker süreçlerinin yaşam döngüsünü ayrı planlayın.",
+      "sections": [
+        {
+          "id": "akis",
+          "heading": "İstek hangi yoldan ilerler?",
+          "paragraphs": [
+            "Tipik akış, istemci → IIS HTTPS → ARR → 127.0.0.1 üzerindeki uygulama portudur. Bu mimaride yerel arka uç portunu internete açmak gerekmez. Uygulamanın yalnız beklenen arabirimde dinlediğini yine de kontrol edin.",
+            "URL Rewrite kuralı ile ARR proxy işlevi ayrı bileşenlerdir. Birinin kurulu olması diğerinin etkin olduğunu göstermez. Mevcut sunucuda çalışan modülleri yeniden kurmak yerine varlıklarını ve kullanılan site kuralını inceleyin."
+          ]
+        },
+        {
+          "id": "envanter",
+          "heading": "Uygulama başına tutulacak işletim kaydı",
+          "columns": [
+            "Alan",
+            "Neden gerekir?"
+          ],
+          "rows": [
+            [
+              "Çalışma klasörü ve executable",
+              "Bağımlılık ve göreli dosya yollarının doğru çözülmesi"
+            ],
+            [
+              "Argümanlar ve ortam",
+              "Doğru modül, bağlantı ve uygulama ayarları"
+            ],
+            [
+              "Yerel port ve dinleme adresi",
+              "Çakışma ve gereksiz dış erişimin önlenmesi"
+            ],
+            [
+              "Süreç sahibi",
+              "Windows görevi, hizmet veya panel arasında tek yönetici"
+            ],
+            [
+              "Log ve sağlık yolu",
+              "Başlangıç ile gerçek işlevin ayrı ölçülmesi"
+            ]
+          ]
+        },
+        {
+          "id": "sahip",
+          "heading": "Mevcut görevlerle çakışmayı önleyin",
+          "paragraphs": [
+            "Server ve worker iki ayrı süreçse her birinin mevcut Windows görevi veya hizmetini bulun. Panel yönetimine geçişte eski ve yeni yöneticiyi aynı anda etkin bırakmayın. Önce yapılandırmayı kaydedin, bakım aralığında eski sahibi durdurun, sonra yeni yöntemi doğrulayın; başarısızsa kayıtlı düzene dönün.",
+            "Bu geçiş planı bir işletim ilkesidir. Kullandığınız AdaPanel sürümünün süreç yönetimi yeteneklerini arayüz ve sürüm notlarından doğrulayın; tüm uygulamaların otomatik taşındığını varsaymayın. Worker’ın sağlıklı olması için yalnız HTTP sürecinin açık olması yeterli değildir."
+          ]
+        },
+        {
+          "id": "test",
+          "heading": "Proxy ve süreç için ayrı kabul testleri",
+          "steps": [
+            "Yerel portta uygulamanın beklenen sağlık yanıtını verdiğini ve portu doğru sürecin kullandığını kontrol edin.",
+            "Dış hostname üzerinden aynı işlevi HTTPS ile çağırın; sertifika, yönlendirme ve yanıt içeriğini doğrulayın.",
+            "Giriş, yükleme ve gerekiyorsa uzun bağlantı veya WebSocket davranışını deneyin.",
+            "Bakım ortamında yeniden başlatma sonrası tek server ve beklenen sayıda worker bulunduğunu, iş kuyruğunun ilerlediğini ölçün."
+          ]
+        },
+        {
+          "id": "proxy",
+          "heading": "HTTPS ve zaman aşımı ayrıntıları",
+          "paragraphs": [
+            "Uygulamanın orijinal HTTPS şemasını ve host adını doğru algıladığını kontrol edin. Proxy başlıklarını yalnız güvenilen proxy kaynaklarından kabul edecek şekilde uygulamanın belgelerine göre yapılandırın; istemcinin gönderdiği her başlığa güvenmeyin.",
+            "Uzun işlerde proxy süresi, yükleme süresi ve işlem tamamlama süresi farklı olabilir. Kendi iş yükünüzle ölçün. Arka uç bağlantısı başarısızken IIS’in çalışması uygulamanın sağlıklı olduğu anlamına gelmez."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "URL Rewrite tek başına uygulamayı başlatır mı?",
+          "Hayır. Yönlendirme kuralı süreç yöneticisi değildir. Uygulamanın başlatma, yeniden başlatma ve açılış davranışı ayrı kurulmalıdır."
+        ],
+        [
+          "Uygulamanın 8000 portunu dışarı açmalı mıyım?",
+          "IIS aynı sunucudaki localhost uygulamasına vekillik ediyorsa genellikle gerekmez. Dış erişimi IIS üzerinden verin ve gerçek dinleme adresini doğrulayın."
+        ],
+        [
+          "Windows görevi ve panel aynı worker’ı yönetebilir mi?",
+          "Aynı süreci iki etkin yöneticiye bırakmayın. Kontrollü sahiplik geçişi yapın ve çift çalışmayı gerçek süreçlerle test edin."
+        ],
+        [
+          "Health yanıtı worker’ın çalıştığını kanıtlar mı?",
+          "Yalnız o kontrolün ölçtüğünü kanıtlar. Worker için test işinin alınması ve tamamlanması gibi ayrı kanıt gerekir."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: ARR ve URL Rewrite reverse proxy",
+          "https://learn.microsoft.com/en-us/iis/extensions/url-rewrite-module/reverse-proxy-with-url-rewrite-v2-and-application-request-routing"
+        ],
+        [
+          "Microsoft: Proxy başlıkları",
+          "https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer"
+        ]
+      ]
+    },
+    "en": {
+      "path": "/en/iis-arr-reverse-proxy-local-app/",
+      "title": "Publish a local app with IIS ARR reverse proxy | AdaPanel",
+      "heading": "Publish a local app with IIS ARR reverse proxy",
+      "description": "Evaluate Python or Node.js behind Windows IIS with ARR, URL Rewrite, localhost ports, a single process owner, health checks and end-to-end proxy tests.",
+      "intro": "A reverse proxy forwards external HTTPS requests to a local application; it does not itself start the application process. Plan IIS routing separately from the lifecycle of the server and its workers.",
+      "sections": [
+        {
+          "id": "flow",
+          "heading": "Trace the request path",
+          "paragraphs": [
+            "A typical path is client → IIS HTTPS → ARR → application on 127.0.0.1. That architecture does not require opening the backend port to the internet. Still verify that the application listens only on the intended interface.",
+            "The URL Rewrite rule and ARR proxy functionality are separate components. Presence of one does not prove the other is enabled. Inspect existing modules and the site rule before reinstalling components on a working server."
+          ]
+        },
+        {
+          "id": "inventory",
+          "heading": "Keep an operating record for each app",
+          "columns": [
+            "Field",
+            "Purpose"
+          ],
+          "rows": [
+            [
+              "Working directory and executable",
+              "Resolve dependencies and relative paths correctly"
+            ],
+            [
+              "Arguments and environment",
+              "Select the right module and application configuration"
+            ],
+            [
+              "Local port and address",
+              "Avoid collisions and unintended exposure"
+            ],
+            [
+              "Process owner",
+              "Choose one task, service or panel manager"
+            ],
+            [
+              "Logs and health route",
+              "Measure startup separately from useful behavior"
+            ]
+          ]
+        },
+        {
+          "id": "ownership",
+          "heading": "Avoid conflicting process managers",
+          "paragraphs": [
+            "If server and worker are separate processes, locate existing tasks or services for each. A transfer to panel management should not leave both managers active. Record the original setup, stop the previous owner in a maintenance window, validate the replacement and restore the recorded setup if it fails.",
+            "This is an operating principle, not a claim of automatic migration for every app. Verify the process controls available in the installed AdaPanel version and its release notes. A healthy HTTP process alone does not establish a healthy worker."
+          ]
+        },
+        {
+          "id": "tests",
+          "heading": "Test the process and proxy independently",
+          "steps": [
+            "Check the expected health response on the local port and confirm which process owns that port.",
+            "Call the application through the external HTTPS hostname and verify certificate, redirects and response content.",
+            "Exercise login, uploads and any required long-lived connection or WebSocket behavior.",
+            "In a maintenance environment, confirm restart behavior, exactly one server and the intended worker count; verify that queued work progresses."
+          ]
+        },
+        {
+          "id": "headers",
+          "heading": "Validate scheme, headers and time budgets",
+          "paragraphs": [
+            "Check that the application recognizes the original HTTPS scheme and hostname. Configure forwarded-header handling according to the application documentation and trusted proxy sources; do not trust arbitrary client-supplied headers.",
+            "For long operations, proxy timeout, transfer time and processing duration can differ. Measure with the actual workload. A running IIS service does not establish application health when backend connections are failing."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Does URL Rewrite start the application?",
+          "No. A routing rule is not a process manager. Startup, recovery and boot behavior need separate configuration."
+        ],
+        [
+          "Should I expose the backend port publicly?",
+          "Usually not when IIS proxies to an application on the same server’s localhost. Publish through IIS and verify the actual listening interface."
+        ],
+        [
+          "Can a Windows task and the panel manage the same worker?",
+          "Do not leave two active owners for the same process. Transfer ownership deliberately and test for duplicate execution."
+        ],
+        [
+          "Does a health response prove the worker is running?",
+          "Only if that check actually measures worker progress. Otherwise submit a harmless job and verify its completion separately."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: ARR and URL Rewrite reverse proxy",
+          "https://learn.microsoft.com/en-us/iis/extensions/url-rewrite-module/reverse-proxy-with-url-rewrite-v2-and-application-request-routing"
+        ],
+        [
+          "Microsoft: Forwarded headers",
+          "https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer"
+        ]
+      ]
+    }
+  },
+  "smtp_delivery": {
+    "category": "operations",
+    "updated": "2026-10-22",
+    "related": [
+      "mail",
+      "dns",
+      "ssl",
+      "iis_errors"
+    ],
+    "tr": {
+      "path": "/smtp-25-587-relay-posta-teslimati/",
+      "title": "SMTP 25, 587 ve relay: dışarı e-posta neden gitmez? | AdaPanel",
+      "heading": "SMTP 25, 587 ve relay: dışarı e-posta neden gitmez?",
+      "description": "SMTP girişinin başarılı olması teslimat değildir. TCP 25 çıkışı, 587 submission, relay seçimi, MX çözümlemesi ve kuyruk hatasının aşamasını ayırın.",
+      "intro": "Uygulamanın 587 üzerinden mesaj göndermesi, posta sunucusunun mesajı kabul ettiğini gösterir. Alıcının sunucusuna doğrudan teslimat ayrı bağlantıdır ve normalde TCP 25 kullanır. Çıkış 25 kapalıysa uygun bir SMTP relay seçeneği değerlendirilir.",
+      "sections": [
+        {
+          "id": "akis",
+          "heading": "İki bağlantıyı ayrı düşünün",
+          "paragraphs": [
+            "Birinci bağlantıda web sitesi veya posta istemcisi kendi SMTP hizmetine kimlik doğrular ve mesajı bırakır. İkinci bağlantıda posta sunucusu alıcı alan adının MX hedefini bulur ve teslimatı dener. İlk bağlantının başarılı olması ikincinin ağ erişimini veya kabulünü kanıtlamaz.",
+            "587, standart mesaj gönderim hizmetidir. Alıcının MX adresindeki portu 587 olarak değiştirmek genel bir teslimat çözümü değildir; o servis varsa bile size ait olmayan kimlik doğrulama veya gönderici politikaları uygulayabilir. Relay ise sizin kullanmaya yetkili olduğunuz ayrı bir aktarım hizmetidir."
+          ]
+        },
+        {
+          "id": "asama",
+          "heading": "Kuyruk hatası hangi aşamayı gösteriyor?",
+          "columns": [
+            "Kanıt",
+            "Araştırılacak aşama"
+          ],
+          "rows": [
+            [
+              "MX veya adres çözümleme hatası",
+              "DNS ve hedef kayıtlar"
+            ],
+            [
+              "TCP zaman aşımı / bağlantı hatası",
+              "Ağ yolu, filtreleme veya hedef erişimi"
+            ],
+            [
+              "TLS doğrulama hatası",
+              "Sertifika, alan adı, zincir ve protokol"
+            ],
+            [
+              "SMTP 4xx / 5xx yanıtı",
+              "Karşı tarafın geçici veya kalıcı ret nedeni"
+            ],
+            [
+              "Mesaj kabulü, sonra spam klasörü",
+              "Teslimat sonrası sınıflandırma ve gönderici itibarı"
+            ]
+          ]
+        },
+        {
+          "id": "ag",
+          "heading": "Çıkış 25’i nasıl değerlendirirsiniz?",
+          "steps": [
+            "Testi posta hizmetinin çalıştığı sunucu ve ağ ortamından yapın; başka bilgisayarın sonucu yeterli değildir.",
+            "Birden fazla alıcı alanının güncel MX kayıtlarını çözümleyin ve TCP 25 bağlantı sonucunu kaydedin.",
+            "IPv4 ve varsa kullanılabilir IPv6 yollarını ayrı inceleyin; yanlış AAAA veya bozuk IPv6 rotasını gözden kaçırmayın.",
+            "Windows çıkış kuralları, ağ geçidi ve sağlayıcı politikasını kanıtlarla karşılaştırın. Tek bir timeout engelin hangi cihazda olduğunu kesin söylemez."
+          ]
+        },
+        {
+          "id": "cozum",
+          "heading": "Doğrudan teslimat mı, SMTP relay mi?",
+          "paragraphs": [
+            "Doğrudan teslimat için gerekli ağ erişimi, DNS ve gönderici işletimi sağlanmalıdır. Sağlayıcı TCP 25 çıkışını açmıyorsa izin verilen bir gönderim portundan kimlik doğrulamalı relay, posta kutularınızı kendi sunucunuzda tutarken dış gönderimi taşıyabilir.",
+            "Relay seçiminde alan adı doğrulaması, gönderici yetkisi, hacim sınırı, hata raporları ve SPF/DKIM/DMARC uyumunu kontrol edin. Mevcut SPF kaydını ikinci bir SPF kaydı ekleyerek bozmayın; kullanılan gönderim yollarını birlikte değerlendirin. Hesap parolasını günlük veya destek mesajına yazmayın."
+          ]
+        },
+        {
+          "id": "sonuc",
+          "heading": "Düzeltmeden sonra neyi doğrulayın?",
+          "paragraphs": [
+            "Kuyruğu silmeden az sayıda izinli test alıcısıyla deneyin. Yeni denemenin bağlantı, TLS ve SMTP aşamalarını izleyin; karşı tarafın kabulünü ve alıcıdaki sonucu ayrı kaydedin. Geçici hatada yeniden deneme davranışını da kontrol edin.",
+            "TCP bağlantısı düzelince bütün e-postaların gelen kutusuna düşeceği garanti edilmez. Teslim edilebilirlik, kimlik doğrulama, içerik ve alıcı politikalarıyla ayrıca ilişkilidir. Sorunu çözmek için TLS sertifika doğrulamasını kapatmayın."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "587 açıkken neden e-posta gitmiyor?",
+          "587 çoğunlukla istemcinin sizin SMTP hizmetinize mesaj bırakmasını kapsar. Doğrudan MX teslimatının dış TCP 25 bağlantısı ayrıca çalışmalıdır."
+        ],
+        [
+          "MX sunucusuna 25 yerine 587 ile gönderemez miyim?",
+          "Genel çözüm değildir. 587 bir submission hizmetidir; alıcı MX’in bu portta sizin mesajınızı yetkisiz kabul etmesi beklenmez. Yetkili bir relay kullanılabilir."
+        ],
+        [
+          "Timeout kesin olarak internet sağlayıcısı engeli mi?",
+          "Hayır. Yerel güvenlik duvarı, ağ geçidi, rota veya hedef de neden olabilir. Farklı hedefler ve ağ katmanlarıyla kanıt toplayın."
+        ],
+        [
+          "Relay kullanınca posta kutuları taşınır mı?",
+          "Sadece dış gönderim relay üzerinden yönlendirilirse posta kutuları kendi sunucunuzda kalabilir. Gelen ve giden posta rotalarını ayrı planlayın."
+        ]
+      ],
+      "sources": [
+        [
+          "RFC 6409: Mesaj gönderimi",
+          "https://www.rfc-editor.org/rfc/rfc6409"
+        ],
+        [
+          "RFC 5321: SMTP teslimatı",
+          "https://www.rfc-editor.org/rfc/rfc5321"
+        ]
+      ]
+    },
+    "en": {
+      "path": "/en/smtp-25-587-relay-delivery/",
+      "title": "SMTP ports 25, 587 and relay delivery | AdaPanel",
+      "heading": "SMTP ports 25, 587 and relay delivery",
+      "description": "Understand why successful SMTP authentication does not prove delivery. Separate submission, outbound TCP 25, MX lookup, relay routing and queue failure stages.",
+      "intro": "A message accepted on port 587 has reached the submission service. Direct delivery to the recipient’s mail server is a separate connection, normally on TCP 25. If outbound port 25 is unavailable, evaluate an authorized SMTP relay.",
+      "sections": [
+        {
+          "id": "flow",
+          "heading": "Separate submission from delivery",
+          "paragraphs": [
+            "First, the website or mail client authenticates to its SMTP service and submits a message. Then the mail server resolves the recipient domain’s MX and attempts delivery. Success in the first connection does not establish network access or acceptance in the second.",
+            "Port 587 is the standard submission service. Changing a recipient MX destination to port 587 is not a general delivery solution: any service there may require credentials and sender permissions you do not have. A relay is a separate forwarding service you are authorized to use."
+          ]
+        },
+        {
+          "id": "stage",
+          "heading": "Identify the failing queue stage",
+          "columns": [
+            "Evidence",
+            "Investigate"
+          ],
+          "rows": [
+            [
+              "MX or address resolution failure",
+              "DNS and destination records"
+            ],
+            [
+              "TCP timeout or connection error",
+              "Network path, filtering or destination availability"
+            ],
+            [
+              "TLS validation failure",
+              "Certificate name, chain and protocol"
+            ],
+            [
+              "SMTP 4xx or 5xx response",
+              "The remote temporary or permanent rejection"
+            ],
+            [
+              "Accepted message later in spam",
+              "Post-delivery classification and reputation"
+            ]
+          ]
+        },
+        {
+          "id": "network",
+          "heading": "Evaluate outbound TCP 25 from the right place",
+          "steps": [
+            "Test from the server and network environment where the mail service runs, not just from another workstation.",
+            "Resolve current MX records for several recipient domains and record TCP 25 outcomes.",
+            "Inspect IPv4 and any usable IPv6 path separately; account for incorrect address records or broken IPv6 routing.",
+            "Compare Windows outbound rules, gateway filtering and provider policy. One timeout cannot locate the blocking device conclusively."
+          ]
+        },
+        {
+          "id": "options",
+          "heading": "Choose a viable delivery route",
+          "paragraphs": [
+            "Direct delivery requires the necessary network access, DNS and sender operations. If the provider will not allow outbound TCP 25, authenticated relay over an allowed submission port can carry outgoing mail while mailboxes remain on your server.",
+            "Check relay domain verification, sender authorization, volume limits, failure reporting and SPF/DKIM/DMARC alignment. Do not introduce a second SPF record when updating the sending policy; account for all legitimate routes together. Keep relay credentials out of logs and support messages."
+          ]
+        },
+        {
+          "id": "verify",
+          "heading": "Verify the correction without deleting the queue",
+          "paragraphs": [
+            "Use a small set of authorized test recipients. Follow connection, TLS and SMTP stages for the new attempt, then record remote acceptance separately from the recipient’s visible result. Also inspect retry behavior for temporary failures.",
+            "A repaired TCP connection does not guarantee inbox placement. Authentication, content and recipient policy remain separate factors. Do not disable certificate validation to make a TLS failure appear resolved."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Why can mail fail when port 587 is open?",
+          "Port 587 usually covers client submission to your SMTP service. Direct MX delivery additionally needs a working outbound TCP 25 connection."
+        ],
+        [
+          "Can I use port 587 on the recipient MX instead of 25?",
+          "Not as a general workaround. Submission services normally require authorization. Use a relay you are entitled to send through."
+        ],
+        [
+          "Does a timeout prove the ISP blocks delivery?",
+          "No. A local firewall, gateway, route or destination can also cause it. Compare multiple destinations and network layers."
+        ],
+        [
+          "Does using a relay move my mailboxes?",
+          "Outgoing relay routing can be configured while keeping mailboxes on your own server. Plan inbound and outbound mail paths separately."
+        ]
+      ],
+      "sources": [
+        [
+          "RFC 6409: Message submission",
+          "https://www.rfc-editor.org/rfc/rfc6409"
+        ],
+        [
+          "RFC 5321: SMTP delivery",
+          "https://www.rfc-editor.org/rfc/rfc5321"
+        ]
+      ]
+    }
+  },
+  "staging": {
+    "category": "operations",
+    "updated": "2026-10-22",
+    "related": [
+      "migration",
+      "backup",
+      "aspnet_deploy",
+      "laravel_deploy"
+    ],
+    "tr": {
+      "path": "/windows-hosting-test-canli-gecis/",
+      "title": "Windows hosting için test ortamı ve canlıya geçiş | AdaPanel",
+      "heading": "Windows hosting için test ortamı ve canlıya geçiş",
+      "description": "Ajans ve geliştiriciler için IIS staging kontrol listesi: ayrı veritabanı, erişim kontrolü, e-posta ve ödeme izolasyonu, yayın kabulü ve geri dönüş kararı.",
+      "intro": "Güvenilir bir test ortamı yalnız sitenin ikinci kopyası değildir. Veri, kimlik bilgileri, dış servis etkileri ve erişim sınırı da ayrılmalıdır. AdaPanel ile yönetilen bir Windows sitesinin yayına geçişini bu kontrol listesiyle planlayın.",
+      "sections": [
+        {
+          "id": "ayir",
+          "heading": "Kopyalamadan önce sınırları belirleyin",
+          "paragraphs": [
+            "Test sitesi için ayrı fiziksel klasör, alan adı ve veri deposu belirleyin. Üretim bağlantı dizelerini kopyalamadan önce hangi işlemlerin gerçek kullanıcıya veya dış sisteme etki ettiğini listeleyin. Görevler ve worker’lar bu listenin dışında bırakılmamalıdır.",
+            "Kişisel veriyi yalnız görünümü test etmek için bütünüyle kopyalamak yerine maskelenmiş veya sentetik örnekler kullanın. Test verisinin yedeklere ve günlük dosyalarına da girebileceğini hesaba katın; erişim ve saklama süresi belirleyin."
+          ]
+        },
+        {
+          "id": "etki",
+          "heading": "Dış etki kontrol tablosu",
+          "columns": [
+            "İşlev",
+            "Test ortamı davranışı"
+          ],
+          "rows": [
+            [
+              "E-posta ve SMS",
+              "Gerçek alıcıya gitmeyen test hedefleri"
+            ],
+            [
+              "Ödeme",
+              "Sağlayıcının test ortamı ve test kimlikleri"
+            ],
+            [
+              "Webhook",
+              "Üretim tüketicisi yerine test uç noktası"
+            ],
+            [
+              "Zamanlanmış işler",
+              "Ayrı kuyruk ve tek süreç sahibi"
+            ],
+            [
+              "Dosya depolama",
+              "Üretim yüklemelerinden ayrı alan"
+            ]
+          ]
+        },
+        {
+          "id": "erisim",
+          "heading": "Arama motorlarından gizlemek erişim kontrolü değildir",
+          "paragraphs": [
+            "Özel staging ortamına kimlik doğrulama veya uygun ağ erişim kuralı uygulayın. noindex arama görünürlüğüyle ilgilidir; dosyaları veya müşteri verisini yetkisiz okumaya karşı korumaz. robots.txt engeli de gizlilik mekanizması değildir.",
+            "Canlıya geçişte test ortamına ait noindex işaretinin üretime taşınmadığını kontrol edin. Canonical, dil bağlantıları ve sitemap üretim hostname’ini göstermelidir. Test alan adına yönlendiren mutlak bağlantılar gözden kaçabilir."
+          ]
+        },
+        {
+          "id": "kabul",
+          "heading": "Yayın kararını tekrarlanabilir hale getirin",
+          "steps": [
+            "Paket sürümü, veri şeması ve ortam değişikliklerini kısa bir yayın kaydında birleştirin.",
+            "Ana sayfa yanında giriş, veri oluşturma, yükleme, posta testi ve hata sayfasını sınayın.",
+            "Beklenen sonuçları ve başarısızlıkta geri dönüş koşulunu yayın öncesinde kararlaştırın.",
+            "DNS veya trafik geçişinden sonra aynı kritik işlemleri dış ağdan tekrar kontrol edin; eski ortamı hemen silmeyin."
+          ]
+        },
+        {
+          "id": "geri",
+          "heading": "Geri dönüş hangi veriyi koruyacak?",
+          "paragraphs": [
+            "Canlıya geçişten sonra yeni sipariş veya kayıt oluştuysa eski veritabanını geri koymak bu verileri kaybettirebilir. Dosya geri dönüşü ile veri geri dönüşünü ayrı kararlar olarak ele alın. Şema uyumu ve yeni yazılan verinin korunması için uygulamaya özel plan gerekir.",
+            "Ajans tesliminde sorumlu kişi, bakım aralığı, doğrulama sonucu ve erişim devrini kaydedin. Bir test sitesinin varlığını değil, hangi sürümün hangi kontrolleri geçtiğini belgelemek sonraki güncellemeleri kolaylaştırır."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Staging için yalnız alt alan adı yeterli mi?",
+          "Hayır. Dosya, veri, dış servis kimlikleri ve görevler de ayrılmalıdır. Farklı URL aynı üretim veritabanına bağlı olabilir."
+        ],
+        [
+          "noindex test sitesini güvenli yapar mı?",
+          "Hayır. noindex indeksleme sinyalidir; kimlik doğrulama veya ağ erişim kontrolünün yerine geçmez."
+        ],
+        [
+          "Test ortamı gerçek e-posta göndermeli mi?",
+          "İzinli, kontrollü test alıcıları veya gönderimi yakalayan test araçları kullanın. Gerçek müşterilere istemeden bildirim gitmesini engelleyin."
+        ],
+        [
+          "Canlıya geçince eski sunucuyu silebilir miyim?",
+          "Önce kabul testleri, veri bütünlüğü ve geri dönüş ihtiyacını değerlendirin. Geçiş tamamlanır tamamlanmaz eski ortamı silmek kurtarma seçeneklerini azaltır."
+        ]
+      ],
+      "sources": [
+        [
+          "Google: noindex ile indekslemeyi engelleme",
+          "https://developers.google.com/search/docs/crawling-indexing/block-indexing"
+        ],
+        [
+          "Microsoft: IIS siteleri",
+          "https://learn.microsoft.com/en-us/iis/manage/creating-websites/scenario-build-a-static-website-on-iis"
+        ]
+      ]
+    },
+    "en": {
+      "path": "/en/windows-hosting-staging-go-live/",
+      "title": "Windows hosting staging and go-live checklist | AdaPanel",
+      "heading": "Windows hosting staging and go-live checklist",
+      "description": "Plan an IIS staging environment with separate data, restricted access, isolated mail and payments, repeatable release acceptance and a workable rollback decision.",
+      "intro": "A useful staging environment is more than a second copy of the site. Separate data, credentials, external side effects and access too. Use this workflow to plan a Windows website release managed through AdaPanel.",
+      "sections": [
+        {
+          "id": "separate",
+          "heading": "Define boundaries before copying",
+          "paragraphs": [
+            "Choose a separate physical directory, hostname and data store. Before copying production connection strings, list actions that affect real users or external systems. Include scheduled jobs and workers in this inventory.",
+            "Use masked or synthetic records when real personal data is unnecessary for the test. Test data can also enter backups and logs, so define access and retention for those copies. A successful visual comparison does not justify unrestricted data duplication."
+          ]
+        },
+        {
+          "id": "effects",
+          "heading": "Control external side effects",
+          "columns": [
+            "Feature",
+            "Staging behavior"
+          ],
+          "rows": [
+            [
+              "Email and SMS",
+              "Test destinations that do not reach real customers"
+            ],
+            [
+              "Payments",
+              "Provider sandbox and test credentials"
+            ],
+            [
+              "Webhooks",
+              "Test consumers instead of production endpoints"
+            ],
+            [
+              "Scheduled jobs",
+              "Separate queue and one process owner"
+            ],
+            [
+              "File storage",
+              "A location separate from production uploads"
+            ]
+          ]
+        },
+        {
+          "id": "access",
+          "heading": "Search exclusion is not access control",
+          "paragraphs": [
+            "Protect private staging through authentication or an appropriate network boundary. noindex addresses search indexing; it does not protect files or customer data from unauthorized readers. A robots.txt rule is not a confidentiality control either.",
+            "At go-live, verify that staging noindex settings have not reached production. Canonical URLs, language links and the sitemap should use the production hostname. Check absolute links that could still send visitors to the test environment."
+          ]
+        },
+        {
+          "id": "acceptance",
+          "heading": "Make the release decision repeatable",
+          "steps": [
+            "Record the package, data schema and environment changes together.",
+            "Exercise login, a data write, upload, controlled mail and an error route in addition to the homepage.",
+            "Agree expected outcomes and rollback triggers before publishing.",
+            "Repeat critical checks externally after switching traffic or DNS; retain the previous environment until recovery needs are assessed."
+          ]
+        },
+        {
+          "id": "rollback",
+          "heading": "Decide how new data survives rollback",
+          "paragraphs": [
+            "If new orders or records arrive after the switch, restoring an old database can discard them. Treat code rollback and data recovery as separate decisions. Schema compatibility and preservation of new writes require an application-specific plan.",
+            "For an agency handover, record the owner, maintenance window, acceptance result and access transfer. Document which release passed which checks, rather than merely asserting that a staging site exists. This provides a reusable baseline for future updates."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Is a staging subdomain enough?",
+          "No. Separate files, data, external credentials and jobs too. A different URL may still connect to the production database."
+        ],
+        [
+          "Does noindex secure the staging site?",
+          "No. It is an indexing instruction, not authentication or network access control."
+        ],
+        [
+          "Should staging send real customer email?",
+          "Use authorized test recipients or a test message capture service. Prevent accidental notifications to real customers."
+        ],
+        [
+          "Can I delete the old server immediately after go-live?",
+          "First assess acceptance results, data integrity and recovery needs. Immediate deletion removes useful rollback options."
+        ]
+      ],
+      "sources": [
+        [
+          "Google: Block indexing with noindex",
+          "https://developers.google.com/search/docs/crawling-indexing/block-indexing"
+        ],
+        [
+          "Microsoft: IIS websites",
+          "https://learn.microsoft.com/en-us/iis/manage/creating-websites/scenario-build-a-static-website-on-iis"
+        ]
+      ]
+    }
+  },
+  "recovery_drill": {
+    "category": "operations",
+    "updated": "2026-10-22",
+    "related": [
+      "backup",
+      "migration",
+      "database",
+      "staging"
+    ],
+    "tr": {
+      "path": "/web-sitesi-yedekten-donus-provasi/",
+      "title": "Web sitesi yedekten dönüş provası nasıl yapılır? | AdaPanel",
+      "heading": "Web sitesi yedekten dönüş provası nasıl yapılır?",
+      "description": "Yedek dosyasını çalışan siteye dönüştürün: ayrı ortamda geri yükleme, veritabanı tutarlılığı, dosya izinleri, kabul testleri ve gerçek kurtarma süresinin ölçümü.",
+      "intro": "Yedekleme işinin başarılı olması, uygulamanın o yedekten çalışır halde dönebildiğini kanıtlamaz. Bir kurtarma provası; dosyaları, veriyi, ayarları ve bağımlılıkları ayrı ortamda birleştirir, kullanıcı işlemlerini sınar ve geçen süreyi ölçer.",
+      "sections": [
+        {
+          "id": "hedef",
+          "heading": "İş hedefini ölçülebilir tanımlayın",
+          "paragraphs": [
+            "Ne kadar veri kaybının ve hizmet kesintisinin kabul edilebilir olduğunu uygulama sahibiyle belirleyin. Son başarılı yedeğin tarihi ile gerçekten geri yüklenebilen son veri noktası aynı olmayabilir. İşlem sürelerini tahmin yerine provada ölçün.",
+            "Prova kapsamını yazın: tek site mi, veritabanı mı, posta mı, bütün sunucu mu? Tek bir statik dosyayı geri getirmek, dinamik bir müşteri uygulamasının veya tüm AdaPanel kurulumunun kurtarıldığını göstermez."
+          ]
+        },
+        {
+          "id": "paket",
+          "heading": "Kurtarma girdileri kontrol listesi",
+          "columns": [
+            "Girdi",
+            "Doğrulanacak nokta"
+          ],
+          "rows": [
+            [
+              "Dosya paketi",
+              "Beklenen sürüm, bütünlük ve okunabilirlik"
+            ],
+            [
+              "Veritabanı yedeği",
+              "Doğru motor, uyumlu sürüm ve gereken yedek zinciri"
+            ],
+            [
+              "Ortam ayarları",
+              "Bağlantılar ve sırlar için güvenli erişim"
+            ],
+            [
+              "Çalışma zamanları",
+              "PHP, .NET veya uygulamaya özel bağımlılıklar"
+            ],
+            [
+              "İzinler ve görevler",
+              "Dosya kimlikleri ve arka plan işlerinin sahipliği"
+            ]
+          ]
+        },
+        {
+          "id": "prova",
+          "heading": "Üretimi etkilemeden geri yükleyin",
+          "steps": [
+            "Ayrı bir hedef hazırlayın; üretim DNS ve veritabanı bağlantısına yanlışlıkla bağlanmayacağını doğrulayın.",
+            "Yedeği seçip kaynak tarihini ve bütünlük bilgisini kaydedin. Yedek paketinin içeriğini varsaymak yerine envanterini inceleyin.",
+            "Dosyaları ve veri motorunun belgelerine uygun veritabanı yedeğini geri yükleyin; hesap ve izin eşlemelerini düzeltin.",
+            "Ortamı test değerleriyle bağlayın; e-posta, ödeme ve webhook gibi gerçek dış etkileri engelleyin.",
+            "Uygulamayı başlatın ve kritik işlemleri tekrar edin; başlangıç ve bitiş saatlerini kaydedin."
+          ]
+        },
+        {
+          "id": "kabul",
+          "heading": "Dosya sayısı yerine uygulama tutarlılığını ölçün",
+          "paragraphs": [
+            "Örnek bir kullanıcıyla giriş, beklenen kaydı okuma, güvenli test kaydı oluşturma ve dosya indirme gibi işlemleri deneyin. Veritabanındaki dosya referansları gerçekten geri gelen yüklemelerle eşleşmelidir. Kayıt sayısının benzemesi tek başına tutarlılık kanıtı değildir.",
+            "Canlı yazılan dosya ve veriyi farklı anlarda kopyalamak uyuşmazlık yaratabilir. Veritabanı motorunun desteklediği yedek yöntemini ve uygulamanın tutarlı kesit alma ihtiyacını değerlendirin. Bütün veritabanları için aynı dosya kopyalama yöntemini kullanmayın."
+          ]
+        },
+        {
+          "id": "rapor",
+          "heading": "Prova raporundan bakım işine geçin",
+          "paragraphs": [
+            "Rapor; seçilen yedeği, geri gelen veri zamanını, toplam süreyi, başarısız kontrolleri ve eksik bağımlılıkları göstermelidir. Eksik anahtar veya bilinmeyen parola bulunduysa canlı olay yaşanmadan önce erişim sürecini düzeltin.",
+            "Prova ortamındaki müşteri verisini saklama politikasına göre kaldırın ve geçici erişimleri kapatın. Büyük uygulama, şema veya barındırma değişikliğinden sonra aynı provayı yenileyin; geçen yılki başarılı test bugünkü paketin kanıtı değildir."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Yedekleme başarılı mesajı yeterli mi?",
+          "Hayır. Ayrı ortamda geri yükleme ve uygulama kabul testi gerekir. Paketin oluşması ile kullanılabilir kurtarma farklı sonuçlardır."
+        ],
+        [
+          "Prova canlı sitenin üzerine mi yapılır?",
+          "Normal prova için ayrı hedef kullanın. Üretime geri yükleme farklı risk ve bakım planı gerektirir."
+        ],
+        [
+          "Veritabanı dosyasını kopyalamak her zaman yeterli mi?",
+          "Hayır. Motorun desteklediği yedekleme ve geri yükleme yöntemini kullanın; aktif dosyaların kopyası tutarlı bir yedek olmayabilir."
+        ],
+        [
+          "Kurtarma süresini nasıl öğrenirim?",
+          "Bağımlılıkları hazırlamadan uygulama kabulüne kadar geçen gerçek süreyi provada ölçün. Yalnız dosya indirme süresini raporlamayın."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: SQL Server restore ve recovery",
+          "https://learn.microsoft.com/en-us/sql/relational-databases/backup-restore/restore-and-recovery-overview-sql-server"
+        ],
+        [
+          "MySQL: Yedekleme ve kurtarma",
+          "https://dev.mysql.com/doc/refman/8.4/en/backup-and-recovery.html"
+        ]
+      ]
+    },
+    "en": {
+      "path": "/en/website-backup-recovery-drill/",
+      "title": "Run a website backup recovery drill | AdaPanel",
+      "heading": "Run a website backup recovery drill",
+      "description": "Turn a backup into a working website with isolated restoration, database consistency checks, dependency recovery, functional acceptance and measured recovery time.",
+      "intro": "A successful backup job does not prove that the application can be recovered. A drill combines files, data, configuration and dependencies in a separate environment, then tests user operations and measures the time required.",
+      "sections": [
+        {
+          "id": "objective",
+          "heading": "Define a measurable recovery objective",
+          "paragraphs": [
+            "Agree the acceptable data loss and outage with the application owner. The most recent successful backup timestamp may differ from the latest usable recovery point. Measure recovery duration during a drill rather than estimating from archive size.",
+            "Write down the scope: one site, its database, mail or the entire server. Restoring a static file does not establish recovery of a dynamic customer application or a complete AdaPanel installation."
+          ]
+        },
+        {
+          "id": "inputs",
+          "heading": "Inventory the recovery inputs",
+          "columns": [
+            "Input",
+            "Verification"
+          ],
+          "rows": [
+            [
+              "File package",
+              "Expected build, integrity and readability"
+            ],
+            [
+              "Database backup",
+              "Correct engine, compatible version and required backup chain"
+            ],
+            [
+              "Environment configuration",
+              "Secure access to required settings and secrets"
+            ],
+            [
+              "Runtimes",
+              "PHP, .NET or application-specific dependencies"
+            ],
+            [
+              "Permissions and tasks",
+              "Filesystem identities and background process ownership"
+            ]
+          ]
+        },
+        {
+          "id": "drill",
+          "heading": "Restore without affecting production",
+          "steps": [
+            "Prepare a separate destination and verify that it will not accidentally use production DNS or data connections.",
+            "Select the backup and record its date and integrity evidence. Inspect the inventory rather than assuming package contents.",
+            "Restore files and data using the database engine’s supported procedure; reconcile accounts and permissions.",
+            "Connect test settings and prevent real email, payment and webhook side effects.",
+            "Start the application, repeat critical operations and record start and completion times."
+          ]
+        },
+        {
+          "id": "acceptance",
+          "heading": "Verify application consistency, not just file count",
+          "paragraphs": [
+            "Sign in with a test user, read an expected record, create a harmless test record and retrieve a file. Database references should match restored uploads. Similar record counts alone do not establish a consistent application.",
+            "Copying active files and data at different moments can create inconsistencies. Use the database engine’s supported backup mechanism and account for the application’s consistency requirements. Do not apply one filesystem-copy method to every database."
+          ]
+        },
+        {
+          "id": "report",
+          "heading": "Turn drill findings into maintenance work",
+          "paragraphs": [
+            "Report the selected backup, recovered data point, total duration, failed checks and missing dependencies. If a required key or credential is unavailable, correct the access process before an actual outage.",
+            "Remove drill data according to retention policy and close temporary access. Repeat after significant application, schema or hosting changes. A successful drill from last year does not validate today’s backup package."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "Is the backup success notification sufficient?",
+          "No. Restore into a separate environment and perform application acceptance tests. Archive creation and usable recovery are different outcomes."
+        ],
+        [
+          "Should a drill overwrite the live website?",
+          "Use a separate target for a normal drill. Production restoration needs its own maintenance and risk plan."
+        ],
+        [
+          "Is copying database files always enough?",
+          "No. Use the engine’s supported backup and restore method. Copies of active database files may not be consistent."
+        ],
+        [
+          "How do I establish recovery time?",
+          "Measure from preparing dependencies through application acceptance during the drill, not just the archive download duration."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: SQL Server restore and recovery",
+          "https://learn.microsoft.com/en-us/sql/relational-databases/backup-restore/restore-and-recovery-overview-sql-server"
+        ],
+        [
+          "MySQL: Backup and recovery",
+          "https://dev.mysql.com/doc/refman/8.4/en/backup-and-recovery.html"
+        ]
+      ]
+    }
+  },
+  "capacity": {
+    "category": "product",
+    "updated": "2026-10-22",
+    "related": [
+      "selection",
+      "isolation",
+      "database",
+      "automation"
+    ],
+    "tr": {
+      "path": "/windows-vps-hosting-kapasite-planlama/",
+      "title": "Windows VPS ile kaç site barındırılabilir? | AdaPanel",
+      "heading": "Windows VPS ile kaç site barındırılabilir?",
+      "description": "Windows hosting kapasitesini site sayısıyla değil gerçek iş yüküyle planlayın: RAM, CPU, disk, veritabanı, arka plan işleri ve gecikme ölçümüne dayalı yöntem.",
+      "intro": "Bir Windows VPS’in taşıyabileceği site sayısı için tek doğru rakam yoktur. Statik sayfa, e-ticaret uygulaması ve video işleyicisi aynı kaynakları tüketmez. AdaPanel’i değerlendirirken panel maliyetini ve barındırılan iş yüklerini ayrı ölçün.",
+      "sections": [
+        {
+          "id": "profil",
+          "heading": "Önce iş yükü profili oluşturun",
+          "paragraphs": [
+            "Her uygulama için çalışma zamanı, ortalama ve yoğun saat trafiği, veritabanı kullanımı, dosya büyümesi ve arka plan işleri listesini çıkarın. Çok sayıda küçük site, tek bir yoğun işlem uygulamasından daha hafif olabilir; yalnız alan adı sayısına bakmak yanıltır.",
+            "Paylaşılan veritabanı, posta, yedekleme ve güvenlik taraması gibi işleri kapasite hesabına dahil edin. Günlük ortalama rahat görünse bile aynı saatte başlayan yedek ve rapor işleri kaynak baskısı yaratabilir."
+          ]
+        },
+        {
+          "id": "olcum",
+          "heading": "Hangi ölçüm hangi karara yardımcı olur?",
+          "columns": [
+            "Ölçüm",
+            "Yorumlama sorusu"
+          ],
+          "rows": [
+            [
+              "CPU ve işlem süresi",
+              "Sürekli hesaplama mı, kısa yoğunluk mu?"
+            ],
+            [
+              "Bellek ve süreçler",
+              "Hangi uygulama veya havuz büyüyor?"
+            ],
+            [
+              "Disk gecikmesi ve boş alan",
+              "Veritabanı, log veya yükleme darboğazı var mı?"
+            ],
+            [
+              "Yanıt süresi dağılımı",
+              "Ortalama iyi olsa da yavaş istekler artıyor mu?"
+            ],
+            [
+              "Hata ve kuyruk uzunluğu",
+              "İş yükü tamamlanmak yerine birikiyor mu?"
+            ]
+          ]
+        },
+        {
+          "id": "deneme",
+          "heading": "Temsilî kapasite denemesi hazırlayın",
+          "steps": [
+            "İşletim sistemi, panel ve boş hizmetlerin başlangıç tüketimini kaydedin.",
+            "Gerçek kullanıma benzeyen veri boyutu ve istek karışımı olan test uygulamalarını ekleyin.",
+            "Yükü kontrollü artırın; gecikme, hata, kuyruk ve kaynak kullanımını birlikte izleyin.",
+            "Yedekleme ve worker gibi arka plan işlerini de denemeye katın; yalnız ana sayfa GET isteğiyle sınır belirlemeyin.",
+            "Kabul edilen gecikme ve hata düzeyini aşmadan önce gereken işletim payını planlayın."
+          ]
+        },
+        {
+          "id": "darbogaz",
+          "heading": "Kaynak artırmadan önce nedeni bulun",
+          "paragraphs": [
+            "Yavaş sorgu, gereksiz dosya taraması veya sınırsız iş kuyruğu daha büyük sunucuda da büyüyebilir. Önce en çok zaman veya kaynak tüketen işi belirleyin. Bir seferde tek değişiklik yapıp aynı yükle tekrar ölçün.",
+            "IIS önbellekleme ve havuz ayarları iş yüküne bağlıdır. Başka bir sunucunun performans değerlerini doğrudan kopyalamak yerine uygulamanın oturum, veri güncelliği ve yeniden başlatma gereksinimlerini dikkate alın."
+          ]
+        },
+        {
+          "id": "karar",
+          "heading": "Ajans için kapasite karar kaydı",
+          "paragraphs": [
+            "Yeni müşteri kabulünde mevcut yoğun saat ölçümü, beklenen iş yükü ve depolama büyümesini karşılaştırın. Hangi eşikte yeni sunucuya geçileceğini veya veritabanının ayrılacağını önceden belirleyin. Deneme sonucunu donanım ve uygulama sürümleriyle birlikte saklayın.",
+            "Bu yöntem AdaPanel için yayımlanmış bir performans benchmark’ı değildir. Sabit bir donanımda garantili site sayısı vaat etmek yerine kendi ölçümünüzle karar vermenizi sağlar. Aynı test, Windows için hosting paneli seçeneklerini daha tutarlı karşılaştırmaya da yardımcı olur."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "4 GB RAM ile kaç site açılır?",
+          "İş yükü bilinmeden güvenilir sayı verilemez. Çalışma zamanı, trafik, veri motoru ve arka plan işleriyle birlikte ölçüm yapın."
+        ],
+        [
+          "Sadece CPU’ya bakmak yeterli mi?",
+          "Hayır. Bellek, disk gecikmesi, yanıt süresi, hata ve kuyruk birikmesi de kapasiteyi sınırlayabilir."
+        ],
+        [
+          "Panel hafifse bütün uygulamalar hızlı olur mu?",
+          "Hayır. Panelin tüketimi ile barındırılan uygulamaların sorgu ve işlem maliyeti ayrı ölçülmelidir."
+        ],
+        [
+          "Daha büyük VPS her yavaşlığı çözer mi?",
+          "Hayır. Sorgu, kod veya sınırsız kuyruk kaynaklı sorunların nedenini düzeltmek gerekebilir. Değişikliği aynı yük altında tekrar ölçün."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: IIS performans ayarı",
+          "https://learn.microsoft.com/en-us/windows-server/administration/performance-tuning/role/web-server/tuning-iis-10"
+        ],
+        [
+          "Microsoft: Windows Server performans rehberi",
+          "https://learn.microsoft.com/en-us/windows-server/administration/performance-tuning/"
+        ]
+      ]
+    },
+    "en": {
+      "path": "/en/windows-vps-hosting-capacity/",
+      "title": "How many websites can a Windows VPS host? | AdaPanel",
+      "heading": "How many websites can a Windows VPS host?",
+      "description": "Plan Windows hosting capacity from real workloads instead of domain counts: measure RAM, CPU, storage, databases, background jobs and response-time distribution.",
+      "intro": "There is no universal site count for a Windows VPS. A static page, an online store and a video worker have different resource needs. Evaluate AdaPanel’s overhead separately from the applications and services you host.",
+      "sections": [
+        {
+          "id": "profile",
+          "heading": "Create a workload profile first",
+          "paragraphs": [
+            "For each application, record runtime, typical and peak traffic, database usage, storage growth and background jobs. Many small sites can consume fewer resources than one processing-heavy application. Domain count alone is a weak capacity measure.",
+            "Include shared database, mail, backup and scanning work. Comfortable daily averages can hide contention when backup and reporting jobs begin at the same time. Model the periods that matter to your users."
+          ]
+        },
+        {
+          "id": "metrics",
+          "heading": "Connect measurements to decisions",
+          "columns": [
+            "Measurement",
+            "Question it helps answer"
+          ],
+          "rows": [
+            [
+              "CPU and processing duration",
+              "Sustained compute demand or brief bursts?"
+            ],
+            [
+              "Memory by process",
+              "Which application or pool is growing?"
+            ],
+            [
+              "Disk latency and free space",
+              "Database, log or upload bottleneck?"
+            ],
+            [
+              "Response-time distribution",
+              "Are slow requests increasing despite a good average?"
+            ],
+            [
+              "Errors and queue length",
+              "Is work completing or accumulating?"
+            ]
+          ]
+        },
+        {
+          "id": "experiment",
+          "heading": "Run a representative capacity exercise",
+          "steps": [
+            "Record baseline consumption for the operating system, panel and idle services.",
+            "Add test applications with realistic data volume and request mix.",
+            "Increase load deliberately while observing latency, failures, queues and resources together.",
+            "Include backup and worker activity instead of testing only homepage GET requests.",
+            "Plan operating headroom before crossing the latency and error levels your product accepts."
+          ]
+        },
+        {
+          "id": "bottleneck",
+          "heading": "Identify the cause before buying capacity",
+          "paragraphs": [
+            "A slow query, unnecessary filesystem scan or unbounded job queue can remain expensive on a larger server. Find the operation consuming the resource first. Change one factor and repeat the same workload to judge the result.",
+            "IIS caching and pool settings depend on the application. Account for session behavior, data freshness and restart requirements instead of copying another server’s tuning values without measurement."
+          ]
+        },
+        {
+          "id": "decision",
+          "heading": "Keep a capacity decision record",
+          "paragraphs": [
+            "Before onboarding another agency customer, compare current peak measurements with the new workload and storage growth. Define when to add a server or separate the database. Record hardware and application versions with the exercise so later results remain comparable.",
+            "This method is not a published AdaPanel performance benchmark. It helps you make a measured decision rather than rely on a guaranteed site count for a fixed machine. The same workload also provides a fairer basis for comparing Windows hosting panel options."
+          ]
+        }
+      ],
+      "faq": [
+        [
+          "How many websites can run with 4 GB RAM?",
+          "There is no reliable number without the workload. Measure runtimes, traffic, databases and background jobs together."
+        ],
+        [
+          "Is CPU utilization enough for sizing?",
+          "No. Memory, disk latency, response times, failures and queue growth can also constrain capacity."
+        ],
+        [
+          "Does a lightweight panel guarantee fast applications?",
+          "No. Panel overhead and application query or processing costs are separate measurements."
+        ],
+        [
+          "Will a larger VPS fix every slowdown?",
+          "No. Query, code and unbounded-queue problems may need correction. Measure the same workload again after the change."
+        ]
+      ],
+      "sources": [
+        [
+          "Microsoft: IIS performance tuning",
+          "https://learn.microsoft.com/en-us/windows-server/administration/performance-tuning/role/web-server/tuning-iis-10"
+        ],
+        [
+          "Microsoft: Windows Server performance guide",
+          "https://learn.microsoft.com/en-us/windows-server/administration/performance-tuning/"
+        ]
+      ]
+    }
+  }
+}

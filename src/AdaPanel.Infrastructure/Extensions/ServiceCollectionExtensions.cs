@@ -20,6 +20,18 @@ public static class ServiceCollectionExtensions
         services.Configure<PanelRuntimeOptions>(configuration.GetSection(PanelRuntimeOptions.SectionName));
         services.AddDataProtection();
         services.AddHttpClient();
+        services.AddHttpClient(Diagnostics.InstallationReportingService.ClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AllowAutoRedirect = false, UseCookies = false
+            });
+        services.AddSingleton<Diagnostics.InstallationReportingService>();
+        services.AddHttpClient(Diagnostics.InstallationReportingService.PublicIpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AllowAutoRedirect = false, UseCookies = false
+            });
+        services.AddHostedService<Diagnostics.InstallationReportingWorker>();
         services.AddHttpClient("AdaPanel.LocalHealth")
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
@@ -76,6 +88,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IConcurrencyLock, ConcurrencyLock>();
         services.AddSingleton<IOperationProgressService, Services.OperationProgressService>();
         services.AddSingleton<JsonFileStore>();
+        services.AddSingleton<AdaPanel.Infrastructure.Automation.IAlertDeliveryFailureStore, AdaPanel.Infrastructure.Automation.AlertDeliveryFailureStore>();
         // YANITI BEKLETMEMESİ gereken işlerin kuyruğu. SINGLETON olmak ZORUNDA: kuyruk süreç
         // genelinde tek olmalı, kapsamlı (scoped) kayıt her istekte YENİ ve BOŞ bir kuyruk üretir,
         // yani hiçbir iş çalıştıran işçiye ULAŞMAZDI (aynı gerekçe SessionRevocationStore'da).
@@ -106,6 +119,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDnsInspectionService>(provider => (Dns.DnsService)provider.GetRequiredService<IDnsService>());
         services.AddScoped<IRdnsService, Dns.RdnsService>();
         services.AddScoped<IPhpService, Php.PhpService>();
+        services.AddScoped<Php.PhpSiteLogMaintenance>();
         services.AddScoped<IAspNetService, AspNet.AspNetService>();
         services.AddScoped<IAppRuntimeService, AppRuntimes.AppRuntimeService>();
         services.AddScoped<IAppRuntimeInventoryService, AppRuntimes.AppRuntimeInventoryService>();
@@ -121,9 +135,17 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWebDbClientService, WebDbClient.WebDbClientService>();
         services.AddScoped<IRemoteDbAccessService, Database.RemoteDbAccessService>();
         services.AddScoped<IWebmailService, Mail.WebmailService>();
+        services.AddSingleton<Mail.WebmailSsoTickets>();
+        services.AddScoped<Mail.StalwartWebmailCredentials>();
+        services.AddScoped<Mail.WebmailSsoService>();
+        services.AddScoped<Mail.WebmailSsoDeployment>();
+        services.AddHostedService<Mail.WebmailSsoCleanup>();
+        services.AddHttpClient(Mail.StalwartWebmailCredentials.ClientName, client => client.Timeout = TimeSpan.FromSeconds(15))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false, UseProxy = false });
         services.AddScoped<ICacheService, Cache.CacheService>();
         services.AddScoped<IFileService, Files.FileService>();
         services.AddScoped<ISslService, Ssl.WinAcmeSslService>();
+        services.AddScoped<Ssl.SslBindingRepairService>();
         services.AddScoped<IFtpService, Ftp.FtpService>();
         services.AddScoped<IWafService, Waf.WafService>();
         services.AddScoped<ILogViewerService, Logs.LogViewerService>();
@@ -132,13 +154,22 @@ public static class ServiceCollectionExtensions
         // yalnızca siliyor ve varsayılan olarak kapalı — yani uzun çalışan sunucuda günlükler sınırsız birikiyordu.
         services.AddScoped<Logs.ILogRotationService, Logs.LogRotationService>();
         services.AddScoped<IFirewallService, Firewall.FirewallService>();
+        services.AddScoped<ISslCsrService, Ssl.SslCsrService>();
+        services.AddSingleton<Firewall.IIpBlockRuleWriter, Firewall.PowerShellIpBlockRuleWriter>();
+        services.AddScoped<IIpBlockService, Firewall.IpBlockService>();
+        services.AddHostedService<Firewall.IpBlockExpiryWorker>();
+        services.AddHostedService<Backup.BackupTestRestoreCleanupWorker>();
         services.AddScoped<ISchedulerService, Scheduler.SchedulerService>();
         services.AddScoped<INotificationService, Notifications.NotificationService>();
         // Yedek şifreleme parolasının DPAPI korumalı kasası (zamanlanmış yedekler için şart).
         services.AddScoped<Backup.BackupEncryptionStore>();
-        services.AddScoped<IBackupService, Backup.BackupService>();
+        services.AddScoped<IBackupService>(provider => ActivatorUtilities.CreateInstance<Backup.BackupService>(
+            provider, provider.GetRequiredService<Backup.IBackupSnapshotRuntime>()));
+        services.AddSingleton<Backup.IBackupSnapshotRuntime, Backup.WindowsBackupSnapshotRuntime>();
+        services.AddScoped<Backup.BackupNetworkTrustService>();
         services.AddScoped<IFileMigrationService, Migration.FileMigrationService>();
         services.AddScoped<ISiteMigrationService, Migration.SiteMigrationService>();
+        services.AddFullMigration(configuration);
         services.AddScoped<IAppStoreService, AppStore.AppStoreService>();
         services.AddScoped<IWordPressToolkitService, AppStore.WordPressToolkitService>();
         services.AddScoped<ISelfUpdateService, SelfUpdate.SelfUpdateService>();
@@ -168,6 +199,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IGitDeploymentService, Git.GitDeploymentService>();
         services.AddScoped<IWebStatisticsService, Statistics.WebStatisticsService>();
         services.AddScoped<SiteBuilder.ISiteBuilderService, SiteBuilder.SiteBuilderService>();
+        services.AddScoped<SiteBuilder.SiteBuilderContactRecipientPolicy>();
         services.AddScoped<SiteBuilder.ISiteBuilderContactService, SiteBuilder.SiteBuilderContactService>();
 
         // HIZ SINIRLAYICI SINGLETON OLMAK ZORUNDA: sayaçlar bellekte tutuluyor ve kapsamlı
@@ -180,6 +212,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Mail.StalwartRuntime>();
         services.AddScoped<Mail.MailService>();
         services.AddScoped<Mail.MailEnableMailService>();
+        services.AddScoped<Mail.MailProviderSelection>();
+        services.AddScoped<Mail.MailEnableWebmail>();
         services.AddScoped<IMailService, Mail.MailServiceRouter>();
         // Dağıtım listesinden self-servis çıkma (kimliksiz genel uçtan çağrılır).
         services.AddScoped<Mail.MailListUnsubscribeService>();
@@ -246,10 +280,13 @@ public static class ServiceCollectionExtensions
         // tüketici onu tutsaydı captive dependency olurdu.
         services.AddSingleton<Cluster.ClusterHttpClientFactory>();
         services.AddScoped<Cluster.ClusterNodeStore>();
+        services.AddSingleton<Cluster.IClusterCertificateProber>(sp => sp.GetRequiredService<Cluster.ClusterHttpClientFactory>());
         services.AddScoped<Cluster.IClusterNodeClient, Cluster.ClusterNodeClient>();
         services.AddScoped<Cluster.IClusterService, Cluster.ClusterService>();
 
         // Abonelik iş modeli: kotayı DOLDURANDA uygulayan taraf (askıya alma) arka planda koşar.
+        services.AddScoped<Subscriptions.SubscriptionResourceSuspender>();
+        services.AddScoped<IPanelWriteQuotaGuard, Files.PanelWriteQuotaGuard>();
         services.AddScoped<ISubscriptionEnforcementService, Subscriptions.SubscriptionEnforcementService>();
         // Bayi tavanı (bayinin KENDİ dağıtım sınırı). CustomerScopeService bunu okur; kayıt burada
         // olmak zorunda çünkü kapsam servisi de burada kaydediliyor (grafik aynı kapsayıcıda çözülür).
@@ -306,6 +343,7 @@ public static class ServiceCollectionExtensions
         // makineler korunurdu, açığı taşıyan MEVCUT kurulumlar hiç kapanmazdı (gerekçe:
         // MailSenderPolicyWorker).
         services.AddHostedService<Mail.MailSenderPolicyWorker>();
+        services.AddHostedService<Mail.MailDkimRetireWorker>();
 
         // Arka plan iş kuyruğunun TÜKETİCİSİ. Kayıt yapılmazsa kuyruk dolar ve kuyruğa alınan hiçbir
         // iş çalışmaz — yani parola sıfırlama postası hiç gitmez. Bu yüzden kayıt burada, diğer

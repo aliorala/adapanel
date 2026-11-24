@@ -460,6 +460,13 @@ public sealed class DataRootHardeningTests : IDisposable
         Assert.Contains(Everyone, DiskteAcikDuranSidler(phpMyAdmin));
     }
 
+    /// <summary>G16: AppStore'un yazdığı temp/app-installs klasörü kiracıya açık kalmamalı.</summary>
+    [Fact]
+    public void Temp_klasoru_hassas_listede()
+    {
+        Assert.Contains("temp", DataRootHardeningService.SensitiveDirectories);
+    }
+
     /// <summary>
     /// Hassas klasör listesi İKİ YERDE yazılı: servis açılışta uygular
     /// (<see cref="DataRootHardeningService.SensitiveDirectories"/>), <c>harden-adapanel.ps1</c>

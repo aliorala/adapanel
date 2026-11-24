@@ -114,7 +114,7 @@ public sealed class SiteSecurityMeasurementTests
             <configuration>
               <system.webServer>
                 <security>
-                  <dynamicIpSecurity denyByRequestRate="false" maxRequests="120" requestIntervalInMilliseconds="60000" />
+                  <dynamicIpSecurity><denyByRequestRate enabled="false" maxRequests="120" requestIntervalInMilliseconds="60000" /></dynamicIpSecurity>
                 </security>
               </system.webServer>
             </configuration>
@@ -260,13 +260,61 @@ public sealed class SiteSecurityMeasurementTests
         Assert.Equal(90, yapilandirma.RequestsPerMinute);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Setting_rate_limit_uses_Iis_child_element_and_preserves_unrelated_rules(bool legacy)
+    {
+        using var alan = new Alan();
+        alan.WebConfigYaz(legacy
+            ? "<configuration><system.webServer><security><dynamicIpSecurity denyByRequestRate='true' maxRequests='7' requestIntervalInMilliseconds='60000' enableProxyMode='true'><denyByConcurrentRequests enabled='true' maxConcurrentRequests='10'/></dynamicIpSecurity></security><rewrite><rules/></rewrite></system.webServer></configuration>"
+            : "<configuration><system.webServer><security><dynamicIpSecurity enableLoggingOnlyMode='true' enableProxyMode='true'><denyByRequestRate enabled='false' maxRequests='7' requestIntervalInMilliseconds='200'/><denyByConcurrentRequests enabled='true' maxConcurrentRequests='10'/></dynamicIpSecurity></security><rewrite><rules/></rewrite></system.webServer></configuration>");
+        var result = await alan.WafServisi("AdaPanel.site").SetRateLimitAsync("site",
+            new AdaPanel.Core.Dtos.Waf.SetSiteRateLimitRequest { RequestsPerMinute = 120 });
+        var web = System.Xml.Linq.XDocument.Load(alan.WebConfigYolu).Root!.Element("system.webServer")!;
+        var dynamic = web.Element("security")!.Element("dynamicIpSecurity")!;
+        // Microsoft IIS schema: denyByRequestRate is a child, not an attribute.
+        Assert.Null(dynamic.Attribute("denyByRequestRate"));
+        Assert.Null(dynamic.Attribute("maxRequests"));
+        Assert.Null(dynamic.Attribute("requestIntervalInMilliseconds"));
+        var rule = Assert.Single(dynamic.Elements("denyByRequestRate"));
+        Assert.Equal("true", (string?)rule.Attribute("enabled"));
+        Assert.Equal("120", (string?)rule.Attribute("maxRequests"));
+        Assert.Equal("60000", (string?)rule.Attribute("requestIntervalInMilliseconds"));
+        Assert.Equal("false", (string?)dynamic.Attribute("enableLoggingOnlyMode"));
+        Assert.Equal("true", (string?)dynamic.Attribute("enableProxyMode"));
+        Assert.Equal("10", (string?)dynamic.Element("denyByConcurrentRequests")!.Attribute("maxConcurrentRequests"));
+        Assert.NotNull(web.Element("rewrite")?.Element("rules"));
+        Assert.True(result.RateLimitMeasured);
+        Assert.Equal(120, result.RequestsPerMinute);
+    }
+
+    [Theory]
+    [InlineData("<dynamicIpSecurity denyByRequestRate='true' maxRequests='120' requestIntervalInMilliseconds='60000'/>")]
+    [InlineData("<dynamicIpSecurity><denyByRequestRate enabled='true' maxRequests='120' requestIntervalInMilliseconds='200'/></dynamicIpSecurity>")]
+    [InlineData("<dynamicIpSecurity><denyByRequestRate enabled='true' maxRequests='invalid' requestIntervalInMilliseconds='60000'/></dynamicIpSecurity>")]
+    public void Invalid_legacy_or_different_burst_window_is_not_reported_as_a_measured_minute_limit(string configuration)
+    {
+        using var alan = new Alan();
+        alan.WebConfigYaz($"<configuration><system.webServer><security>{configuration}</security></system.webServer></configuration>");
+        Assert.Null(WafService.MeasureWebConfig(alan.WebConfigYolu).RequestsPerMinute);
+    }
+
+    [Fact]
+    public void Logging_only_mode_does_not_report_an_enforced_limit()
+    {
+        using var alan = new Alan();
+        alan.WebConfigYaz("<configuration><system.webServer><security><dynamicIpSecurity enableLoggingOnlyMode='true'><denyByRequestRate enabled='true' maxRequests='120' requestIntervalInMilliseconds='60000'/></dynamicIpSecurity></security></system.webServer></configuration>");
+        Assert.Equal(0, WafService.MeasureWebConfig(alan.WebConfigYolu).RequestsPerMinute);
+    }
+
     private static string TamWebConfig(int maxRequests) =>
         $"""
         <configuration>
           <system.webServer>
             <security>
               <requestFiltering removeServerHeader="true" allowDoubleEscaping="false" />
-              <dynamicIpSecurity denyByRequestRate="true" maxRequests="{maxRequests}" requestIntervalInMilliseconds="60000" />
+              <dynamicIpSecurity><denyByRequestRate enabled="true" maxRequests="{maxRequests}" requestIntervalInMilliseconds="60000" /></dynamicIpSecurity>
             </security>
             <httpProtocol>
               <customHeaders>

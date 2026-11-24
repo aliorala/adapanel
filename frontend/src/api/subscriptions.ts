@@ -87,6 +87,32 @@ export async function resumeSubscription(userId: string) {
   return response.data.data;
 }
 
+/** Bayinin tavanı ve ne kadarının dağıtıldığı (`ResellerQuotaUsageDto` karşılığı). 0 = sınırsız. */
+export type ResellerQuotaUsage = {
+  resellerId: string;
+  maxSites: number;
+  maxDiskMb: number;
+  allocatedSites: number;
+  allocatedDiskMb: number;
+  usedSites: number;
+  customerCount: number;
+  hasUnlimitedCustomer: boolean;
+};
+
+export async function getResellerQuota(userId: string) {
+  const response = await apiClient.get<ApiEnvelope<ResellerQuotaUsage>>(`/subscriptions/resellers/${encodeURIComponent(userId)}/quota`);
+  return response.data.data;
+}
+
+/** Bayiye tavan atar (YALNIZ yönetici). 0 = sınırsız. */
+export async function setResellerQuota(userId: string, payload: { maxSites: number; maxDiskMb: number }) {
+  const response = await apiClient.put<ApiEnvelope<ResellerQuotaUsage>>(
+    `/subscriptions/resellers/${encodeURIComponent(userId)}/quota`,
+    { maxSites: payload.maxSites, maxDiskMb: payload.maxDiskMb }
+  );
+  return response.data.data;
+}
+
 /** Bütün abonelikleri hemen denetler (arka plan turunu beklemeden). */
 export async function enforceSubscriptions() {
   const response = await apiClient.post<ApiEnvelope<SubscriptionEnforcementChange[]>>("/subscriptions/enforce", {});

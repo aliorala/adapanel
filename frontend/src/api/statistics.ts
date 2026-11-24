@@ -18,6 +18,8 @@ export type WebStatistics = {
   generatedAtUtc: string;
   logPath: string;
   hasData: boolean;
+  logDirectoryMissing?: boolean;
+  scanLimitReached?: boolean;
   totalRequests: number;
   uniqueVisitors: number;
   /** true ise sayı üst sınıra dayandı ve gerçek sayının ALTINDA; ekranda "+" ile gösterilir. */

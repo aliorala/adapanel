@@ -13,6 +13,7 @@
     <div v-if="notice" :class="['notice', 'page-notice', 'ssl-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
       <p>{{ notice }}</p>
       <button type="button" class="secondary notice-close" :aria-label="t('panel.common.dismissNotice')" @click="notice = ''">×</button>
+      <button v-if="retryWwwHost" type="button" class="secondary compact" :disabled="!!busyAction || loading" @click="openWwwRetry">{{ t("panel.ssl.retryWww", { host: retryWwwHost }) }}</button>
     </div>
 
     <div class="module-toolbar">
@@ -20,6 +21,7 @@
         <button role="tab" :aria-selected="activeTab === 'current'" :class="{ active: activeTab === 'current' }" @click="activeTab = 'current'">{{ t("panel.ssl.currentTab") }}</button>
         <button role="tab" :aria-selected="activeTab === 'letsencrypt'" :class="{ active: activeTab === 'letsencrypt' }" @click="activeTab = 'letsencrypt'">Let's Encrypt</button>
         <button role="tab" :aria-selected="activeTab === 'import'" :class="{ active: activeTab === 'import' }" @click="activeTab = 'import'">{{ t("panel.ssl.importTitle") }}</button>
+        <button v-if="isAdmin" role="tab" :aria-selected="activeTab === 'csr'" :class="{ active: activeTab === 'csr' }" @click="activeTab = 'csr'">{{ t("panel.ssl.csr.tab") }}</button>
       </div>
       <!-- Domain hub'dan gelince site zaten seçili (breadcrumb); tekrar seçici gösterme. -->
       <select v-if="!selectedSiteName" v-model="selectedSiteName" class="site-select">
@@ -92,7 +94,8 @@
         </span>
         <span class="cert-field">
           <span class="cert-field-label">{{ t("panel.ssl.expires") }}</span>
-          <span :class="['status-pill', expiryClass(item.notAfterUtc)]" :title="formatUtc(item.notAfterUtc)">{{ formatUtc(item.notAfterUtc) }} · {{ expiryLabel(item.notAfterUtc) }}</span>
+          <span :class="['status-pill', expiryClass(item.notAfterUtc, item.expiryStatus)]" :title="formatUtc(item.notAfterUtc)">{{ formatUtc(item.notAfterUtc) }} · {{ expiryLabel(item.notAfterUtc, item.expiryStatus) }}</span>
+          <small v-if="item.renewalPaused" class="cert-store-note missing">{{ t("panel.ssl.renewalPaused") }}</small>
         </span>
         <span class="cert-field">
         <span class="cert-field-label">HTTPS</span>
@@ -111,6 +114,14 @@
         </span>
         </span>
         <span class="row-actions">
+          <template v-if="isAdmin && item.managedRenewalId">
+            <button v-if="!item.renewalPaused" type="button" class="secondary compact"
+              v-bind="writeGate(!!busyAction || loading)" @click="changeRenewal(item, 'pause')">{{ t("panel.ssl.renewalPause") }}</button>
+            <button v-else type="button" class="secondary compact"
+              v-bind="writeGate(!!busyAction || loading)" @click="changeRenewal(item, 'resume')">{{ t("panel.ssl.renewalResume") }}</button>
+            <button type="button" class="danger compact"
+              v-bind="writeGate(!!busyAction || loading)" @click="changeRenewal(item, 'cancel')">{{ t("panel.ssl.renewalCancel") }}</button>
+          </template>
           <button v-if="canManageBindings && item.isHttpsBindingPresent === true" type="button" class="secondary compact"
             v-bind="writeGate(!!busyAction || loading)" @click="removeBinding(item)">{{ t("panel.ssl.removeBinding") }}</button>
         </span>
@@ -144,6 +155,11 @@
           <input v-model.trim="issueForm.contactEmail" type="email" placeholder="admin@example.com" />
         </label>
       </div>
+      <label v-if="wwwCompanion" class="toggle-field wildcard-toggle">
+        <input v-model="includeWww" type="checkbox" :disabled="!!busyAction" />
+        <span>{{ t("panel.ssl.includeWww", { host: wwwCompanion }) }}</span>
+      </label>
+      <p v-if="wwwCompanion && includeWww" class="field-hint">{{ t("panel.ssl.includeWwwHint", { host: wwwCompanion }) }}</p>
       <label v-if="isAdmin" class="toggle-field wildcard-toggle">
         <input v-model="issueForm.wildcard" type="checkbox" />
         <span>{{ t("panel.ssl.wildcardOption") }}</span>
@@ -159,6 +175,8 @@
       </div>
       <p class="field-hint">{{ t("panel.ssl.letsencryptHint") }}</p>
     </section>
+
+    <SslCsrPanel v-else-if="activeTab === 'csr'" :site-name="selectedSiteName" :disabled="!!busyAction || loading || locked" @imported="onCsrImported" />
 
     <section v-else class="form-surface">
       <div class="form-grid">
@@ -186,33 +204,42 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { routeLocationKey } from "vue-router";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
+import SslCsrPanel from "../components/SslCsrPanel.vue";
 import { useConfirm } from "../components/ConfirmDialog.vue";
-import { getSslWorkspace, importCertificate, issueLetsEncrypt, renewAllCertificates, removeCertificate, setHttpsRedirect, type SslCertificate, type SslWorkspace, type SslRenewalResult } from "../api/ssl";
+import { getSslWorkspace, importCertificate, issueLetsEncrypt, renewAllCertificates, removeCertificate, setHttpsRedirect, setRenewalState, type RenewalAction, type SslCertificate, type SslWorkspace, type SslRenewalResult } from "../api/ssl";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 import { formatDateTime } from "../utils/datetime";
 import { getSessionEpoch } from "../api/client";
+import { addSiteAlias } from "../api/aliases";
+import { getSslRepairPlan } from "../api/sslRepair";
+import { companionWwwHost } from "../utils/wwwSsl";
 
 const { t } = useI18n();
+const route = inject(routeLocationKey, undefined);
 const { confirm } = useConfirm();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
 const { writeGate, locked } = useSubscriptionGate();
 const sitesStore = useSitesStore();
 const workspace = ref<SslWorkspace | null>(null);
-const activeTab = ref<"current" | "letsencrypt" | "import">("current");
+const activeTab = ref<"current" | "letsencrypt" | "import" | "csr">("current");
 const notice = ref("");
 const noticeError = ref(false);
+const retryWwwHost = ref("");
+const includeWww = ref(true);
 const busyAction = ref("");
 const loading = ref(false);
 const fileLoading = ref(false);
 const fileInputVersion = ref(0);
 let siteGeneration = 0, workspaceRequest = 0, fileRequest = 0, issueRevision = 0, tabRevision = 0;
 let disposed = false;
+let consumedSslHost = "";
 const mountedSession = getSessionEpoch();
 const isActive = () => !disposed && getSessionEpoch() === mountedSession;
 const selectedSiteName = computed({
@@ -224,6 +251,7 @@ const isAdmin = computed(() => authStore.session?.user?.role === "Administrator"
 const canManageBindings = computed(() => authStore.session?.isAuthenticated === true &&
   ["Administrator", "Reseller", "Customer"].includes(authStore.session.user?.role ?? ""));
 const issueForm = reactive({ contactEmail: "", hostName: "", useStaging: false, wildcard: false });
+const wwwCompanion = computed(() => companionWwwHost(selectedSiteName.value, issueForm.hostName, sitesStore.selectedSite?.bindings ?? [], issueForm.wildcard));
 const importForm = reactive({ hostName: "", password: "", fileName: "", base64Content: "" });
 watch(issueForm, () => { issueRevision++; }, { deep: true, flush: "sync" });
 watch(activeTab, () => { tabRevision++; }, { flush: "sync" });
@@ -261,12 +289,15 @@ watch(selectedSiteName, () => {
   Object.assign(importForm, { hostName: "", password: "", fileName: "", base64Content: "" });
   issueForm.hostName = ""; issueForm.wildcard = false;
   notice.value = "";
+  retryWwwHost.value = "";
   void refresh(true);
 }, { immediate: true });
 
 async function refresh(force = false, keepIssueDraft = false): Promise<boolean> {
   if (!isActive() || (!force && (busyAction.value || loading.value))) return false;
-  const target = siteContext(), request = ++workspaceRequest, draft = issueRevision;
+  const target = siteContext(), request = ++workspaceRequest, draft = issueRevision, tab = tabRevision;
+  const query = route?.query ?? {};
+  const requestedHost = query.section === "sites" && query.site === target.site && query.tool === "ssl" && typeof query.sslHost === "string" ? query.sslHost : "";
   if (!selectedSiteName.value) {
     workspace.value = null;
     loading.value = false;
@@ -278,7 +309,18 @@ async function refresh(force = false, keepIssueDraft = false): Promise<boolean> 
     if (!target.current() || request !== workspaceRequest) return false;
     workspace.value = result;
     const firstHost = workspace.value.hostNames[0] || "";
-    if (!keepIssueDraft && issueRevision === draft && !workspace.value.hostNames.includes(issueForm.hostName)) issueForm.hostName = firstHost;
+    const draftUnchanged = !keepIssueDraft && issueRevision === draft;
+    if (draftUnchanged && !workspace.value.hostNames.includes(issueForm.hostName)) issueForm.hostName = firstHost;
+    // A deep link selects only a hostname measured on this site. Merely opening
+    // this form never issues a certificate or broadens its domain coverage.
+    const hostKey = `${target.site}:${requestedHost}`;
+    const boundHost = workspace.value.hostNames.find(host => host.toLowerCase() === requestedHost.toLowerCase());
+    if (requestedHost && route?.query.sslHost === requestedHost && consumedSslHost !== hostKey && boundHost && draftUnchanged) {
+      issueForm.hostName = boundHost;
+      issueForm.wildcard = false;
+      if (tabRevision === tab) activeTab.value = "letsencrypt";
+      consumedSslHost = hostKey;
+    }
     if (!importForm.hostName) importForm.hostName = firstHost;
     notice.value = "";
     return true;
@@ -357,6 +399,9 @@ function kurulumBildirimi(sertifika: SslCertificate | null | undefined, target: 
     return [t("panel.ssl.certificateUnverifiedNotice"), true];
   }
 
+  if (!target.issue && sertifika.fallbackReason?.trim())
+    return [t(sertifika.fallbackReason.trim()), true];
+
   return [t(target.issue ? "panel.ssl.issued" : "panel.ssl.imported"), false];
 }
 
@@ -373,6 +418,8 @@ async function issue() {
   const target = siteContext(), submitted = { siteName: target.site, ...issueForm }, draft = issueRevision, tab = tabRevision;
   const domain = submitted.hostName.trim().replace(/^\*\./, "").replace(/^www\./i, "");
   const installation = { siteName: target.site, hostName: submitted.wildcard ? `*.${domain}` : submitted.hostName.trim(), port: 443, issue: true };
+  const wwwHost = includeWww.value ? wwwCompanion.value : "";
+  retryWwwHost.value = "";
   busyAction.value = "issue";
   try {
     const sertifika = await issueLetsEncrypt(submitted);
@@ -381,9 +428,61 @@ async function issue() {
     const refreshed = await refresh(true, issueRevision !== draft);
     if (!target.current()) return;
     if (!refreshed) { if (preliminary[1]) showNotice(`${preliminary[0]}\n${notice.value}`, true); return; }
-    if (tabRevision === tab) activeTab.value = "current";
     // Sabit yeşil "SSL kuruldu" yalnız sertifikanın bağlamada ÖLÇÜLDÜĞÜ durumda çıkar.
-    showNotice(...installationNotice(sertifika, installation));
+    const mainNotice = installationNotice(sertifika, installation);
+    if (!mainNotice[1] && wwwHost) {
+      try {
+        const wwwTarget = { siteName: target.site, hostName: wwwHost, port: 443, issue: true };
+        if (!target.current()) return;
+        if (locked.value) throw new Error(t("panel.subscription.readOnlyAction"));
+        if (!workspace.value!.hostNames.some(host => sameSslName(host, wwwHost))) {
+          const alias = await addSiteAlias(target.site, { hostName: wwwHost, redirectToPrimary: true, includeWww: false });
+          if (!target.current()) return;
+          if (alias.redirectRuleNoticeKey) throw new Error(t(alias.redirectRuleNoticeKey));
+          if (!await refresh(true, true)) throw new Error(notice.value);
+          if (!target.current()) return;
+          if (!workspace.value?.hostNames.some(host => sameSslName(host, wwwHost))) throw new Error(t("panel.ssl.wwwBindingUnverified"));
+        }
+        if (!target.current() || locked.value) return;
+        const existing = workspace.value?.certificates.find(item => sameSslName(item.hostName, wwwHost) && item.port === 443 && item.isHttpsBindingPresent === true && item.isCertificateBound === true && item.isPresentInStore === true);
+        // Trust inspection uses an administrator-only endpoint. Tenant users
+        // must neither call it nor replace an existing www certificate because
+        // they cannot perform that inspection.
+        if (existing && !isAdmin.value) {
+          retryWwwHost.value = "";
+          showNotice(`${submitted.hostName.trim()}: ${mainNotice[0]}\n${t("panel.ssl.wwwPreservedNeedsAdmin", { host: wwwHost })}`, true);
+          if (tabRevision === tab) activeTab.value = "current";
+          return;
+        }
+        let existingValid = false;
+        if (existing && existing.source !== "self-signed") {
+          const plan = await getSslRepairPlan({ siteName: target.site, hostName: wwwHost, port: 443 });
+          if (!target.current()) return;
+          existingValid = plan.options.some(option => sameSslName(option.hostName, wwwHost) && option.current?.valid === true &&
+            sameSslName(option.current.thumbprint, existing.thumbprint));
+        }
+        if (!existingValid) {
+          if (!target.current() || locked.value) return;
+          const wwwCertificate = await issueLetsEncrypt({ siteName: target.site, hostName: wwwHost, contactEmail: submitted.contactEmail, useStaging: submitted.useStaging, wildcard: false });
+          if (!target.current()) return;
+          const preliminaryWww = kurulumBildirimi(wwwCertificate, wwwTarget);
+          if (preliminaryWww[1]) throw new Error(preliminaryWww[0]);
+          if (!await refresh(true, true)) throw new Error(notice.value);
+          if (!target.current()) return;
+          const wwwNotice = installationNotice(wwwCertificate, wwwTarget);
+          if (wwwNotice[1]) throw new Error(wwwNotice[0]);
+        }
+        const finalMainNotice = installationNotice(sertifika, installation);
+        if (finalMainNotice[1]) { showNotice(`${submitted.hostName.trim()}: ${finalMainNotice[0]}`, true); return; }
+        showNotice(t("panel.ssl.mainAndWwwIssued", { host: submitted.hostName.trim(), wwwHost }), false);
+      } catch (error) {
+        if (!target.current()) return;
+        retryWwwHost.value = wwwHost;
+        const detail = error instanceof Error ? error.message : resolveApiMessage(error);
+        showNotice(`${submitted.hostName.trim()}: ${mainNotice[0]}\n${t("panel.ssl.wwwFailed", { host: wwwHost })}\n${detail}`, true);
+      }
+    } else showNotice(...mainNotice);
+    if (tabRevision === tab) activeTab.value = "current";
   } catch (error) {
     if (!target.current()) return;
     // Wildcard/DNS-01 hatasında gerçek neden (win-acme çıktısı) Details'te gelir — kör mesaj bırakma.
@@ -392,6 +491,27 @@ async function issue() {
   } finally {
     busyAction.value = "";
   }
+}
+
+async function openWwwRetry() {
+  if (!isActive() || busyAction.value || loading.value || locked.value || !workspace.value || !retryWwwHost.value) return;
+  const target = siteContext(), host = retryWwwHost.value;
+  busyAction.value = "prepare-www";
+  try {
+    if (!workspace.value.hostNames.some(value => sameSslName(value, host))) {
+      const alias = await addSiteAlias(target.site, { hostName: host, redirectToPrimary: true, includeWww: false });
+      if (!target.current()) return;
+      if (alias.redirectRuleNoticeKey) throw new Error(t(alias.redirectRuleNoticeKey));
+      if (!await refresh(true, true)) return;
+      if (!target.current()) return;
+    }
+    if (!workspace.value?.hostNames.some(value => sameSslName(value, host))) throw new Error(t("panel.ssl.wwwBindingUnverified"));
+    issueForm.hostName = host;
+    issueForm.wildcard = false;
+    activeTab.value = "letsencrypt";
+  } catch (error) {
+    if (target.current()) showNotice(error instanceof Error ? error.message : resolveApiMessage(error), true);
+  } finally { busyAction.value = ""; }
 }
 
 async function renew() {
@@ -447,7 +567,10 @@ async function removeBinding(item: SslCertificate) {
       showNotice(t(result?.bindingRemoved === false ? "ssl.remove_binding_failed" : "panel.ssl.removalUnverified"), true);
       return;
     }
-    const message = t("panel.ssl.bindingRemoved", { host: payload.hostName || target.site, port: payload.port });
+    let message = t("panel.ssl.bindingRemoved", { host: payload.hostName || target.site, port: payload.port });
+    // win-acme yenilemesi iptal edilemediyse sessiz gecilmez: yenileme baglamayi geri getirebilir.
+    const renewalFailed = result.renewalAction === "cancel_failed";
+    if (renewalFailed) message = `${message}\n${t("panel.ssl.renewalCancelFailed")}${result.renewalDetail ? ` ${t(result.renewalDetail)}` : ""}`;
     const measured = result.workspace;
     if (!measured || !sameSslName(measured.siteName, target.site) || !Array.isArray(measured.certificates) || !Array.isArray(measured.hostNames)) {
       markUnknown();
@@ -462,7 +585,7 @@ async function removeBinding(item: SslCertificate) {
     // Binding removal and redirect verification are separate measurements. A
     // redirect read failure must not hide that the binding was actually removed.
     const redirectWarning = !redirectMeasured.value || (result.httpsRedirectDisabled === true && measured.httpsRedirectEnabled);
-    showNotice(redirectWarning ? `${message}\n${t("panel.ssl.redirectUnverified")}` : message, redirectWarning);
+    showNotice(redirectWarning ? `${message}\n${t("panel.ssl.redirectUnverified")}` : message, redirectWarning || renewalFailed);
   } catch (error) {
     if (current()) { markUnknown(); showNotice(resolveApiMessage(error), true); }
   } finally {
@@ -545,18 +668,60 @@ async function handleFileChange(event: Event) {
   }
 }
 
-function expiryClass(value: string) {
+// Sunucu `expiryStatus` verirse ONA uyulur (tek kaynak: 7 gun = expiring, 30 gun = renewal_due); eski
+// sunucuda alan yoksa tarihten yerel hesap yapilir. 1 gunu kalan sertifika artik yesil gorunmez.
+function expiryClass(value: string, status?: string) {
+  if (status === "expired" || status === "expiring") return "danger";
+  if (status === "renewal_due") return "warn";
+  if (status === "valid") return "ok";
   const days = (new Date(value).getTime() - Date.now()) / 86400000;
   return days < 0 ? "danger" : days < 30 ? "warn" : "ok";
 }
 
-// Açık geçerlilik etiketi: "X gün kaldı" / "Bugün doluyor" / "Süresi doldu" — sertifikanın geçerli/yenilenmiş olduğunu netleştirir.
-function expiryLabel(value: string) {
+// Açık geçerlilik etiketi: "X gün kaldı" / "Bugün doluyor" / "Süresi doldu" + yenileme/bitiyor uyarısı.
+function expiryLabel(value: string, status?: string) {
   if (!value) return "-";
   const days = Math.floor((new Date(value).getTime() - Date.now()) / 86400000);
-  if (days < 0) return t("panel.ssl.expired");
-  if (days === 0) return t("panel.ssl.expiresToday");
-  return t("panel.ssl.daysRemaining", { days });
+  let label: string;
+  if (days < 0) label = t("panel.ssl.expired");
+  else if (days === 0) label = t("panel.ssl.expiresToday");
+  else label = t("panel.ssl.daysRemaining", { days });
+  if (status === "renewal_due") return `${label} · ${t("panel.ssl.renewalDue")}`;
+  if (status === "expiring" && days >= 0) return `${label} · ${t("panel.ssl.expiringSoon")}`;
+  return label;
+}
+
+/** Yenileme kaydini duraklat / surdur / iptal et. Iptal geri alinamaz: onay ister. Yenileme okumasi basarisizsa soyler. */
+async function changeRenewal(item: SslCertificate, action: RenewalAction) {
+  if (!isActive() || !isAdmin.value || locked.value || busyAction.value || loading.value) return;
+  const target = siteContext();
+  busyAction.value = "renewal";
+  try {
+    if (action === "cancel" && !await confirm({
+      title: t("panel.ssl.renewalCancel"), tone: "neutral", confirmLabel: t("panel.ssl.renewalCancel"),
+      message: t("panel.ssl.renewalCancelConfirm", { host: item.hostName }), impact: [target.site, item.hostName]
+    })) return;
+    if (!target.current()) return;
+    await setRenewalState({ siteName: target.site, hostName: item.hostName, port: item.port, action });
+    if (!target.current()) return;
+    const refreshed = await refresh(true);
+    if (!target.current()) return;
+    const done = t(`panel.ssl.renewalDone_${action}`, { host: item.hostName });
+    showNotice(refreshed ? done : `${done}\n${notice.value}`, !refreshed);
+  } catch (error) {
+    if (target.current()) showNotice(resolveApiMessage(error), true);
+  } finally {
+    busyAction.value = "";
+  }
+}
+
+async function onCsrImported() {
+  if (!isActive()) return;
+  const target = siteContext();
+  const refreshed = await refresh(true);
+  if (!target.current()) return;
+  if (!refreshed) return; // refresh() zaten nedenini gosterdi.
+  activeTab.value = "current";
 }
 
 /** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */

@@ -78,6 +78,11 @@
         </label>
       </div>
       <p class="hint">{{ t("panel.database.transfer.targetUserHint") }}</p>
+      <label class="checkbox-field">
+        <input v-model="form.adaptDefiners" type="checkbox" :disabled="busy" />
+        <span>{{ t("panel.database.definers.adapt") }}</span>
+      </label>
+      <p class="hint">{{ t("panel.database.definers.restoreHint") }}</p>
 
       <div class="row-actions">
         <button :disabled="busy || !canRun" @click="run">
@@ -106,6 +111,7 @@ const noticeError = ref(false);
 const created = reactive({ userName: "", password: "" });
 const form = reactive({
   engine: "mariadb",
+  adaptDefiners: false,
   sourceHost: "",
   sourcePort: 3306,
   sourceUserName: "root",
@@ -146,6 +152,7 @@ async function run() {
   try {
     const result = await transferDatabase({
       engine: form.engine,
+      adaptDefiners: form.adaptDefiners,
       sourceHost: form.sourceHost.trim(),
       sourcePort: form.sourcePort,
       sourceUserName: form.sourceUserName.trim(),

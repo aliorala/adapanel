@@ -22,6 +22,8 @@ public sealed class AutomationUpdateOutcomeTests
     public async Task Auto_update_requires_measured_version_reaching_checked_target(
         string actualVersion, bool measured, string installStatus, string targetVersion, bool succeeds)
     {
+        using var settings = new AutomationUpdateSettingsStore();
+        await settings.EnableAsync();
         var installs = 0;
         var component = DispatchProxy.Create<IComponentBootstrapper, AutomationVersionCheckTests.Proxy>();
         ((AutomationVersionCheckTests.Proxy)(object)component).Handler = (method, args) =>
@@ -44,6 +46,7 @@ public sealed class AutomationUpdateOutcomeTests
         };
         var constructor = typeof(AutomationService).GetConstructors().Single();
         var service = constructor.Invoke(constructor.GetParameters().Select(parameter =>
+            parameter.ParameterType == typeof(AdaPanel.Infrastructure.Support.JsonFileStore) ? (object)settings.Store :
             parameter.ParameterType == typeof(IComponentBootstrapper) ? (object)component :
             parameter.ParameterType == typeof(ILogger<AutomationService>) ? NullLogger<AutomationService>.Instance : null).ToArray());
         var task = (Task)typeof(AutomationService).GetMethod("RunUpdateCheckAsync", BindingFlags.NonPublic | BindingFlags.Instance)!

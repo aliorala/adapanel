@@ -1,4 +1,4 @@
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Dtos.Databases;
@@ -22,6 +22,198 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </summary>
 public sealed class BackupCombinedRestoreSafetyTests
 {
+    [Theory]
+    [InlineData("mssql", false, false)]
+    [InlineData("sqlserver", false, false)]
+    [InlineData("mssql", true, false)]
+    [InlineData("sqlserver", true, false)]
+    [InlineData("mssql", false, true)]
+    [InlineData("mssql", true, true)]
+    public async Task CombinedRestoreImportsBinarySqlServerBackupAndReportsItsOutcome(
+        string engine, bool subscription, bool fail)
+    {
+        using var area = new GeciciAlan();
+        var root = area.KlasorAc("wwwroot");
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "keep");
+        var files = subscription
+            ? new Dictionary<string, string> { ["sites/shop.example.com/config/site.json"] =
+                System.Text.Json.JsonSerializer.Serialize(new SiteDto
+                { Name = "shop.example.com", PhysicalPath = root, ApplicationRootPath = root }) }
+            : new Dictionary<string, string>();
+        var zip = area.BirlesikYedekUret(files, new Dictionary<string, string>());
+        byte[] content = [0x54, 0x41, 0x50, 0x45, 0x00, 0xff, 0x80, 0x0a, 0x0d];
+        using (var archive = ZipFile.Open(zip, ZipArchiveMode.Update))
+        using (var output = archive.CreateEntry($"databases/{engine}-shop-data.BAK").Open())
+            output.Write(content);
+        var original = await File.ReadAllBytesAsync(zip);
+        DatabaseDumpRequest? captured = null;
+        var calls = 0;
+        var service = area.ServisKur(zip, root, new SahteVeritabaniServisi(request =>
+        {
+            calls++;
+            captured = request;
+            Assert.Equal(content, File.ReadAllBytes(request.FilePath));
+            Assert.Equal(".bak", Path.GetExtension(request.FilePath), ignoreCase: true);
+            if (fail) throw new AppException("database.restore_failed", 500, 500, "SQL Server restore rejected");
+        }));
+        if (subscription)
+        {
+            var records = await area.DosyaDeposu.ReadAsync("config/backups.json", Array.Empty<BackupRecordDto>());
+            records[0].Type = "subscription";
+            await area.DosyaDeposu.WriteAsync("config/backups.json", records);
+        }
+
+        var result = await service.RestoreAsync(new RestoreBackupRequest { BackupId = "b1" });
+
+        Assert.Equal(1, calls);
+        Assert.NotNull(captured);
+        Assert.Equal(engine, captured.Engine);
+        Assert.Equal("shop-data", captured.DatabaseName);
+        Assert.False(File.Exists(captured.FilePath));
+        Assert.Equal(original, await File.ReadAllBytesAsync(zip));
+        Assert.Equal("keep", await File.ReadAllTextAsync(Path.Combine(root, "index.html")));
+        Assert.Equal(fail ? "restored_with_errors" : "restored", result.Status);
+        if (fail)
+        {
+            var warning = Assert.Single(result.Warnings);
+            Assert.Equal($"{engine}/shop-data", warning.Target);
+            Assert.Contains("SQL Server restore rejected", warning.Detail);
+            var persisted = Assert.Single(await service.GetBackupsAsync());
+            Assert.Equal("restored_with_errors", persisted.Status);
+        }
+        else Assert.Empty(result.Warnings);
+    }
+
+    [Fact]
+    public async Task CombinedRestoreRejectsBinaryBackupForNonSqlServerEngine()
+    {
+        using var area = new GeciciAlan();
+        var root = area.KlasorAc("wwwroot");
+        var zip = area.BirlesikYedekUret(new Dictionary<string, string>(),
+            new Dictionary<string, string> { ["databases/mariadb-shop.bak"] = "not a SQL dump" });
+        var called = false;
+        var service = area.ServisKur(zip, root, new SahteVeritabaniServisi(_ => called = true));
+        var result = await service.RestoreAsync(new RestoreBackupRequest { BackupId = "b1" });
+        Assert.False(called);
+        Assert.Equal("restored_with_errors", result.Status);
+        Assert.Equal("backup.invalid_entry_path", Assert.Single(result.Warnings).MessageKey);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CancelledCombinedRestore_PersistsRecoveryPathAndRethrows(bool subscription)
+    {
+        using var area = new GeciciAlan();
+        using var cancellation = new CancellationTokenSource();
+        var root = area.KlasorAc("wwwroot");
+        await File.WriteAllTextAsync(Path.Combine(root, "old.txt"), "old data");
+        var files = subscription
+            ? new Dictionary<string, string> { ["sites/shop.example.com/files/new.txt"] = "new data",
+                ["sites/shop.example.com/config/site.json"] = System.Text.Json.JsonSerializer.Serialize(new SiteDto
+                { Name = "shop.example.com", PhysicalPath = root, ApplicationRootPath = root }) }
+            : new Dictionary<string, string> { ["files/new.txt"] = "new data" };
+        var zip = area.BirlesikYedekUret(files, new Dictionary<string, string> { ["databases/mariadb-shop.sql"] = "-- dump" });
+        var service = area.ServisKur(zip, root, new SahteVeritabaniServisi(_ =>
+        {
+            cancellation.Cancel();
+            throw new OperationCanceledException(cancellation.Token);
+        }));
+        if (subscription)
+        {
+            var records = await area.DosyaDeposu.ReadAsync("config/backups.json", Array.Empty<BackupRecordDto>());
+            records[0].Type = "subscription";
+            await area.DosyaDeposu.WriteAsync("config/backups.json", records);
+        }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.RestoreAsync(new() { BackupId = "b1" }, cancellation.Token));
+        var persisted = Assert.Single(await service.GetBackupsAsync());
+        Assert.Equal("restored_with_errors", persisted.Status);
+        Assert.NotEmpty(persisted.PreservedPath);
+        Assert.Contains(persisted.Warnings, warning => warning.MessageKey == "backup.restore_aborted");
+        Assert.Equal("old data", await File.ReadAllTextAsync(Path.Combine(persisted.PreservedPath, "old.txt")));
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CombinedArchiveForwardsDefinerChoiceWithoutRewritingTheArchive(bool adapt)
+    {
+        using var alan = new GeciciAlan();
+        var root = alan.KlasorAc("wwwroot");
+        const string sql = "CREATE DEFINER=`source`@`%` VIEW v AS SELECT 1;";
+        var zip = alan.BirlesikYedekUret(new Dictionary<string, string>(),
+            new Dictionary<string, string> { ["databases/mariadb-shop.sql"] = sql });
+        var original = await File.ReadAllBytesAsync(zip);
+        DatabaseDumpRequest? captured = null;
+        var service = alan.ServisKur(zip, root, new SahteVeritabaniServisi(request =>
+        {
+            captured = request;
+            Assert.Equal(sql, File.ReadAllText(request.FilePath));
+        }));
+        var record = await service.RestoreAsync(new RestoreBackupRequest { BackupId = "b1", AdaptDefiners = adapt });
+        Assert.Equal("restored", record.Status);
+        Assert.NotNull(captured);
+        Assert.Equal(adapt, captured.AdaptDefiners);
+        Assert.Equal("mariadb", captured.Engine);
+        Assert.Equal(original, await File.ReadAllBytesAsync(zip));
+        Assert.False(File.Exists(captured.FilePath));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirectSqlRestorePersistsRealFailureAndChosenOwnership(bool cancelled)
+    {
+        using var alan = new GeciciAlan();
+        var sql = Path.Combine(alan.Kok, "backup.sql");
+        await File.WriteAllTextAsync(sql, "-- SQL backup");
+        var service = alan.ServisKur(sql, alan.Kok, new SahteVeritabaniServisi(request =>
+        {
+            Assert.True(request.AdaptDefiners);
+            if (cancelled) throw new OperationCanceledException();
+            throw new AppException("database.restore_failed", 500, 500, "ERROR 1227 at line 3; CREATE VIEW v_incidents_full; SET USER");
+        }));
+        await alan.DosyaDeposu.WriteAsync("config/backups.json", new[]
+        {
+            new BackupRecordDto { Id = "b1", Name = "backup.sql", Type = "database", Source = "mariadb:shop", Format = "sql", Path = sql }
+        });
+        var error = await Record.ExceptionAsync(() => service.RestoreAsync(new RestoreBackupRequest { BackupId = "b1", AdaptDefiners = true }));
+        Assert.NotNull(error);
+        var persisted = Assert.Single(await service.GetBackupsAsync());
+        Assert.Equal("restored_with_errors", persisted.Status);
+        var warning = Assert.Single(persisted.Warnings);
+        if (!cancelled)
+        {
+            Assert.Contains("1227", warning.Detail);
+            Assert.Contains("v_incidents_full", warning.Detail);
+        }
+        Assert.Equal("-- SQL backup", await File.ReadAllTextAsync(sql));
+    }
+
+    [Fact]
+    public async Task BlockedReplayRetainsTheOriginalSqlFailureForRecovery()
+    {
+        using var alan = new GeciciAlan();
+        var sql = Path.Combine(alan.Kok, "backup.sql");
+        await File.WriteAllTextAsync(sql, "-- SQL backup");
+        var calls = 0;
+        var service = alan.ServisKur(sql, alan.Kok, new SahteVeritabaniServisi(_ =>
+        {
+            if (++calls == 1) throw new AppException("database.restore_failed", 500, 500, "ERROR 1227; CREATE VIEW v_incidents_full");
+            throw new AppException("database.restore_partial_retry_blocked", 409, 409, "No SQL replayed");
+        }));
+        await alan.DosyaDeposu.WriteAsync("config/backups.json", new[]
+        {
+            new BackupRecordDto { Id = "b1", Name = "backup.sql", Type = "database", Source = "mariadb:shop", Format = "sql", Path = sql }
+        });
+        for (var i = 0; i < 3; i++)
+            await Assert.ThrowsAsync<AppException>(() => service.RestoreAsync(new RestoreBackupRequest { BackupId = "b1" }));
+        var record = Assert.Single(await service.GetBackupsAsync());
+        Assert.Equal("restored_with_errors", record.Status);
+        Assert.Equal(2, record.Warnings.Count);
+        Assert.Contains(record.Warnings, warning => warning.Detail.Contains("1227; CREATE VIEW v_incidents_full"));
+        Assert.Contains(record.Warnings, warning => warning.Detail.Contains("No SQL replayed"));
+    }
+
     [Fact]
     public async Task Restore_WhenDatabaseImportFails_ReportsWarningAndRefusesToSayRestored()
     {
@@ -193,6 +385,60 @@ public sealed class BackupCombinedRestoreSafetyTests
 
     // ---------------------------------------------------------------------------------------
 
+    [Theory]
+    [InlineData("io")]
+    [InlineData("service")]
+    [InlineData("wrong-404")]
+    public async Task Subscription_iis_read_failure_never_recreates_site_or_writes_archive_files(string failure)
+    {
+        using var area = new GeciciAlan();
+        var live = area.KlasorAc("live");
+        var index = Path.Combine(live, "index.html");
+        await File.WriteAllTextAsync(index, "ORIGINAL_LIVE_CONTENT");
+        var forbidden = Path.Combine(area.Kok, "would-create");
+        var zip = area.BirlesikYedekUret(new Dictionary<string, string>
+        {
+            ["sites/shop.example.com/config/site.json"] = System.Text.Json.JsonSerializer.Serialize(new SiteDto
+                { Name = "shop.example.com", PhysicalPath = forbidden, ApplicationRootPath = forbidden }),
+            ["sites/shop.example.com/files/index.html"] = "ARCHIVE_CONTENT"
+        }, new Dictionary<string, string>());
+        var proxy = System.Reflection.DispatchProxy.Create<IIisSiteService, FailingIisRead>();
+        var tracker = (FailingIisRead)(object)proxy;
+        tracker.Failure = failure switch
+        {
+            "io" => new IOException("SYNTHETIC_IIS_READ_FAILURE"),
+            "service" => new AppException("sites.read_failed", 503, 503),
+            _ => new AppException("unrelated.not_found", 404, 404)
+        };
+        var service = area.ServisKur(zip, live, new SahteVeritabaniServisi(_ => throw new InvalidOperationException()), proxy);
+        var records = await area.DosyaDeposu.ReadAsync("config/backups.json", Array.Empty<BackupRecordDto>());
+        records[0].Type = "subscription";
+        await area.DosyaDeposu.WriteAsync("config/backups.json", records);
+
+        var result = await service.RestoreAsync(new RestoreBackupRequest { BackupId = "b1" });
+
+        Assert.Equal("restored_with_errors", result.Status);
+        Assert.Contains(result.Warnings, warning => warning.MessageKey == "backup.site_target_unavailable");
+        Assert.Equal(1, tracker.Reads);
+        Assert.Equal(0, tracker.Writes);
+        Assert.False(Directory.Exists(forbidden));
+        Assert.Equal("ORIGINAL_LIVE_CONTENT", await File.ReadAllTextAsync(index));
+        Assert.Single(Directory.GetFiles(live, "*", SearchOption.AllDirectories));
+    }
+
+    public class FailingIisRead : System.Reflection.DispatchProxy
+    {
+        public Exception Failure { get; set; } = null!;
+        public int Reads { get; private set; }
+        public int Writes { get; private set; }
+        protected override object? Invoke(System.Reflection.MethodInfo? method, object?[]? args)
+        {
+            if (method!.Name == "GetSiteAsync") { Reads++; throw Failure; }
+            Writes++;
+            throw new InvalidOperationException("IIS mutation must not occur after an unverified read.");
+        }
+    }
+
     private sealed class GeciciAlan : IDisposable
     {
         public GeciciAlan()
@@ -231,7 +477,7 @@ public sealed class BackupCombinedRestoreSafetyTests
             return zipYolu;
         }
 
-        public BackupService ServisKur(string zipYolu, string siteKoku, IDatabaseService veritabani)
+        public BackupService ServisKur(string zipYolu, string siteKoku, IDatabaseService veritabani, IIisSiteService? sites = null)
         {
             DosyaDeposu.WriteAsync("config/backups.json", new[]
             {
@@ -248,7 +494,7 @@ public sealed class BackupCombinedRestoreSafetyTests
             }).GetAwaiter().GetResult();
 
             return new BackupService(
-                new SahteSiteServisi(siteKoku),
+                sites ?? new SahteSiteServisi(siteKoku),
                 veritabani,
                 null!,
                 null!,

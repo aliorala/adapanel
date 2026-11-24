@@ -152,8 +152,8 @@ public sealed class PanelRequestSurfaceWiringTests
 
         Assert.Equal(PanelServerLimits.FileUploadMaxBytes, form.MultipartBodyLengthLimit);
         Assert.True(
-            form.MultipartBodyLengthLimit >= UcunGovdeTavani("FilesController", "UploadAsync"),
-            "Form ayristiricisi, yukleme ucunun izin verdiginden AZ kabul ediyor.");
+            form.MultipartBodyLengthLimit < UcunGovdeTavani("FilesController", "UploadAsync"),
+            "Tum multipart govdesi dosya sinirinin yaninda baslik/sinirlayici payi da icermeli.");
     }
 
     [Fact]

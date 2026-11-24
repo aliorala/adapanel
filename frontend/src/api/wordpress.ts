@@ -26,6 +26,8 @@ export type WordPressSite = {
   plugins: WordPressComponent[];
   themes: WordPressComponent[];
   latestVersion: string;
+  versionMeasured: boolean;
+  versionComparisonMeasured: boolean;
   updateAvailable: boolean;
   security: WordPressSecurity;
 };
@@ -64,6 +66,9 @@ export async function createWordPressLoginLink(siteName: string) {
 }
 
 export type WordPressCloneResult = {
+  databaseIsolated: boolean;
+  siteStarted: boolean;
+  urlRewritten: boolean;
   targetSiteName: string;
   targetUrl: string;
   targetDatabase: string;

@@ -26,6 +26,51 @@ public sealed class RunContainerRequest
 
     /// <summary>--restart unless-stopped uygulansin mi.</summary>
     public bool AutoRestart { get; set; } = true;
+
+    /// <summary>Konteyneri bir siteyle ilişkilendirir (etiket <c>adapanel.site</c>); site silinince konteyner de temizlenir.</summary>
+    [StringLength(260)]
+    public string SiteName { get; set; } = string.Empty;
+
+    /// <summary>CPU sınırı, çekirdek sayısı olarak ("0.5", "2"). Boş = sınırsız.</summary>
+    [StringLength(8)]
+    public string CpuLimit { get; set; } = string.Empty;
+
+    /// <summary>Bellek sınırı ("256m", "2g"). Boş = sınırsız.</summary>
+    [StringLength(8)]
+    public string MemoryLimit { get; set; } = string.Empty;
+}
+
+public sealed class UpdateContainerLimitsRequest
+{
+    [StringLength(8)]
+    public string CpuLimit { get; set; } = string.Empty;
+
+    [StringLength(8)]
+    public string MemoryLimit { get; set; } = string.Empty;
+}
+
+public sealed class DockerContainerLimitsDto
+{
+    public string ContainerId { get; set; } = string.Empty;
+
+    /// <summary>Çekirdek sayısı; 0 = sınırsız.</summary>
+    public double Cpus { get; set; }
+
+    /// <summary>Bayt; 0 = sınırsız.</summary>
+    public long MemoryBytes { get; set; }
+}
+
+/// <summary>Site silinirken konteyner temizliğinin ölçülmüş sonucu.</summary>
+public sealed class DockerSiteCleanupResult
+{
+    public bool Installed { get; set; }
+
+    public bool DaemonRunning { get; set; }
+
+    public List<string> Removed { get; set; } = [];
+
+    /// <summary>Silinemeyenler: "ad: sebep".</summary>
+    public List<string> Failed { get; set; } = [];
 }
 
 public sealed class DockerLogsDto

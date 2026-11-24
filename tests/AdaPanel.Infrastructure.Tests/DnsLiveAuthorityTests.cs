@@ -15,6 +15,338 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class DnsLiveAuthorityTests
 {
     [Fact]
+    public async Task Template_TXT_values_survive_save_expansion_and_native_publication()
+    {
+        using var f = new Fixture();
+        await f.SetNative(new Record("A", "@", "198.51.100.8"));
+        var service = f.Service();
+        await service.UpdateTemplateAsync(new() { Records = [
+            new() { Type = "TXT", Host = "_empty", Value = "", Ttl = 3600 },
+            new() { Type = "TXT", Host = "_spaces", Value = "  ", Ttl = 3600 },
+            new() { Type = "TXT", Host = "_proof", Value = "  MiXeD+/=; {domain}  ", Ttl = 3600 }
+        ] });
+        var zone = await service.ResetDefaultsAsync("example.test");
+        Assert.Equal("", Assert.Single(zone.Records, r => r.Host == "_empty").Value);
+        Assert.Equal("  ", Assert.Single(zone.Records, r => r.Host == "_spaces").Value);
+        Assert.Equal("  MiXeD+/=; example.test  ", Assert.Single(zone.Records, r => r.Host == "_proof").Value);
+    }
+
+    [Fact]
+    public async Task Captured_long_public_RSA_keys_delete_only_the_obsolete_record_with_complete_native_RDATA()
+    {
+        using var f = new Fixture();
+        // Public TXT values captured in the incident; no private signing material.
+        const string old = "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtuAnAEy9YmJ9IRUKw2su7iEqD8G4uqEcWQyhB95/1ieRucIwoEZ/LPTNeFnAyFBEICxduD7cdR4rnjpPNNSZ5i/aPIP3F1XIxlqL2BZ2faTnA9hSDlO+XOnNLIXq4tYw3nabnMdRm3jh8nLiG/tARprfr2RXB6QSy7XhlFVX19W5+wZxO+2Gl5rJ9nNwLpT5aUp8UhMvQzihMC7cLcC21WqKqVv/rMSXa49LjiITGxfKbiuC59gIj+y6uv7W7PSueBz7BF7Q+HpvWTOz9ErDVo33S+RBVmdJIqZs8/ukbc7Ls1Gd00hOse3GVUMrLsE0kLp0E0v075P083Nz9+iaaQIDAQAB";
+        const string current = "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxiLQ8fdnUjEIWTPlzpvgQ8VY+akZojl9e9fmW2V7A/haOrrdGn0xK7ziehxHaqVcBBRucG4LXAOaH8Vmz51mRsLSeAvR7P5LTi9NSPBmxRnhXRTX9LRy4ynxd98QJGP92kpzwx0By0nAe+avXRCCz4m15r0G4r1RIY6TQLspZ54rCuRNYk+BKL3XBJgAq1NP/X70b91nF9e8Prd4PL0u18oK7x8BOy1pcHrroAXI+g4Gu/3aB76Tj8MI+02ChVj7MjDS4aW2EEwsLqEvOjl7kxc5A25cCje3j706418a7K92dPois/1+RiD3nagdV0V93BPbpGOXXjnY8JntqdiHQwIDAQAB";
+        Assert.Equal(410, old.Length); Assert.Equal(410, current.Length);
+        await f.SetNative(new Record("TXT", "selector._domainkey", old), new Record("TXT", "selector._domainkey", current));
+        var service = f.Service();
+        var zone = await service.GetZoneAsync("example.test");
+        var result = await service.DeleteRecordAsync("example.test", Assert.Single(zone.Records, r => r.Value == old).Id);
+        Assert.Equal(current, Assert.Single(result.Records).Value);
+        using var call = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(f.Root, "delete-call.json")));
+        Assert.Equal(new[] { old[..255], old[255..] }, call.RootElement.GetProperty("RecordData").EnumerateArray().Select(p => p.GetString()).ToArray());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("  MiXeD+/=;  ")]
+    public async Task TXT_cache_reload_and_targeted_delete_preserve_empty_and_surrounding_spaces(string value)
+    {
+        using var f = new Fixture();
+        await f.SetNative(new Record("TXT", "selector", value), new Record("TXT", "selector", "Keep"));
+        var service = f.Service();
+        var zone = await service.GetZoneAsync("example.test");
+        // Delete reloads the persisted native inventory through NormalizeRecord.
+        var result = await service.DeleteRecordAsync("example.test", Assert.Single(zone.Records, r => r.Value == value).Id);
+        Assert.Equal("Keep", Assert.Single(result.Records).Value);
+        using var call = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(f.Root, "delete-call.json")));
+        Assert.Equal(new[] { value }, call.RootElement.GetProperty("RecordData").EnumerateArray().Select(p => p.GetString()).ToArray());
+    }
+
+    [Fact]
+    public async Task Native_multi_string_TXT_import_preserves_complete_separate_records_and_case()
+    {
+        using var f = new Fixture();
+        var first = "v=DKIM1; p=" + new string('A', 300) + "+/MiXeD=; quoted=\"x\"; slash=\\";
+        var second = first[..255] + "differentTAIL";
+        await f.SetNative(new Record("TXT", "selector._domainkey", first), new Record("TXT", "selector._domainkey", second));
+        var records = (await f.Service().GetZoneAsync("example.test")).Records;
+        Assert.Equal(2, records.Count());
+        Assert.Contains(records, record => record.Value == first);
+        Assert.Contains(records, record => record.Value == second);
+    }
+
+    [Fact]
+    public async Task Deleting_one_long_TXT_preserves_another_RR_with_the_same_first_fragment()
+    {
+        using var f = new Fixture();
+        var first = new string('A', 255) + "old-tail";
+        var second = new string('A', 255) + "NEW-tail";
+        await f.SetNative(new Record("TXT", "selector._domainkey", first), new Record("TXT", "selector._domainkey", second));
+        var service = f.Service();
+        var zone = await service.GetZoneAsync("example.test");
+        await service.DeleteRecordAsync("example.test", Assert.Single(zone.Records, record => record.Value == first).Id);
+        var remaining = (await service.GetZoneAsync("example.test")).Records;
+        Assert.Equal(second, Assert.Single(remaining).Value);
+        using var call = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(f.Root, "delete-call.json")));
+        Assert.Equal("TXT", call.RootElement.GetProperty("RRType").GetString());
+        Assert.Equal("selector._domainkey", call.RootElement.GetProperty("Name").GetString());
+        Assert.Equal("example.test", call.RootElement.GetProperty("ZoneName").GetString());
+        Assert.True(call.RootElement.GetProperty("Force").GetBoolean());
+        Assert.Equal(new[] { first[..255], first[255..] }, call.RootElement.GetProperty("RecordData").EnumerateArray().Select(p => p.GetString()).ToArray());
+    }
+
+    [Fact]
+    public async Task Updating_long_TXT_roundtrips_full_value_without_leaving_the_previous_record()
+    {
+        using var f = new Fixture();
+        var old = "v=DKIM1; p=" + new string('A', 390);
+        var updated = "v=DKIM1; p=" + new string('B', 390) + "+/MiXeD=";
+        await f.SetNative(new Record("TXT", "selector._domainkey", old), new Record("TXT", "@", "verification=Keep"));
+        var service = f.Service();
+        var zone = await service.GetZoneAsync("example.test");
+        var original = Assert.Single(zone.Records, record => record.Host == "selector._domainkey");
+        await service.UpsertRecordAsync("example.test", new() { Id = original.Id, Type = "TXT", Host = original.Host, Value = updated, Ttl = 3600 });
+        var records = (await service.GetZoneAsync("example.test")).Records;
+        Assert.Equal(updated, Assert.Single(records, record => record.Host == "selector._domainkey").Value);
+        Assert.Contains(records, record => record.Value == "verification=Keep");
+    }
+
+    [Fact]
+    public async Task Failed_full_TXT_inventory_is_not_an_empty_success_and_does_not_replace_cached_records()
+    {
+        using var f = new Fixture();
+        await f.SeedCache();
+        await f.SetNative(new Record("TXT", "selector._domainkey", new string('A', 400)));
+        var before = await File.ReadAllTextAsync(f.Store().ResolvePath("config/dns-zones.json"));
+        f.FailTxtRead = true;
+        await Assert.ThrowsAsync<AppException>(() => f.Service().GetZoneAsync("example.test"));
+        Assert.Equal(before, await File.ReadAllTextAsync(f.Store().ResolvePath("config/dns-zones.json")));
+        Assert.Equal(0, f.Publications);
+    }
+
+    [Fact]
+    public async Task Same_address_general_save_discovers_verified_legacy_defaults_and_repeated_save_is_idempotent()
+    {
+        using var f = new Fixture();
+        await f.SeedLegacyDefaults();
+        await f.SetNative(new Record("A", "@", "84.51.22.239"), new Record("A", "mail", "84.51.22.239"),
+            new Record("A", "ns1", "84.51.22.239"), new Record("A", "ns2", "84.51.22.239"), new Record("TXT", "@", "v=spf1 a mx ip4:84.51.22.239 ~all"),
+            new Record("A", "cdn", "203.0.113.77", 900));
+        var ftp = new AdaPanel.Infrastructure.Ftp.FtpService(null!, f.Store(), null!,
+            Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = f.Root }))
+        {
+            NativeScript = (script, _, _) => {
+                Assert.DoesNotContain("ADAPANEL-FTP-ADDRESS-WRITE", script);
+                return Task.FromResult(new CommandResult { StandardOutput = JsonSerializer.Serialize(new { Exists = true, Owned = true, Address = "176.43.253.97" }) });
+            }
+        };
+        var preferences = Stub<IPanelPreferencesService>((_, _) => Task.FromResult(new PanelPreferencesDto { ServerAddress = "176.43.253.97" }));
+        var dns = f.Service(ftp);
+        var controller = new AdaPanel.Api.Controllers.PanelSettingsController(preferences, Stub<IAuditService>((_, _) => Task.CompletedTask), dns)
+        { ControllerContext = new Microsoft.AspNetCore.Mvc.ControllerContext { HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext() } };
+        var request = new UpdatePanelPreferencesRequest { ServerAddress = "176.43.253.97", ReconcileServerAddress = true };
+        await controller.UpdateAsync(request, default);
+        var first = await dns.GetServerAddressDnsSyncAsync();
+        Assert.False(first!.Pending); Assert.Equal("84.51.22.239", first.OldAddress);
+        Assert.Equal(5, first.Zones.Single().ChangedRecords); Assert.True(first.Ftp!.Succeeded); Assert.False(first.Ftp.Changed);
+        await controller.UpdateAsync(request, default);
+        var second = await dns.GetServerAddressDnsSyncAsync();
+        Assert.False(second!.Pending); Assert.Equal(0, second.Zones.Single().ChangedRecords);
+        Assert.Equal(1, f.Publications);
+        var records = (await dns.GetZoneAsync("example.test")).Records;
+        Assert.Equal(4, records.Count(record => record.Type == "A" && record.Value == "176.43.253.97"));
+        Assert.Contains(records, record => record.Value == "v=spf1 a mx ip4:176.43.253.97 ~all");
+        Assert.Contains(records, record => record.Host == "cdn" && record.Value == "203.0.113.77" && record.Ttl == 900);
+    }
+
+    [Theory]
+    [InlineData("mixed")]
+    [InlineData("unmanaged")]
+    [InlineData("nat")]
+    public async Task Same_address_reconciliation_never_guesses_custom_or_unowned_addresses(string scenario)
+    {
+        using var f = new Fixture();
+        await f.SeedLegacyDefaults(scenario != "unmanaged", scenario == "mixed", scenario == "nat");
+        var before = await File.ReadAllTextAsync(f.Store().ResolvePath("config/dns-zones.json"));
+        var result = await f.Service().ReconcileServerAddressAsync("176.43.253.97");
+        Assert.True(result!.Skipped); Assert.False(result.Pending); Assert.NotEmpty(result.Error);
+        Assert.Equal(0, f.Publications);
+        Assert.Equal(before, await File.ReadAllTextAsync(f.Store().ResolvePath("config/dns-zones.json")));
+        Assert.Null(await f.Service().GetServerAddressDnsSyncAsync());
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task General_settings_save_runs_real_DNS_and_FTP_migration_and_same_IP_save_retries_FTP_failure(bool failFirstFtpWrite)
+    {
+        using var f = new Fixture();
+        await f.SeedCache("84.51.22.239");
+        await f.SetNative(new Record("A", "@", "84.51.22.239"), new Record("TXT", "@", "v=spf1 a mx ip4:84.51.22.239 ~all"));
+        var ftpAddress = "84.51.22.239";
+        var failFtp = failFirstFtpWrite;
+        var ftp = new AdaPanel.Infrastructure.Ftp.FtpService(null!, f.Store(), null!,
+            Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = f.Root }))
+        {
+            NativeScript = (script, _, _) => {
+                if (script.Contains("ADAPANEL-FTP-ADDRESS-WRITE"))
+                {
+                    if (failFtp) return Task.FromResult(new CommandResult { ExitCode = 1 });
+                    ftpAddress = "176.43.253.97";
+                    return Task.FromResult(new CommandResult());
+                }
+                return Task.FromResult(new CommandResult { StandardOutput = JsonSerializer.Serialize(new { Exists = true, Owned = true, Address = ftpAddress }) });
+            }
+        };
+        var settings = new PanelPreferencesDto { ServerAddress = "84.51.22.239" };
+        var preferences = Stub<IPanelPreferencesService>((method, args) => {
+            if (method.Name == nameof(IPanelPreferencesService.UpdateAsync)) settings = new PanelPreferencesDto { ServerAddress = ((UpdatePanelPreferencesRequest)args![0]!).ServerAddress };
+            return Task.FromResult(settings);
+        });
+        var dns = f.Service(ftp);
+        var controller = new AdaPanel.Api.Controllers.PanelSettingsController(preferences,
+            Stub<IAuditService>((_, _) => Task.CompletedTask), dns)
+        { ControllerContext = new Microsoft.AspNetCore.Mvc.ControllerContext { HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext() } };
+        var request = new UpdatePanelPreferencesRequest { ServerAddress = "176.43.253.97" };
+        var first = await controller.UpdateAsync(request, default);
+        var firstResponse = Assert.IsType<AdaPanel.Core.Dtos.Common.ApiResponse<PanelPreferencesDto>>(
+            Assert.IsType<Microsoft.AspNetCore.Mvc.OkObjectResult>(first.Result).Value);
+        Assert.Equal(failFirstFtpWrite, firstResponse.Data!.ServerAddressDnsSync!.Pending);
+        var records = (await dns.GetZoneAsync("example.test")).Records;
+        Assert.Contains(records, record => record.Type == "A" && record.Value == "176.43.253.97");
+        Assert.Contains(records, record => record.Value == "v=spf1 a mx ip4:176.43.253.97 ~all");
+        if (failFirstFtpWrite)
+        {
+            Assert.False(firstResponse.Data.ServerAddressDnsSync.Ftp!.Succeeded);
+            failFtp = false;
+            await controller.UpdateAsync(request, default); // Ordinary Save, same server IP.
+        }
+        var completed = await dns.GetServerAddressDnsSyncAsync();
+        Assert.False(completed!.Pending);
+        Assert.True(completed.Ftp!.Succeeded);
+        Assert.Equal("176.43.253.97", completed.Ftp.CurrentAddress);
+        Assert.Equal("176.43.253.97", ftpAddress);
+    }
+    [Theory]
+    [InlineData("A", "84.51.22.239", "176.43.253.97")]
+    [InlineData("A", "84.51.22.2390", "84.51.22.2390")]
+    [InlineData("TXT", "v=spf1 a mx include:x ip4:84.51.22.239/32 -all", "v=spf1 a mx include:x ip4:176.43.253.97/32 -all")]
+    [InlineData("TXT", "v=spf1 +ip4:84.51.22.239 ip4:84.51.22.239/24 ip4:84.51.22.2390 ~all", "v=spf1 +ip4:176.43.253.97 ip4:84.51.22.239/24 ip4:84.51.22.2390 ~all")]
+    [InlineData("TXT", "verification=84.51.22.239", "verification=84.51.22.239")]
+    [InlineData("MX", "84.51.22.239", "84.51.22.239")]
+    public void Server_address_replacement_changes_only_exact_A_and_SPF_mechanisms(string type, string value, string expected)
+        => Assert.Equal(expected, DnsService.ReplaceServerAddress(type, value, "84.51.22.239", "176.43.253.97"));
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("mail.example.test")]
+    [InlineData("2001:db8::1")]
+    [InlineData("192.168.1.80")]
+    [InlineData("127.1")]
+    [InlineData("0.0.0.0")]
+    public void Server_address_migration_rejects_non_public_or_ambiguous_addresses(string address)
+        => Assert.False(DnsService.TryPublicIpv4(address, out _));
+
+    [Fact]
+    public async Task Server_address_migration_preserves_custom_records_metadata_and_shared_zone_and_updates_NAT()
+    {
+        using var f = new Fixture();
+        await f.SeedCache("84.51.22.239");
+        await f.AddPeer();
+        await f.Service().UpdateTemplateAsync(new UpdateDnsTemplateRequest {
+            IpMappings = [new() { PrivateAddress = "192.168.1.80", PublicAddress = "84.51.22.239" }],
+            Records = [new() { Type = "A", Host = "@", Value = "84.51.22.239", Ttl = 900 },
+                new() { Type = "A", Host = "mail", Value = "{ip}" },
+                new() { Type = "TXT", Host = "@", Value = "v=spf1 a mx ip4:84.51.22.239 ~all" }]
+        });
+        await f.SetNative(new Record("A", "@", "84.51.22.239", 900), new Record("A", "cdn", "203.0.113.10"),
+            new Record("TXT", "@", "v=spf1 a mx ip4:84.51.22.239/32 include:external.test ~all", 7200),
+            new Record("TXT", "@", "verification=84.51.22.239"), new Record("MX", "@", "external.test", 300, 30));
+        var status = await f.Service().SyncServerAddressAsync("84.51.22.239", "176.43.253.97");
+        Assert.False(status.Pending);
+        Assert.True(Assert.Single(status.Zones).Succeeded);
+        Assert.Equal(2, status.Zones.Single().ChangedRecords);
+        var records = (await f.Service().GetZoneAsync("example.test")).Records;
+        Assert.Contains(records, record => record.Id == "old" && record.Value == "176.43.253.97" && record.Ttl == 900);
+        Assert.Contains(records, record => record.Value == "v=spf1 a mx ip4:176.43.253.97/32 include:external.test ~all" && record.Ttl == 7200);
+        Assert.Contains(records, record => record.Value == "203.0.113.10");
+        Assert.Contains(records, record => record.Value == "verification=84.51.22.239");
+        Assert.Contains(records, record => record.Type == "MX" && record.Priority == 30 && record.Ttl == 300);
+        Assert.Equal("176.43.253.97", (await f.Service().GetTemplateAsync()).IpMappings.Single().PublicAddress);
+        var template = await f.Service().GetTemplateAsync();
+        Assert.Contains(template.Records, record => record.Host == "@" && record.Type == "A" && record.Value == "176.43.253.97" && record.Ttl == 900);
+        Assert.Contains(template.Records, record => record.Host == "mail" && record.Value == "{ip}");
+        Assert.Contains(template.Records, record => record.Value == "v=spf1 a mx ip4:176.43.253.97 ~all");
+        Assert.Equal(2, Directory.GetFiles(Path.Combine(f.Root, "config", "dns-address-backups")).Length);
+    }
+
+    [Fact]
+    public async Task Server_address_migration_retries_partial_native_delete_from_persistent_intent()
+    {
+        using var f = new Fixture();
+        await f.SeedCache();
+        await f.SetNative(new Record("A", "@", "84.51.22.239"));
+        f.FailPublication = true;
+        var failed = await f.Service().SyncServerAddressAsync("84.51.22.239", "176.43.253.97");
+        Assert.True(failed.Pending);
+        Assert.False(failed.Zones.Single().Succeeded);
+        // Model a native failure after removal and before replacement.
+        await f.SetNative();
+        f.FailPublication = false;
+        var retried = await f.Service().SyncServerAddressAsync("84.51.22.239", "176.43.253.97");
+        Assert.False(retried.Pending);
+        Assert.Equal("176.43.253.97", (await f.Service().GetZoneAsync("example.test")).Records.Single().Value);
+        Assert.False((await f.Service().GetServerAddressDnsSyncAsync())!.Pending);
+    }
+
+    [Fact]
+    public async Task Server_address_prepare_is_durable_and_unmeasured_matching_zone_remains_pending()
+    {
+        using var f = new Fixture();
+        await f.SeedCache("84.51.22.239");
+        await f.Service().PrepareServerAddressDnsSyncAsync("84.51.22.239", "176.43.253.97");
+        Assert.True((await f.Service().GetServerAddressDnsSyncAsync())!.Pending);
+        var service = f.Service();
+        service.AvailabilityOverride = _ => Task.FromResult(false);
+        var result = await service.SyncServerAddressAsync("84.51.22.239", "176.43.253.97");
+        Assert.True(result.Pending);
+        Assert.False(result.Zones.Single().Skipped);
+        Assert.False(result.Zones.Single().Succeeded);
+        Assert.Equal(0, f.Publications);
+        await Assert.ThrowsAsync<AppException>(() => service.SyncServerAddressAsync("176.43.253.97", "203.0.113.10"));
+    }
+
+    [Fact]
+    public async Task Server_address_migration_keeps_existing_destination_metadata_when_old_and_new_coexist()
+    {
+        using var f = new Fixture();
+        await f.SeedCache();
+        await f.SetNative(new Record("A", "@", "84.51.22.239", 900), new Record("A", "@", "176.43.253.97", 3600));
+        var result = await f.Service().SyncServerAddressAsync("84.51.22.239", "176.43.253.97");
+        Assert.False(result.Pending);
+        var record = Assert.Single((await f.Service().GetZoneAsync("example.test")).Records);
+        Assert.Equal("176.43.253.97", record.Value);
+        Assert.Equal(3600, record.Ttl);
+    }
+
+    [Fact]
+    public async Task Server_address_migration_isolates_missing_external_zone_as_unmeasured_warning()
+    {
+        using var f = new Fixture();
+        await f.SeedCache();
+        await f.AddExternalReference();
+        await f.SetNative(new Record("A", "@", "84.51.22.239"));
+        var result = await f.Service().SyncServerAddressAsync("84.51.22.239", "176.43.253.97");
+        Assert.False(result.Pending);
+        Assert.True(result.Zones.Single(zone => zone.ZoneName == "example.test").Succeeded);
+        Assert.False(result.Zones.Single(zone => zone.ZoneName == "external.test").Succeeded);
+        Assert.True(result.Zones.Single(zone => zone.ZoneName == "external.test").Skipped);
+        Assert.Equal(1, f.Publications);
+        Assert.Equal("84.51.22.239", (await f.Service().GetServerAddressDnsSyncAsync())!.OldAddress);
+    }
+    [Fact]
     public async Task Refresh_reads_native_values_preserves_metadata_and_backs_up_old_intent_without_native_writes()
     {
         using var f = new Fixture();
@@ -258,14 +590,25 @@ public sealed class DnsLiveAuthorityTests
         private string NativePath => Path.Combine(Root, "native.json");
         internal int Publications;
         internal bool FailPublication;
+        internal bool FailTxtRead;
         internal Func<Task>? BeforePublication;
         private readonly CancellationTokenSource deadline = new(TimeSpan.FromSeconds(90));
         internal Fixture() { Directory.CreateDirectory(Root); }
         internal Task SetNative(params Record[] records) => File.WriteAllTextAsync(NativePath, JsonSerializer.Serialize(records));
-        internal async Task SeedCache()
+        internal async Task SeedCache(string address = "192.168.1.80")
         {
             var store = Store();
-            await store.WriteAsync("config/dns-zones.json", new[] { new { siteName = "example.test", zoneName = "example.test", defaultsVersion = 4, nameServers = new[] { "ns1.example.test", "ns2.example.test" }, records = new[] { new { id = "old", type = "A", host = "@", value = "192.168.1.80", ttl = 3600, isManaged = true } } } });
+            await store.WriteAsync("config/dns-zones.json", new[] { new { siteName = "example.test", zoneName = "example.test", defaultsVersion = 4, nameServers = new[] { "ns1.example.test", "ns2.example.test" }, records = new[] { new { id = "old", type = "A", host = "@", value = address, ttl = 3600, isManaged = true } } } });
+        }
+        internal async Task SeedLegacyDefaults(bool managed = true, bool mixed = false, bool differentNat = false)
+        {
+            var hosts = new[] { "@", "mail", "ns1", "ns2" };
+            await Store().WriteAsync("config/dns-zones.json", new[] { new { siteName = "example.test", zoneName = "example.test", defaultsVersion = 4,
+                records = hosts.Select(host => new { id = host, type = "A", host, value = "84.51.22.239", ttl = 3600, isManaged = managed && host != "mail" }).ToArray() } });
+            await Store().WriteAsync("config/dns-template.json", new DnsTemplateDto {
+                Records = hosts.Select(host => new DnsTemplateRecordDto { Type = "A", Host = host, Value = mixed && host == "mail" ? "203.0.113.10" : "84.51.22.239" }).ToList(),
+                IpMappings = differentNat ? [new() { PrivateAddress = "192.168.1.80", PublicAddress = "203.0.113.10" }] : []
+            });
         }
         internal async Task AddPeer()
         {
@@ -273,20 +616,34 @@ public sealed class DnsLiveAuthorityTests
             var zones = await store.ReadAsync("config/dns-zones.json", Array.Empty<JsonElement>());
             await store.WriteAsync("config/dns-zones.json", zones.Append(JsonSerializer.SerializeToElement(new { siteName = "peer.test", zoneName = "example.test", records = Array.Empty<object>(), defaultsVersion = 4 })).ToArray());
         }
-        private JsonFileStore Store() => new(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = Root }));
-        internal DnsService Service()
+        internal async Task AddExternalReference()
+        {
+            var store = Store();
+            var zones = await store.ReadAsync("config/dns-zones.json", Array.Empty<JsonElement>());
+            await store.WriteAsync("config/dns-zones.json", zones.Append(JsonSerializer.SerializeToElement(new { siteName = "external.test", zoneName = "external.test", records = Array.Empty<object>(), defaultsVersion = 4 })).ToArray());
+        }
+        internal JsonFileStore Store() => new(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = Root }));
+        internal DnsService Service(IFtpService? ftp = null)
         {
             var site = new SiteDto { Name = "example.test", Bindings = [new() { HostName = "example.test", IpAddress = "192.168.1.80" }] };
             var sites = Stub<IIisSiteService>((method, _) => method.Name == nameof(IIisSiteService.GetSitesAsync)
                 ? Task.FromResult<IReadOnlyCollection<SiteDto>>([site]) : Task.FromResult(site));
             var preferences = Stub<IPanelPreferencesService>((_, _) => Task.FromResult(new PanelPreferencesDto { ServerAddress = "198.51.100.8" }));
-            return new DnsService(sites, preferences, Store(), NullLogger<DnsService>.Instance)
+            return new DnsService(sites, preferences, Store(), NullLogger<DnsService>.Instance, ftp)
             {
                 AvailabilityOverride = _ => Task.FromResult(true), NativeCommand = Run
             };
         }
         private async Task<CommandResult> Run(string script, CancellationToken token)
         {
+            // This fixture exercises RR inventory/publication, not DNSSEC. Its fake
+            // zone is always unsigned; avoid an unrelated PowerShell process per DTO.
+            if (script.Contains("Export-DnsServerDnsSecPublicKey"))
+                return new CommandResult { StandardOutput = "SIGNED=False" };
+            // These bounded tests mock the cmdlet writer. A regression must fail,
+            // never fall through to real dnscmd/WMI/zone-file writes on this PC.
+            if (script.Contains("$adaOlcum ="))
+                script = script.Replace("if (-not $adaVar) {", "if (-not $adaVar) { throw 'Test fixture forbids native fallback writes.';");
             if (script.Contains("$basarisiz"))
             {
                 Publications++;
@@ -294,8 +651,8 @@ public sealed class DnsLiveAuthorityTests
                 if (FailPublication) return new CommandResult { ExitCode = 22, StandardOutput = "ADAPANEL-FAIL: access denied" };
             }
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
-            var result = await ProcessRunner.RunPowerShellAsync("$taskNativePath='" + NativePath.Replace("'", "''") + "'\n" + FakeDns + "\n" + script, linked.Token);
-            if (!result.Success && script.Contains("ADAPANEL-LIVE-RECORDS"))
+            var result = await ProcessRunner.RunPowerShellAsync("$taskNativePath='" + NativePath.Replace("'", "''") + "'\n$taskFailTxtRead=$" + FailTxtRead.ToString().ToLowerInvariant() + "\n" + FakeDns + "\n" + script, linked.Token);
+            if (!result.Success && script.Contains("ADAPANEL-LIVE-RECORDS") && !FailTxtRead)
                 throw new Xunit.Sdk.XunitException(result.StandardError + result.StandardOutput);
             return result;
         }
@@ -322,7 +679,8 @@ public sealed class DnsLiveAuthorityTests
             if($Name -and $r.Host -ne $Name){continue}; if($RRType -and $r.Type -ne $RRType){continue}
             $d = switch($r.Type) {
               'A' { @{IPv4Address=$r.Value} }
-              'TXT' { @{DescriptiveText=@($r.Value)} }
+              # Model the real Windows provider: scalar, first character-string only.
+              'TXT' { @{DescriptiveText=$r.Value.Substring(0,[Math]::Min(255,$r.Value.Length))} }
               'CNAME' { @{HostNameAlias=$r.Value} }
               'NS' { @{NameServer=$r.Value} }
               'MX' { @{MailExchange=$r.Value;Preference=$r.Priority} }
@@ -330,6 +688,24 @@ public sealed class DnsLiveAuthorityTests
               'CAA' { $v=$r.Value.Split(' ',3); $bytes=[byte[]]@([byte]$v[0],[byte]$v[1].Length)+[Text.Encoding]::ASCII.GetBytes($v[1])+[Text.Encoding]::UTF8.GetBytes($v[2]); @{Type=257;Data=$bytes} }
             }
             [pscustomobject]@{RecordType=if($r.Type -eq 'CAA'){'Unknown'}else{$r.Type};HostName=$r.Host;RecordData=[pscustomobject]$d;TimeToLive=[timespan]::FromSeconds($r.Ttl)}
+          }
+        }
+        function Get-CimInstance {
+          param($Namespace,$ClassName)
+          if($taskFailTxtRead){throw 'Native TXT access denied.'}
+          foreach($r in @(Read-Rows|Where-Object Type -eq 'TXT')) {
+            $pieces=@(for($i=0;$i -lt $r.Value.Length;$i+=255){'"'+$r.Value.Substring($i,[Math]::Min(255,$r.Value.Length-$i)).Replace('\','\\').Replace('"','\"')+'"'})
+            if($pieces.Count -eq 0){$pieces=@('""')}
+            $owner=if($r.Host -eq '@'){'example.test'}else{$r.Host+'.example.test'}
+            # Simulate a truncated provider identity independently of full TextRepresentation.
+            [pscustomobject]@{ContainerName='example.test';OwnerName=$owner;TTL=$r.Ttl;RecordData=$r.Value.Substring(0,[Math]::Min(255,$r.Value.Length));TextRepresentation=($owner+' '+$r.Ttl+' IN TXT '+($pieces -join ' '))}
+          }
+        }
+        function Remove-CimInstance {
+          param([Parameter(ValueFromPipeline=$true)]$InputObject)
+          process {
+            $a=Convert-AdaNativeTxt $InputObject 'example.test'
+            Save-Rows @(Read-Rows|Where-Object{!($_.Type -eq 'TXT' -and $_.Host -eq $a.Host -and $_.Value -ceq $InputObject.RecordData -and $_.Ttl -eq $a.Ttl)})
           }
         }
         function Add-Row($type,$name,$value,$ttl,$priority) {
@@ -342,13 +718,28 @@ public sealed class DnsLiveAuthorityTests
         function Add-DnsServerResourceRecordCName { param($ZoneName,$Name,$HostNameAlias,$TimeToLive) Add-Row 'CNAME' $Name $HostNameAlias $TimeToLive $null }
         function Add-DnsServerResourceRecordMX { param($ZoneName,$Name,$MailExchange,$Preference,$TimeToLive) Add-Row 'MX' $Name $MailExchange $TimeToLive $Preference }
         function Add-DnsServerResourceRecord { param($ZoneName,$Name,[switch]$Txt,[switch]$NS,[switch]$Srv,$DescriptiveText,$NameServer,$DomainName,$Weight,$Port,$Priority,$TimeToLive)
-          if($Txt){Add-Row 'TXT' $Name ($DescriptiveText -join '') $TimeToLive $null}
+          if($Txt){Add-Row 'TXT' $Name (($DescriptiveText -join '').Replace("`r`n",'')) $TimeToLive $null}
           elseif($NS){Add-Row 'NS' $Name $NameServer $TimeToLive $null}
           elseif($Srv){Add-Row 'SRV' $Name "$Weight $Port $DomainName" $TimeToLive $Priority}
         }
-        function Remove-DnsServerResourceRecord { param($ZoneName,[Parameter(ValueFromPipeline=$true)]$InputObject,[switch]$Force) process {
-          $a=Convert-AdaDnsRecord $InputObject
-          Save-Rows @(Read-Rows|Where-Object{!($_.Type -eq $a.Type -and $_.Host -eq $a.Host -and $_.Value -eq $a.Value -and $_.Priority -eq $a.Priority -and $_.Ttl -eq $a.Ttl)})
+        function Remove-DnsServerResourceRecord {
+          [CmdletBinding()]
+          param($ZoneName,[Parameter(ValueFromPipeline=$true)]$InputObject,$RRType,$Name,[string[]]$RecordData,[switch]$Force)
+          process {
+          if($RRType -eq 'TXT') {
+            if($ZoneName -cne 'example.test' -or -not $Force -or -not $Name -or $null -eq $RecordData -or $RecordData.Count -lt 1){throw 'Incomplete bounded TXT deletion.'}
+            [pscustomobject]@{ZoneName=$ZoneName;RRType=$RRType;Name=$Name;RecordData=@($RecordData);Force=[bool]$Force} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path (Split-Path $taskNativePath) 'delete-call.json')
+            Save-Rows @(Read-Rows|Where-Object {
+              $r=$_; $parts=@(for($i=0;$i -lt $r.Value.Length;$i+=255){$r.Value.Substring($i,[Math]::Min(255,$r.Value.Length-$i))})
+              if($parts.Count -eq 0){$parts=@('')}
+              $same=$parts.Count -eq $RecordData.Count
+              for($i=0;$same -and $i -lt $parts.Count;$i++){if($parts[$i] -cne $RecordData[$i]){$same=$false}}
+              -not($r.Type -eq 'TXT' -and $r.Host -eq $Name -and $same)
+            })
+          } else {
+            $a=Convert-AdaDnsRecord $InputObject
+            Save-Rows @(Read-Rows|Where-Object{!($_.Type -eq $a.Type -and $_.Host -eq $a.Host -and $_.Value -eq $a.Value -and $_.Priority -eq $a.Priority -and $_.Ttl -eq $a.Ttl)})
+          }
         } }
         """;
 }

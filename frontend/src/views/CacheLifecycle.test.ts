@@ -1,8 +1,9 @@
+import { renderToString } from "vue/server-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import { createRenderer, h, nextTick, ssrContextKey, type App, type Component } from "vue";
+import { createRenderer, createSSRApp, h, nextTick, ssrContextKey, type App, type Component } from "vue";
 import CacheView from "./CacheView.vue";
-import { getCacheStatus, startMemcached, startRedis, stopMemcached, stopRedis, type CacheRuntime, type CacheStatus } from "../api/cache";
+import { getCacheStatus, startMemcached, startRedis, stopMemcached, stopRedis, type CacheMetrics, type CacheRuntime, type CacheStatus } from "../api/cache";
 import { SoftwareInstallationIncompleteError, SoftwareInstallationRefreshError, SoftwareRemovalIncompleteError, useSoftwareStore } from "../stores/software";
 import { invalidateSessionRequests } from "../api/client";
 import { useSubscriptionStore } from "../stores/subscription";
@@ -27,6 +28,8 @@ type State = {
   status: CacheStatus | null; installedCount: number | null; runningCount: number | null; busyAction: string; notice: string; noticeError: boolean;
   refresh(): Promise<void>; install(id: string): Promise<void>; remove(id: string): Promise<void>; toggle(id: string, start: boolean): Promise<void>;
   statusLabel(item: CacheRuntime): string;
+  readDelta: number | null;
+  clientsState: string;
 };
 async function flush() { for (let i = 0; i < 12; i++) await nextTick(); }
 async function mount() {
@@ -202,4 +205,34 @@ it("does not apply cache status belonging to an invalidated session", async () =
   const pending = deferred<CacheStatus>(); vi.mocked(getCacheStatus).mockReturnValueOnce(pending.promise);
   const state = await mount(); invalidateSessionRequests(); pending.resolve(status()); await flush();
   expect(state.status).toBeNull(); expect(state.installedCount).toBeNull();
+});
+
+const usageMetrics = (changes: Partial<CacheMetrics> = {}): CacheMetrics => ({ version: "7", usedMemory: "2M", keys: 4, connectedClients: 1, hits: 10, misses: 2, uptimeSeconds: 100, runId: "run-a", measuredAtUtc: `2026-10-30T08:00:${String(changes.hits ?? 10).padStart(2, "0")}Z`, ...changes });
+const usageStatus = (changes: Partial<CacheMetrics> = {}): CacheStatus => ({ ...status("Running"), redis: { ...runtime("redis", "Running"), metrics: usageMetrics(changes) } });
+
+it("resets read comparison after a failed refresh, stopped service and unmount", async () => {
+  vi.mocked(getCacheStatus).mockResolvedValueOnce(usageStatus());
+  const state = await mount(); expect(state.readDelta).toBeNull();
+  vi.mocked(getCacheStatus).mockResolvedValueOnce(usageStatus({ hits: 15 }));
+  await state.refresh(); expect(state.readDelta).toBe(5);
+  vi.mocked(getCacheStatus).mockRejectedValueOnce(new Error("offline"));
+  await state.refresh(); expect(state.readDelta).toBeNull();
+  vi.mocked(getCacheStatus).mockResolvedValueOnce(usageStatus({ hits: 30 }));
+  await state.refresh(); expect(state.readDelta).toBeNull();
+  vi.mocked(getCacheStatus).mockResolvedValueOnce(status()); await state.refresh();
+  vi.mocked(getCacheStatus).mockResolvedValueOnce(usageStatus({ hits: 40 })); await state.refresh(); expect(state.readDelta).toBeNull();
+  vi.mocked(getCacheStatus).mockResolvedValueOnce(usageStatus({ hits: 41 })); await state.refresh(); expect(state.readDelta).toBe(1);
+  unmount(); expect(state.readDelta).toBeNull();
+});
+
+it.each([null, [], [{ name: "<script>unsafe</script>", databaseIndex: 1, idleSeconds: 12 }]].map(clients => [clients]))("renders the Redis usage contract with clients %j", async clients => {
+  vi.mocked(getCacheStatus).mockResolvedValueOnce(usageStatus({ clients, databases: [{ index: 0, keys: 4, expires: 2, averageTtlMilliseconds: 500 }, { index: 1, keys: 0, expires: null, averageTtlMilliseconds: null }] }));
+  const state = await mount();
+  const text = await renderToString(createSSRApp({ ...CacheView, setup: () => state } as Component));
+  expect(text).toContain("panel.cache.usage.firstMeasurement");
+  expect(text).toContain("db0"); expect(text).toContain("db1"); expect(text).toContain("panel.cache.usage.expires");
+  expect(text).toContain("panel.cache.usage.measuredAt");
+  if (clients === null) { expect(state.clientsState).toBe("unknown"); expect(text).toContain("panel.cache.usage.clientsUnknown"); }
+  else if (!clients.length) { expect(state.clientsState).toBe("empty"); expect(text).toContain("panel.cache.usage.clientsEmpty"); }
+  else { expect(state.clientsState).toBe("measured"); expect(text).toContain("&lt;script&gt;unsafe&lt;/script&gt;"); expect(text).not.toContain("<script>unsafe</script>"); }
 });

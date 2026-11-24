@@ -20,8 +20,10 @@ export type AppRuntimeSiteConfiguration = {
   logsDirectory: string;
   isEnabled: boolean;
   hasHttpPlatformHandler: boolean;
-  managedRuntimeDisabled: boolean;
+  managedRuntimeDisabled: boolean | null;
   environmentVariables: string[];
+  /** Uygulama havuzunun ölçülen durumu; ölçülemediyse null ("çalışıyor" diye uydurulmaz). */
+  poolState?: string | null;
 };
 
 export type HostNodeAppPayload = {
@@ -60,5 +62,30 @@ export async function hostNodeApp(siteName: string, payload: HostNodeAppPayload)
 
 export async function hostPythonApp(siteName: string, payload: HostPythonAppPayload) {
   const response = await apiClient.post<ApiEnvelope<AppRuntimeSiteConfiguration>>(`/sites/${encodeURIComponent(siteName)}/python`, payload);
+  return response.data.data;
+}
+
+export type AppRuntimeRemovalResult = {
+  siteName: string;
+  removed: string[];
+  /** Bos degilse kaldirma TAM degildir. */
+  leftovers: string[];
+  configuration: AppRuntimeSiteConfiguration;
+};
+
+export type AppRuntimeLogs = { siteName: string; fileName: string; output: string; truncated: boolean };
+
+export async function controlSiteApp(siteName: string, action: "start" | "stop" | "restart") {
+  const response = await apiClient.post<ApiEnvelope<AppRuntimeSiteConfiguration>>(`/sites/${encodeURIComponent(siteName)}/apps/${action}`, {});
+  return response.data.data;
+}
+
+export async function removeSiteApp(siteName: string, confirmSiteName: string, deleteLogs: boolean) {
+  const response = await apiClient.post<ApiEnvelope<AppRuntimeRemovalResult>>(`/sites/${encodeURIComponent(siteName)}/apps/remove`, { confirmSiteName, deleteLogs });
+  return response.data.data;
+}
+
+export async function getSiteAppLogs(siteName: string, tail = 200) {
+  const response = await apiClient.get<ApiEnvelope<AppRuntimeLogs>>(`/sites/${encodeURIComponent(siteName)}/apps/logs`, { params: { tail } });
   return response.data.data;
 }

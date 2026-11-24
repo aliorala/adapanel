@@ -5,6 +5,17 @@ namespace AdaPanel.Core.Interfaces;
 
 public interface IFtpService
 {
+    Task<FtpServerAddressSyncDto> SyncServerAddressAsync(string oldAddress, string newAddress, CancellationToken cancellationToken = default)
+        => Task.FromResult(new FtpServerAddressSyncDto { Skipped = true, Error = "FTP external address synchronization is unavailable." });
+    Task<FtpCertificateDto> GetCertificateAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new FtpCertificateDto());
+
+    Task<FtpCertificateDto> ApplyCertificateAsync(ApplyFtpCertificateRequest request,
+        Func<CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+    Task<FtpCertificateDto?> SyncCertificateAsync(Func<CancellationToken, Task>? beforeMutation,
+        CancellationToken cancellationToken = default) => Task.FromResult<FtpCertificateDto?>(null);
+
     Task<FtpServerStatusDto> EnsureServerAsync(CancellationToken cancellationToken = default);
 
     Task<FtpServerStatusDto> EnsureServerAsync(Func<CancellationToken, Task> beforeMutation,
@@ -33,6 +44,22 @@ public interface IFtpService
         Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) => throw new NotSupportedException();
 
     Task DeleteFtpUserAsync(string userName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Panelin yönettiği FTP hesabını AÇAR/KAPATIR (M2: abonelik askısı). Windows hesabının
+    /// Enabled bayrağı değiştirilir ve GERİ OKUNUR; doğrulanamazsa istisna fırlatır (sessiz başarı yok).
+    /// Varsayılan gövde "desteklenmiyor" der — çağıran bunu kapatılamadı olarak gösterir.
+    /// </summary>
+    Task SetFtpUserEnabledAsync(string userName, bool enabled, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("FTP account enable/disable is not supported by this implementation.");
+
+    /// <summary>Açma/kapatma; <paramref name="beforeMutation"/> hesap kilidi altında yetki/sahiplik onayı verir.</summary>
+    Task SetFtpUserEnabledAsync(string userName, bool enabled,
+        Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    /// <summary>Ev dizini / salt-okunur güncelleme; yazılan değerler IIS ve NTFS'ten geri okunarak doğrulanır.</summary>
+    Task<FtpUserDto> UpdateFtpUserAsync(string userName, UpdateFtpUserRequest request,
+        Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) => throw new NotSupportedException();
 
     Task DeleteFtpUserAsync(string userName,
         Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) => throw new NotSupportedException();

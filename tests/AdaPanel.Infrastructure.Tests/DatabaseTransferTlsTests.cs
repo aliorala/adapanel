@@ -209,7 +209,7 @@ public sealed class DatabaseTransferTlsTests
             new PatlayanSiteServisi(),
             NullLogger<SiteMigrationService>.Instance);
 
-        await servis.MigrateSiteAsync(
+        var sonuc = await servis.MigrateSiteAsync(
             new MigrateSiteRequest
             {
                 SiteName = "ornek.test",
@@ -225,6 +225,10 @@ public sealed class DatabaseTransferTlsTests
             actorUserId: null,
             ipAddress: null);
 
+        Assert.True(sonuc.OverallSuccess);
+        Assert.True(Assert.Single(sonuc.Steps).Success);
+        Assert.Equal(1, veritabani.DatabaseCreations);
+        Assert.Equal(1, veritabani.UserCreations);
         Assert.NotNull(veritabani.SonIstek);
         Assert.Equal(MySqlTransferTls.Disabled, veritabani.SonIstek!.SourceTlsMode);
     }
@@ -284,6 +288,8 @@ public sealed class DatabaseTransferTlsTests
     private sealed class IsteğiYakalayanVeritabani : IDatabaseService
     {
         public DatabaseTransferRequest? SonIstek { get; private set; }
+        public int DatabaseCreations { get; private set; }
+        public int UserCreations { get; private set; }
 
         public Task<DatabaseTransferResultDto> TransferDatabaseAsync(DatabaseTransferRequest request, CancellationToken cancellationToken = default)
         {
@@ -296,9 +302,19 @@ public sealed class DatabaseTransferTlsTests
             });
         }
 
-        // Göç akışı bunları try/catch içinde çağırır (zaten var olabilirler); ölçümü etkilemezler.
-        public Task<DatabaseWorkspaceDto> CreateDatabaseAsync(CreateDatabaseRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<DatabaseWorkspaceDto> CreateUserAsync(CreateDatabaseUserRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        // This TLS propagation test models successful provisioning before transfer can start.
+        public Task<DatabaseWorkspaceDto> CreateDatabaseAsync(CreateDatabaseRequest request, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DatabaseCreations++;
+            return Task.FromResult(new DatabaseWorkspaceDto());
+        }
+        public Task<DatabaseWorkspaceDto> CreateUserAsync(CreateDatabaseUserRequest request, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            UserCreations++;
+            return Task.FromResult(new DatabaseWorkspaceDto());
+        }
 
         public Task<IReadOnlyCollection<DatabaseEngineStatusDto>> GetEnginesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<DatabaseEngineStatusDto> RegisterCredentialsAsync(RegisterDatabaseCredentialsRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();

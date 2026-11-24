@@ -1,6 +1,10 @@
 using System.Reflection;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Sites;
+using AdaPanel.Core.Dtos.Migration;
+using AdaPanel.Infrastructure.Migration;
+using System.Text.Json;
+using System.Security.Cryptography;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Iis;
 using AdaPanel.Infrastructure.Services;
@@ -16,6 +20,79 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class SiteNativeLifecycleRecoveryTests
 {
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(10);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MigrationCreateCannotReplaceAnExistingSiteEvenWithTheLegacyReplacementFlag(bool replaceExisting)
+    {
+        using var f = new Fixture();
+        var original = await f.Create();
+        await File.WriteAllTextAsync(Path.Combine(f.SitePath, "keep.txt"), "existing site content");
+        var commits = f.State.Commits;
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Native.CreateSiteAsync(new()
+        { Name = f.Name, HostName = f.Name, PhysicalPath = f.OtherPath, MigrationFreshOnly = true, ReplaceExisting = replaceExisting, AutoStart = false, Port = 8080 }));
+        Assert.Equal("migration.target_site_exists", error.MessageKey);
+        Assert.Equal(0, f.State.RemoveCalls);
+        Assert.Equal(commits, f.State.Commits);
+        Assert.Equal(original.Id, f.State.Current!.Id);
+        Assert.False(Directory.Exists(f.OtherPath));
+        Assert.Equal("existing site content", await File.ReadAllTextAsync(Path.Combine(f.SitePath, "keep.txt")));
+    }
+
+    [Fact]
+    public async Task MigrationAliasConflictDoesNotCommitAnyPartOfTheNewSite()
+    {
+        using var f = new Fixture();
+        await f.Create();
+        var commits = f.State.Commits;
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Native.CreateSiteAsync(new()
+        {
+            Name = "another.example", HostName = "another.example", PhysicalPath = f.OtherPath,
+            MigrationFreshOnly = true, MigrationHostNames = [f.Name], AutoStart = false, Port = 8080
+        }));
+        Assert.Equal("sites.binding_conflict", error.MessageKey);
+        Assert.Equal(commits, f.State.Commits);
+        Assert.False(Directory.Exists(f.OtherPath));
+        Assert.Equal(f.Name, f.State.Current!.Name);
+    }
+
+    [Fact]
+    public async Task MigrationFreshCreatePreservesEmptyContentAndCreatesAllBindingsInOneCommit()
+    {
+        using var f = new Fixture();
+        var created = await f.Native.CreateSiteAsync(new()
+        {
+            Name = f.Name, HostName = f.Name, PhysicalPath = f.SitePath, MigrationFreshOnly = true,
+            MigrationHostNames = [f.Name, "www.example.test", "www.example.test"], AutoStart = false, Port = 8080
+        });
+        Assert.False(created.AutoStart);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(f.SitePath));
+        Assert.Equal(1, f.State.Commits);
+        Assert.Equal(2, created.Bindings.Count);
+        Assert.Contains(created.Bindings, binding => binding.HostName == "www.example.test");
+    }
+
+    [Fact]
+    public void PublicSiteRequestsCannotSelectInternalMigrationModes()
+    {
+        var request = System.Text.Json.JsonSerializer.Deserialize<CreateSiteRequest>(
+            "{\"MigrationFreshOnly\":true,\"MigrationHostNames\":[\"injected.example\"]}")!;
+        Assert.False(request.MigrationFreshOnly);
+        Assert.Empty(request.MigrationHostNames);
+    }
+
+    [Fact]
+    public async Task NativeMigrationTargetInventoryIncludesHiddenHttpRootsButNotFtpState()
+    {
+        using var f = new Fixture();
+        f.State.Current = new() { Id = 10, Name = "AdaPanel.WebDb.Adminer", PhysicalPath = f.SitePath,
+            Bindings = [new() { Protocol = "http", BindingInformation = "127.0.0.1:8897:" }] };
+        Assert.Empty(await f.Native.GetSitesAsync());
+        Assert.Equal(f.SitePath, Assert.Single(await f.Native.GetMigrationTargetSitesAsync()).PhysicalPath);
+        f.State.Current.Bindings[0].Protocol = "ftp";
+        Assert.Empty(await f.Native.GetMigrationTargetSitesAsync());
+    }
 
     [Theory]
     [InlineData("use")]
@@ -152,7 +229,7 @@ public sealed class SiteNativeLifecycleRecoveryTests
                 var originalId = f.State.Current!.Id;
                 if (replacement == "same-id-native")
                 {
-                    await f.Create();
+                    await f.Create(replaceExisting: true);
                     f.State.Current!.Id = originalId;
                 }
                 else if (replacement == "id") f.State.Current!.Id += 100;
@@ -195,7 +272,7 @@ public sealed class SiteNativeLifecycleRecoveryTests
         await File.WriteAllTextAsync(Path.Combine(f.SitePath, "original.txt"), "original");
         f.State.FailCommit = f.State.Commits + 1;
         var commandCount = f.CommandTokens.Count;
-        Assert.IsType<AppException>(await Capture(() => f.Provision(default)));
+        Assert.IsType<AppException>(await Capture(() => f.Provision(default, replaceExisting: true)));
         Assert.Equal(original.Id, f.State.Current!.Id);
         Assert.Equal("original", await File.ReadAllTextAsync(Path.Combine(f.SitePath, "original.txt")));
         Assert.Equal(commandCount, f.CommandTokens.Count);
@@ -224,7 +301,7 @@ public sealed class SiteNativeLifecycleRecoveryTests
         Assert.Equal(2, f.CommandTokens.Count);
         var expected = new IOException("firewall unavailable");
         f.FailFirstCommand(expected);
-        Assert.Same(expected, await Capture(() => f.Create()));
+        Assert.Same(expected, await Capture(() => f.Create(replaceExisting: true)));
     }
 
     [Theory]
@@ -278,6 +355,70 @@ public sealed class SiteNativeLifecycleRecoveryTests
         await target.RunAsync(_ => Task.CompletedTask, default);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Native_existing_site_requires_explicit_replacement_without_mutating_identity_bindings_pool_or_files(bool explicitlyFalse)
+    {
+        using var f = new Fixture(); await f.Create();
+        f.State.Current!.Bindings.Add("*:443:secure.victim.test", "https");
+        await File.WriteAllTextAsync(Path.Combine(f.SitePath, "keep.txt"), "original content");
+        var before = JsonSerializer.Serialize(f.State.Current); var pools = JsonSerializer.Serialize(f.State.Pools);
+        var hashes = Directory.GetFiles(f.SitePath).Select(file => Path.GetFileName(file) + ":" + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file)))).Order(StringComparer.Ordinal).ToArray();
+        var commits = f.State.Commits; var commands = f.CommandTokens.Count;
+        var request = new CreateSiteRequest { Name = f.Name.ToUpperInvariant(), HostName = "replacement.test", PhysicalPath = f.OtherPath, ApplicationPoolName = "replacement-pool", Port = 9090 };
+        if (explicitlyFalse) request = new CreateSiteRequest { Name = f.Name.ToUpperInvariant(), HostName = "replacement.test", PhysicalPath = f.OtherPath, ApplicationPoolName = "replacement-pool", Port = 9090, ReplaceExisting = false };
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Native.CreateSiteAsync(request));
+        Assert.Equal("sites.name_exists", error.MessageKey); Assert.Equal(409, error.HttpStatusCode);
+        Assert.Equal(commits, f.State.Commits); Assert.Equal(0, f.State.RemoveCalls); Assert.Equal(commands, f.CommandTokens.Count);
+        Assert.Equal(before, JsonSerializer.Serialize(f.State.Current)); Assert.Equal(pools, JsonSerializer.Serialize(f.State.Pools));
+        Assert.Equal(hashes, Directory.GetFiles(f.SitePath).Select(file => Path.GetFileName(file) + ":" + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file)))).Order(StringComparer.Ordinal).ToArray());
+        Assert.False(Directory.Exists(f.OtherPath));
+    }
+
+    [Fact]
+    public async Task Explicit_replacement_still_replaces_only_the_IIS_site_with_a_new_identity()
+    {
+        using var f = new Fixture(); var original = await f.Create();
+        await File.WriteAllTextAsync(Path.Combine(f.SitePath, "keep.txt"), "old physical files");
+        var replacement = await f.Native.CreateSiteAsync(new() { Name = f.Name, HostName = "replacement.test", PhysicalPath = f.OtherPath,
+            ApplicationPoolName = "replacement-pool", Port = 9090, ReplaceExisting = true });
+        Assert.NotEqual(original.Id, replacement.Id); Assert.Equal(replacement.Id, f.State.Current!.Id);
+        Assert.Equal(1, f.State.RemoveCalls); Assert.Equal(2, f.State.Commits);
+        Assert.Equal(f.OtherPath, replacement.PhysicalPath); Assert.Equal("replacement-pool", replacement.ApplicationPoolName);
+        Assert.Equal("old physical files", await File.ReadAllTextAsync(Path.Combine(f.SitePath, "keep.txt")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Legacy_site_migration_real_native_provisioner_preserves_existing_site_and_stops_dependent_effects(bool transferDependents)
+    {
+        using var f = new Fixture(); await f.Create();
+        await File.WriteAllTextAsync(Path.Combine(f.SitePath, "keep.txt"), "victim content");
+        var before = JsonSerializer.Serialize(f.State.Current); var commits = f.State.Commits; var commands = f.CommandTokens.Count;
+        var effects = new List<string>();
+        var provisioner = new SiteProvisioningService(f.Native,
+            Fake<IComponentBootstrapper>((m, _) => { effects.Add("component:" + m.Name); throw new InvalidOperationException("No component changes expected"); }),
+            Fake<IPhpService>((m, _) => { effects.Add("php:" + m.Name); throw new InvalidOperationException("No runtime changes expected"); }),
+            Fake<IAspNetService>(), Fake<IAppRuntimeService>(),
+            Fake<ISiteDefaultsService>((m, _) => { effects.Add("mail-ftp-defaults:" + m.Name); throw new InvalidOperationException("No mail/FTP defaults expected"); }),
+            Fake<IWafService>(), NullLogger<SiteProvisioningService>.Instance, f.Gates);
+        var migration = new SiteMigrationService(provisioner,
+            Fake<IFileMigrationService>((m, _) => { effects.Add("file-transfer:" + m.Name); throw new InvalidOperationException("No FTP/SFTP transfer expected"); }),
+            Fake<IDatabaseService>((m, _) => { effects.Add("database:" + m.Name); throw new InvalidOperationException("No database transfer expected"); }),
+            f.Native, NullLogger<SiteMigrationService>.Instance);
+        var result = await migration.MigrateSiteAsync(new MigrateSiteRequest { SiteName = f.Name, PhysicalPath = f.OtherPath, CreateSite = true,
+            PullFiles = transferDependents, TransferDatabase = transferDependents }, null, null);
+        Assert.Equal(before, JsonSerializer.Serialize(f.State.Current));
+        Assert.False(result.OverallSuccess); Assert.Equal("sites.name_exists", Assert.Single(result.Steps, step => step.Step == "site").Message);
+        Assert.All(result.Steps.Where(step => step.Step != "site"), step => { Assert.False(step.Success); Assert.Equal("migration.step.site_required", step.Message); });
+        Assert.Empty(effects); Assert.Equal(commits, f.State.Commits); Assert.Equal(0, f.State.RemoveCalls); Assert.Equal(commands, f.CommandTokens.Count);
+        Assert.Equal(before, JsonSerializer.Serialize(f.State.Current)); Assert.False(Directory.Exists(f.OtherPath));
+        Assert.Equal("victim content", await File.ReadAllTextAsync(Path.Combine(f.SitePath, "keep.txt")));
+        Assert.Equal(0, f.DefaultsCalls);
+    }
+
     private static async Task<Exception?> Capture(Func<Task> action)
     { try { await action(); return null; } catch (Exception error) { return error; } }
 
@@ -303,15 +444,15 @@ public sealed class SiteNativeLifecycleRecoveryTests
                 token => { token.ThrowIfCancellationRequested(); return EnsureManagement?.Invoke(token) ?? Task.CompletedTask; },
                 (file, args, token) => { CommandTokens.Add(token); return Command(file, args, token); });
         }
-        public Task<SiteDto> Create() => Native.CreateSiteAsync(Request());
-        private CreateSiteRequest Request() => new()
-        { Name = Name, HostName = Name, PhysicalPath = SitePath, RuntimeProfile = "static", Port = 8080 };
+        public Task<SiteDto> Create(bool replaceExisting = false) => Native.CreateSiteAsync(Request(replaceExisting));
+        private CreateSiteRequest Request(bool replaceExisting = false) => new()
+        { Name = Name, HostName = Name, PhysicalPath = SitePath, RuntimeProfile = "static", Port = 8080, ReplaceExisting = replaceExisting };
         public void FailFirstCommand(Exception failure)
         {
             var failed = false;
             Command = (_, _, _) => { if (!failed) { failed = true; throw failure; } return Task.FromResult(new CommandResult()); };
         }
-        public async Task<SiteDto> Provision(CancellationToken token)
+        public async Task<SiteDto> Provision(CancellationToken token, bool replaceExisting = false)
         {
             using var services = new ServiceCollection().AddSingleton<IIisSiteService>(Native).AddSingleton(Gates)
                 .AddSingleton<IComponentBootstrapper>(Fake<IComponentBootstrapper>())
@@ -321,7 +462,7 @@ public sealed class SiteNativeLifecycleRecoveryTests
                 .AddSingleton<Microsoft.Extensions.Logging.ILogger<SiteProvisioningService>>(NullLogger<SiteProvisioningService>.Instance)
                 .BuildServiceProvider();
             return await ActivatorUtilities.CreateInstance<SiteProvisioningService>(services)
-                .CreateAndProvisionAsync(Request(), null, null, token);
+                .CreateAndProvisionAsync(Request(replaceExisting), null, null, token);
         }
         public void Dispose() { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
     }
@@ -331,6 +472,7 @@ public sealed class SiteNativeLifecycleRecoveryTests
         public MemorySite? Current;
         public PoolCollection Pools = [];
         public int Commits;
+        public int RemoveCalls;
         public int FailCommit = -1;
         public long NextId = 40;
     }
@@ -342,6 +484,7 @@ public sealed class SiteNativeLifecycleRecoveryTests
         public MemoryManager(MemoryState state)
         {
             this.state = state;
+            Sites.OnRemove = () => state.RemoveCalls++;
             if (state.Current is not null) Sites.Add(state.Current.Clone());
             ApplicationPools.AddRange(state.Pools.Select(pool => pool.Clone()));
         }
@@ -358,6 +501,8 @@ public sealed class SiteNativeLifecycleRecoveryTests
     }
     public sealed class SiteCollection : List<MemorySite>
     {
+        public Action? OnRemove;
+        public new bool Remove(MemorySite site) { OnRemove?.Invoke(); return base.Remove(site); }
         public MemorySite Add(string name, string protocol, string binding, string path)
         {
             var site = new MemorySite { Name = name, PhysicalPath = path,
@@ -372,19 +517,21 @@ public sealed class SiteNativeLifecycleRecoveryTests
         public string Name { get; set; } = "";
         public string State => "Started";
         public bool ServerAutoStart { get; set; } = true;
-        public Binding[] Bindings { get; set; } = [];
+        public BindingCollection Bindings { get; set; } = [];
         public Application[] Applications { get; } = [new()];
         public string PhysicalPath { get => Applications[0].VirtualDirectories[0].PhysicalPath; set => Applications[0].VirtualDirectories[0].PhysicalPath = value; }
         public MemorySite Clone()
         {
             var clone = new MemorySite { Id = Id, Name = Name, ServerAutoStart = ServerAutoStart, PhysicalPath = PhysicalPath,
-                Bindings = Bindings.Select(binding => new Binding { Protocol = binding.Protocol, BindingInformation = binding.BindingInformation }).ToArray() };
+                Bindings = [.. Bindings.Select(binding => new Binding { Protocol = binding.Protocol, BindingInformation = binding.BindingInformation })] };
             clone.Applications[0].ApplicationPoolName = Applications[0].ApplicationPoolName;
             return clone;
         }
     }
     public sealed class Binding
     { public string Protocol { get; set; } = "http"; public string BindingInformation { get; set; } = ""; }
+    public sealed class BindingCollection : List<Binding>
+    { public Binding Add(string information, string protocol) { var binding = new Binding { BindingInformation = information, Protocol = protocol }; Add(binding); return binding; } }
     public sealed class Application
     { public string Path => "/"; public string ApplicationPoolName { get; set; } = ""; public VirtualDirectory[] VirtualDirectories { get; } = [new()]; }
     public sealed class VirtualDirectory

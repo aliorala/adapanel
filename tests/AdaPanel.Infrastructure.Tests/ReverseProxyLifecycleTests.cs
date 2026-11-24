@@ -130,7 +130,7 @@ public sealed class ReverseProxyLifecycleTests
         {
             if (change == "id") f.Sites.Single().Id += 100;
             else if (change == "path") await f.Native.UpdatePhysicalPathAsync(f.Name, f.OtherPath);
-            else { f.ReuseNextSiteId(); await f.Native.CreateSiteAsync(f.Request()); }
+            else { f.ReuseNextSiteId(); await f.Native.CreateSiteAsync(f.Request(replaceExisting: true)); }
         }
         finally { release.TrySetResult(); }
         Assert.Equal("sites.target_changed", Assert.IsType<AppException>(await action.WaitAsync(Deadline)).MessageKey);
@@ -143,7 +143,7 @@ public sealed class ReverseProxyLifecycleTests
         var held = Signal(); var release = Signal();
         var blocker = f.Gates.RunExclusiveAsync(async () => { held.TrySetResult(); await release.Task.WaitAsync(Deadline); });
         await held.Task.WaitAsync(Deadline);
-        var replacement = f.Native.CreateSiteAsync(f.Request());
+        var replacement = f.Native.CreateSiteAsync(f.Request(replaceExisting: true));
         var action = Capture(() => f.Invoke(operation)); await Reached(f.SiteRead.Task, action);
         release.TrySetResult(); await blocker; await replacement.WaitAsync(Deadline);
         Assert.Equal("sites.target_changed", Assert.IsType<AppException>(await action.WaitAsync(Deadline)).MessageKey);
@@ -155,7 +155,7 @@ public sealed class ReverseProxyLifecycleTests
         using var f = await Fixture.Create(); var entered = Signal(); var release = Signal();
         f.BeforeScope = async () => { entered.TrySetResult(); await release.Task.WaitAsync(Deadline); };
         var action = Capture(() => f.Invoke(operation)); await Reached(entered.Task, action);
-        try { f.ReuseNextSiteId(); await f.Native.CreateSiteAsync(f.Request()); }
+        try { f.ReuseNextSiteId(); await f.Native.CreateSiteAsync(f.Request(replaceExisting: true)); }
         finally { release.TrySetResult(); }
         Assert.Equal("sites.target_changed", Assert.IsType<AppException>(await action.WaitAsync(Deadline)).MessageKey);
         f.AssertUnchanged();
@@ -283,7 +283,7 @@ public sealed class ReverseProxyLifecycleTests
         }
         private AdaPanelDbContext Context()
         { var db = new AdaPanelDbContext(new DbContextOptionsBuilder<AdaPanelDbContext>().UseSqlite(keeper.ConnectionString).Options); contexts.Add(db); return db; }
-        public CreateSiteRequest Request() => new() { Name = Name, HostName = Name, PhysicalPath = SitePath, Port = 8080 };
+        public CreateSiteRequest Request(bool replaceExisting = false) => new() { Name = Name, HostName = Name, PhysicalPath = SitePath, Port = 8080, ReplaceExisting = replaceExisting };
         public void ReuseNextSiteId() => nextId = Sites.Single().Id - 1;
         private async Task<SiteDto> ReadSite(string name, CancellationToken token)
         { var site = await Native.GetSiteAsync(name, token); SiteRead.TrySetResult(); return site; }

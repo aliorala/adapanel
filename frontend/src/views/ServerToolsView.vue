@@ -21,6 +21,10 @@
         <span>NX</span>
         <strong>{{ t("panel.nginx.title") }}</strong>
       </button>
+      <button :class="{ active: activeTool === 'ftp' }" @click="activeTool = 'ftp'">
+        <span>FTP</span>
+        <strong>{{ t("panel.ftp.title") }}</strong>
+      </button>
       <button :class="{ active: activeTool === 'logs' }" @click="activeTool = 'logs'">
         <span>LG</span>
         <strong>{{ t("panel.logs.title") }}</strong>
@@ -47,6 +51,10 @@
         <span>DN</span>
         <strong>{{ t("panel.dnsTemplate.title") }}</strong>
       </button>
+      <button :class="{ active: activeTool === 'htaccessmodule' }" @click="activeTool = 'htaccessmodule'">
+        <span>HT</span>
+        <strong>{{ t("panel.htaccessModule.title") }}</strong>
+      </button>
     </nav>
 
     <ServerHealthView v-if="activeTool === 'health'" />
@@ -54,9 +62,11 @@
     <BackupView v-else-if="activeTool === 'backup'" />
     <AutomationView v-else-if="activeTool === 'automation'" />
     <NginxView v-else-if="activeTool === 'nginx'" />
+    <FtpView v-else-if="activeTool === 'ftp'" />
     <LogsView v-else-if="activeTool === 'logs'" />
     <TerminalView v-else-if="activeTool === 'terminal' && sunucuSahibi" />
     <DnsTemplateView v-else-if="activeTool === 'dnstemplate'" />
+    <HtaccessModuleCard v-else-if="activeTool === 'htaccessmodule'" />
     <DockerView v-else />
   </section>
 </template>
@@ -66,6 +76,7 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { lazyView } from "../utils/lazyView";
 import { useAuthStore } from "../stores/auth";
+import HtaccessModuleCard from "../components/HtaccessModuleCard.vue";
 
 // Sekmeler talep üzerine iner (bkz. utils/lazyView.ts): dokuz aracın kodu, hiçbirine
 // tıklanmasa bile indiriliyordu.
@@ -75,6 +86,7 @@ const DockerView = lazyView(() => import("./DockerView.vue"));
 const FirewallView = lazyView(() => import("./FirewallView.vue"));
 const LogsView = lazyView(() => import("./LogsView.vue"));
 const NginxView = lazyView(() => import("./NginxView.vue"));
+const FtpView = lazyView(() => import("./FtpView.vue"));
 const TerminalView = lazyView(() => import("./TerminalView.vue"));
 const ServerHealthView = lazyView(() => import("./ServerHealthView.vue"));
 const DnsTemplateView = lazyView(() => import("./DnsTemplateView.vue"));
@@ -86,7 +98,7 @@ const { t } = useI18n();
 const authStore = useAuthStore();
 const sunucuSahibi = computed(() => authStore.session?.isServerOwner === true);
 
-const activeTool = ref<"health" | "firewall" | "backup" | "automation" | "nginx" | "logs" | "terminal" | "docker" | "dnstemplate">("health");
+const activeTool = ref<"health" | "firewall" | "backup" | "automation" | "nginx" | "ftp" | "logs" | "terminal" | "docker" | "dnstemplate" | "htaccessmodule">("health");
 </script>
 
 <style scoped>

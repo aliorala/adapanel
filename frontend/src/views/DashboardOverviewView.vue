@@ -92,7 +92,7 @@
           <small>{{ sitesCount === null ? t('panel.dashboard.countUnmeasured') : t("panel.sites.bindings") + ': ' + (totalBindingCount ?? '—') }}</small>
         </button>
 
-        <button v-if="canReadFtpCount && can('sites')" type="button" class="summary-card clickable" @click="go('sites')">
+        <button v-if="canReadFtpCount && can('ftp')" type="button" class="summary-card clickable" @click="go('ftp')">
           <span class="tile-label">{{ t("panel.ftp.title") }}</span>
           <strong>{{ ftpUserCount ?? '—' }}</strong>
           <small>{{ t(ftpUserCount === null ? 'panel.dashboard.countUnmeasured' : 'panel.ftp.cardHint') }}</small>
@@ -298,7 +298,7 @@
           <ul class="access-list">
             <li v-for="link in accessLinks" :key="link.url" class="access-row">
               <span class="access-tag">{{ link.label }}</span>
-              <a :href="link.url" target="_blank" rel="noopener" class="access-url">{{ link.url }}</a>
+              <a :href="safeHref(link.url)" target="_blank" rel="noopener" class="access-url">{{ link.url }}</a>
               <button class="secondary compact access-copy" @click="copyAccess(link.url)">
                 {{ copiedUrl === link.url ? t("panel.dashboard.access.copied") : t("panel.dashboard.access.copy") }}
               </button>
@@ -328,6 +328,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import ResourceMetric from "../components/ResourceMetric.vue";
 import { useI18n } from "vue-i18n";

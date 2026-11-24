@@ -81,7 +81,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { getSessionEpoch } from "../api/client";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import { importSiteArchive, migrateSiteFiles } from "../api/siteHosting";
@@ -100,20 +101,31 @@ const cleanFirst = ref(false);
 const busy = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
+const mountedEpoch = getSessionEpoch();
+let disposed = false, siteGeneration = 0;
+const isActive = () => !disposed && mountedEpoch === getSessionEpoch();
+function captureContext() {
+  const site = siteName.value, generation = siteGeneration;
+  return () => isActive() && site === siteName.value && generation === siteGeneration;
+}
+onBeforeUnmount(() => { disposed = true; });
+watch(siteName, () => { siteGeneration++; notice.value = ""; busy.value = false; ftpBusy.value = false; }, { flush: "sync" });
 
 async function run() {
-  if (!siteName.value || !archiveUrl.value.trim()) {
+  if (!isActive() || busy.value || !siteName.value || !archiveUrl.value.trim()) {
     return;
   }
   busy.value = true;
+  const isCurrent = captureContext();
   notice.value = "";
   try {
     const result = await importSiteArchive(siteName.value, archiveUrl.value.trim(), cleanFirst.value);
+    if (!isCurrent()) return;
     showNotice(t("panel.migration.done", { count: result.filesCopied }), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
   } finally {
-    busy.value = false;
+    if (isCurrent()) busy.value = false;
   }
 }
 
@@ -122,10 +134,11 @@ const ftpBusy = ref(false);
 const defaultPortHint = computed(() => (ftp.protocol === "sftp" ? "22" : "21"));
 
 async function runFtp() {
-  if (!siteName.value || !ftp.host.trim() || !ftp.userName.trim()) {
+  if (!isActive() || ftpBusy.value || !siteName.value || !ftp.host.trim() || !ftp.userName.trim()) {
     return;
   }
   ftpBusy.value = true;
+  const isCurrent = captureContext();
   notice.value = "";
   try {
     const result = await migrateSiteFiles(siteName.value, {
@@ -136,11 +149,12 @@ async function runFtp() {
       password: ftp.password,
       remotePath: ftp.remotePath.trim()
     });
+    if (!isCurrent()) return;
     showNotice(t("panel.migration.ftp.done", { count: result.filesDownloaded }), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (isCurrent()) showNotice(resolveApiMessage(error), true);
   } finally {
-    ftpBusy.value = false;
+    if (isCurrent()) ftpBusy.value = false;
   }
 }
 

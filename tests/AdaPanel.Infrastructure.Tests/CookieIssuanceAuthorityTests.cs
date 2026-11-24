@@ -345,7 +345,7 @@ public sealed class CookieIssuanceAuthorityTests
             return operation switch
             {
                 "login" => (await Controller.LoginAsync(new LoginRequest { UserNameOrEmail = "cookie-admin", Password = Password }, token)).Result!,
-                "confirm" => (await Controller.ConfirmTwoFactorSetupAsync(new VerifyTwoFactorRequest { Code = "123456" }, token)).Result!,
+                "confirm" => (await Controller.ConfirmTwoFactorSetupAsync(new VerifyTwoFactorRequest { Code = "123456", Password = Password }, token)).Result!,
                 "disable" => (await Controller.DisableTwoFactorAsync(new DisableTwoFactorRequest { Password = Password }, token)).Result!,
                 "sso" => await Controller.RedeemSsoLinkAsync(ssoToken, token),
                 "impersonate" => (await Controller.ImpersonateAsync(TargetUserId, token)).Result!,

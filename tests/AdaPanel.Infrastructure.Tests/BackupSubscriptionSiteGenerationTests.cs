@@ -17,6 +17,30 @@ public sealed class BackupSubscriptionSiteGenerationTests
 {
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(12);
 
+    [Fact]
+    public async Task All_sites_share_one_capture_and_release_it_before_database_dump()
+    {
+        var runtime = new SnapshotRuntime();
+        using var fixture = new Fixture(runtime);
+        fixture.BeforeDump = _ => { Assert.True(runtime.Disposed); return Task.CompletedTask; };
+        var record = await fixture.Service.BackupSubscriptionAsync(fixture.Request());
+        Assert.Equal("created", record.Status);
+        Assert.Equal(1, runtime.Captures);
+        Assert.Equal(2, runtime.RootCount);
+        Assert.Equal(2, runtime.Resolved);
+    }
+
+    private sealed class SnapshotRuntime : IBackupSnapshotRuntime, IBackupSnapshotLease
+    {
+        public int Captures, RootCount, Resolved;
+        public bool Disposed;
+        public DateTime CapturedAtUtc => DateTime.UtcNow;
+        public Task<IBackupSnapshotLease> CaptureAsync(IReadOnlyCollection<string> roots, CancellationToken cancellationToken)
+        { Captures++; RootCount = roots.Count; return Task.FromResult<IBackupSnapshotLease>(this); }
+        public string ResolveRoot(string root) { Assert.False(Disposed); Resolved++; return root; }
+        public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
+    }
+
     [Theory]
     [InlineData("create", 0, true)]
     [InlineData("delete", 0, true)]
@@ -157,7 +181,7 @@ public sealed class BackupSubscriptionSiteGenerationTests
         internal int Dumps;
         internal string IndexPath => Area.DosyaDeposu.ResolvePath("config/backups.json");
         internal string ArchiveRoot => Area.DosyaDeposu.EnsureDirectory("backups");
-        internal Fixture()
+        internal Fixture(IBackupSnapshotRuntime? snapshotRuntime = null)
         {
             foreach (var name in Names)
             {
@@ -177,7 +201,7 @@ public sealed class BackupSubscriptionSiteGenerationTests
                 ? Task.FromResult(new PanelPreferencesDto { DefaultBackupRoot = ArchiveRoot }) : throw new NotSupportedException(method));
             Service = new BackupService(sites, databases, null!, preferences, null!, Area.DosyaDeposu,
                 new SahteIstemciFabrikasi(new SahteBulut()), customerScopes: scopes, databaseOwnership: ownership,
-                secretProtector: new SahteKoruyucu(), concurrencyLock: Gates);
+                secretProtector: new SahteKoruyucu(), concurrencyLock: Gates, snapshotRuntime: snapshotRuntime);
         }
         internal BackupSubscriptionRequest Request(bool files = true) => new()
         { UserId = UserId, IncludeFiles = files, IncludeDatabases = true, IncludeMail = false, IncludeFtp = false };

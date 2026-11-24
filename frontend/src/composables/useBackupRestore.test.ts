@@ -22,6 +22,23 @@ beforeEach(() => {
   mocks.confirm.mockImplementation(async (options) => { await options.action(); return true; });
 });
 describe("shared full restore", () => {
+  it("preserves owners by default and sends adaptation only after explicit selection", async () => {
+    await scopedRestore().restore(backup, vi.fn(), vi.fn());
+    expect(mocks.confirm.mock.calls[0][0].checkbox.value).toBe(false);
+    expect(mocks.restore).toHaveBeenLastCalledWith("b1", "", "");
+    mocks.restore.mockClear();
+    mocks.confirm.mockImplementation(async options => { options.checkbox.value = true; await options.action(); return true; });
+    await scopedRestore().restore(backup, vi.fn(), vi.fn());
+    expect(mocks.restore).toHaveBeenCalledExactlyOnceWith("b1", "", "", { adaptDefiners: true });
+  });
+  it("shows portable backup ownership loss on the final confirmation", async () => {
+    await scopedRestore().restore({ ...backup, portableDefiners: true }, vi.fn(), vi.fn());
+    expect(mocks.confirm.mock.calls[0][0].impact).toContain("panel.database.definers.portableBackup");
+  });
+  it("does not offer an SQL ownership option for a mail-only backup", async () => {
+    await scopedRestore().restore({ ...backup, type: "mail" }, vi.fn(), vi.fn());
+    expect(mocks.confirm.mock.calls[0][0].checkbox).toBeUndefined();
+  });
   it("does not restore after its screen was closed while confirmation was open", async () => {
     const flow = scopedRestore();
     mocks.confirm.mockImplementation(async options => { scope.stop(); await options.action(); return true; });

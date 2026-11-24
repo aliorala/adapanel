@@ -14,10 +14,12 @@ import en from '../i18n/en.json';
 import tr from '../i18n/tr.json';
 
 vi.mock('../components/ConfirmDialog.vue', () => ({ useConfirm: () => ({ confirm: vi.fn() }) }));
-type State = { notice: string; noticeError: boolean; noticeWarning: boolean; settings: ReturnType<typeof siteSettings>; assignVersion(id: string): Promise<void>; saveSettings(): Promise<void> };
+type State = { notice: string; noticeError: boolean; noticeWarning: boolean; settings: ReturnType<typeof siteSettings>; loggingResult?: ReturnType<typeof logging>; verifyLogging(): Promise<void>; assignVersion(id: string): Promise<void>; saveSettings(): Promise<void> };
 const version = { componentId: 'php-8.3', displayName: 'PHP 8.3', version: '8.3.20', installDir: 'fixture/php', executablePath: 'fixture/php/php-cgi.exe', status: 'Installed', isFastCgiRegistered: true, installedAtUtc: '2026-10-04T00:00:00Z' };
 const siteSettings = (siteName='example.test') => ({ siteName, memoryLimit: '256M', maxExecutionTime: 120, uploadMaxFilesize: '64M', postMaxSize: '64M', displayErrors: false, openBasedirEnabled: true, configured: true });
 const order = (kind: string) => ({ measured: kind !== 'unverified', handlerFound: kind !== 'missing', precedesCatchAll: kind === 'ordered', handlerIndex: 0, catchAllIndex: 1, blockingHandlerName: '', insertedAtFront: true });
+const logging = (status = 'verified') => ({status,logPath:'C:/logs/php.log',detail:'runtime detail <b>literal</b>',cacheTtlSeconds:300,checkedAtUtc:status==='verified'?'2026-11-18T00:00:00Z':null,managed:true,rollAtBytes:52428800,retention:'indefinite'});
+let logStatus: string | undefined;
 let app: App | undefined, outcome: string, writes: string[], barrier: Promise<void> | undefined;
 const original = apiClient.defaults.adapter;
 const flush = async () => { for(let n=0;n<50;n++) await nextTick(); };
@@ -32,7 +34,7 @@ async function mount(locale: 'tr'|'en'='en') {
   return {state,pinia,php,auth,sites,html:async()=>(await renderToString(createSSRApp({...PhpView,setup:()=>state} as Component).use(i18n(locale)))).replace(/<!--[\s\S]*?-->/g,'')};
 }
 beforeEach(()=>{
-  invalidateSessionRequests();outcome='ordered';writes=[];barrier=undefined;
+  invalidateSessionRequests();outcome='ordered';logStatus='verified';writes=[];barrier=undefined;
   vi.stubGlobal('window',{location:{pathname:'/panel',hostname:'localhost'}});
   vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify({success:true,data:{requestToken:'fixture-only'}}),{status:200})));
   apiClient.defaults.adapter=async config=>{
@@ -40,12 +42,14 @@ beforeEach(()=>{
     if(config.method==='get'){
       if(config.url==='/php/versions')data=[version];
       else if(config.url==='/software')data={manifest:[],installed:[],defaults:[]};
+      else if(config.url?.endsWith('/php/logging/verify'))data=logging(logStatus);
       else if(config.url?.endsWith('/php/settings'))data=siteSettings(config.url.split('/')[2]);
       else throw new Error('Unexpected GET '+config.url);
     } else {
       writes.push(config.url!); if(barrier) await barrier;
-      if(config.url?.endsWith('/php/settings'))data={...siteSettings(),memoryLimit:'128M',maxExecutionTime:60,uploadMaxFilesize:'16M',postMaxSize:'32M',displayErrors:true,openBasedirEnabled:false};
-      else if(config.url?.endsWith('/php'))data={...version,isFastCgiRegistered:outcome!=='fastcgi',siteName:'example.test',handlerName:'PHP',...(outcome==='legacy'?{}:{handlerOrder:order(outcome==='fastcgi'?'ordered':outcome),handlerOrderNoticeKey:outcome==='ordered'?'':`aspnet.handler_${outcome==='unverified'?'order_unverified':outcome}`})};
+      if(config.url?.endsWith('/php/logging/verify'))data=logging(logStatus);
+      else if(config.url?.endsWith('/php/settings'))data={...siteSettings(),memoryLimit:'128M',maxExecutionTime:60,uploadMaxFilesize:'16M',postMaxSize:'32M',displayErrors:false,openBasedirEnabled:false,...(logStatus?{errorLogging:logging(logStatus)}:{})};
+      else if(config.url?.endsWith('/php'))data={...version,...(logStatus?{errorLogging:logging(logStatus)}:{}),isFastCgiRegistered:outcome!=='fastcgi',siteName:'example.test',handlerName:'PHP',...(outcome==='legacy'?{}:{handlerOrder:order(outcome==='fastcgi'?'ordered':outcome),handlerOrderNoticeKey:outcome==='ordered'?'':`aspnet.handler_${outcome==='unverified'?'order_unverified':outcome}`})};
       else throw new Error('Unexpected write '+config.url);
     }
     return {config,data:{success:true,data,message:'php.assignment.success',code:200},headers:{},status:200,statusText:'OK'};
@@ -68,7 +72,7 @@ for(const locale of ['tr','en'] as const){
 }
 it('uses every returned saved setting instead of displaying rejected draft values',async()=>{
   const view=await mount();Object.assign(view.state.settings,{memoryLimit:'512M',maxExecutionTime:3600,uploadMaxFilesize:'128M',postMaxSize:'256M',displayErrors:false,openBasedirEnabled:true});
-  await view.state.saveSettings();expect(view.state.settings).toMatchObject({memoryLimit:'128M',maxExecutionTime:60,uploadMaxFilesize:'16M',postMaxSize:'32M',displayErrors:true,openBasedirEnabled:false});
+  await view.state.saveSettings();expect(view.state.settings).toMatchObject({memoryLimit:'128M',maxExecutionTime:60,uploadMaxFilesize:'16M',postMaxSize:'32M',displayErrors:false,openBasedirEnabled:false});
 });
 it.each(['subscription','logout','epoch'])('blocks direct settings saves after %s changes',async change=>{
   const view=await mount();if(change==='subscription')useSubscriptionStore(view.pinia).$patch({usage:{isSuspended:true}});
@@ -83,4 +87,43 @@ it('does not show a late assignment warning on a newly selected site',async()=>{
 it('warns when handler order is correct but FastCGI registration is missing',async()=>{
   outcome='fastcgi';const view=await mount();await view.state.assignVersion('php-8.3');
   expect(view.state.notice).toContain(en['panel.php.fastCgiMissing']);expect(view.state.notice).not.toContain(en['php.assignment.success']);expect(view.state.noticeWarning).toBe(true);
+});
+
+it.each(['pending','failed','unverified',undefined])('warns about %s logging on an otherwise ordered assignment and save',async status=>{
+  logStatus=status;const view=await mount('tr');await view.state.assignVersion('php-8.3');
+  expect(view.state.noticeWarning).toBe(true);expect(view.state.notice).not.toContain(tr['php.assignment.success']);
+  await view.state.saveSettings();expect(view.state.noticeWarning).toBe(true);
+  expect(view.state.notice).toContain(tr[status==='pending'?'panel.php.loggingPending':status==='failed'?'panel.php.loggingFailed':'panel.php.loggingUnverified']);
+});
+it('renders verified logging details as escaped text and managed retention policy',async()=>{
+  const view=await mount();await view.state.verifyLogging();const html=await view.html();
+  expect(html).toContain(en['panel.php.loggingVerified']);expect(html).toContain('runtime detail &lt;b&gt;literal&lt;/b&gt;');
+  expect(html).toContain('C:/logs/php.log');expect(html).toContain(en['panel.php.loggingManaged']);
+  expect(html).not.toContain('type="checkbox" value="true"');
+});
+it('keeps pending measurement and cache wait hint visible',async()=>{
+  logStatus='pending';const view=await mount();await view.state.verifyLogging();const html=await view.html();
+  expect(html).toContain('300 seconds');expect(html).toContain(en['panel.php.loggingPending']);
+});
+it.each(['site','logout','epoch'])('discards late logging verification after %s changes',async change=>{
+  const view=await mount();let release!:()=>void;barrier=new Promise<void>(resolve=>release=resolve);
+  const request=view.state.verifyLogging();await flush();
+  if(change==='site')view.sites.selectedSiteName='second.test';else if(change==='logout')view.auth.session=null;else invalidateSessionRequests();
+  await flush();release();await request;expect(view.state.loggingResult).toBeUndefined();
+});
+it('blocks direct logging verification under suspension',async()=>{
+  const view=await mount();useSubscriptionStore(view.pinia).$patch({usage:{isSuspended:true}});
+  await view.state.verifyLogging();expect(writes).toEqual([]);
+});
+
+it('does not leave a prior positive logging result after verification transport fails',async()=>{
+  const view=await mount();await view.state.verifyLogging();expect(view.state.loggingResult?.status).toBe('verified');
+  vi.spyOn(apiClient,'post').mockRejectedValueOnce(new Error('verification unavailable'));
+  await view.state.verifyLogging();expect(view.state.loggingResult).toBeUndefined();expect(view.state.noticeError).toBe(true);
+  expect(await view.html()).toContain(en['panel.php.loggingUnverified']);
+});
+it('does not dispatch a second verification or assignment while verification is running',async()=>{
+  const view=await mount();let release!:()=>void;barrier=new Promise<void>(resolve=>release=resolve);
+  const first=view.state.verifyLogging();await flush();await view.state.verifyLogging();await view.state.assignVersion('php-8.3');
+  release();await first;expect(writes).toEqual(['/sites/example.test/php/logging/verify']);
 });

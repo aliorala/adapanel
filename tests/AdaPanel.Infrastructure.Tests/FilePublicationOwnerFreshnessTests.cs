@@ -223,7 +223,7 @@ public sealed class FilePublicationOwnerFreshnessTests
                 NullLogger<UserManagementService>.Instance, audit, sites,
                 Stub<IDatabaseOwnershipService>((method, _) => method.Name == nameof(IDatabaseOwnershipService.CountForOwnerAsync)
                     ? Task.FromResult(0) : throw new NotSupportedException(method.Name)),
-                Stub<ISchedulerService>(), Stub<ISiteCascadeDeletionService>(), Stub<IApiTokenService>(), Stub<IServerOwnerService>());
+                Stub<ISchedulerService>(), Stub<ISiteCascadeDeletionService>(), Stub<IApiTokenService>(), Stub<IServerOwnerService>(), null!);
             var observed = Stub<ICustomerScopeService>((method, args) => method.Name switch
             {
                 nameof(ICustomerScopeService.GetSiteOwnerUserIdAsync) => ReadOwner((string)args![0]!, (CancellationToken)args[1]!),

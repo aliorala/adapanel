@@ -42,6 +42,19 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </remarks>
 public sealed class HtaccessServerModeTests
 {
+    [Fact]
+    public void PanelReportsAnUnreadableSwitchInsteadOfShowingItAsDisabled()
+    {
+        var directory = Directory.CreateTempSubdirectory();
+        try
+        {
+            var store = new HtaccessSwitchStore(directory.FullName);
+            Assert.False(store.ReadGlobal().FileExists);
+            Directory.CreateDirectory(HtaccessHostingPaths.GlobalSwitchPath(directory.FullName));
+            Assert.Throws<UnauthorizedAccessException>(() => store.ReadGlobal());
+        }
+        finally { directory.Delete(true); }
+    }
     private const string GetUcu = "GetServerMode";
     private const string PostUcu = "SetServerModeAsync";
 

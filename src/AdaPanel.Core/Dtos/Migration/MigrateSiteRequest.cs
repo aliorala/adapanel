@@ -4,7 +4,7 @@ namespace AdaPanel.Core.Dtos.Migration;
 
 /// <summary>
 /// Tek akışta site göçü (Plesk/cPanel/ham sunucu → AdaPanel): siteyi oluştur + dosyaları FTP/SFTP ile çek +
-/// veritabanını mysqldump→mysql ile aktar. Her adım bağımsız (biri başarısız olsa diğerleri yürür); sonuç
+/// veritabanını mysqldump→mysql ile aktar. İstenen site oluşturma başarısızsa dosya/DB adımları çalışmaz; sonuç
 /// adım-adım raporlanır. Mevcut, test edilmiş parçaları (site sağlama, dosya çekme, DB transfer) orkestre eder.
 /// </summary>
 public sealed class MigrateSiteRequest

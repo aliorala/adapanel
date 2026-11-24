@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -12,6 +12,7 @@ using AdaPanel.Core.Dtos.Proxy;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Dtos.Ssl;
 using AdaPanel.Core.Dtos.Firewall;
+using AdaPanel.Core.Dtos.Settings;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Options;
 using AdaPanel.Infrastructure.Support;
@@ -72,6 +73,9 @@ public sealed partial class PanelPublicAccessService(
 
     /// <summary>Her dış ölçüm kısa timeout'lu: durum sorgusu bir isteği dakikalarca dondurmamalı.</summary>
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(6);
+    // Scoped service instances still mutate the same infrastructure site. Serialize setup
+    // independently of the IIS gate, which the called services acquire themselves.
+    private static readonly SemaphoreSlim SetupGate = new(1, 1);
 
     // --- Durum ---
 
@@ -130,6 +134,13 @@ public sealed partial class PanelPublicAccessService(
 
     public async Task<PanelAccessStatusDto> SetupAsync(SetupPanelAccessRequest request, CancellationToken cancellationToken = default)
     {
+        await SetupGate.WaitAsync(cancellationToken);
+        try { return await SetupCoreAsync(request, cancellationToken); }
+        finally { SetupGate.Release(); }
+    }
+
+    private async Task<PanelAccessStatusDto> SetupCoreAsync(SetupPanelAccessRequest request, CancellationToken cancellationToken)
+    {
         var hostName = NormalizeHostName(request.HostName);
         var preferences = await panelPreferencesService.GetAsync(cancellationToken);
         var backendUrl = ResolveBackendUrl();
@@ -162,16 +173,32 @@ public sealed partial class PanelPublicAccessService(
                 dnsStep.Detail);
         }
 
+        report.Steps = steps;
+        return await SetupAfterDnsAsync(request, preferences, report, cancellationToken);
+    }
+
+    // Only called after SetupAsync has validated the requested name and DNS.
+    internal async Task<PanelAccessStatusDto> SetupAfterDnsAsync(SetupPanelAccessRequest request,
+        PanelPreferencesDto preferences, PanelAccessStatusDto report, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var hostName = report.HostName;
+        var backendUrl = report.BackendUrl;
+        var steps = report.Steps.ToList();
+        PanelAccessStatusDto Stop()
+        {
+            report.Steps = Pad(steps, "Skipped: a required setup step failed.");
+            report.OverallStatus = "fail";
+            return report;
+        }
+
         // 2) IIS sitesi — sabit adlı ters vekil sitesi. VARSA yeniden oluşturulmaz (bu, 443
         //    bağlamasını ve sertifikayı silerdi); yalnız alan adı bağlaması güncellenir.
         var (siteStep, site) = await EnsureSiteAsync(hostName, preferences.DefaultSiteRoot, cancellationToken);
         steps.Add(siteStep);
         if (siteStep.Status == "fail" || site is null)
         {
-            report.Steps = Pad(steps, "Skipped: the IIS site step failed, so no further change was made.");
-            report.OverallStatus = "fail";
-            await SaveHostNameAsync(hostName, cancellationToken);
-            return report;
+            return Stop();
         }
 
         // 2b) Güvenlik duvarı: 443 açık değilse kurulumun geri kalanı doğru yapılsa bile panel
@@ -185,34 +212,51 @@ public sealed partial class PanelPublicAccessService(
                 new UpdateFirewallRuleRequest { RuleName = "AdaPanel Panel Access HTTPS", Port = 443, Protocol = "TCP" },
                 cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "443 portu için güvenlik duvarı kuralı eklenemedi; dışarıdan erişim adımı bunu gösterecek.");
         }
 
-        // 3) Sertifika — ters vekilden ÖNCE (sınıf açıklamasındaki sıra gerekçesi).
-        steps.Add(await IssueCertificateAsync(hostName, request, cancellationToken));
+        // An existing proxy can already intercept ACME. Repair the exclusion BEFORE issuance.
+        var renewal = await EnsureAcmeExclusionAsync(cancellationToken);
+        steps.Add(renewal);
+        if (renewal.Status != "ok") return Stop();
 
-        // 4) Yenileme muafiyeti — kök vekil kuralı eklenmeden ÖNCE yazılır ki kural listesinde
-        //    ondan önce gelsin (AddRewriteRuleAsync vekil kuralı varsa onun ÖNÜNE ekler, yoksa sona).
-        steps.Add(await EnsureAcmeExclusionAsync(cancellationToken));
+        var issued = await IssueCertificateAsync(hostName, request, cancellationToken);
+        steps.Add(issued);
+        if (issued.Status != "ok") return Stop();
 
         // 5) Ters vekil — mevcut servisi çağırır (yeniden yazılmaz).
-        steps.Add(await EnableProxyAsync(backendUrl, cancellationToken));
+        var proxy = await EnableProxyAsync(backendUrl, cancellationToken);
+        steps.Add(proxy);
+        if (proxy.Status != "ok") return Stop();
 
         // 6) Dışarıdan gerçek doğrulama: yapay zeka istemcisinin yapacağı şeyin aynısı —
         //    zincir doğrulamalı HTTPS isteği. Kendinden imzalı kalmışsa burada patlar.
         steps.Add(await ProbeExternalAsync(hostName, cancellationToken));
 
-        await SaveHostNameAsync(hostName, cancellationToken);
+        var (certificateStep, certificateInfo) = await ProbeCertificateAsync(hostName, cancellationToken);
+        report.Steps = steps;
+        return await CompleteSetupAsync(report, certificateStep, certificateInfo, cancellationToken);
+    }
 
-        var (_, certificateInfo) = await ProbeCertificateAsync(hostName, cancellationToken);
+    internal async Task<PanelAccessStatusDto> CompleteSetupAsync(PanelAccessStatusDto report,
+        PanelAccessStepDto certificateStep, CertificateInfo certificateInfo, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var steps = report.Steps.ToList();
+        steps[steps.FindIndex(step => step.Key == "certificate")] = certificateStep;
         report.CertificateSource = certificateInfo.Source;
         report.CertificateIsSelfSigned = certificateInfo.IsSelfSigned;
         report.CertificateDaysLeft = certificateInfo.DaysLeft;
 
         report.Steps = steps;
         report.OverallStatus = CombineStatus(steps);
+        // NAT DNS comparisons and soon-expiring but valid certificates can remain warnings.
+        // Failed or unmeasured live checks must never replace the previously saved host.
+        if (steps.All(step => step.Status is "ok" or "warn"))
+            await SaveHostNameAsync(report.HostName, cancellationToken);
         return report;
     }
 
@@ -292,6 +336,7 @@ public sealed partial class PanelPublicAccessService(
                 }
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Panel alan adı DNS ön kontrolü (PowerShell) çalıştırılamadı; yerel çözümleyiciye düşülüyor.");
@@ -306,6 +351,7 @@ public sealed partial class PanelPublicAccessService(
                 addresses.Select(address => address.ToString()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                 new[] { "public resolver query unavailable; used local resolver" });
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             return (Array.Empty<string>(), new[] { $"local resolver: {exception.GetType().Name}: {exception.Message}" });
@@ -338,7 +384,7 @@ public sealed partial class PanelPublicAccessService(
 
     // --- Adım: IIS sitesi ---
 
-    private async Task<(PanelAccessStepDto Step, SiteDto? Site)> CheckSiteAsync(string hostName, CancellationToken cancellationToken)
+    internal async Task<(PanelAccessStepDto Step, SiteDto? Site)> CheckSiteAsync(string hostName, CancellationToken cancellationToken)
     {
         try
         {
@@ -346,7 +392,8 @@ public sealed partial class PanelPublicAccessService(
             var hasHost = site.Bindings.Any(binding =>
                 string.Equals((binding.HostName ?? string.Empty).Trim(), hostName, StringComparison.OrdinalIgnoreCase));
             var hasHttps = site.Bindings.Any(binding =>
-                string.Equals(binding.Protocol, "https", StringComparison.OrdinalIgnoreCase));
+                string.Equals(binding.Protocol, "https", StringComparison.OrdinalIgnoreCase) && binding.Port == 443 &&
+                string.Equals(binding.HostName?.Trim(), hostName, StringComparison.OrdinalIgnoreCase));
 
             var detail = $"site={site.Name}; state={site.State}; bindings={DescribeBindings(site)}";
             if (!hasHost)
@@ -358,6 +405,7 @@ public sealed partial class PanelPublicAccessService(
             var status = running && hasHttps ? "ok" : "warn";
             return (Step("site", status, site.Name, detail), site);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             return (Step("site", "fail", string.Empty, Describe(exception)), null);
@@ -369,7 +417,7 @@ public sealed partial class PanelPublicAccessService(
     /// oluşturmaz: CreateSiteAsync aynı adlı siteyi silip kurar, bu da 443 bağlamasını ve bağlı
     /// sertifikayı yok ederdi (kurulum ikinci kez çalıştırılınca panel dışarıya kapanırdı).
     /// </summary>
-    private async Task<(PanelAccessStepDto Step, SiteDto? Site)> EnsureSiteAsync(
+    internal async Task<(PanelAccessStepDto Step, SiteDto? Site)> EnsureSiteAsync(
         string hostName,
         string defaultSiteRoot,
         CancellationToken cancellationToken)
@@ -379,10 +427,11 @@ public sealed partial class PanelPublicAccessService(
         {
             existing = await iisSiteService.GetSiteAsync(ProxySiteName, cancellationToken);
         }
-        catch (AppException)
+        catch (AppException exception) when (exception.MessageKey == "sites.site_not_found" && exception.HttpStatusCode == 404)
         {
             existing = null;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             return (Step("site", "fail", string.Empty, Describe(exception)), null);
@@ -414,57 +463,41 @@ public sealed partial class PanelPublicAccessService(
                         RuntimeProfile = "static",
                         InstallRuntimeIfMissing = false,
                         // Panelin kendi vekil sitesi için veritabanı/mail/FTP kaynağı üretilmez.
-                        ProvisionDefaultServices = false
+                        ProvisionDefaultServices = false,
+                        IsManagedInfrastructure = true
                     },
                     cancellationToken);
 
                 var fresh = await iisSiteService.GetSiteAsync(created.Name, cancellationToken);
                 return (
-                    Step("site", "ok", fresh.Name, $"created; path={fresh.PhysicalPath}; bindings={DescribeBindings(fresh)}"),
+                    Step("site", IsSiteReadyForAcme(fresh, hostName) ? "ok" : "fail", fresh.Name,
+                        $"created; state={fresh.State}; path={fresh.PhysicalPath}; bindings={DescribeBindings(fresh)}"),
                     fresh);
             }
 
             var hasHost = existing.Bindings.Any(binding =>
                 string.Equals((binding.HostName ?? string.Empty).Trim(), hostName, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(binding.Protocol, "http", StringComparison.OrdinalIgnoreCase));
+                string.Equals(binding.Protocol, "http", StringComparison.OrdinalIgnoreCase) && binding.Port == 80);
 
             if (!hasHost)
             {
-                // Alan adı değişmiş: yeni HTTP bağlamasını ekle, eski panel bağlamalarını kaldır.
+                // Keep working bindings: the replacement certificate may still fail to issue.
                 await iisSiteService.AddBindingAsync(
                     existing.Name,
                     new SiteBindingRequest { Protocol = "http", HostName = hostName, IpAddress = "*", Port = 80 },
                     cancellationToken);
 
-                foreach (var stale in existing.Bindings.Where(binding =>
-                             !string.IsNullOrWhiteSpace(binding.HostName) &&
-                             !string.Equals(binding.HostName.Trim(), hostName, StringComparison.OrdinalIgnoreCase)))
-                {
-                    try
-                    {
-                        await iisSiteService.RemoveBindingAsync(
-                            existing.Name,
-                            new RemoveSiteBindingRequest
-                            {
-                                Protocol = stale.Protocol,
-                                HostName = stale.HostName,
-                                IpAddress = stale.IpAddress,
-                                Port = stale.Port
-                            },
-                            cancellationToken);
-                    }
-                    catch (Exception exception)
-                    {
-                        logger.LogWarning(exception, "Eski panel bağlaması kaldırılamadı ({Binding}).", stale.BindingInformation);
-                    }
-                }
             }
 
+            if (!string.Equals(existing.State, "Started", StringComparison.OrdinalIgnoreCase))
+                await iisSiteService.StartSiteAsync(existing.Name, cancellationToken);
             var updated = await iisSiteService.GetSiteAsync(existing.Name, cancellationToken);
             return (
-                Step("site", "ok", updated.Name, $"reused; path={updated.PhysicalPath}; bindings={DescribeBindings(updated)}"),
+                Step("site", IsSiteReadyForAcme(updated, hostName) ? "ok" : "fail", updated.Name,
+                    $"reused; state={updated.State}; path={updated.PhysicalPath}; bindings={DescribeBindings(updated)}"),
                 updated);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             return (Step("site", "fail", ProxySiteName, Describe(exception)), existing);
@@ -472,6 +505,12 @@ public sealed partial class PanelPublicAccessService(
     }
 
     // --- Adım: sertifika ---
+
+    private static bool IsSiteReadyForAcme(SiteDto site, string hostName) =>
+        string.Equals(site.State, "Started", StringComparison.OrdinalIgnoreCase) &&
+        site.Bindings.Any(binding => binding.Port == 80 &&
+            string.Equals(binding.Protocol, "http", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(binding.HostName?.Trim(), hostName, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Mevcut <see cref="ISslService"/> ile Let's Encrypt sertifikası alır. DİKKAT: bu servis
@@ -519,6 +558,7 @@ public sealed partial class PanelPublicAccessService(
             var daysLeft = DaysLeft(certificate.NotAfterUtc);
             return Step("certificate", daysLeft > 0 ? "ok" : "fail", $"{daysLeft}", detail);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             return Step("certificate", "fail", string.Empty, Describe(exception));
@@ -526,12 +566,15 @@ public sealed partial class PanelPublicAccessService(
     }
 
     /// <summary>443'te FİİLEN sunulan sertifikayı TLS el sıkışmasıyla okur (SNI = panel alan adı).</summary>
-    private async Task<(PanelAccessStepDto Step, CertificateInfo Info)> ProbeCertificateAsync(
+    internal async Task<(PanelAccessStepDto Step, CertificateInfo Info)> ProbeCertificateAsync(
         string hostName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int port = 443)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var info = new CertificateInfo();
         var detail = string.Empty;
+        var verified = false;
 
         try
         {
@@ -539,43 +582,43 @@ public sealed partial class PanelPublicAccessService(
             timeout.CancelAfter(ProbeTimeout);
 
             using var client = new TcpClient();
-            await client.ConnectAsync(hostName, 443, timeout.Token);
+            await client.ConnectAsync(hostName, port, timeout.Token);
 
-            X509Certificate2? served = null;
-            var policyErrors = SslPolicyErrors.None;
             using var stream = new SslStream(
                 client.GetStream(),
                 leaveInnerStreamOpen: false,
-                // Zinciri doğrulamak İÇİN değil, sertifikayı GÖRMEK için bağlanıyoruz: geçersiz
-                // sertifikayı da okuyup sebebiyle raporlayabilmeliyiz.
+                // Ret sebebini kaydet; geçersiz sertifikayla el sıkışmasını kabul etme.
                 userCertificateValidationCallback: (_, certificate, _, errors) =>
                 {
-                    policyErrors = errors;
                     if (certificate is not null)
                     {
-                        served = new X509Certificate2(certificate);
+                        using var served = new X509Certificate2(certificate);
+                        var now = DateTime.UtcNow;
+                        if (served.NotBefore.ToUniversalTime() > now || served.NotAfter.ToUniversalTime() <= now)
+                            errors |= SslPolicyErrors.RemoteCertificateChainErrors;
+                        info.DaysLeft = DaysLeft(served.NotAfter.ToUniversalTime());
+                        info.IsSelfSigned = string.Equals(served.Subject, served.Issuer, StringComparison.OrdinalIgnoreCase);
+                        info.Source = Ssl.WinAcmeSslService.ResolveCertificateSource(served);
+                        detail = $"{hostName}:{port} → issuer={served.Issuer}; notAfter={served.NotAfter.ToUniversalTime():yyyy-MM-dd}"
+                            + (errors == SslPolicyErrors.None ? string.Empty : $"; tls={errors}");
                     }
 
-                    return true;
+                    return certificate is not null && errors == SslPolicyErrors.None;
                 });
 
             await stream.AuthenticateAsClientAsync(
-                new SslClientAuthenticationOptions { TargetHost = hostName },
+                new SslClientAuthenticationOptions
+                {
+                    TargetHost = hostName,
+                    CertificateRevocationCheckMode = X509RevocationMode.Online
+                },
                 timeout.Token);
-
-            if (served is not null)
-            {
-                info.DaysLeft = DaysLeft(served.NotAfter.ToUniversalTime());
-                info.IsSelfSigned = string.Equals(served.Subject, served.Issuer, StringComparison.OrdinalIgnoreCase);
-                info.Source = info.IsSelfSigned ? "self-signed" : "letsencrypt";
-                detail = $"{hostName}:443 → issuer={served.Issuer}; notAfter={served.NotAfter.ToUniversalTime():yyyy-MM-dd}"
-                    + (policyErrors == SslPolicyErrors.None ? string.Empty : $"; tls={policyErrors}");
-                served.Dispose();
-            }
+            verified = true;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
-            detail = $"{hostName}:443 → {Describe(exception)}";
+            detail = (detail + $" {hostName}:{port} → {Describe(exception)}").Trim();
         }
 
         if (info.Source == "none")
@@ -584,14 +627,14 @@ public sealed partial class PanelPublicAccessService(
         }
 
         // Kendinden imzalı = yapay zeka istemcileri için ÇALIŞMIYOR demektir; "warn" yumuşatması yapma.
-        var status = info.IsSelfSigned || info.DaysLeft <= 0
+        var status = !verified || info.IsSelfSigned || info.DaysLeft <= 0
             ? "fail"
             : info.DaysLeft <= 14 ? "warn" : "ok";
 
         return (Step("certificate", status, $"{info.DaysLeft}", detail), info);
     }
 
-    private sealed class CertificateInfo
+    internal sealed class CertificateInfo
     {
         public string Source { get; set; } = "none";
 
@@ -628,8 +671,7 @@ public sealed partial class PanelPublicAccessService(
                 ? "ok"
                 : configurationDto.IsProxyEnabled ? "warn" : "fail";
 
-            var hasAcmeRule = configurationDto.RewriteRules.Any(rule =>
-                string.Equals(rule.Name, AcmeExclusionRuleName, StringComparison.OrdinalIgnoreCase));
+            var hasAcmeRule = HasAcmeExclusion(configurationDto);
 
             var renewalStep = Step(
                 "renewal",
@@ -639,6 +681,7 @@ public sealed partial class PanelPublicAccessService(
 
             return (Step("proxy", proxyStatus, configurationDto.DestinationUrl ?? string.Empty, detail), renewalStep);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             var detail = Describe(exception);
@@ -667,10 +710,13 @@ public sealed partial class PanelPublicAccessService(
 
             return Step(
                 "proxy",
-                result is { IsArrEnabled: true, IsProxyEnabled: true } ? "ok" : "warn",
+                result is { IsArrEnabled: true, IsProxyEnabled: true } &&
+                    string.Equals(result.DestinationUrl.TrimEnd('/'), backendUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)
+                    && result.MountPath == "/" ? "ok" : "fail",
                 result.DestinationUrl ?? backendUrl,
                 detail);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             return Step("proxy", "fail", string.Empty, Describe(exception));
@@ -686,7 +732,7 @@ public sealed partial class PanelPublicAccessService(
     {
         try
         {
-            await reverseProxyService.AddRewriteRuleAsync(
+            var result = await reverseProxyService.AddRewriteRuleAsync(
                 ProxySiteName,
                 new AddRewriteRuleRequest
                 {
@@ -699,40 +745,49 @@ public sealed partial class PanelPublicAccessService(
                 },
                 cancellationToken);
 
-            return Step("renewal", "ok", AcmeExclusionRuleName, "acme-challenge requests are served by IIS, not proxied");
+            return HasAcmeExclusion(result)
+                ? Step("renewal", "ok", AcmeExclusionRuleName, "acme-challenge requests are served by IIS, not proxied")
+                : Step("renewal", "fail", AcmeExclusionRuleName, "The required ACME exclusion was not present in the resulting configuration.");
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
-            // Yenileme muafiyeti kurulamazsa panel BUGÜN çalışır, 60 gün sonra sertifika yenilenemez.
-            // Bu yüzden "warn": kurulum başarısız değil ama sessiz de geçilmemeli.
-            return Step("renewal", "warn", string.Empty, Describe(exception));
+            return Step("renewal", "fail", string.Empty, Describe(exception));
         }
     }
 
     // --- Adım: dış erişim ---
 
+    private static bool HasAcmeExclusion(ReverseProxySiteConfigurationDto configuration) =>
+        configuration.RewriteRules.Any(rule =>
+            string.Equals(rule.Name, AcmeExclusionRuleName, StringComparison.OrdinalIgnoreCase) &&
+            rule.MatchPattern == "^\\.well-known/acme-challenge/(.*)$" &&
+            rule.RewriteUrl == ".well-known/acme-challenge/{R:1}" && rule.StopProcessing);
+
     /// <summary>
     /// Yapay zeka istemcisinin yapacağı isteğin AYNISI: zincir doğrulamalı HTTPS. Kendinden imzalı
     /// sertifika burada başarısız olur — özelliğin var oluş sebebi tam olarak bu kontroldür.
     /// </summary>
-    private async Task<PanelAccessStepDto> ProbeExternalAsync(string hostName, CancellationToken cancellationToken)
+    internal async Task<PanelAccessStepDto> ProbeExternalAsync(string hostName, CancellationToken cancellationToken)
     {
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(ProbeTimeout);
 
-            // Varsayılan (adsız) istemci sertifika zincirini DOĞRULAR — burada istediğimiz tam olarak bu.
-            var client = httpClientFactory.CreateClient();
+            // Validate TLS and inspect this host's response; a redirected page is not proof
+            // that the configured panel endpoint works. The named client disables redirects/proxies.
+            var client = httpClientFactory.CreateClient("AdaPanel.LocalHealth");
             client.Timeout = ProbeTimeout;
 
             using var request = new HttpRequestMessage(HttpMethod.Get, $"https://{hostName}/");
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
 
             var code = (int)response.StatusCode;
-            var status = code is >= 200 and < 500 ? "ok" : "warn";
+            var status = code is >= 200 and < 300 ? "ok" : "fail";
             return Step("external", status, $"HTTP {code}", $"https://{hostName}/ → {code} {response.ReasonPhrase}");
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             return Step("external", "fail", string.Empty, $"https://{hostName}/ → {Describe(exception)}");

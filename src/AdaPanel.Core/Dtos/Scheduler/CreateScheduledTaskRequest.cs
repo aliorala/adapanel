@@ -4,6 +4,9 @@ namespace AdaPanel.Core.Dtos.Scheduler;
 
 public sealed class CreateScheduledTaskRequest
 {
+    [global::System.Text.Json.Serialization.JsonIgnore]
+    public bool MigrationFreshDisabled { get; set; }
+
     /// <summary>
     /// Görevin adı — DAR bir beyaz listeyle sınırlıdır (bkz. <see cref="TaskNameRules"/>).
     /// <para>

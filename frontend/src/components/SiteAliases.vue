@@ -8,9 +8,9 @@
     </div>
 
     <p v-if="error" class="notice error" role="alert">{{ error }}</p>
-    <p v-else-if="loading && !workspace" class="empty-state">{{ t("panel.common.loading") }}</p>
+    <p v-if="loading && !workspace" class="empty-state">{{ t("panel.common.loading") }}</p>
 
-    <template v-else-if="workspace">
+    <template v-if="workspace">
       <!-- ANA ALAN ADI OLMADAN yönlendirme yapılamaz; sebebini önden söylüyoruz ki kullanıcı
            takma ad ekleyip "neden yönlenmiyor" diye aramasın. -->
       <p v-if="!workspace.primaryHostName" class="notice warn" role="alert">
@@ -19,6 +19,12 @@
       <p v-else class="field-hint">
         {{ t("panel.alias.primaryIs", { host: workspace.primaryHostName }) }}
       </p>
+      <div v-if="primaryWwwHost">
+        <p class="field-hint">{{ t("panel.alias.wwwSetupHint", { host: primaryWwwHost }) }}</p>
+        <button type="button" class="secondary compact" v-bind="writeGate(busy || loading)" @click="preparePrimaryWww">
+          {{ t("panel.alias.wwwSetup") }}
+        </button>
+      </div>
 
       <div class="form-grid alias-form">
         <label class="stacked-field">
@@ -42,6 +48,7 @@
         </button>
       </div>
       <small class="field-hint">{{ t("panel.alias.redirectHint") }}</small>
+      <small class="field-hint">{{ t("panel.alias.separateHttpsHint") }}</small>
 
       <p v-if="workspace.aliases.length === 0" class="empty-state">{{ t("panel.alias.empty") }}</p>
 
@@ -55,9 +62,12 @@
         <div v-for="alias in workspace.aliases" :key="alias.hostName" class="data-row alias-row">
           <span class="cell-main">
             <strong>{{ alias.hostName }}</strong>
-            <small v-if="alias.includesWww">www.{{ alias.hostName }}</small>
+            <small v-if="alias.includesWww">
+              www.{{ alias.hostName }}
+              <button type="button" class="secondary compact" :disabled="busy" @click="openSsl(`www.${alias.hostName}`)">{{ t("panel.alias.reviewHttps") }}</button>
+            </small>
           </span>
-          <span :class="['status-pill', alias.redirectToPrimary ? 'ok' : '']">
+          <span :class="['status-pill', alias.redirectToPrimary ? (workspace.redirectRuleNoticeKey ? 'warn' : 'ok') : '']">
             {{ alias.redirectToPrimary ? t("panel.alias.modeRedirect") : t("panel.alias.modeServe") }}
           </span>
           <!-- HTTPS yoksa bu bir EKSİKLİK, "kapalı" bir ayar değil: takma addan gelen ziyaretçi
@@ -68,6 +78,9 @@
             {{ alias.hasHttps ? t("panel.status.enabled") : t("panel.alias.noHttps") }}
           </span>
           <span class="row-actions">
+            <button v-if="!alias.hasHttps" type="button" class="secondary compact" :disabled="busy" @click="openSsl(alias.hostName)">
+              {{ t("panel.alias.createHttps") }}
+            </button>
             <button class="danger compact" v-bind="writeGate(busy)" @click="remove(alias.hostName)">
               {{ t("panel.alias.remove") }}
             </button>
@@ -79,24 +92,81 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { addSiteAlias, getSiteAliases, removeSiteAlias, type SiteAliasWorkspace } from "../api/aliases";
-import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useConfirm } from "./ConfirmDialog.vue";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import router from "../router";
+import { getSslWorkspace } from "../api/ssl";
+import { getSessionEpoch } from "../api/client";
 
 const props = defineProps<{ siteName: string }>();
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
-const { writeGate } = useSubscriptionGate();
+const { writeGate, locked } = useSubscriptionGate();
+const authStore = useAuthStore();
 const { confirm } = useConfirm();
 
 const workspace = ref<SiteAliasWorkspace | null>(null);
 const loading = ref(false);
 const busy = ref(false);
 const error = ref("");
+let disposed = false;
+let scopeVersion = 0;
+let loadRequest = 0;
+onBeforeUnmount(() => { disposed = true; });
+
+function context() {
+  const site = props.siteName, version = scopeVersion, epoch = getSessionEpoch();
+  const session = authStore.session, actor = session?.user?.id, role = session?.user?.role;
+  return { site, current: () => !disposed && props.siteName === site && scopeVersion === version &&
+    epoch === getSessionEpoch() && session === authStore.session && actor === authStore.session?.user?.id && role === authStore.session?.user?.role };
+}
+
+function applyWorkspace(value: SiteAliasWorkspace) {
+  workspace.value = value;
+  error.value = value.redirectRuleNoticeKey ? t(value.redirectRuleNoticeKey) : "";
+}
+const primaryWwwHost = computed(() => {
+  if (workspace.value?.siteName !== props.siteName) return "";
+  const host = workspace.value?.primaryHostName.trim().toLowerCase() ?? "";
+  if (!host || host.startsWith("www.") || host.endsWith(".nip.io") || host.endsWith(".localhost") ||
+    /^(mail|smtp|imap|pop|pop3|webmail|ftp|autodiscover|autoconfig|ns\d*)\./.test(host) ||
+    /^\d+(?:\.\d+){3}$/.test(host) || host.length > 249 || !host.includes(".") ||
+    !host.split(".").every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))) return "";
+  return `www.${host}`;
+});
+
+async function preparePrimaryWww() {
+  if (disposed || busy.value || loading.value || locked.value || !primaryWwwHost.value) return;
+  const target = context(), site = target.site, host = primaryWwwHost.value;
+  const current = () => target.current() && primaryWwwHost.value === host;
+  busy.value = true;
+  error.value = "";
+  try {
+    const measured = await getSslWorkspace(site);
+    if (!current() || locked.value) return;
+    // Existing bindings (including ones created outside the alias UI) retain
+    // their routing behavior. Only a missing www address is added.
+    if (!measured.hostNames.some(value => value.toLowerCase() === host)) {
+      const result = await addSiteAlias(site, { hostName: host, redirectToPrimary: true, includeWww: false });
+      if (!current()) return;
+      applyWorkspace(result);
+      if (result.redirectRuleNoticeKey) return;
+    }
+    if (current()) await router.push({ query: { section: "sites", site, tool: "ssl", sslHost: host } });
+  } catch (err) {
+    if (current()) error.value = resolveApiMessage(err);
+  } finally { if (target.current()) busy.value = false; }
+}
+
+function openSsl(hostName: string) {
+  if (disposed || loading.value || workspace.value?.siteName !== props.siteName) return;
+  void router.push({ query: { section: "sites", site: props.siteName, tool: "ssl", sslHost: hostName } });
+}
 
 const form = reactive({
   hostName: "",
@@ -114,33 +184,38 @@ function resolveApiMessage(err: unknown) {
 }
 
 async function load() {
-  if (!props.siteName) {
+  const target = context(), request = ++loadRequest;
+  if (!target.site || disposed) {
     return;
   }
   loading.value = true;
   error.value = "";
   try {
-    workspace.value = await getSiteAliases(props.siteName);
+    const result = await getSiteAliases(target.site);
+    if (target.current() && request === loadRequest) applyWorkspace(result);
   } catch (err) {
-    error.value = resolveApiMessage(err);
+    if (target.current() && request === loadRequest) error.value = resolveApiMessage(err);
   } finally {
-    loading.value = false;
+    if (target.current() && request === loadRequest) loading.value = false;
   }
 }
 
 async function add() {
-  if (!form.hostName) {
+  if (disposed || busy.value || loading.value || locked.value || !props.siteName || !form.hostName) {
     return;
   }
+  const target = context(), payload = { ...form };
   busy.value = true;
   error.value = "";
   try {
-    workspace.value = await addSiteAlias(props.siteName, { ...form });
-    form.hostName = "";
+    const result = await addSiteAlias(target.site, payload);
+    if (!target.current()) return;
+    applyWorkspace(result);
+    if (form.hostName === payload.hostName) form.hostName = "";
   } catch (err) {
-    error.value = resolveApiMessage(err);
+    if (target.current()) error.value = resolveApiMessage(err);
   } finally {
-    busy.value = false;
+    if (target.current()) busy.value = false;
   }
 }
 
@@ -149,26 +224,44 @@ async function add() {
  * ulaşamaz. Onaysız yapılmaz; onay metni hangi alan adının kalkacağını söyler.
  */
 async function remove(hostName: string) {
+  if (disposed || busy.value || loading.value || locked.value || !props.siteName) return;
+  const target = context();
+  busy.value = true;
+  error.value = "";
+  try {
   await confirm({
     title: t("panel.alias.confirmRemoveTitle"),
     message: t("panel.alias.confirmRemoveMessage", { host: hostName }),
     impact: [hostName],
     confirmLabel: t("panel.alias.remove"),
     action: async () => {
-      busy.value = true;
-      error.value = "";
+      if (!target.current() || locked.value) return;
       try {
-        workspace.value = await removeSiteAlias(props.siteName, hostName);
+        const result = await removeSiteAlias(target.site, hostName);
+        if (target.current()) applyWorkspace(result);
       } catch (err) {
-        error.value = resolveApiMessage(err);
-      } finally {
-        busy.value = false;
+        // ConfirmDialog handles action failures itself; publish the API error
+        // here while the original site/session context is still available.
+        if (target.current()) error.value = resolveApiMessage(err);
       }
     }
   });
+  } catch (err) {
+    if (target.current()) error.value = resolveApiMessage(err);
+  } finally {
+    if (target.current()) busy.value = false;
+  }
 }
 
-watch(() => props.siteName, () => void load());
+watch(() => [props.siteName, authStore.session, authStore.session?.user?.id, authStore.session?.user?.role], () => {
+  scopeVersion++;
+  workspace.value = null;
+  form.hostName = "";
+  error.value = "";
+  busy.value = false;
+  loading.value = false;
+  void load();
+}, { flush: "sync" });
 onMounted(() => void load());
 </script>
 

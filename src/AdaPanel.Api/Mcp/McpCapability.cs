@@ -42,6 +42,16 @@ internal static class McpCapability
     }
 
     /// <summary>Silme/üzerine yazma/servis durdurma gerektiren araçların başında çağrılır.</summary>
+    public static void RequireNotReadOnlyScope(ClaimsPrincipal user)
+    {
+        if (user.FindFirst(PanelTokenAuthenticationHandler.ReadOnlyScopeClaim)?.Value == "true")
+        {
+            throw new McpProtocolException(
+                "Bu anahtar salt okunur kapsamda; yazma araçları kullanılamaz.",
+                McpErrorCode.InvalidRequest);
+        }
+    }
+
     public static void RequireDestructive(ClaimsPrincipal user)
     {
         if (user.FindFirst(PanelTokenAuthenticationHandler.AllowDestructiveClaim)?.Value != "true")
@@ -69,22 +79,21 @@ internal static class McpCapability
     }
 
     /// <summary>
-    /// DNS araçlarının kapısı: yönetici ya da bayi.
+    /// DNS araçlarının kapısı: yönetici, bayi ya da müşteri (kapsamlı roller kendi sitelerinde).
     /// <para>
-    /// Neden: aynı yeteneğin REST kapısı olan <c>DnsController</c>
-    /// <c>[Authorize(Roles = "Administrator,Reseller")]</c> ile korunuyor — DNS bölgesi bir sunucu
-    /// yeteneğidir ve müşteriye açılmamış. MCP tarafında bu denetim yoktu: bir MÜŞTERİ anahtarı,
-    /// panelin REST üzerinden hiç vermediği bölge okuma/yazma yeteneğine erişebiliyordu (MX'i
-    /// değiştirmek postayı kesmek, A'yı değiştirmek trafiği kaçırmak demektir). Aynı yeteneğin iki
-    /// kapısı varsa ikisi de aynı kilidi taşımalı.
+    /// REST ikizi <c>DnsController</c> <c>[Authorize(Roles = "Administrator,Reseller,Customer")]</c> ile
+    /// korunuyor (müşteri kendi sitesinin DNS'ini yönetir — Plesk gibi). İki kapı AYNI kilidi taşır:
+    /// rol burada, SAHİPLİK (<c>EnsureSiteAsync</c>), alt-kullanıcı bölüm izni, abonelik askısı ve
+    /// paylaşımlı-bölge kapsam onayı (<c>DnsRecordApproval</c>) araç gövdesinde. MX'i değiştirmek
+    /// postayı kesmek, A'yı değiştirmek trafiği kaçırmak demektir; rol tek başına yetmez.
     /// </para>
     /// </summary>
     public static void RequireDnsRole(ClaimsPrincipal user)
     {
-        if (!user.IsInRole("Administrator") && !user.IsInRole("Reseller"))
+        if (!user.IsInRole("Administrator") && !user.IsInRole("Reseller") && !user.IsInRole("Customer"))
         {
             throw new McpProtocolException(
-                "DNS bölgesi yönetimi yalnızca yönetici ve bayi hesaplarına açıktır; panelin REST " +
+                "DNS bölgesi yönetimi yalnızca yönetici, bayi ve müşteri hesaplarına açıktır; panelin REST " +
                 "arayüzünde de aynı kısıt geçerli.",
                 McpErrorCode.InvalidRequest);
         }
@@ -151,6 +160,10 @@ internal static class McpCapability
         string section,
         CancellationToken cancellationToken)
     {
+        // SALT OKUNUR KAPSAM: /mcp MVC filtresinden (PanelTokenCapabilityFilter) geçmez; kapsam burada
+        // uygulanır. site_start gibi "yıkıcı sayılmayan" yazma araçları da kapsamı aşamaz. Tüm yazma
+        // araçları (site_start/stop, dns_upsert_record, mail_dns_apply) bu kapıdan geçer.
+        RequireNotReadOnlyScope(user);
         try
         {
             await SubscriptionSuspension.EnsureAllowedAsync(scopes, user, "POST", "/mcp", cancellationToken);

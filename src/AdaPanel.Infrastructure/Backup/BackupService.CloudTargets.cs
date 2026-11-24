@@ -987,6 +987,7 @@ public sealed partial class BackupService
         BackupPruneRemoteOptions remote,
         CancellationToken cancellationToken)
     {
+        await EnsureRemoteTargetAllowedAsync(new BackupTarget(targetType, baseUri, "", "", ""), cancellationToken);
         return targetType switch
         {
             "dropbox" => await ListDropboxAsync(baseUri, remote, cancellationToken),

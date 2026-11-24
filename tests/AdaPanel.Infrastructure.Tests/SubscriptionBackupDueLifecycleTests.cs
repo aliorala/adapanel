@@ -23,6 +23,24 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class SubscriptionBackupDueLifecycleTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UpdatingRemoteIdentity_DoesNotCarrySecretToAnotherTarget(bool changed)
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        var original = Fixture.Request();
+        original.TargetType = "ftp";
+        original.RemoteUrl = "ftp://original.test/backups";
+        original.RemoteUserName = "backup-user";
+        original.RemotePassword = "old-secret";
+        await f.Schedules.UpdateScheduleAsync(f.User, original, f.Token);
+        original.RemotePassword = "";
+        if (changed) original.RemoteUrl = "ftp://different.test/backups";
+        var updated = await f.Schedules.UpdateScheduleAsync(f.User, original, f.Token);
+        Assert.Equal(!changed, updated.RemotePasswordSet);
+    }
+    [Theory]
     [InlineData("global", false)]
     [InlineData("global", true)]
     [InlineData("producer", false)]
@@ -48,7 +66,8 @@ public sealed class SubscriptionBackupDueLifecycleTests
         await run.WaitAsync(f.Token);
 
         Assert.Empty(f.Produced);
-        Assert.Empty(f.Pruned);
+        Assert.Equal(wait == "producer" ? 1 : 0, f.Pruned.Count);
+        Assert.All(f.Pruned, id => Assert.Equal(f.User, id));
         var current = await f.Schedules.GetScheduleAsync(f.User, f.Token);
         Assert.Equal(previous.LastRunUtc, current.LastRunUtc);
         Assert.Equal(previous.LastStatus, current.LastStatus);
@@ -122,7 +141,8 @@ public sealed class SubscriptionBackupDueLifecycleTests
         finally { if (held is not null) await held.DisposeAsync(); f.ReleaseProducer(); }
         await run.WaitAsync(f.Token);
         Assert.Equal(f.User, Assert.Single(f.Produced));
-        Assert.Equal(f.User, Assert.Single(f.Pruned));
+        Assert.Equal(2, f.Pruned.Count);
+        Assert.All(f.Pruned, id => Assert.Equal(f.User, id));
         Assert.Equal("completed", (await f.Schedules.GetScheduleAsync(f.User, f.Token)).LastStatus);
     }
 
@@ -142,7 +162,8 @@ public sealed class SubscriptionBackupDueLifecycleTests
         finally { if (held is not null) await held.DisposeAsync(); f.ReleaseProducer(); }
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
         Assert.Empty(f.Produced);
-        Assert.Empty(f.Pruned);
+        Assert.Equal(wait == "producer" ? 1 : 0, f.Pruned.Count);
+        Assert.All(f.Pruned, id => Assert.Equal(f.User, id));
         Assert.Equal(previous.LastRunUtc, (await f.Schedules.GetScheduleAsync(f.User, f.Token)).LastRunUtc);
         Assert.Empty((await f.Jobs.GetStatusAsync([RunningJobKinds.Backup], null, f.Token)).Running);
     }
@@ -171,7 +192,8 @@ public sealed class SubscriptionBackupDueLifecycleTests
         f.AfterProduction = _ => f.TightenPlan(assignNewPlan);
         await f.Schedules.RunDueAsync(f.Token);
         Assert.Equal(f.User, Assert.Single(f.Produced));
-        Assert.Equal(f.User, Assert.Single(f.Pruned));
+        Assert.Equal(2, f.Pruned.Count);
+        Assert.All(f.Pruned, id => Assert.Equal(f.User, id));
         var current = await f.Schedules.GetScheduleAsync(f.User, f.Token);
         Assert.Equal("completed", current.LastStatus);
         Assert.Contains("measured.zip", current.LastDetails);
@@ -192,7 +214,8 @@ public sealed class SubscriptionBackupDueLifecycleTests
         finally { await held.DisposeAsync(); }
         await run.WaitAsync(f.Token);
         Assert.Equal(neighbor, Assert.Single(f.Produced));
-        Assert.Equal(neighbor, Assert.Single(f.Pruned));
+        Assert.Equal(2, f.Pruned.Count);
+        Assert.All(f.Pruned, id => Assert.Equal(neighbor, id));
         Assert.Equal("completed", (await f.Schedules.GetScheduleAsync(neighbor, f.Token)).LastStatus);
     }
 

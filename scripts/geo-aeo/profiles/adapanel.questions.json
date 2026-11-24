@@ -1,0 +1,48 @@
+{
+  "planVersion": "2026-10-29-v1",
+  "project": "adapanel",
+  "locale": "tr-TR",
+  "country": "TR",
+  "targetUrlPrefixes": [
+    "https://adapanel.host/"
+  ],
+  "engines": [
+    "chatgpt-search",
+    "gemini-search",
+    "perplexity",
+    "copilot"
+  ],
+  "repetitions": 3,
+  "questions": [
+    {
+      "id": "brand",
+      "question": "AdaPanel nedir ve hangi işletim sistemi için geliştirilmiştir?"
+    },
+    {
+      "id": "category",
+      "question": "Windows Server ve IIS için hangi hosting kontrol panelleri var?"
+    },
+    {
+      "id": "alternative",
+      "question": "Windows üzerinde Plesk alternatiflerini değerlendirirken nelere bakmalıyım?"
+    },
+    {
+      "id": "iis",
+      "question": "IIS web siteleri, DNS ve SSL yönetimini tek panelden nasıl yapabilirim?"
+    },
+    {
+      "id": "seo",
+      "question": "AdaPanel SEO, AEO ve GEO denetimi neyi ölçer?"
+    },
+    {
+      "id": "backup",
+      "question": "Windows hosting paneli seçerken yedek geri yükleme nasıl test edilir?"
+    }
+  ],
+  "conditions": {
+    "searchMode": "enabled",
+    "session": "fresh",
+    "questionText": "verbatim",
+    "model": "record actual label or unknown (not exposed)"
+  }
+}

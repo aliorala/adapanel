@@ -20,6 +20,10 @@ public interface IMailService
     /// <summary>Mail sunucusundaki TLS sertifikası durumunu döner.</summary>
     Task<MailCertificateDto> GetCertificateStatusAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Inspect the selected domain, without substituting another domain's saved certificate.</summary>
+    Task<MailCertificateDto> GetCertificateStatusForDomainAsync(string domain, CancellationToken cancellationToken = default)
+        => GetCertificateStatusAsync(cancellationToken);
+
     Task SyncWebCertificateAsync(string hostName, Func<CancellationToken, Task>? beforeMutation = null,
         CancellationToken cancellationToken = default) => Task.CompletedTask;
 
@@ -53,6 +57,12 @@ public interface IMailService
     /// sorunun kalıcı olmasına yol açar.
     /// </param>
     Task<bool> EnsureServerHostnameAsync(bool applyChanges = true, CancellationToken cancellationToken = default);
+
+    Task<MailServerIdentityDto> GetServerIdentityAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult(MailServerIdentityDto.Unsupported());
+
+    Task<MailServerIdentityDto> SetServerIdentityAsync(SetMailServerIdentityRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(MailServerIdentityDto.Unsupported());
 
     Task<MailWorkspaceDto> GetWorkspaceAsync(string? domain, CancellationToken cancellationToken = default);
 
@@ -170,4 +180,29 @@ public interface IMailService
     /// böylece uç, uydurma değer yayınlamak yerine 404 verebilir.
     /// </summary>
     Task<MailClientSettingsDto?> GetClientSettingsAsync(string domain, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Posta kutusunu askıya alır/açar (abonelik askısı + yönetici işlemi). Varsayılan gövde "desteklenmiyor" der:
+    /// MailEnable için kanıtlanmış bir yöntem yoktur; çağıran bunu kapatılamadı olarak gösterir (sessiz başarı yok).
+    /// </summary>
+    Task<MailWorkspaceDto> SetAccountActiveAsync(SetMailAccountActiveRequest request, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Mailbox suspend/reactivate is not supported by this mail server.");
+
+    /// <summary>Var olan alias'ın hedefini değiştirir ve/veya açar-kapatır.</summary>
+    Task<MailWorkspaceDto> UpdateAliasAsync(UpdateMailAliasRequest request, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Alias update is not supported by this mail server.");
+
+    Task<MailForwardDto> GetForwardAsync(string address, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Mailbox forwarding is not supported by this mail server.");
+
+    Task<MailForwardDto> SetForwardAsync(SetMailForwardRequest request, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Mailbox forwarding is not supported by this mail server.");
+
+    /// <summary>Yeni selector üret, DNS'e yayınla, geçir; eski anahtar bekleme süresi sonunda kaldırılır. Hata = eski anahtar aktif kalır.</summary>
+    Task<MailDkimRotationDto> RotateDkimAsync(RotateMailDkimRequest request, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("DKIM rotation is not supported by this mail server.");
+
+    /// <summary>Bekleme süresi dolan eski DKIM anahtarlarını kaldırır; kaldırılan sayısını döner.</summary>
+    Task<int> FinalizeDkimRotationsAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult(0);
 }

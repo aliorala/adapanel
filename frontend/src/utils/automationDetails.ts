@@ -4,7 +4,11 @@ type Translate = (key: string, values?: Record<string, string | number>) => stri
 // known summary formats; retain unrecognized diagnostics verbatim.
 export function automationDetails(details: string, t: Translate): string {
   return details.split(/\r?\n/).map(line => {
-    let match = /^(\d+) site, (\d+) veritabanı yedeklendi, (\d+) eski yedek silindi\.$/.exec(line);
+    let match = /^(\d+) site, (\d+) veritabanı kopyası doğrulandı \(site arşivlerinde: (\d+), ayrı dökümlerde: (\d+)\), (\d+) eski yedek silindi\.$/.exec(line);
+    if (match) return t('panel.automation.result.backupMeasured', {
+      sites: match[1]!, databases: match[2]!, siteDatabases: match[3]!, separateDatabases: match[4]!, deleted: match[5]!
+    });
+    match = /^(\d+) site, (\d+) veritabanı yedeklendi, (\d+) eski yedek silindi\.$/.exec(line);
     if (match) return t('panel.automation.result.backup', { sites: match[1]!, databases: match[2]!, deleted: match[3]! });
     match = /^(mail|panel): yedeklendi$/.exec(line);
     if (match) return t(match[1] === 'mail' ? 'panel.automation.result.mail' : 'panel.automation.result.panel');

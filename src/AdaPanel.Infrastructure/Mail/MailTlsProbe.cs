@@ -22,7 +22,10 @@ internal static class MailTlsProbe
         result.Subject = leaf.Subject;
         result.Issuer = leaf.Issuer;
         result.Thumbprint = leaf.Thumbprint;
+        result.NotBeforeUtc = leaf.NotBefore.ToUniversalTime();
         result.NotAfterUtc = leaf.NotAfter.ToUniversalTime();
+        result.ChainStatus = chain?.ChainStatus.Where(s => s.Status != X509ChainStatusFlags.NoError)
+            .Select(s => s.Status.ToString()).Distinct().ToArray() ?? [];
         var failures = new List<string>();
         if (errors != SslPolicyErrors.None)
         {
@@ -33,6 +36,8 @@ internal static class MailTlsProbe
         }
         try
         {
+            result.SubjectAlternativeNames = leaf.Extensions.OfType<X509SubjectAlternativeNameExtension>()
+                .SelectMany(extension => extension.EnumerateDnsNames()).ToArray();
             if (!leaf.MatchesHostname(host, true, false)) failures.Add("Certificate SAN does not match the requested host.");
         }
         catch (CryptographicException) { failures.Add("Certificate SAN could not be read."); }
@@ -50,6 +55,37 @@ internal static class MailTlsProbe
 
     internal static Task<MailTlsEndpointDto> ProbeAsync(string host, int port, string? expectedThumbprint,
         CancellationToken token) => ProbeCoreAsync(host, port, expectedThumbprint, port == 587, token);
+
+    internal static async Task<MailTlsEndpointDto> ProbeClientAsync(string host, int port, string protocol,
+        bool startTls, CancellationToken token)
+    {
+        var result = new MailTlsEndpointDto { Port = port, Protocol = protocol + (startTls ? "/STARTTLS" : "/TLS"), CheckedAtUtc = DateTime.UtcNow };
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(12));
+        using MailKit.MailService client = protocol switch
+        {
+            "imap" => new MailKit.Net.Imap.ImapClient(),
+            "pop3" => new MailKit.Net.Pop3.Pop3Client(),
+            "smtp" => new MailKit.Net.Smtp.SmtpClient(),
+            _ => throw new ArgumentOutOfRangeException(nameof(protocol))
+        };
+        client.ServerCertificateValidationCallback = (_, certificate, chain, errors) =>
+            ValidateCertificate(result, host, null, certificate, chain, errors);
+        try
+        {
+            await client.ConnectAsync(host, port, startTls ? SecureSocketOptions.StartTls : SecureSocketOptions.SslOnConnect, timeout.Token);
+            await client.DisconnectAsync(false, timeout.Token);
+            if (result.Status != "ok") result.Status = "fail";
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception error) when (error is IOException or SocketException or System.Security.Authentication.AuthenticationException
+            or MailKit.ProtocolException or MailKit.CommandException or MailKit.Security.SslHandshakeException or OperationCanceledException or NotSupportedException)
+        {
+            result.Status = "fail";
+            if (result.Detail.Length == 0) result.Detail = error is OperationCanceledException ? "Connection timed out." : error.GetType().Name;
+        }
+        return result;
+    }
 
     internal static async Task<MailTlsEndpointDto> ProbeCoreAsync(string host, int port, string? expectedThumbprint,
         bool startTls, CancellationToken token)

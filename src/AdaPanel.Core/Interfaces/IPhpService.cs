@@ -5,6 +5,11 @@ namespace AdaPanel.Core.Interfaces;
 
 public interface IPhpService
 {
+    Task<PhpErrorLoggingDto> EnsureSiteErrorLoggingAsync(string siteName, CancellationToken cancellationToken = default)
+        => Task.FromResult(new PhpErrorLoggingDto { Detail = "PHP günlük yazımı doğrulanmadı." });
+
+    Task<PhpErrorLoggingDto> VerifySiteErrorLoggingAsync(string siteName, CancellationToken cancellationToken = default)
+        => Task.FromResult(new PhpErrorLoggingDto { Detail = "PHP günlük yazımı doğrulanmadı." });
     Task<IReadOnlyCollection<PhpVersionDto>> GetInstalledVersionsAsync(CancellationToken cancellationToken = default);
 
     Task<ComponentInstallResultDto> InstallVersionAsync(
@@ -65,4 +70,15 @@ public interface IPhpService
     /// uyan DLL indirilir, php.ini'ye eklenir, "php -m" ile DOĞRULANIR; yüklenmezse GERİ ALINIR (PHP kırılmaz).
     /// </summary>
     Task<RedisExtensionResultDto> EnableRedisExtensionAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Verilen PHP sürümünü kullanan sitelerin adları. Bir site ölçülemezse HATA verir (boş liste dönmez).</summary>
+    Task<IReadOnlyCollection<string>> FindSitesUsingVersionAsync(string componentId, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    /// <summary>
+    /// PHP sürümünü kaldırır. Kullanan site varsa <c>php.version_in_use</c> (409) ile REDDEDER ve
+    /// site adlarını ayrıntıda verir. Başarıda temizlenemeyenleri döner (boş liste = tam temizlik).
+    /// </summary>
+    Task<IReadOnlyCollection<string>> RemoveVersionAsync(string componentId, Guid? actorUserId, string? ipAddress, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
 }

@@ -18,6 +18,7 @@ public sealed class UpdatePolicyTests
     [InlineData("postgresql-16")]
     [InlineData("mssql-2022")]
     [InlineData("stalwart-mail")]
+    [InlineData("mailenable-standard")]
     [InlineData("stalwart-cli")]
     [InlineData("docker-engine")]
     public void IsAutoUpdatable_IsFalse_ForComponentsWhereAnUpgradeCanBreakDataOrUptime(string componentId)
@@ -49,6 +50,7 @@ public sealed class UpdatePolicyTests
     [InlineData("memcached")]
     [InlineData("nodejs-lts")]
     [InlineData("stalwart-mail")]
+    [InlineData("mailenable-standard")]
     [InlineData("stalwart-cli")]
     public void SupportsVersionCheck_IsTrue_ForComponentsWithALiveResolver(string componentId)
     {
@@ -59,7 +61,6 @@ public sealed class UpdatePolicyTests
     // Bilinmeyen/gelecekte eklenecek bir bileşen de varsayılan olarak "kontrol edilemiyor" sayılır,
     // yani sessizce "güncel" GÖSTERİLMEZ.
     [Theory]
-    [InlineData("mailenable-standard")]
     [InlineData("composer")]
     [InlineData("phpmyadmin")]
     [InlineData("docker-engine")]

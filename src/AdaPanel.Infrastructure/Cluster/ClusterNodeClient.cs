@@ -120,13 +120,22 @@ public sealed class ClusterNodeClient(
             return new ClusterCallResult<T>(default, ClusterMessages.TokenRequired, string.Empty, 0);
         }
 
+        // G18: https düğümde onaylı parmak izi yoksa BAĞLANMAYIZ — belirteç hiç yola çıkmaz.
+        // "Güvenilmeyen ama çalışan" bir ara hâl yok: yönetici yeniden onaylayana kadar düğüm
+        // açıkça "yeniden onay gerek" der, sessizce eski davranışa düşmez.
+        if (ClusterCertificateStates.IsHttps(node.Address) && string.IsNullOrWhiteSpace(node.CertificateFingerprint))
+        {
+            logger.LogWarning("Düğüm {Label} ({Address}) için sertifika onayı yok; bağlantı kurulmadı.", node.Label, node.Address);
+            return new ClusterCallResult<T>(default, ClusterMessages.CertificateApprovalRequired, "certificate_unpinned", 0);
+        }
+
         var saat = Stopwatch.StartNew();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         linked.CancelAfter(timeout);
 
         try
         {
-            using var client = clientFactory.Create(node.Address, node.VerifyTlsCertificate, timeout);
+            using var client = clientFactory.Create(node.Address, node.CertificateFingerprint, timeout);
             using var request = requestFactory();
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
@@ -163,6 +172,13 @@ public sealed class ClusterNodeClient(
         catch (OperationCanceledException)
         {
             return new ClusterCallResult<T>(default, ClusterMessages.NodeUnreachable, "timeout", saat.ElapsedMilliseconds);
+        }
+        catch (HttpRequestException exception) when (exception.InnerException is System.Security.Authentication.AuthenticationException)
+        {
+            // Sertifika onaylı parmak iziyle UYUŞMADI: araya giren ya da yenilenmiş sertifika. Bu bir
+            // "ulaşılamıyor" değil — ayrı anahtar, ayrı eylem (yönetici parmak izini yeniden onaylar).
+            logger.LogWarning("Düğüm {Label} ({Address}) sertifikası onaylı parmak iziyle uyuşmuyor.", node.Label, node.Address);
+            return new ClusterCallResult<T>(default, ClusterMessages.CertificateMismatch, "certificate_mismatch", saat.ElapsedMilliseconds);
         }
         catch (Exception exception)
         {

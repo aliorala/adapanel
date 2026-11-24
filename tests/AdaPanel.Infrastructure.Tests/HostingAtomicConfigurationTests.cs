@@ -6,6 +6,7 @@ using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Iis;
 using AdaPanel.Infrastructure.Options;
+using AdaPanel.Infrastructure.Services;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -78,7 +79,7 @@ public sealed class HostingAtomicConfigurationTests
                 ? Task.FromResult(new SiteDto { Name = "site.test", PhysicalPath = SiteRoot })
                 : throw new InvalidOperationException("Unexpected native IIS call: " + method.Name));
             return new SiteHostingSettingsService(iis, Fake<IComponentBootstrapper>(), Fake<ISchedulerService>(),
-                options, Fake<IConcurrencyLock>(), new JsonFileStore(options)) { ConfigurationStream = configureStream };
+                options, new ConcurrencyLock(), new JsonFileStore(options)) { ConfigurationStream = configureStream };
         }
         public void Dispose() { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }

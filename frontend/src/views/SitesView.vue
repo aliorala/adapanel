@@ -206,8 +206,8 @@
                `.link-btn` tanimi `.domain-row-actions` altina hapsedilmisti — yani onizleme
                kartindaki "Ac" HICBIR dugme bicimi almiyor, kalin bir duz baglanti olarak
                ciziliyordu. Ayni isi yapan satir icindeki dugmeyle ayni gorunmeli. -->
-          <a class="secondary compact link-btn" :href="preview.url" target="_blank" rel="noopener">{{ t("panel.sites.previewOpenLink") }} ↗</a>
-          <a class="preview-url" :href="preview.url" target="_blank" rel="noopener">{{ preview.url }}</a>
+          <a class="secondary compact link-btn" :href="safeHref(preview.url)" target="_blank" rel="noopener">{{ t("panel.sites.previewOpenLink") }} ↗</a>
+          <a class="preview-url" :href="safeHref(preview.url)" target="_blank" rel="noopener">{{ preview.url }}</a>
         </p>
         <p class="meta">{{ t("panel.sites.previewHostsHint") }}</p>
         <code v-if="preview.hostsLine" class="preview-hosts">{{ preview.hostsLine }}</code>
@@ -227,7 +227,7 @@
               <strong :title="site.name">{{ site.name }}</strong>
               <a
                 class="domain-url"
-                :href="siteUrl(site)"
+                :href="safeHref(siteUrl(site))"
                 :title="siteUrl(site)"
                 target="_blank"
                 rel="noopener"
@@ -314,6 +314,9 @@
       <!-- Liste GELMEDEN kurulum daveti çiziliyordu: sunucuda siteler VARKEN kullanıcı
            "hiç siteniz yok" okuyordu. Davet artık ancak liste BAŞARIYLA okunduktan sonra çıkar
            (bkz. stores/sites.ts `loaded`). -->
+      <p v-else-if="sitesStore.refreshFailed && !sitesStore.loaded" class="notice error" role="alert">
+        {{ t("panel.sites.refreshFailed") }}
+      </p>
       <p v-else-if="!sitesStore.loaded" class="empty-state" role="status" aria-live="polite">
         {{ t("panel.common.loading") }}
       </p>
@@ -335,6 +338,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { primarySiteUrl } from "../utils/siteUrl";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -350,6 +354,7 @@ import { useSitesStore } from "../stores/sites";
 import { copyToClipboard } from "../utils/clipboard";
 import { looksLikeMessageKey, splitCompositeMessage } from "../utils/apiError";
 import { siteToolIcon } from "../utils/siteToolIcons";
+import { canUseSiteTool } from "../utils/siteToolAccess";
 import { useSoftwareStore } from "../stores/software";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
@@ -397,7 +402,7 @@ const quickTools = computed(() => [
   ...(isAdmin.value ? [{ id: "webdb", label: t("panel.sites.tools.domaindb") }] : []),
   { id: "ftp", label: t("panel.sites.tools.ftp") },
   { id: "dns", label: t("panel.sites.tools.dns") }
-].filter((tool) => isAdmin.value || authStore.session?.user?.role === "Reseller" || ["files", "mail"].includes(tool.id)));
+].filter((tool) => canUseSiteTool(tool.id, authStore.session?.user?.role)));
 
 function openTool(siteName: string, tool: string) {
   sitesStore.selectSite(siteName);
@@ -409,7 +414,7 @@ function isRunning(site: SiteRecord): boolean {
 }
 
 function siteUrl(site: SiteRecord): string {
-  return primarySiteUrl(site.bindings);
+  return primarySiteUrl(site.bindings, site.name);
 }
 
 const notice = ref("");
@@ -617,8 +622,14 @@ async function handleAddSubdomain(label: string) {
       startupFile: "",
       provisionDefaultServices: false
     });
-    await sitesStore.fetchSites().catch(() => undefined);
-    showNotice(t("panel.sites.subdomainCreated", { host }), false);
+    // Liste tazelenemezse "eklendi" demek yetmez: ekrandaki liste eski, bunu söyle.
+    let listRefreshed = true;
+    await sitesStore.fetchSites().catch(() => { listRefreshed = false; });
+    showNotice(
+      listRefreshed
+        ? t("panel.sites.subdomainCreated", { host })
+        : `${t("panel.sites.subdomainCreated", { host })} ${t("panel.sites.refreshFailed")}`,
+      !listRefreshed);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   }
@@ -753,6 +764,13 @@ async function handlePrepareDefaults(siteName: string) {
 }
 
 async function handleStopSite(siteName: string) {
+  // Durdurmak siteyi ziyaretçilere KAPATIR: tek dokunuşla (özellikle telefonda) yanlışlıkla yapılmasın.
+  const approved = await confirm({
+    title: t("panel.confirm.stopSiteTitle", { name: siteName }),
+    message: t("panel.sites.confirmStop"),
+    confirmLabel: t("panel.sites.stop")
+  });
+  if (!approved) return;
   try {
     await sitesStore.stopSite(siteName);
     showNotice(t("panel.sites.stopped"), false);

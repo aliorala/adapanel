@@ -19,7 +19,12 @@ public static class BackupFtpFolderMaintenance
         string Read(string name) => root.GetProperty(name).GetString() ?? string.Empty;
         var days = root.GetProperty("backupRetentionDays").GetInt32();
         var uri = new Uri(Read("backupRemoteUrl").TrimEnd('/') + "/");
-        if (Read("backupTargetType") != "ftp" || uri.Scheme != "ftp" || days <= 0
+        // Bu kurtarma komutu panel servisi OLMADAN çalışır: adres sabitleyici (pinner) ve FTPS istemcisi
+        // yoktur. ftps adresini düz FTP ile denemek TLS'i sessizce atlardı; sabitlemesiz bağlanmak ise
+        // DNS rebinding'i açardı. Bu yüzden ftps AÇIK hatayla reddedilir (temizlik panelden yapılır).
+        if (BackupFtpScheme.IsSecure(uri))
+            throw new InvalidOperationException("FTPS targets are not supported by this maintenance command; run the cleanup from the panel instead.");
+        if (Read("backupTargetType") != "ftp" || !BackupFtpScheme.Is(uri) || days <= 0
             || !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
             throw new InvalidOperationException("An FTP directory target and positive retention are required.");
 
@@ -28,8 +33,19 @@ public static class BackupFtpFolderMaintenance
         var provider = DataProtectionProvider.Create(keyDirectory, builder => builder.SetApplicationName("AdaPanel"));
         var password = new SecretProtector(provider).Unprotect(Read("backupRemotePasswordProtected"));
         return await SweepAsync(new FtpWebRequestCommands(), uri, new NetworkCredential(Read("backupRemoteUserName"), password),
-            DateTime.Today.AddDays(-days), cancellationToken);
+            ResolveCutoff(DateTime.UtcNow, days), cancellationToken);
     }
+
+    /// <summary>
+    /// Exclusive cutoff day for the FTP sweep (days strictly before it are expired). Derived from the
+    /// SAME clock helper as the server-wide local/FTP day retention (UTC instant converted by one shared
+    /// rule) instead of <c>DateTime.Today</c>, so the two pruners can no longer disagree about the day
+    /// boundary. Day-folder names are written with the server calendar date, hence the helper keeps that
+    /// calendar for the boundary.
+    /// </summary>
+    internal static DateTime ResolveCutoff(DateTime nowUtc, int retentionDays, TimeZoneInfo? timeZone = null) =>
+        (BackupRetentionCalendar.GetExpiredThroughLocalDate(nowUtc, retentionDays, timeZone)
+            ?? throw new InvalidOperationException("A positive retention is required.")).AddDays(1);
 
     internal static async Task<Report> SweepAsync(IBackupFtpCommands ftp, Uri root, NetworkCredential credential,
         DateTime cutoff, CancellationToken cancellationToken)

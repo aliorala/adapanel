@@ -7,14 +7,14 @@ type ApiEnvelope<T> = {
   code: number;
 };
 
-export type MailDomain = { name: string; active: boolean; accountCount: number; maxSizeMB: number; allocatedMB: number };
+export type MailDomain = { name: string; active: boolean; accountCount: number; accountCountMeasured?: boolean; maxSizeMB: number; allocatedMB: number };
 // `active` UC DEGERLI: true/false sunucunun cevabi, null/undefined ise "olculemedi".
 // Backend (MailAccountDto.Active) artik hesabin durumunu SORUYOR; sabit true dondurmuyor.
 export type MailAccount = { address: string; active: boolean | null; maxSizeMB: number; currentSizeMB: number };
 export type MailAlias = { address: string; target: string; active: boolean };
 // Plesk'in "kimler gonderebilir" karsiligi. Stalwart'in MailingList nesnesinde boyle bir alan
 // YOK; kural RCPT asamasina baglanan sistem sieve script'iyle uygulanir (canli dogrulandi).
-export type MailListPostingPolicy = "anyone" | "subscribers" | "allowed";
+export type MailListPostingPolicy = "anyone" | "subscribers" | "allowed" | "native-members" | "native-password" | "native-moderated" | "native-disabled" | "native-unknown";
 
 export type MailList = {
   address: string;
@@ -52,14 +52,19 @@ export type MailSpamSettings = {
 };
 
 export type MailWorkspace = {
+  provider?: "stalwart" | "mailenable";
   installed: boolean;
   configured: boolean;
   selectedDomain: string;
   domains: MailDomain[];
   accounts: MailAccount[];
+  accountsMeasured?: boolean;
   aliases: MailAlias[];
   lists: MailList[];
+  listsMeasured?: boolean;
   statusMessage?: string;
+  /** Alan adi olusturma/silme sirasinda tamamlanamayan yan adimlarin kodlari (bos = eksiksiz). */
+  warnings?: string[];
 };
 
 export async function getMailWorkspace(domain?: string) {
@@ -325,10 +330,15 @@ export type MailCertificate = {
 export type MailTlsEndpoint = {
   port: number; protocol: string; status: string; subject: string; issuer: string;
   thumbprint: string; notAfterUtc: string | null; detail: string; checkedAtUtc: string;
+  subjectAlternativeNames?: string[];
+  notBeforeUtc?: string | null;
+  chainStatus?: string[];
 };
 
-export async function getMailCertificate() {
-  const response = await apiClient.get<ApiEnvelope<MailCertificate>>("/mail/certificate");
+export async function getMailCertificate(domain?: string) {
+  const response = await apiClient.get<ApiEnvelope<MailCertificate>>("/mail/certificate", {
+    params: domain ? { domain } : {}
+  });
   return response.data.data;
 }
 
@@ -345,11 +355,12 @@ export async function issueMailCertificate(domain: string, hostName: string, con
 
 export type WebmailOpen = {
   url: string;
+  handoffToken?: string;
 };
 
 /// Roundcube webmail'i (gerekirse kurup) açacak URL'i döndürür.
-export async function openWebmail() {
-  const response = await apiClient.post<ApiEnvelope<WebmailOpen>>("/mail/webmail/open", {});
+export async function openWebmail(options?: { domain?: string; address?: string }) {
+  const response = await apiClient.post<ApiEnvelope<WebmailOpen>>("/mail/webmail/open", options ?? {});
   return response.data.data;
 }
 
@@ -468,6 +479,7 @@ export async function deleteMailQueueMessage(id: string) {
 }
 
 export type MailRelay = {
+  securityStatus?: string;
   installed: boolean;
   configured: boolean;
   enabled: boolean;
@@ -486,6 +498,7 @@ export type MailRelay = {
 };
 
 export type SetMailRelayPayload = {
+  recoverOnly?: boolean;
   enabled: boolean;
   host: string;
   port: number;
@@ -531,5 +544,33 @@ export type MailClientSettings = {
 export async function getMailClientSettings(domain: string) {
   const response = await apiClient.get<ApiEnvelope<MailClientSettings>>(
     `/mail/client-settings/${encodeURIComponent(domain)}`);
+  return response.data.data;
+}
+
+export type MailForward = { address: string; enabled: boolean; target: string; keepCopy: boolean };
+export type MailDkimRotation = { domain: string; oldSelector: string; newSelector: string; retireAfterUtc: string; status: string };
+
+export async function setMailAccountActive(address: string, active: boolean) {
+  const response = await apiClient.post<ApiEnvelope<MailWorkspace>>("/mail/accounts/active", { address, active });
+  return response.data.data;
+}
+
+export async function updateMailAlias(address: string, change: { target?: string; active?: boolean }) {
+  const response = await apiClient.put<ApiEnvelope<MailWorkspace>>("/mail/aliases", { address, ...change });
+  return response.data.data;
+}
+
+export async function getMailForward(address: string) {
+  const response = await apiClient.get<ApiEnvelope<MailForward>>("/mail/accounts/forward", { params: { address } });
+  return response.data.data;
+}
+
+export async function setMailForward(payload: MailForward) {
+  const response = await apiClient.put<ApiEnvelope<MailForward>>("/mail/accounts/forward", payload);
+  return response.data.data;
+}
+
+export async function rotateMailDkim(domain: string) {
+  const response = await apiClient.post<ApiEnvelope<MailDkimRotation>>("/mail/dkim/rotate", { domain });
   return response.data.data;
 }

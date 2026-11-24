@@ -6,7 +6,7 @@ vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock("../api/databases", async original => ({ ...await original<object>(), transferDatabase: vi.fn() }));
 let app: App | undefined;
 afterEach(() => { app?.unmount(); app = undefined; vi.clearAllMocks(); });
-type State = { form: { sourceHost: string; sourceDatabase: string; sourcePassword: string; targetPassword: string; sourcePort: number }; created: { userName: string; password: string }; run(): Promise<void> };
+type State = { form: { sourceHost: string; sourceDatabase: string; sourcePassword: string; targetPassword: string; sourcePort: number; adaptDefiners: boolean }; created: { userName: string; password: string }; run(): Promise<void> };
 function mount() {
   const renderer = createRenderer<object, object>({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
   app = renderer.createApp({ ...DbTransferView, render: () => h("section") } as Component); app.provide(ssrContextKey, {});
@@ -14,6 +14,11 @@ function mount() {
   Object.assign(state.form, { sourceHost: "db.example.test", sourceDatabase: "fixture", sourcePassword: "source-secret", targetPassword: "target-secret" }); return state;
 }
 const result = { targetDatabase: "fixture", userName: "fixture-user", password: "created-secret" } as DatabaseTransferResult;
+it.each([false, true])("preserves owners by default and forwards explicit adaptation: %s", async adapt => {
+  const state = mount(); expect(state.form.adaptDefiners).toBe(false);
+  state.form.adaptDefiners = adapt; vi.mocked(transferDatabase).mockResolvedValue(result); await state.run();
+  expect(transferDatabase).toHaveBeenCalledWith(expect.objectContaining({ adaptDefiners: adapt }));
+});
 function pendingTransfer() { let resolve!: (value: DatabaseTransferResult) => void; const promise = new Promise<DatabaseTransferResult>(yes => { resolve = yes; }); vi.mocked(transferDatabase).mockReturnValue(promise); return { resolve }; }
 it("does not start another database transfer while one is running", async () => {
   const state = mount(), pending = pendingTransfer(); const first = state.run(), second = state.run(); pending.resolve(result); await Promise.all([first, second]);

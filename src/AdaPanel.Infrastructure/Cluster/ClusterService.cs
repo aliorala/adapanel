@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Cluster;
+using AdaPanel.Infrastructure.Migration;
 using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Cluster;
@@ -19,6 +20,12 @@ public interface IClusterService
 
     Task<ClusterNodeDto> UpdateAsync(Guid id, UpdateClusterNodeRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>Adresin sunduğu sertifikayı (belirteçsiz) okur; yönetici parmak izini onaylayacak.</summary>
+    Task<ClusterCertificateProbeDto> ProbeCertificateAsync(string address, CancellationToken cancellationToken = default);
+
+    /// <summary>Var olan düğümün sertifikasını onaylar/yeniden onaylar (sunulan = verilen olmalı).</summary>
+    Task<ClusterNodeDto> ApproveCertificateAsync(Guid id, string fingerprint, CancellationToken cancellationToken = default);
+
     Task RemoveAsync(Guid id, CancellationToken cancellationToken = default);
 
     Task<ClusterNodeStatusDto> ProbeAsync(Guid id, CancellationToken cancellationToken = default);
@@ -35,6 +42,7 @@ public interface IClusterService
 public sealed class ClusterService(
     ClusterNodeStore store,
     IClusterNodeClient nodeClient,
+    IClusterCertificateProber certificateProber,
     ILogger<ClusterService> logger) : IClusterService
 {
     /// <summary>Adres denetiminde kullanılan çözümleyici; testte sahte DNS ile değiştirilir.</summary>
@@ -99,9 +107,17 @@ public sealed class ClusterService(
         {
             Label = label,
             Address = address,
-            Enabled = request.Enabled,
-            VerifyTlsCertificate = request.VerifyTlsCertificate
+            Enabled = request.Enabled
         };
+
+        // https düğüm: onaylı parmak izi OLMADAN kayıt yok. Yönetici parmak izini certificate-probe
+        // ile görüp onaylar; burada sertifika YENİDEN okunur, çünkü istemciden gelen değere kör
+        // güvenmek, araya girenin probe ile kayıt arasında devreye girmesine izin verirdi.
+        if (ClusterCertificateStates.IsHttps(address))
+        {
+            record.CertificateFingerprint = await VerifyApprovedFingerprintAsync(address, request.CertificateFingerprint, cancellationToken);
+            record.CertificateApprovedAtUtc = DateTime.UtcNow;
+        }
 
         await store.AddAsync(record, token, cancellationToken);
         return record.ToDto();
@@ -131,6 +147,28 @@ public sealed class ClusterService(
             throw new AppException(ClusterMessages.TokenRequired, 400, 400);
         }
 
+        // Adres değiştiyse eski sunucunun onayı YENİ adrese taşınmaz: ya yeni parmak izi doğrulanıp
+        // yazılır ya da onay silinir ("yeniden onay gerek"). Adres aynıysa mevcut onay korunur;
+        // istek yeni bir parmak izi taşıyorsa o doğrulanıp değiştirilir.
+        var addressChanged = !string.Equals(existing.Address, address, StringComparison.OrdinalIgnoreCase);
+        var newFingerprint = existing.CertificateFingerprint;
+        DateTime? newApprovedAt = existing.CertificateApprovedAtUtc;
+        if (!ClusterCertificateStates.IsHttps(address))
+        {
+            newFingerprint = string.Empty;
+            newApprovedAt = null;
+        }
+        else if (!string.IsNullOrWhiteSpace(request.CertificateFingerprint))
+        {
+            newFingerprint = await VerifyApprovedFingerprintAsync(address, request.CertificateFingerprint, cancellationToken);
+            newApprovedAt = DateTime.UtcNow;
+        }
+        else if (addressChanged)
+        {
+            newFingerprint = string.Empty;
+            newApprovedAt = null;
+        }
+
         var updated = await store.UpdateAsync(
             id,
             record =>
@@ -138,12 +176,113 @@ public sealed class ClusterService(
                 record.Label = label;
                 record.Address = address;
                 record.Enabled = request.Enabled;
-                record.VerifyTlsCertificate = request.VerifyTlsCertificate;
+                record.CertificateFingerprint = newFingerprint;
+                record.CertificateApprovedAtUtc = newApprovedAt;
             },
             token.Length == 0 ? null : token,
             cancellationToken) ?? throw new AppException(ClusterMessages.NodeNotFound, 404, 404);
 
         return updated.ToDto();
+    }
+
+    public async Task<ClusterCertificateProbeDto> ProbeCertificateAsync(string address, CancellationToken cancellationToken = default)
+    {
+        var normalized = await ValidateAddressAsync(address, cancellationToken);
+        return await ReadCertificateAsync(normalized, cancellationToken);
+    }
+
+    public async Task<ClusterNodeDto> ApproveCertificateAsync(Guid id, string fingerprint, CancellationToken cancellationToken = default)
+    {
+        var existing = await store.GetAsync(id, cancellationToken)
+            ?? throw new AppException(ClusterMessages.NodeNotFound, 404, 404);
+
+        if (!ClusterCertificateStates.IsHttps(existing.Address))
+        {
+            throw new AppException(ClusterMessages.CertificateUnreadable, 400, 400);
+        }
+
+        // Adres kayıtlıydı ama DNS bu arada iç ağa çevrilmiş olabilir: yeniden doğrulanır.
+        var address = await ValidateAddressAsync(existing.Address, cancellationToken);
+        var approved = await VerifyApprovedFingerprintAsync(address, fingerprint, cancellationToken);
+
+        var updated = await store.UpdateAsync(
+            id,
+            record =>
+            {
+                record.CertificateFingerprint = approved;
+                record.CertificateApprovedAtUtc = DateTime.UtcNow;
+            },
+            null,
+            cancellationToken) ?? throw new AppException(ClusterMessages.NodeNotFound, 404, 404);
+
+        logger.LogWarning(
+            "Düğüm sertifikası onaylandı: {Label} {Address} eski={Eski} yeni={Yeni}.",
+            updated.Label,
+            updated.Address,
+            string.IsNullOrWhiteSpace(existing.CertificateFingerprint) ? "(yok)" : existing.CertificateFingerprint,
+            approved);
+
+        return updated.ToDto();
+    }
+
+    /// <summary>
+    /// Yöneticinin onayladığı parmak izi ile adresin ŞU AN sunduğu sertifikayı karşılaştırır.
+    /// Uyuşmazlıkta kayıt/onay yazılmaz (kapalı başarısız).
+    /// </summary>
+    private async Task<string> VerifyApprovedFingerprintAsync(string address, string? approved, CancellationToken cancellationToken)
+    {
+        if (TrustFingerprint.Normalize(approved) is null)
+        {
+            throw new AppException(ClusterMessages.CertificateApprovalRequired, 400, 400);
+        }
+
+        var sunulan = await ReadCertificateAsync(address, cancellationToken);
+        if (!TrustFingerprint.Matches(sunulan.Fingerprint, approved))
+        {
+            logger.LogWarning("Düğüm sertifika onayı REDDEDİLDİ: {Address} onaylanan {Onay}, sunulan {Sunulan}.", address, approved, sunulan.Fingerprint);
+            throw new AppException(ClusterMessages.CertificateMismatch, 409, 409, sunulan.Fingerprint);
+        }
+
+        return sunulan.Fingerprint;
+    }
+
+    private async Task<ClusterCertificateProbeDto> ReadCertificateAsync(string address, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var probe = await certificateProber.ProbeCertificateAsync(address, cancellationToken);
+            if (probe.Https && probe.Fingerprint.Length == 0)
+            {
+                throw new AppException(ClusterMessages.CertificateUnreadable, 502, 502);
+            }
+
+            return probe;
+        }
+        // Zincir taranır: .NET geri çağrıdan atılan istisnayı kendi HttpRequestException'ına sarar; metin
+        // eşitliği sarılmış hâli kaçırır ve rebinding 403 yerine 502 dönerdi.
+        catch (Exception exception) when (Support.OutboundBlockedException.Cikar(exception) is not null
+                                          || FindAddressForbidden(exception))
+        {
+            throw new AppException(ClusterMessages.AddressForbidden, 403, 403);
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or TimeoutException
+                                              && !cancellationToken.IsCancellationRequested)
+        {
+            throw new AppException(ClusterMessages.CertificateUnreadable, 502, 502, exception.GetType().Name);
+        }
+    }
+
+    private static bool FindAddressForbidden(Exception? exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is HttpRequestException && current.Message == ClusterMessages.AddressForbidden)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public async Task RemoveAsync(Guid id, CancellationToken cancellationToken = default)

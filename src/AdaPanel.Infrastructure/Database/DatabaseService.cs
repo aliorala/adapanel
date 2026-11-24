@@ -18,7 +18,8 @@ internal sealed partial class DatabaseService(
     ISecretProtector secretProtector,
     DatabaseCredentialStore credentialStore,
     ISiteDatabaseLinkService siteDatabaseLinks,
-    IEnumerable<IDatabaseEngineProvider> providers) : IDatabaseService
+    IEnumerable<IDatabaseEngineProvider> providers,
+    JsonFileStore? restoreFileStore = null) : IDatabaseService
 {
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
     {
@@ -218,8 +219,8 @@ internal sealed partial class DatabaseService(
             cancellationToken);
     }
 
-    /// <summary>Veritabanının bağlı olduğu site (panelin kendi kaydı); yoksa boş.</summary>
-    private async Task<string> ResolveLinkedSiteAsync(string engineKey, string databaseName, CancellationToken cancellationToken)
+    /// <summary>Bağlı site; yoksa boş, kayıt okunamadıysa bilinmiyor (null).</summary>
+    private async Task<string?> ResolveLinkedSiteAsync(string engineKey, string databaseName, CancellationToken cancellationToken)
     {
         try
         {
@@ -229,8 +230,8 @@ internal sealed partial class DatabaseService(
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            // Site bağı okunamadıysa kart yine de açılmalı; bu alan bilgilendirici, zorunlu değil.
-            return string.Empty;
+            // Keep the size/card usable, but never report a failed read as unlinked.
+            return null;
         }
     }
 
@@ -431,6 +432,8 @@ internal sealed partial class DatabaseService(
         var linkAttempted = false;
         try
         {
+            if (restoreFileStore is not null && dbEngine is (DbEngine.MariaDb or DbEngine.MySql))
+                await RestoreJournal().ClearForNewDatabaseAsync(profile.EngineKey, databaseName, cancellationToken);
             if (newUser.Length > 0)
             {
                 await provider.CreateUserAsync(profile, newUser, request.Password, newUserHost, cancellationToken);
@@ -619,6 +622,28 @@ internal sealed partial class DatabaseService(
                 $"engine={profile.EngineKey}; user={normalizedUser}; cleanup={string.Join(", ", failures)}");
     }
 
+    public async Task<IReadOnlyCollection<DatabaseUserLockDto>> GetUserLocksAsync(
+        string engine, IReadOnlyCollection<string> databaseNames, CancellationToken cancellationToken = default)
+    {
+        var dbEngine = ParseEngine(engine);
+        if (dbEngine is not (DbEngine.MySql or DbEngine.MariaDb))
+            throw new NotSupportedException("Database account lock is supported only for MariaDB/MySQL.");
+        using var mutation = await DatabaseLifecycle.EnterSharedEngineAsync(engine, cancellationToken);
+        var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
+        return await ResolveProvider(dbEngine).GetUserLocksAsync(profile, databaseNames, cancellationToken);
+    }
+
+    public async Task SetUserLockedAsync(string engine, string userName, string host, bool locked, CancellationToken cancellationToken = default)
+    {
+        var dbEngine = ParseEngine(engine);
+        if (dbEngine is not (DbEngine.MySql or DbEngine.MariaDb))
+            throw new NotSupportedException("Database account lock is supported only for MariaDB/MySQL.");
+        using var mutation = await DatabaseLifecycle.EnterSharedEngineAsync(engine, cancellationToken);
+        using var account = await DatabaseLifecycle.EnterAccountAsync(mutation, engine, userName, cancellationToken);
+        var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
+        await ResolveProvider(dbEngine).SetUserLockedAsync(profile, userName, host, locked, cancellationToken);
+    }
+
     public async Task<DatabaseWorkspaceDto> SetUserPasswordAsync(
         SetDatabaseUserPasswordRequest request,
         CancellationToken cancellationToken = default)
@@ -745,6 +770,9 @@ internal sealed partial class DatabaseService(
         var targetPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(request.FilePath.Trim()));
         Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
 
+        if (request.PortableDefiners && engine is not (DbEngine.MariaDb or DbEngine.MySql))
+            throw new AppException("database.definer_mysql_only", 400, 400);
+
         var result = engine switch
         {
             DbEngine.MariaDb or DbEngine.MySql => await ExportMySqlAsync(profile, databaseName, targetPath, cancellationToken),
@@ -756,6 +784,22 @@ internal sealed partial class DatabaseService(
         if (!result.Success || !File.Exists(targetPath))
         {
             throw new AppException("database.dump_failed", 500, 500);
+        }
+
+        if (request.PortableDefiners)
+        {
+            // This is a NEW export, never an existing backup. Publish only a fully converted copy.
+            var portable = targetPath + $".portable-{Guid.NewGuid():N}";
+            try
+            {
+                await MySqlDefinerRewriter.RewriteAsync(targetPath, portable, cancellationToken);
+                File.Move(portable, targetPath, overwrite: true);
+            }
+            catch (Exception error) when (error is InvalidDataException or NotSupportedException or System.Text.DecoderFallbackException)
+            {
+                throw new AppException("database.definer_conversion_failed", 422, 422, error.Message);
+            }
+            finally { if (File.Exists(portable)) File.Delete(portable); }
         }
 
         return new DatabaseDumpResultDto
@@ -785,9 +829,15 @@ internal sealed partial class DatabaseService(
         // A SQL script can switch databases (USE / \\connect), even when the caller
         // supplies an initial database. Hold the engine lease for its actual scope.
         using var mutation = await DatabaseLifecycle.EnterEngineAsync(request.Engine, cancellationToken);
+        if (engine is DbEngine.MariaDb or DbEngine.MySql)
+        {
+            await MySqlRestoreExecutor.ExecuteAsync(RestoreJournal(), profile.EngineKey, databaseName, sourcePath,
+                request.AdaptDefiners, (input, ct) => ImportMySqlAsync(profile, databaseName, input, ct), cancellationToken,
+                readInitialSqlMode: ct => MySqlImportSession.ReadSqlModeAsync(profile, ct));
+            return DumpResult(profile.EngineKey, databaseName, sourcePath);
+        }
         var result = engine switch
         {
-            DbEngine.MariaDb or DbEngine.MySql => await ImportMySqlAsync(profile, databaseName, sourcePath, cancellationToken),
             DbEngine.PostgreSql => await ImportPostgreSqlAsync(profile, databaseName, sourcePath, cancellationToken),
             DbEngine.MsSql => await ImportMsSqlAsync(profile, databaseName, sourcePath, cancellationToken),
             _ => throw new AppException("database.engine_not_supported", 400, 400)
@@ -795,7 +845,7 @@ internal sealed partial class DatabaseService(
 
         if (!result.Success)
         {
-            throw new AppException("database.restore_failed", 500, 500);
+            throw new AppException("database.restore_failed", 500, 500, TrimTransferError(result.StandardError));
         }
 
         return new DatabaseDumpResultDto
@@ -806,6 +856,14 @@ internal sealed partial class DatabaseService(
             Size = new FileInfo(sourcePath).Length
         };
     }
+
+    private MySqlRestoreJournal RestoreJournal() => new(restoreFileStore ??
+        throw new InvalidOperationException("Persistent restore state is required before executing a MySQL import."));
+
+    private static DatabaseDumpResultDto DumpResult(string engine, string database, string path) => new()
+    {
+        Engine = engine, DatabaseName = database, FilePath = path, Size = new FileInfo(path).Length
+    };
 
     public async Task<DatabaseTransferResultDto> TransferDatabaseAsync(
         DatabaseTransferRequest request,
@@ -844,11 +902,14 @@ internal sealed partial class DatabaseService(
         using var mutation = await DatabaseLifecycle.EnterResourceAsync(request.Engine, targetDatabase, cancellationToken);
         var targetProfile = await ResolveConnectionProfileAsync(engine, cancellationToken);
         var provider = ResolveProvider(engine);
+        var journal = RestoreJournal();
+        await journal.EnsureCanStartAsync(targetProfile.EngineKey, targetDatabase, cancellationToken);
 
         // Hedef DB yoksa oluştur; varsa içine aktarmaya devam et.
         try
         {
             await provider.CreateDatabaseAsync(targetProfile, targetDatabase, cancellationToken);
+            await journal.ClearForNewDatabaseAsync(targetProfile.EngineKey, targetDatabase, cancellationToken);
         }
         catch (AppException existing) when (existing.MessageKey == "database.database_already_exists")
         {
@@ -912,39 +973,37 @@ internal sealed partial class DatabaseService(
                 targetProfile.AdminUserName,
                 targetDatabase,
                 MySqlTransferTls.Coz(targetProfile.Host, MySqlTransferTls.Auto));
-            var import = await ProcessRunner.RunAsync(
-                mysql,
-                importArguments,
-                cancellationToken: cancellationToken,
-                environmentVariables: new Dictionary<string, string> { ["MYSQL_PWD"] = targetProfile.AdminPassword },
-                timeout: transferTimeout,
-                standardInputFilePath: tempFile);
-
-            if (import.ExitCode != 0)
-            {
-                throw new AppException("database.transfer_import_failed", 500, 500, TrimTransferError(import.StandardError));
-            }
-
-            // 3) Hedef DB KULLANICISINI oluştur + bu DB'ye tam yetki (taşınan uygulama bağlanabilsin). Eskiden yalnız
-            //    DB + veri taşınıyordu, kullanıcı oluşturulmuyordu → uygulama "Access denied for user" alıyordu.
-            //    Kullanıcı/parola verilmezse DB adından türetilir / güçlü üretilir. Best-effort (transfer'i bozmaz).
             var createdUser = string.Empty;
             var createdPassword = string.Empty;
-            try
-            {
-                var transferUser = string.IsNullOrWhiteSpace(request.TargetUserName)
-                    ? DeriveTransferUser(targetDatabase)
-                    : NormalizeUserName(request.TargetUserName, engine);
-                var passwordGenerated = string.IsNullOrWhiteSpace(request.TargetPassword);
-                var transferPassword = passwordGenerated ? GenerateDbPassword() : request.TargetPassword;
-                var transferHost = NewUserHost(engine);
-                (createdUser, createdPassword) = await ProvisionTransferUserAsync(mutation, targetProfile, provider,
-                    targetDatabase, transferUser, transferHost, transferPassword, passwordGenerated, cancellationToken);
-            }
-            catch (Exception exception) when (CanIgnoreTransferAccountFailure(exception))
-            {
-                // best-effort: kullanıcı kurulamasa da transfer başarılı (DB + veri taşındı)
-            }
+            await MySqlRestoreExecutor.ExecuteAsync(journal, targetProfile.EngineKey, targetDatabase, tempFile,
+                request.AdaptDefiners,
+                (input, ct) => ProcessRunner.RunAsync(mysql, importArguments, cancellationToken: ct,
+                    environmentVariables: new Dictionary<string, string> { ["MYSQL_PWD"] = targetProfile.AdminPassword },
+                    timeout: transferTimeout, standardInputFilePath: input), cancellationToken, engineWide: false,
+                afterImport: async ct =>
+                {
+                    // Keep the recovery intent until the account/GRANT stage succeeds too.
+                    // A failure here must not turn retry into a second DROP/INSERT pass.
+                    try
+                    {
+                        var transferUser = string.IsNullOrWhiteSpace(request.TargetUserName)
+                            ? DeriveTransferUser(targetDatabase)
+                            : NormalizeUserName(request.TargetUserName, engine);
+                        var generated = string.IsNullOrWhiteSpace(request.TargetPassword);
+                        var password = generated ? GenerateDbPassword() : request.TargetPassword;
+                        (createdUser, createdPassword) = await ProvisionTransferUserAsync(mutation, targetProfile, provider,
+                            targetDatabase, transferUser, NewUserHost(engine), password, generated, ct);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception error)
+                    {
+                        var app = error as AppException;
+                        throw new AppException(app?.MessageKey ?? "database.transfer_account_failed", app?.Code ?? 500,
+                            app?.HttpStatusCode ?? 500,
+                            "SQL data was imported, but target account/GRANT setup failed. Do not replay the dump; repair account access only. " +
+                            (app?.Details.Length > 0 ? app.Details : error.Message));
+                    }
+                }, readInitialSqlMode: ct => MySqlImportSession.ReadSqlModeAsync(targetProfile, ct));
 
             return new DatabaseTransferResultDto
             {
@@ -971,10 +1030,6 @@ internal sealed partial class DatabaseService(
             }
         }
     }
-
-    internal static bool CanIgnoreTransferAccountFailure(Exception exception) =>
-        exception is not OperationCanceledException &&
-        exception is not AppException { MessageKey: "database.user_create_cleanup_incomplete" };
 
     internal async Task<(string UserName, string Password)> ProvisionTransferUserAsync(
         IDisposable mutation, DatabaseConnectionProfile profile, IDatabaseEngineProvider provider,
@@ -1327,36 +1382,103 @@ internal sealed partial class DatabaseService(
         }
     }
 
-    private static async Task<CommandResult> ImportMsSqlAsync(
+    internal static async Task<CommandResult> ImportMsSqlAsync(
         DatabaseConnectionProfile profile,
         string databaseName,
         string sourcePath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<string, string, IReadOnlyDictionary<string, object>, bool, CancellationToken, Task<object?>>? executeSql = null)
     {
         if (string.IsNullOrWhiteSpace(databaseName))
-        {
             throw new AppException("database.name_required", 400, 400);
-        }
 
+        // The normal ImportDumpAsync path and isolated tests use this same orchestration.
+        // Each command gets a fresh master connection: RESTORE can invalidate its connection.
+        executeSql ??= RunSqlAsync;
+        var master = BuildMsSqlConnectionString(profile, "master");
+        var identifier = new SqlCommandBuilder().QuoteIdentifier(databaseName);
+        var parameters = new Dictionary<string, object> { ["@database"] = databaseName };
+        const string readState = "SELECT CONCAT(user_access_desc, '|', state_desc) FROM sys.databases WHERE name = @database";
+        var accessMode = "";
+        var restoreStarted = false;
+        Exception? restoreFailure = null;
+        Exception? cleanupFailure = null;
         try
         {
-            await using var connection = new SqlConnection(BuildMsSqlConnectionString(profile, "master"));
-            await connection.OpenAsync(cancellationToken);
-            await using var command = connection.CreateCommand();
-            command.CommandTimeout = 0;
-            command.CommandText = $"""
-                IF DB_ID(N'{databaseName.Replace("'", "''")}') IS NOT NULL
-                    ALTER DATABASE [{databaseName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-                RESTORE DATABASE [{databaseName}] FROM DISK = @path WITH REPLACE, RECOVERY;
-                ALTER DATABASE [{databaseName}] SET MULTI_USER;
-                """;
-            command.Parameters.AddWithValue("@path", sourcePath);
-            await command.ExecuteNonQueryAsync(cancellationToken);
-            return new CommandResult { ExitCode = 0 };
+            accessMode = (await executeSql(master,
+                "SELECT user_access_desc FROM sys.databases WHERE name = @database", parameters, true, cancellationToken)) as string ?? "";
+            if (accessMode is not ("" or "MULTI_USER" or "RESTRICTED_USER" or "SINGLE_USER"))
+                throw new InvalidDataException("SQL Server returned an unknown database access mode.");
+
+            // Mark before ALTER: it can take effect and then lose its response or be cancelled.
+            restoreStarted = true;
+            if (accessMode is "MULTI_USER" or "RESTRICTED_USER")
+                await executeSql(master, $"ALTER DATABASE {identifier} SET SINGLE_USER WITH ROLLBACK IMMEDIATE",
+                    parameters, false, cancellationToken);
+            await executeSql(master, $"RESTORE DATABASE {identifier} FROM DISK = @path WITH REPLACE, RECOVERY",
+                new Dictionary<string, object> { ["@path"] = sourcePath }, false, cancellationToken);
         }
-        catch (SqlException exception)
+        catch (Exception exception)
         {
-            return new CommandResult { ExitCode = exception.Number, StandardError = exception.Message };
+            restoreFailure = exception;
+        }
+
+        if (restoreStarted)
+        {
+            try
+            {
+                var expected = accessMode.Length == 0 ? "MULTI_USER" : accessMode;
+                var actual = (await executeSql(master, readState, parameters, true, CancellationToken.None)) as string;
+                if (string.IsNullOrWhiteSpace(actual))
+                {
+                    if (accessMode.Length > 0 || restoreFailure is null)
+                        throw new InvalidDataException("SQL Server database is missing after restore.");
+                }
+                else
+                {
+                    if (!actual.StartsWith(expected + "|", StringComparison.Ordinal))
+                    {
+                        await executeSql(master, $"ALTER DATABASE {identifier} SET {expected} WITH ROLLBACK IMMEDIATE",
+                            parameters, false, CancellationToken.None);
+                        actual = (await executeSql(master, readState, parameters, true, CancellationToken.None)) as string;
+                    }
+                    if (!string.Equals(actual, expected + "|ONLINE", StringComparison.Ordinal))
+                        throw new InvalidDataException("SQL Server database access mode or ONLINE state could not be verified.");
+                }
+            }
+            catch (Exception exception)
+            {
+                cleanupFailure = exception;
+            }
+        }
+
+        if (restoreFailure is not null)
+        {
+            if (cleanupFailure is not null)
+                restoreFailure.Data["MsSqlAccessModeCleanupFailure"] = cleanupFailure.Message;
+            if (restoreFailure is SqlException sqlFailure)
+                return new CommandResult { ExitCode = sqlFailure.Number == 0 ? 1 : sqlFailure.Number,
+                    StandardError = sqlFailure.Message + (cleanupFailure is null ? "" : " Database access mode could not be restored: " + cleanupFailure.Message) };
+            // Preserve cancellation and the actual restore error, including its stack/identity.
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(restoreFailure).Throw();
+        }
+        if (cleanupFailure is not null)
+            return new CommandResult { ExitCode = 1,
+                StandardError = "Database access mode could not be restored: " + cleanupFailure.Message };
+        return new CommandResult { ExitCode = 0 };
+
+        static async Task<object?> RunSqlAsync(string connectionString, string sql,
+            IReadOnlyDictionary<string, object> values, bool scalar, CancellationToken token)
+        {
+            await using var connection = new SqlConnection(connectionString);
+            await connection.OpenAsync(token);
+            await using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.CommandTimeout = sql.StartsWith("RESTORE ", StringComparison.Ordinal) ? 0 : 60;
+            foreach (var (name, value) in values) command.Parameters.AddWithValue(name, value);
+            if (scalar) return await command.ExecuteScalarAsync(token);
+            await command.ExecuteNonQueryAsync(token);
+            return null;
         }
     }
 

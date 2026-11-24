@@ -6,7 +6,7 @@ import { getBackupRunningJobs } from "../api/backup";
 
 vi.mock("../api/automation", () => ({ getAutomation: vi.fn(), runAutomationBackup: vi.fn(), runAutomationSsl: vi.fn(), updateAutomation: vi.fn(), testRemoteBackup: vi.fn() }));
 vi.mock("../api/backup", () => ({ getBackupRunningJobs: vi.fn() }));
-vi.mock("../stores/auth", () => ({ extractApiMessage: () => "failed" }));
+vi.mock("../stores/auth", () => ({ extractApiMessage: () => "failed", useAuthStore: () => ({ session: { isServerOwner: false } }) }));
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 
 let app: App | undefined;

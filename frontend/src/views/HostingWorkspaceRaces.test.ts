@@ -7,9 +7,13 @@ import { getQuota, setQuota, removeQuota, installFsrm, type SiteDiskQuota } from
 import { getGitDeployment, configureGitDeployment, deployGit, type GitDeployment } from "../api/git";
 import { updateDocumentRoot, enableFrameworkRewrite, repairSitePermissions } from "../api/sites";
 import { useSitesStore } from "../stores/sites";
+import { useAuthStore } from "../stores/auth";
 import { invalidateSessionRequests } from "../api/client";
 
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
+// Kotayı kaldırma onay ister (yeni): yarış testi onayı veren kullanıcıyı temsil eder.
+vi.mock("../components/ConfirmDialog.vue", () => ({ useConfirm: () => ({ confirm: async () => true }) }));
+vi.mock("../router", () => ({ default: { push: vi.fn() } }));
 vi.mock("../api/siteHosting", async original => ({ ...await original<object>(), getSiteHostingSettings: vi.fn(), updateSiteHostingSettings: vi.fn(), runComposerInstall: vi.fn() }));
 vi.mock("../api/quota", () => ({ getQuota: vi.fn(), setQuota: vi.fn(), removeQuota: vi.fn(), installFsrm: vi.fn() }));
 vi.mock("../api/git", () => ({ getGitDeployment: vi.fn(), configureGitDeployment: vi.fn(), deployGit: vi.fn() }));
@@ -26,7 +30,7 @@ function quota(site = "a.test", enabled = true): SiteDiskQuota {
   return { siteName: site, path: `C:/sites/${site}`, fsrmAvailable: true, quotaEnabled: enabled, limitBytes: 20 * 1_048_576, usedBytes: 100, softLimit: true };
 }
 function git(site = "a.test", configured = true): GitDeployment {
-  return { siteName: site, configured, repositoryUrl: configured ? `https://git.test/${site}` : "", branch: configured ? "production" : "", deployPath: "", lastCommit: "", lastDeployUtc: null, lastDeployStatus: "", webhookPath: "/webhook", webhookSecret: site, webhookHeaderName: "X-Hook" };
+  return { siteName: site, configured, repositoryUrl: configured ? `https://git.test/${site}` : "", branch: configured ? "production" : "", deployPath: "", lastCommit: "", lastDeployUtc: null, lastDeployStatus: "", webhookPath: "/webhook", webhookSecret: site, webhookHeaderName: "X-Hook", hasDeployKey: false, deployPublicKey: "", deployKeyFingerprint: "", deployKeyCreatedUtc: null, hasHttpsToken: false, httpsUsername: "", postDeployCommands: [], postDeployTimeoutSeconds: 600, allowedPostDeployCommands: [], recentDeployments: [] };
 }
 let app: App | undefined;
 beforeEach(() => {
@@ -50,6 +54,8 @@ async function flush() { for (let i = 0; i < 12; i++) await nextTick(); }
 async function mount() {
   const renderer = createRenderer<object, object>({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
   const pinia = createPinia(); setActivePinia(pinia); useSitesStore().selectedSiteName = "a.test";
+  // Rol süzgeci (Git/kota/Composer yalnız yönetici-bayi): bu yarış testleri YÖNETİCİ yoluyla ölçülür.
+  useAuthStore().session = { isAuthenticated: true, requiresSetupWizard: false, user: { id: "actor", role: "Administrator", userName: "actor", email: "a@example.test", preferredLanguage: "en", isTwoFactorEnabled: false, isActive: true, lastLoginAtUtc: null } } as never;
   app = renderer.createApp({ ...SiteHostingView, render: () => h("section") } as Component).use(pinia); app.provide(ssrContextKey, {});
   const state = (app.mount({}).$ as unknown as { setupState: State }).setupState; await flush(); return state;
 }
@@ -116,6 +122,15 @@ it("preserves normal read and settings-save behavior", async () => {
   state.form.redirectUrl = "https://target.test"; await state.save();
   expect(updateSiteHostingSettings).toHaveBeenCalledWith("a.test", expect.objectContaining({ redirectUrl: "https://target.test", defaultDocuments: ["index.php"] }));
   expect(state.notice).toBe("panel.hosting.saved"); expect(state.busy).toBe(false);
+});
+
+it("surfaces unverified PHP logging after a document-root update", async () => {
+  const state = await mount(); state.documentRoot = "C:/sites/a/public";
+  vi.spyOn(useSitesStore(), "fetchSites").mockResolvedValue([]);
+  vi.mocked(updateDocumentRoot).mockResolvedValue({phpErrorLogging:{status:"failed",detail:"PHP write denied"}} as Awaited<ReturnType<typeof updateDocumentRoot>>);
+  await state.saveDocumentRoot();
+  expect(state.notice).toBe("PHP write denied");
+  expect(state.notice).not.toBe("panel.hosting.documentRootSaved");
 });
 it("does not apply a response from before leaving and returning to the same site", async () => {
   const state = await mount(), pending = deferred<SiteHostingSettings>(); vi.mocked(updateSiteHostingSettings).mockReturnValueOnce(pending.promise);

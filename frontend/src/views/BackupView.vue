@@ -27,6 +27,34 @@
 
     <BackupRestoreResult v-if="fullRestore.result.value" :result="fullRestore.result.value" :refresh-error="fullRestore.refreshError.value" />
 
+    <!-- YALITILMIŞ TEST GERİ YÜKLEME SONUCU. Canlı siteye/veritabanına dokunulmaz; geçici klasörde
+         doğrulanır ve silinir. "Test edilemedi" ayrı bir sonuçtur ve "geçti" gibi gösterilmez. -->
+    <section v-if="testResult" class="form-surface verify-panel" role="status">
+      <div class="section-head">
+        <div>
+          <h3>{{ t("panel.backup.testRestore.title", { name: testResult.name }) }}</h3>
+          <p class="meta">{{ t("panel.backup.testRestore.hint") }}</p>
+        </div>
+        <button class="secondary compact" @click="testResult = null">{{ t("panel.backup.verify.close") }}</button>
+      </div>
+      <div>
+        <span :class="['status-pill', testResult.outcome === 'passed' ? 'ok' : testResult.outcome === 'failed' ? 'danger' : 'warn']">
+          {{ t(`panel.backup.testRestore.outcome_${testResult.outcome}`) }}
+        </span>
+        <template v-if="testResult.outcome !== 'not_tested'">
+          <span class="status-pill">{{ t("panel.backup.testRestore.entries", { count: testResult.entryCount }) }}</span>
+          <span :class="['status-pill', testResult.fileFailures ? 'danger' : '']">{{ t("panel.backup.testRestore.fileFailures", { count: testResult.fileFailures }) }}</span>
+          <span :class="['status-pill', testResult.databaseDumpFailures ? 'danger' : '']">{{ t("panel.backup.testRestore.dumps", { checked: testResult.databaseDumpsChecked, failed: testResult.databaseDumpFailures }) }}</span>
+          <span v-if="testResult.databaseDumpsUnchecked" class="status-pill warn">{{ t("panel.backup.testRestore.dumpsUnchecked", { count: testResult.databaseDumpsUnchecked }) }}</span>
+          <span :class="['status-pill', testResult.cleanedUp ? 'ok' : 'danger']">{{ t(testResult.cleanedUp ? "panel.backup.testRestore.cleaned" : "panel.backup.testRestore.notCleaned") }}</span>
+        </template>
+        <span v-else class="status-pill warn">{{ t(testResult.notTestedReason) }}</span>
+      </div>
+      <ul v-if="testResult.issues.length" class="verify-issues">
+        <li v-for="issue in testResult.issues" :key="issue"><code>{{ issue }}</code></li>
+      </ul>
+    </section>
+
     <!-- DOĞRULAMA SONUCU. Üç sayı ayrı ayrı gösterilir; "ulaşılamadı" KAYIP DEĞİLDİR ve
          karıştırılırsa kullanıcı geçici bir ağ arızasında bütün geçmişini kayıp sanar. -->
     <section v-if="verification" class="form-surface verify-panel">
@@ -314,6 +342,9 @@
               <span class="safe-actions">
                 <button v-if="isAdmin" class="secondary compact row-button" v-bind="writeGate(busy)" @click="restore(backup)">
                   {{ t("panel.backup.restore") }}
+                </button>
+                <button v-if="isAdmin" class="secondary compact row-button" :disabled="busy || !!testingId" @click="testRestore(backup)">
+                  {{ testingId === backup.id ? t("panel.backup.testRestore.running") : t("panel.backup.testRestore.action") }}
                 </button>
                 <button
                   v-if="backup.format === 'zip'"
@@ -801,6 +832,13 @@
             <span class="field-label">{{ t("panel.database.databaseName") }}</span>
             <input v-model="databaseName" :placeholder="t('panel.backup.allDatabases')" />
           </label>
+          <div v-if="['mariadb', 'mysql'].includes(databaseEngine)">
+            <label class="checkbox-field">
+              <input v-model="portableDefiners" type="checkbox" :disabled="busy" />
+              <span>{{ t("panel.database.definers.portable") }}</span>
+            </label>
+            <p class="hint">{{ t("panel.database.definers.portableHint") }}</p>
+          </div>
         </template>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.backup.targetType") }}</span>
@@ -866,6 +904,18 @@
                adres arayıp bulamaz. -->
           <span class="field-label">{{ isFolderPathTarget(targetForm.targetType) ? t("panel.backup.remoteFolder") : t("panel.backup.remoteUrl") }}</span>
           <input v-model="targetForm.remoteUrl" :placeholder="remoteUrlPlaceholder" />
+        </label>
+        <!-- G19: FTPS (açık TLS). Şema adreste taşınır (ftp:// / ftps://); seçici adresi yeniden yazar.
+             Varsayılan düz FTP KALIR (mevcut hedefler kırılmasın) ama uyarı gösterilir. -->
+        <label v-if="targetForm.targetType === 'ftp'" class="stacked-field">
+          <span class="field-label">{{ t("panel.backup.ftpSecurity") }}</span>
+          <select :value="ftpSecurityOf(targetForm.remoteUrl)" @change="targetForm.remoteUrl = withFtpSecurity(targetForm.remoteUrl, ($event.target as HTMLSelectElement).value)">
+            <option value="ftp">{{ t("panel.backup.ftpSecurityPlain") }}</option>
+            <option value="ftps">{{ t("panel.backup.ftpSecurityTls") }}</option>
+          </select>
+          <small :class="ftpSecurityOf(targetForm.remoteUrl) === 'ftps' ? 'field-hint' : 'notice warn'">
+            {{ ftpSecurityOf(targetForm.remoteUrl) === "ftps" ? t("panel.backup.ftpSecurityTlsHint") : t("panel.backup.ftpSecurityPlainWarning") }}
+          </small>
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ remoteUserLabel(targetForm.targetType) }}</span>
@@ -1135,6 +1185,16 @@
               <span class="field-label">{{ t("panel.backup.remoteUrl") }}</span>
               <input v-model="scheduleForm.remoteUrl" />
             </label>
+            <label v-if="scheduleForm.targetType === 'ftp'" class="stacked-field">
+              <span class="field-label">{{ t("panel.backup.ftpSecurity") }}</span>
+              <select :value="ftpSecurityOf(scheduleForm.remoteUrl)" @change="scheduleForm.remoteUrl = withFtpSecurity(scheduleForm.remoteUrl, ($event.target as HTMLSelectElement).value)">
+                <option value="ftp">{{ t("panel.backup.ftpSecurityPlain") }}</option>
+                <option value="ftps">{{ t("panel.backup.ftpSecurityTls") }}</option>
+              </select>
+              <small :class="ftpSecurityOf(scheduleForm.remoteUrl) === 'ftps' ? 'field-hint' : 'notice warn'">
+                {{ ftpSecurityOf(scheduleForm.remoteUrl) === "ftps" ? t("panel.backup.ftpSecurityTlsHint") : t("panel.backup.ftpSecurityPlainWarning") }}
+              </small>
+            </label>
             <label class="stacked-field">
               <span class="field-label">{{ scheduleForm.targetType === 's3' ? t("panel.backup.remoteAccessKey") : t("panel.backup.remoteUser") }}</span>
               <input v-model="scheduleForm.remoteUserName" autocomplete="off" />
@@ -1201,6 +1261,8 @@ import {
   setBackupEncryption,
   updateBackupSchedule,
   verifyBackups,
+  testRestoreBackup,
+  type BackupTestRestoreResult,
   type BackupChain,
   type BackupEncryptionSettings,
   type BackupEntry,
@@ -1484,6 +1546,7 @@ const showCreateForm = computed(() => activeView.value === "create");
 const siteName = ref(sitesStore.selectedSiteName);
 const databaseEngine = ref("mariadb");
 const databaseName = ref("");
+const portableDefiners = ref(false);
 const loading = ref(false);
 const busy = ref(false);
 
@@ -1722,6 +1785,16 @@ function isFolderPathTarget(type: string) {
   return type === "dropbox" || type === "onedrive";
 }
 
+/** FTP şeması: `ftp://` düz, `ftps://` açık TLS (AUTH TLS; sunucu desteklemezse bağlantı KESİLİR, düz FTP'ye düşülmez). */
+function ftpSecurityOf(url: string) {
+  return /^ftps:\/\//i.test((url ?? "").trim()) ? "ftps" : "ftp";
+}
+
+function withFtpSecurity(url: string, mode: string) {
+  const bare = (url ?? "").trim().replace(/^ftps?:\/\//i, "");
+  return `${mode === "ftps" ? "ftps" : "ftp"}://${bare}`;
+}
+
 const remoteUrlPlaceholder = computed(() => {
   switch (targetForm.targetType) {
     case "ftp":
@@ -1783,6 +1856,29 @@ const cloudTargetHint = computed(() => {
       return "";
   }
 });
+
+// --- Yalıtılmış test geri yükleme ---
+const testingId = ref("");
+const testResult = ref<BackupTestRestoreResult | null>(null);
+
+/**
+ * Yedeği GEÇİCİ klasörde açıp doğrular ve siler; canlı site/veritabanı/posta değişmez. Sonuç ekranda
+ * kalır (geçti / kaldı / test edilemedi ayrı gösterilir). Hata sessiz yutulmaz.
+ */
+async function testRestore(record: BackupRecord) {
+  if (!isActive() || testingId.value || busy.value) return;
+  testingId.value = record.id;
+  try {
+    const result = await testRestoreBackup(record.id);
+    if (!isActive()) return;
+    testResult.value = result;
+    showNotice(t(`panel.backup.testRestore.notice_${result.outcome}`, { name: record.name }), result.outcome !== "passed");
+  } catch (error) {
+    if (isActive()) showError(error);
+  } finally {
+    if (isActive()) testingId.value = "";
+  }
+}
 
 // --- Yedek doğrulama (uzlaştırma) ---
 const verifying = ref(false);
@@ -1900,7 +1996,8 @@ const autoServerLocalTime = computed(() => (autoStatus.value?.serverLocalTime ||
 
 onMounted(async () => {
   if (sitesStore.sites.length === 0) {
-    await sitesStore.fetchSites().catch(() => undefined);
+    // Site listesi okunamazsa SOYLE: sessizce bos birakmak, site secicisinin neden bos oldugunu gizler.
+    await sitesStore.fetchSites().catch((error: unknown) => { if (isActive()) showError(error); });
   }
   if (!isActive()) return;
   await refresh();
@@ -2222,13 +2319,16 @@ async function createSubscriptionBackup() {
 
 async function createDatabaseBackup() {
   if (!canAdminWrite()) return;
-  await runBackup(() => backupDatabase(databaseEngine.value, databaseName.value, buildTargetPayload()));
+  await runBackup(() => backupDatabase(databaseEngine.value, databaseName.value, {
+    ...buildTargetPayload(), portableDefiners: ['mariadb', 'mysql'].includes(databaseEngine.value) && portableDefiners.value
+  }));
 }
 
 async function createDatabaseToConfiguredFtp() {
   if (!canAdminWrite()) return;
   const engine = databaseEngine.value;
   const name = databaseName.value;
+  const portable = ['mariadb', 'mysql'].includes(engine) && portableDefiners.value;
   const encryptionPassword = targetForm.encryptionPassword;
   const label = runningLabel();
   await withOperation(async () => {
@@ -2248,7 +2348,7 @@ async function createDatabaseToConfiguredFtp() {
       action: async () => {
         if (!canAdminWrite()) return;
         await performBackup(() => backupDatabase(engine, name, {
-          useConfiguredFtpTarget: true, remoteUrl: target, encryptionPassword
+          useConfiguredFtpTarget: true, remoteUrl: target, encryptionPassword, portableDefiners: portable
         }), label, encryptionPassword);
       }
     });

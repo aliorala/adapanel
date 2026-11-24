@@ -27,6 +27,15 @@ public static class ClusterMessages
 
     public const string NodeUnreachable = "cluster.node_unreachable";
 
+    /// <summary>https düğümün sertifikası onaylanmamış / onay eksik (yeni kayıt ya da eski kayıt göçü).</summary>
+    public const string CertificateApprovalRequired = "cluster.certificate_approval_required";
+
+    /// <summary>Düğümün sunduğu sertifika onaylı parmak iziyle uyuşmuyor ya da onay sırasında değişti.</summary>
+    public const string CertificateMismatch = "cluster.certificate_mismatch";
+
+    /// <summary>Adres sertifika okunamadı (TLS yok / el sıkışma başarısız).</summary>
+    public const string CertificateUnreadable = "cluster.certificate_unreadable";
+
     /// <summary>Uzak düğüm isteği reddetti (yetki/HTTP hatası); ayrıntı Detail alanında.</summary>
     public const string RemoteRejected = "cluster.remote_rejected";
 

@@ -86,9 +86,10 @@
                üçüncü bir kez aynı şeyi söylüyordu. -->
           <div class="wp-status">
             <span class="status-pill">WordPress {{ wp.version || "?" }}</span>
-            <span v-if="wp.updateAvailable" class="status-pill warn">{{ t("panel.wpkit.updateAvailable", { v: wp.latestVersion }) }}</span>
-            <span v-else class="status-pill ok">{{ t("panel.wpkit.upToDate") }}</span>
-            <a v-if="wp.adminUrl" :href="wp.adminUrl" target="_blank" rel="noopener" class="wp-admin-link">{{ t("panel.wpkit.openAdmin") }} ↗</a>
+            <span v-if="!wp.versionMeasured" class="status-pill warn">{{ t("panel.software.installedVersionUnknown") }}</span>
+            <span v-else-if="wp.updateAvailable" class="status-pill warn">{{ t("panel.wpkit.updateAvailable", { v: wp.latestVersion }) }}</span>
+            <span v-else-if="wp.versionComparisonMeasured" class="status-pill ok">{{ t("panel.wpkit.upToDate") }}</span>
+            <a v-if="wp.adminUrl" :href="safeHref(wp.adminUrl)" target="_blank" rel="noopener" class="wp-admin-link">{{ t("panel.wpkit.openAdmin") }} ↗</a>
           </div>
 
           <div class="wp-actions">
@@ -212,7 +213,8 @@
             </div>
             <small class="hint">{{ t("panel.wpkit.cloneHint") }}</small>
             <div v-if="wpCloneResult" class="notice wp-cred" role="status">
-              <a :href="wpCloneResult.targetUrl" target="_blank" rel="noopener">{{ wpCloneResult.targetUrl }}</a>
+              <a v-if="wpCloneResult.siteStarted" :href="safeHref(wpCloneResult.targetUrl)" target="_blank" rel="noopener">{{ wpCloneResult.targetUrl }}</a>
+              <span v-else>{{ wpCloneResult.targetUrl }}</span>
               · DB: <code>{{ wpCloneResult.targetDatabase }}</code>
               · {{ t("panel.wpkit.cloneUser") }}: <code>{{ wpCloneResult.databaseUser }}</code>
               · {{ t("panel.wpkit.clonePass") }}: <code>{{ wpCloneResult.databasePassword }}</code>
@@ -318,6 +320,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { computed, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import CommandConsole from "../components/CommandConsole.vue";
@@ -542,8 +545,9 @@ async function wpDoClone() {
       targetHostName: wpClone.targetHostName,
     });
     wpCloneResult.value = klon.sonuc;
-    const klonYarim = klon.mesajAnahtari !== "" && klon.mesajAnahtari !== "wp.clone_done";
-    showWpNotice(klonYarim ? t(klon.mesajAnahtari) : t("panel.wpkit.cloneDone"), klonYarim);
+    const klonYarim = !klon.sonuc.databaseIsolated || !klon.sonuc.urlRewritten || !klon.sonuc.siteStarted
+      || (klon.mesajAnahtari !== "" && klon.mesajAnahtari !== "wp.clone_done");
+    showWpNotice(klonYarim ? t(klon.mesajAnahtari || "wp.clone_not_started") : t("panel.wpkit.cloneDone"), klonYarim);
   } catch (error) {
     showWpNotice(resolveApiMessage(error), true);
   } finally {
@@ -836,6 +840,8 @@ async function startQueue() {
 }
 
 async function stopQueue() {
+  // Kuyruk işçisini durdurmak bekleyen işlerin (e-posta, bildirim) işlenmesini keser: onay iste.
+  if (!await confirm({ title: t("panel.confirm.stopQueueTitle"), message: t("panel.toolkit.confirmStopQueue"), confirmLabel: t("panel.toolkit.queue.stop") })) return;
   queueBusy.value = true;
   queueNotice.value = "";
   try {
@@ -881,6 +887,7 @@ async function startScheduler() {
 }
 
 async function stopScheduler() {
+  if (!await confirm({ title: t("panel.confirm.stopSchedulerTitle"), message: t("panel.toolkit.confirmStopScheduler"), confirmLabel: t("panel.toolkit.queue.stop") })) return;
   schedulerBusy.value = true;
   queueNotice.value = "";
   try {

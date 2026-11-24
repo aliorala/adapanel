@@ -186,6 +186,7 @@ public sealed class CustomerScopeService(
         && entry.ExpiresAtUtc is null
         && entry.SuspendedAtUtc is null
         && string.IsNullOrEmpty(entry.SuspendReason)
+        && string.IsNullOrEmpty(entry.InactiveSource)
         && entry.SubUserSections is null;
 
     public async Task SetExtraLimitsAsync(Guid userId, int maxDatabases, int maxMailboxes, int maxScheduledTasks, CancellationToken cancellationToken = default)
@@ -506,9 +507,18 @@ public sealed class CustomerScopeService(
         /// <summary>Askı sebebi (sabit anahtar: "traffic" | "expired" | "manual").</summary>
         public string? SuspendReason { get; set; }
 
+        /// <summary>Kullanıcıyı pasife alan taraf: "reseller" | "admin" (askıdan ayrı; bkz. ICustomerScopeService).</summary>
+        public string? InactiveSource { get; set; }
+
         public int MaxFtpUsers { get; set; }
 
         public int MaxTrafficGbPerMonth { get; set; }
+
+        /// <summary>Askıda kapatılan kaynakların önceki hali (M2); yok = null.</summary>
+        public SubscriptionSuspensionState? Suspension { get; set; }
+
+        /// <summary>Disk tavanı aşımı tespiti (yalnız bildirim); yok = null.</summary>
+        public DiskOverageState? DiskOverage { get; set; }
     }
 
     public async Task SetOwnerAsync(Guid userId, Guid? ownerId, CancellationToken cancellationToken = default)
@@ -786,6 +796,49 @@ public sealed class CustomerScopeService(
 
             entry.SuspendReason = string.IsNullOrWhiteSpace(reason) ? "manual" : reason.Trim();
         }, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<string?> GetInactiveSourceAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        var state = await LoadAsync(cancellationToken);
+        return state.TryGetValue(userId.ToString("N"), out var entry) ? entry.InactiveSource : null;
+    }
+
+    /// <inheritdoc />
+    public Task SetInactiveSourceAsync(Guid userId, string? source, CancellationToken cancellationToken = default)
+        => DuzenleAsync(userId, entry => entry.InactiveSource = string.IsNullOrWhiteSpace(source) ? null : source.Trim(), cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<SubscriptionSuspensionState?> GetSuspensionStateAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        var state = await LoadAsync(cancellationToken);
+        return state.TryGetValue(userId.ToString("N"), out var entry) ? entry.Suspension : null;
+    }
+
+    /// <inheritdoc />
+    public Task SetSuspensionStateAsync(Guid userId, SubscriptionSuspensionState? suspension, CancellationToken cancellationToken = default)
+        => DuzenleAsync(userId, entry => entry.Suspension = suspension, cancellationToken);
+
+    /// <inheritdoc />
+    public Task SetDiskOverageAsync(Guid userId, DiskOverageState? overage, CancellationToken cancellationToken = default)
+        => DuzenleAsync(userId, entry => entry.DiskOverage = overage, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyCollection<SubscriptionAttentionState>> GetAttentionStatesAsync(CancellationToken cancellationToken = default)
+    {
+        var state = await LoadAsync(cancellationToken);
+        return state
+            .Where(item => Guid.TryParseExact(item.Key, "N", out _) &&
+                (item.Value.DiskOverage is not null ||
+                 item.Value.Suspension is { PendingClose.Count: > 0 } or { PendingRestore.Count: > 0 } or { Unsupported.Count: > 0 }))
+            .Select(item => new SubscriptionAttentionState(
+                Guid.ParseExact(item.Key, "N"),
+                item.Value.Suspension?.PendingClose.ToArray() ?? [],
+                item.Value.Suspension?.PendingRestore.ToArray() ?? [],
+                item.Value.Suspension?.Unsupported.ToArray() ?? [],
+                item.Value.DiskOverage))
+            .ToArray();
+    }
 
     /// <inheritdoc />
     public Task ResumeAsync(Guid userId, CancellationToken cancellationToken = default)

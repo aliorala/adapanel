@@ -130,6 +130,68 @@ public sealed class SslImportLifecycleTests
         Assert.Single(f.Audits); Assert.Equal(1, f.Persists); Assert.Equal(1, f.Bindings);
         await f.ChangeSite("id");
     }
+
+    [Theory]
+    [InlineData(443, "")]
+    [InlineData(443, ":80")]
+    [InlineData(443, ":8080")]
+    [InlineData(8443, "")]
+    [InlineData(8443, ":80")]
+    [InlineData(8443, ":8080")]
+    public async Task Http_only_site_import_redirects_to_the_installed_TLS_port_without_reusing_the_HTTP_port(int tlsPort, string incomingPort)
+    {
+        using var f = await Fixture.Create();
+        f.HttpOnlyBeforeImport = true;
+        f.Request.Port = tlsPort;
+        await f.Area.DosyaDeposu.WriteAsync("config/ssl.json", Array.Empty<SslCertificateDto>(), f.Token);
+        Assert.All(f.Site.Bindings, binding => Assert.Equal("http", binding.Protocol));
+        var certificate = await f.Invoke();
+        Assert.True(certificate.IsCertificateBound);
+        Assert.Equal(tlsPort, certificate.Port);
+        var script = Assert.Single(f.RedirectScripts);
+        var hostPattern = System.Text.RegularExpressions.Regex.Match(script,
+            """input='\{HTTP_HOST\}'; pattern='([^']+)'""");
+        Assert.True(hostPattern.Success, "The redirect must separate the incoming host from its HTTP port.");
+        var incoming = System.Text.RegularExpressions.Regex.Match(f.Name + incomingPort, hostPattern.Groups[1].Value);
+        Assert.True(incoming.Success);
+        var action = System.Text.RegularExpressions.Regex.Match(script, """-name 'url' -value '(https://[^']+)'""");
+        Assert.True(action.Success);
+        var location = action.Groups[1].Value.Replace("{C:1}", incoming.Groups[1].Value).Replace("{R:1}", "folder/page");
+        var expectedPort = tlsPort == 443 ? "" : $":{tlsPort}";
+        Assert.Equal($"https://{f.Name}{expectedPort}/folder/page", location);
+        Assert.Contains("^/\\.well-known/acme-challenge/", script);
+    }
+
+    [Theory]
+    [InlineData(443, false, false)]
+    [InlineData(8443, true, false)]
+    [InlineData(443, true, true)]
+    public async Task Import_does_not_redirect_another_HTTP_host_to_a_TLS_port_it_cannot_serve(int otherTlsPort, bool hasCommonPort, bool previousPrimary443)
+    {
+        using var f = await Fixture.Create(); f.Request.Port = 8443;
+        f.Site = new SiteDto { Id = f.Site.Id, Name = f.Name, PhysicalPath = f.Site.PhysicalPath,
+            ApplicationRootPath = f.Site.ApplicationRootPath, ApplicationPoolName = f.Site.ApplicationPoolName,
+            Bindings = [new() { Protocol = "http", HostName = f.Name, Port = 80 },
+                new() { Protocol = "http", HostName = "other.example.test", Port = 80 }] };
+        f.AdditionalBindings = [new() { SiteName = f.Name, BindingInformation = $"*:{otherTlsPort}:other.example.test",
+            Thumbprint = "other-working-certificate", CertificateReadable = true }];
+        if (previousPrimary443)
+            f.AdditionalBindings = [.. f.AdditionalBindings, new() { SiteName = f.Name, BindingInformation = $"*:443:{f.Name}",
+                Thumbprint = "previous-primary-certificate", CertificateReadable = true }];
+        var result = await f.Invoke();
+        Assert.True(result.IsCertificateBound);
+        Assert.Equal(8443, result.Port);
+        if (hasCommonPort)
+        {
+            Assert.Empty(result.FallbackReason);
+            Assert.Contains(otherTlsPort == 443 ? "https://{C:1}/{R:1}" : "https://{C:1}:8443/{R:1}", Assert.Single(f.RedirectScripts));
+        }
+        else
+        {
+            Assert.Equal("ssl.https_redirect_preserved", result.FallbackReason);
+            Assert.Empty(f.RedirectScripts); // The existing site-wide redirect is untouched.
+        }
+    }
     [Theory, InlineData(UserRole.Administrator), InlineData(UserRole.Reseller), InlineData(UserRole.Customer)]
     public async Task CurrentAuthorizedRolesKeepTheNormalImportPath(UserRole role)
     {
@@ -233,6 +295,9 @@ public sealed class SslImportLifecycleTests
         public readonly List<X509KeyStorageFlags> LoadFlags = [];
         public readonly List<string> Audits = [];
         public int Persists, Bindings, RedirectWrites, WebmailCalls;
+        public bool HttpOnlyBeforeImport;
+        public readonly List<string> RedirectScripts = [];
+        public IisHttpsBinding[] AdditionalBindings = [];
         public int PersistentBundleCertificateCount;
         public readonly List<string> Intermediates = [];
         public Action? AfterIntermediate;
@@ -296,7 +361,7 @@ public sealed class SslImportLifecycleTests
                     f.Bindings++; if (f.AfterBinding is not null) await f.AfterBinding();
                     return new CommandResult { ExitCode = f.BindingFails ? 1 : 0, StandardOutput = "OK", StandardError = f.BindingFails ? "fixture rejected binding" : "" };
                 },
-                RedirectCommand = (_, _) => { f.RedirectWrites++; return Task.FromResult(new CommandResult { ExitCode = 0, StandardOutput = "OK" }); }
+                RedirectCommand = (script, _) => { f.RedirectScripts.Add(script); f.RedirectWrites++; return Task.FromResult(new CommandResult { ExitCode = 0, StandardOutput = "OK" }); }
             };
             f.services = new ServiceCollection().AddSingleton(f.Context()).AddSingleton(sites).AddSingleton<IConcurrencyLock>(f.Gates).AddSingleton(scopes).BuildServiceProvider();
             f.controller = new SslController(f.Service, scopes, Fake<IWebmailService>((_, _) => { f.WebmailCalls++; return Task.CompletedTask; }),
@@ -349,8 +414,9 @@ public sealed class SslImportLifecycleTests
         private async Task<IReadOnlyCollection<IisHttpsBinding>?> ReadBindings(CancellationToken token)
         {
             if (BeforeInventory is not null) { var action = BeforeInventory; BeforeInventory = null; await action(); }
+            if (HttpOnlyBeforeImport && Bindings == 0) return [];
             return [new IisHttpsBinding { SiteName = Name, BindingInformation = "*:" + Request.Port + ":" + Request.HostName,
-                Thumbprint = thumbprint, CertificateReadable = true, StoreName = "My" }];
+                Thumbprint = thumbprint, CertificateReadable = true, StoreName = "My" }, .. AdditionalBindings];
         }
         public async Task ChangeActor(string change)
         {

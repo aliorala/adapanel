@@ -18,10 +18,11 @@
         <div class="wp-tile">
           <span class="tile-label">{{ t("panel.wp.version") }}</span>
           <strong>{{ wp.version || "?" }}</strong>
-          <span v-if="wp.updateAvailable" class="status-pill warn wp-update-pill">
+          <span v-if="!wp.versionMeasured" class="status-pill warn wp-update-pill">{{ t("panel.software.installedVersionUnknown") }}</span>
+          <span v-else-if="wp.updateAvailable" class="status-pill warn wp-update-pill">
             {{ t("panel.wp.updateAvailable", { version: wp.latestVersion }) }}
           </span>
-          <span v-else-if="wp.latestVersion" class="status-pill ok wp-update-pill">{{ t("panel.wp.upToDate") }}</span>
+          <span v-else-if="wp.versionComparisonMeasured" class="status-pill ok wp-update-pill">{{ t("panel.wp.upToDate") }}</span>
         </div>
         <div class="wp-tile">
           <span class="tile-label">{{ t("panel.wp.maintenance") }}</span>
@@ -34,8 +35,8 @@
       </div>
 
       <div class="wp-actions">
-        <a v-if="wp.adminUrl" class="secondary compact link-btn" :href="wp.adminUrl" target="_blank" rel="noopener">{{ t("panel.wp.openAdmin") }}</a>
-        <a v-if="wp.updateAvailable && wp.adminUrl" class="compact link-btn" :href="`${wp.adminUrl}update-core.php`" target="_blank" rel="noopener">{{ t("panel.wp.runUpdate") }}</a>
+        <a v-if="wp.adminUrl" class="secondary compact link-btn" :href="safeHref(wp.adminUrl)" target="_blank" rel="noopener">{{ t("panel.wp.openAdmin") }}</a>
+        <a v-if="wp.updateAvailable && wp.adminUrl" class="compact link-btn" :href="safeHref(`${wp.adminUrl}update-core.php`)" target="_blank" rel="noopener">{{ t("panel.wp.runUpdate") }}</a>
         <button class="secondary compact" v-bind="writeGate(busy)" @click="toggleMaintenance">
           {{ wp.maintenanceMode ? t("panel.wp.maintenanceOff") : t("panel.wp.maintenanceOn") }}
         </button>
@@ -89,6 +90,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from "../utils/url";
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import WordPressUpdates from "../components/WordPressUpdates.vue";

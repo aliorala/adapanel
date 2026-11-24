@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
@@ -38,6 +39,9 @@ public sealed class PanelTokenAuthenticationHandler(
     /// <summary>Anahtar sunucuda komut çalıştırmaya izin veriyor mu ("true"/"false").</summary>
     public const string AllowTerminalClaim = "adapanel_allow_terminal";
 
+    /// <summary>Salt okunur kapsam: true ise GET/HEAD dışındaki istekler 403 alır.</summary>
+    public const string ReadOnlyScopeClaim = "adapanel_readonly_scope";
+
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         // Başlık yoksa BAŞARISIZ değil "sonuç yok" dönülür: aynı istek başka bir şemayla
@@ -58,6 +62,14 @@ public sealed class PanelTokenAuthenticationHandler(
             return AuthenticateResult.Fail("apitoken.invalid");
         }
 
+        // IP/CIDR izin listesi: doluysa yalnız listedeki adreslerden gelen istek kabul edilir.
+        // Not: ForwardedHeaders bilerek kapalı (Program.cs); ters vekil arkasında RemoteIpAddress vekilin
+        // adresidir, bu durumda liste vekil adresine göre yazılmalıdır.
+        if (!ApiTokenIpAllowList.IsAllowed(token.AllowedIps, Context.Connection.RemoteIpAddress))
+        {
+            return AuthenticateResult.Fail("apitoken.ip_not_allowed");
+        }
+
         var user = await dbContext.Users
             .AsNoTracking()
             .FirstOrDefaultAsync(candidate => candidate.Id == token.UserId, Context.RequestAborted);
@@ -76,10 +88,11 @@ public sealed class PanelTokenAuthenticationHandler(
             new(ClaimTypes.Email, user.Email),
             new(ClaimTypes.Role, user.Role.ToString()),
             new("preferred_language", user.PreferredLanguage),
-            new(AllowDestructiveClaim, token.AllowDestructive ? "true" : "false"),
+            new(AllowDestructiveClaim, token.AllowDestructive && !token.ReadOnly ? "true" : "false"),
+            new(ReadOnlyScopeClaim, token.ReadOnly ? "true" : "false"),
             // Komut çalıştırma yalnız YÖNETİCİ anahtarında anlamlı: rol yükseltmesi olmasın diye
             // burada rolle de kesiştiriliyor.
-            new(AllowTerminalClaim, token.AllowTerminal && user.Role == Core.Enums.UserRole.Administrator ? "true" : "false")
+            new(AllowTerminalClaim, token.AllowTerminal && !token.ReadOnly && user.Role == Core.Enums.UserRole.Administrator ? "true" : "false")
         };
 
         var identity = new ClaimsIdentity(claims, SchemeName);

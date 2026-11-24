@@ -15,6 +15,12 @@ export type SslCertificate = {
   friendlyName: string;
   subject: string;
   notAfterUtc: string;
+  /** Sunucunun hesapladigi durum: valid | renewal_due (30 gun) | expiring (7 gun) | expired. Eski sunucuda yok. */
+  expiryStatus?: string;
+  /** Panel bu kaydin otomatik yenilemesini duraklatti (panel tetikli turlar atlar). */
+  renewalPaused?: boolean;
+  /** Panelin win-acme yenileme kimligi; yoksa (elle yuklenen) yenileme kontrolu yoktur. */
+  managedRenewalId?: string | null;
   // "letsencrypt" | "self-signed" | "manual" (başka bir sertifika otoritesi ya da elle yüklenmiş).
   source: string;
   // null = ÖLÇÜLEMEDİ. "Bağlama yok" ile "bakamadık" aynı şey değildir.
@@ -91,6 +97,9 @@ export type SslRemovalResult = {
   certificateAction: string;
   certificateUsedBy: string[];
   detail: string;
+  /** none | cancelled | kept_shared | cancel_failed: win-acme yenileme kaydina ne yapildi. */
+  renewalAction?: string;
+  renewalDetail?: string;
   workspace: SslWorkspace;
 };
 
@@ -111,3 +120,50 @@ export type SslRenewalResult = {
   failureReason: string;
   output: string;
 };
+
+export type RenewalAction = "pause" | "resume" | "cancel";
+
+export async function setRenewalState(payload: { siteName: string; hostName: string; port: number; action: RenewalAction }) {
+  const response = await apiClient.post<ApiEnvelope<SslCertificate>>("/ssl/renewal", payload);
+  if (response.data?.success !== true || !response.data.data) throw new UserFacingError("panel.ssl.renewalControlUnverified");
+  return response.data.data;
+}
+
+export type SslCsr = {
+  id: string;
+  hostName: string;
+  altNames: string[];
+  subject: string;
+  keySize: number;
+  createdAtUtc: string;
+  status: "pending" | "imported";
+  importedThumbprint: string;
+  /** Yalniz olusturma yanitinda dolu; listede bos. Ozel anahtar HICBIR yanitta yoktur. */
+  csrPem: string;
+};
+
+export async function listSslCsrs() {
+  const response = await apiClient.get<ApiEnvelope<SslCsr[]>>("/ssl-csr");
+  return response.data.data;
+}
+
+export async function createSslCsr(payload: { hostName: string; altNames: string[]; organization: string; country: string; state: string; locality: string; keySize: number }) {
+  const response = await apiClient.post<ApiEnvelope<SslCsr>>("/ssl-csr", payload);
+  if (response.data?.success !== true || !response.data.data?.csrPem) throw new UserFacingError("panel.ssl.csr.unverified");
+  return response.data.data;
+}
+
+export async function downloadSslCsr(id: string) {
+  const response = await apiClient.get<Blob>(`/ssl-csr/${encodeURIComponent(id)}/download`, { responseType: "blob" });
+  return response.data;
+}
+
+export async function importSignedCertificate(id: string, payload: { siteName: string; base64Content: string; port: number }) {
+  const response = await apiClient.post<ApiEnvelope<SslCertificate>>(`/ssl-csr/${encodeURIComponent(id)}/import`, payload);
+  if (response.data?.success !== true) throw new UserFacingError("panel.ssl.installationUnverified");
+  return response.data.data;
+}
+
+export async function deleteSslCsr(id: string) {
+  await apiClient.delete(`/ssl-csr/${encodeURIComponent(id)}`);
+}

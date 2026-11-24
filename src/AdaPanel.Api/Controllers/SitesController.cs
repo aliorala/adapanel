@@ -395,7 +395,8 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         }, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         await WriteAuditAsync("sites.document_root.updated", siteName, cancellationToken, ayrinti: site.PhysicalPath);
-        return Ok(ApiResponse<SiteDto>.Ok(site, "sites.document_root.updated"));
+        return Ok(ApiResponse<SiteDto>.Ok(site, site.PhpErrorLogging?.Status == "verified"
+            ? "sites.document_root.updated" : "php.logging.unverified"));
     }
 
     private async Task<bool> IsDocumentRootAllowedAsync(SiteDto current, string requested, CancellationToken token)
@@ -663,6 +664,9 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             $"site-quota:{aboneligim}",
             async () =>
             {
+                // M4: lisans "Kısıtlı" ise YENİ site açılmaz (yönetici dahil; mevcut siteler etkilenmez).
+                await LicenseGate.EnsureCanCreateAsync(HttpContext, Core.Dtos.Licensing.LicensedResource.Site, cancellationToken);
+
                 // M1 (profesyonel paneller gibi): Admin sınırsız; Bayi yalnız planının MaxSites kotası kadar site açabilir.
                 await EnsureSiteQuotaAsync(cancellationToken);
 
@@ -709,6 +713,11 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         await WriteAuditAsync("sites.create.completed", site.Name, cancellationToken);
 
         var result = new SiteCreationResultDto { Site = site };
+        if (site.PhpErrorLogging is { Status: not "verified" } logging)
+            result.Warnings.Add("PHP: " + logging.Detail);
+        // Varsayılan adımlar (DNS/FTP/SSL/güvenlik...) isteğe bağlıdır: site yine kurulur, ama hazırlanamayanlar SESSİZ kalmaz.
+        foreach (var feature in site.DefaultsFailedFeatures)
+            result.Warnings.Add($"sites.create.default_failed — {feature}");
 
         // ALT ALAN ADI: yeni site başka bir yönetilen sitenin ALTINDAysa, üst bölgeye A kaydı düşer.
         //
@@ -766,6 +775,7 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
                         async token =>
                         {
                             await authority.RevalidateAsync(dbContext, customerScopes, User, token);
+                            await LicenseGate.EnsureCanCreateAsync(HttpContext, Core.Dtos.Licensing.LicensedResource.Database, token);
                             if (await IsDatabaseQuotaReachedAsync(token))
                                 throw new AppException("database.quota_exceeded", 403, 403);
                             // This callback already owns the database lease. Pin until CREATE,
@@ -804,31 +814,24 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             var domain = string.IsNullOrWhiteSpace(request.HostName) ? site.Name : request.HostName.Trim();
             try
             {
-                await mailService.CreateDomainAsync(
+                var mailWorkspace = await mailService.CreateDomainAsync(
                     new Core.Dtos.Mail.CreateMailDomainRequest { DomainName = domain },
                     cancellationToken);
                 result.Created.Add($"mail: {domain}");
+                if (mailWorkspace.Warnings.Contains(Core.Dtos.Mail.MailDomainWarnings.SenderPolicyNotApplied))
+                {
+                    result.Warnings.Add($"mail ({domain}): sender forgery protection rule could not be applied.");
+                }
 
                 // profesyonel paneller gibi: mail domaini sitenin DNS bölgesine MX/SPF/DKIM/DMARC kayıtlarını
-                // otomatik yazsın (mail ekranındaki davranışla tutarlı). Best-effort.
-                try
+                // otomatik yazsın. Tek toplu yazma + ÖLÇÜLEN hüküm (mail ekranıyla aynı karar); yazılamadıysa
+                // sessiz geçilmez, uyarı olarak yanıta girer.
+                var (dnsPublished, dnsDetail) = await AdaPanel.Infrastructure.Mail.MailDnsPublication.PublishForSiteAsync(
+                    mailService, dnsService, site.Name, domain, cancellationToken);
+
+                if (!dnsPublished)
                 {
-                    var mailDns = await mailService.GetDnsRecordsAsync(domain, cancellationToken);
-                    foreach (var record in mailDns.Records.Where(r => !string.IsNullOrWhiteSpace(r.Value)))
-                    {
-                        await dnsService.UpsertRecordAsync(domain, new Core.Dtos.Sites.UpsertDnsRecordRequest
-                        {
-                            Type = record.Type,
-                            Host = record.Host,
-                            Value = record.Value,
-                            Priority = record.Priority,
-                            Ttl = 3600
-                        }, cancellationToken);
-                    }
-                }
-                catch
-                {
-                    // DNS otomatik uygulanamadıysa kullanıcı mail ekranından uygular.
+                    result.Warnings.Add($"mail ({domain}): DNS records (MX/SPF/DKIM/DMARC) were not published: {dnsDetail}. Add them manually.");
                 }
             }
             catch (Exception exception)
@@ -847,6 +850,9 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
                 : request.FtpPassword;
             try
             {
+                // M3: site oluştururken açılan varsayılan FTP hesabı da plan MaxFtpUsers kotasına tabidir
+                // (FtpController'daki kardeş yol ile AYNI kural; aşılırsa hesap açılmaz, uyarı döner).
+                await FtpQuota.EnsureAsync(customerScopes, ftpService, User, site.Name, cancellationToken);
                 await ftpService.CreateFtpUserAsync(
                     new Core.Dtos.Ftp.CreateFtpUserRequest
                     {
@@ -870,7 +876,8 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             }
         }
 
-        return Ok(ApiResponse<SiteCreationResultDto>.Ok(result, "sites.create.success"));
+        return Ok(ApiResponse<SiteCreationResultDto>.Ok(result,
+            result.Warnings.Count > 0 ? "sites.create.completed_with_warnings" : "sites.create.success"));
     }
 
     // Alt-kaynak (DB/mail/FTP) provisyon hatasını okunur özetler: AppException ise GERÇEK sebebi (Details =
@@ -942,6 +949,14 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         //
         // Karar artık GERÇEĞİ bilen yerde: cascade servisi yalnızca DROP'u başarılı olan
         // veritabanının kaydını siler, hayatta kalanların sahipliğini KORUYUP ölü site adını koparır.
+        // DÜRÜSTLÜK: bilinçsiz kalıntı varsa "başarılı/tamamlandı" denmez (denetim kaydı da "partial").
+        if (!result.FullyDeleted)
+        {
+            var kalintilar = string.Join(", ", result.Leftovers.Where(l => !l.Deliberate).Select(l => $"{l.Kind}:{l.Name} ({l.Reason})"));
+            await WriteAuditAsync("sites.delete.partial", siteName, cancellationToken, sahip, ayrinti: "leftovers: " + kalintilar);
+            return Ok(ApiResponse<SiteDeletionResultDto>.Ok(result, "sites.delete.completed_with_leftovers"));
+        }
+
         await WriteAuditAsync("sites.delete.completed", siteName, cancellationToken, sahip);
         return Ok(ApiResponse<SiteDeletionResultDto>.Ok(result, "sites.delete.success"));
     }

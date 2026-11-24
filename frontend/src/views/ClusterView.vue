@@ -97,18 +97,38 @@
         </label>
         <p class="field-hint">{{ t("panel.cluster.fieldEnabledHint") }}</p>
 
-        <!-- TLS doğrulaması VARSAYILAN AÇIK. Kapatmak, merkezin yönetici belirtecini araya
-             girene teslim etmeyi göze almaktır; bu yüzden kutu İŞARETLİ başlar ve işaret
-             kaldırılınca kırmızı uyarı çıkar. -->
-        <label class="check-field">
-          <input v-model="form.verifyTlsCertificate" type="checkbox" />
-          <span>{{ t("panel.cluster.fieldTls") }}</span>
-        </label>
-        <p v-if="form.verifyTlsCertificate" class="field-hint">{{ t("panel.cluster.fieldTlsHint") }}</p>
-        <p v-else class="notice error">{{ t("panel.cluster.fieldTlsWarning") }}</p>
+        <!-- G18: "TLS doğrulamasını kapat" KALDIRILDI. https düğümde yönetici sertifikanın parmak
+             izini görür, başka bir kanaldan teyit eder ve ONAYLAR; bağlantılar o parmak izine
+             sabitlenir. Onay olmadan https düğüme bağlanılmaz. -->
+        <div v-if="isHttpsAddress" class="cert-approval">
+          <div class="row-actions">
+            <button class="secondary compact" :disabled="operationBusy || probingCert" @click="readCertificate">
+              {{ probingCert ? t("panel.cluster.certReading") : t("panel.cluster.certRead") }}
+            </button>
+            <span v-if="form.certificateFingerprint" class="status-pill ok">{{ t("panel.cluster.certApprovedPill") }}</span>
+            <span v-else-if="editingId && !addressChanged" class="field-hint">{{ t("panel.cluster.certKeepHint") }}</span>
+          </div>
+          <dl v-if="certProbe && certProbe.https" class="cert-details">
+            <dt>{{ t("panel.cluster.certFingerprint") }}</dt>
+            <dd><code>{{ certProbe.fingerprint }}</code></dd>
+            <dt>{{ t("panel.cluster.certSubject") }}</dt>
+            <dd>{{ certProbe.subject }}</dd>
+            <dt>{{ t("panel.cluster.certIssuer") }}</dt>
+            <dd>{{ certProbe.issuer }}</dd>
+            <dt>{{ t("panel.cluster.certValidity") }}</dt>
+            <dd>{{ certProbe.notBeforeUtc ? formatDateTime(certProbe.notBeforeUtc) : "-" }} – {{ certProbe.notAfterUtc ? formatDateTime(certProbe.notAfterUtc) : "-" }}</dd>
+          </dl>
+          <p v-if="certProbe && certProbe.https" class="field-hint">{{ certProbe.chainTrusted ? t("panel.cluster.certChainTrusted") : t("panel.cluster.certChainUntrusted") }}</p>
+          <div v-if="certProbe && certProbe.https" class="row-actions">
+            <button class="compact" :disabled="operationBusy || form.certificateFingerprint === certProbe.fingerprint" @click="approveProbed">
+              {{ t("panel.cluster.certApprove") }}
+            </button>
+          </div>
+          <p class="field-hint">{{ t("panel.cluster.certHint") }}</p>
+        </div>
 
         <div class="row-actions">
-          <button class="compact" :disabled="saving" @click="save">
+          <button class="compact" :disabled="operationBusy" @click="save">
             {{ saving ? t("panel.cluster.saving") : t("panel.cluster.save") }}
           </button>
         </div>
@@ -193,25 +213,35 @@
                hizada -- refleksle yanlisina basilacak dizilim. Uc guvenli eylem kendi obeginde
                kaldi, silme obekten kopartildi ve HER ZAMAN satirin sonunda duruyor. -->
           <footer class="node-actions">
-            <span v-if="!row.node.verifyTlsCertificate" class="status-pill danger">
-              {{ t("panel.cluster.tlsOff") }}
+            <span v-if="row.node.certificateState === 'reapproval_required'" class="status-pill danger">
+              {{ t("panel.cluster.certReapproval") }}
+            </span>
+            <span v-else-if="row.node.certificateState === 'pinned'" class="status-pill ok" :title="row.node.certificateFingerprint">
+              {{ t("panel.cluster.certPinned") }}
             </span>
             <span v-if="!row.node.hasToken" class="status-pill warn">{{ t("panel.cluster.noToken") }}</span>
             <span class="cell-muted">{{ sonGorulme(row) }}</span>
             <div class="safe-actions">
-              <button class="secondary compact row-button" :disabled="busyId === row.node.id" @click="probe(row)">
+              <button class="secondary compact row-button" :disabled="operationBusy" @click="probe(row)">
                 {{ t("panel.cluster.test") }}
               </button>
               <button
                 class="secondary compact row-button"
-                :disabled="busyId === row.node.id || !row.reachable"
+                :disabled="operationBusy || !row.reachable"
                 :title="row.reachable ? t('panel.cluster.openHint') : t('panel.cluster.openDisabled')"
                 @click="open(row)">
                 {{ t("panel.cluster.open") }}
               </button>
+              <button
+                v-if="row.node.certificateState !== 'not_applicable'"
+                class="secondary compact row-button"
+                :disabled="operationBusy"
+                @click="reapprove(row)">
+                {{ row.node.certificateState === "pinned" ? t("panel.cluster.certReapprove") : t("panel.cluster.certApproveNow") }}
+              </button>
               <button class="secondary compact row-button" @click="edit(row)">{{ t("panel.common.edit") }}</button>
             </div>
-            <button class="danger compact row-button" :disabled="busyId === row.node.id" @click="remove(row)">
+            <button class="danger compact row-button" :disabled="operationBusy" @click="remove(row)">
               {{ t("panel.cluster.remove") }}
             </button>
           </footer>
@@ -248,8 +278,16 @@
         </label>
       </div>
 
+      <!-- Otomatik seçimin SONUCU önceden gösterilir: "Otomatik" bırakan yönetici sitenin nereye gideceğini
+           oluşturmadan önce bilir (ölçülmüş değer; okunamazsa sebebi söylenir, tahmin yazılmaz). -->
+      <p v-if="placementError" class="notice error" role="alert">{{ placementError }}</p>
+      <p v-else-if="placement" class="meta placement-preview" data-testid="cluster-placement">
+        <template v-if="placement.nodeId">{{ t("panel.cluster.placementPreview", { node: placement.nodeLabel, reason: t(placement.reasonKey) }) }}</template>
+        <template v-else>{{ t(placement.reasonKey) }}</template>
+      </p>
+
       <div class="row-actions">
-        <button class="compact" :disabled="creatingSite" @click="createSite">
+        <button class="compact" :disabled="operationBusy" @click="createSite">
           {{ creatingSite ? t("panel.cluster.siteCreating") : t("panel.cluster.siteCreate") }}
         </button>
       </div>
@@ -268,22 +306,28 @@ import { getFormattingLocale } from '../utils/locale';
  *
  * Bu ekran YALNIZ YÖNETİCİ içindir; uç da sınıf düzeyinde Administrator ister (asıl dayatma orada).
  */
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import {
   createClusterSite,
   getClusterNodeLink,
+  getClusterPlacement,
   getClusterOverview,
+  approveClusterCertificate,
+  probeClusterCertificate,
   probeClusterNode,
   registerClusterNode,
   removeClusterNode,
   updateClusterNode,
+  type ClusterCertificateProbe,
   type ClusterNodeStatus,
-  type ClusterOverview
+  type ClusterOverview,
+  type ClusterPlacement
 } from "../api/cluster";
-import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
+import { getSessionEpoch } from "../api/client";
 import { formatDateTime } from "../utils/datetime";
 import { openAsyncReachable } from "../utils/externalTab";
 
@@ -307,182 +351,220 @@ const form = reactive({
   address: "",
   apiToken: "",
   enabled: true,
-  // VARSAYILAN AÇIK — sunucu tarafındaki varsayılanla aynı.
-  verifyTlsCertificate: true
+  // Yöneticinin ONAYLADIĞI parmak izi. Yalnız `approveProbed` doldurur.
+  certificateFingerprint: ""
 });
 
+const certProbe = ref<ClusterCertificateProbe | null>(null);
+const probingCert = ref(false);
+const editingAddress = ref("");
+// Şema yazılmadıysa sunucu https varsayar (ClusterAddressGuard.TryNormalize).
+const isHttpsAddress = computed(() => {
+  const value = form.address.trim();
+  return value.length > 0 && (/^https:\/\//i.test(value) || !/^[a-z]+:\/\//i.test(value));
+});
+const addressChanged = computed(() => editingId.value.length > 0
+  && form.address.trim().toLowerCase().replace(/\/+$/, "") !== editingAddress.value.toLowerCase().replace(/\/+$/, ""));
+
 const siteForm = reactive({ name: "", nodeId: "" });
+const placement = ref<ClusterPlacement | null>(null);
+const placementError = ref("");
 
 const ulasilabilirler = computed(() => (overview.value?.nodes ?? []).filter((row) => row.reachable));
 
 const otomatikEtiketi = computed(() => t("panel.cluster.siteNodeAuto"));
 
-onMounted(refresh);
+const auth = useAuthStore();
+const operationBusy = computed(() => saving.value || creatingSite.value || busyId.value.length > 0);
+let disposed = false, generation = 0, request = 0;
+onBeforeUnmount(() => { disposed = true; });
+function context() {
+  const session = auth.session, actor = session?.user?.id, role = session?.user?.role;
+  const version = generation, epoch = getSessionEpoch();
+  return { current: () => !disposed && version === generation && epoch === getSessionEpoch() &&
+    session === auth.session && actor === auth.session?.user?.id && role === auth.session?.user?.role && role === "Administrator" };
+}
+function canMutate() { return context().current() && !operationBusy.value; }
+function invalidateRead() { request++; loading.value = false; }
 
-async function refresh() {
+async function refresh(): Promise<"loaded" | "failed" | "stale"> {
+  const target = context(), id = ++request;
+  if (!target.current()) return "stale";
   loading.value = true;
   try {
-    overview.value = await getClusterOverview();
+    const result = await getClusterOverview();
+    if (!target.current() || id !== request) return "stale";
+    overview.value = result;
     loaded.value = true;
+    // Yerleşim önizlemesi ayrı okunur: hata düğüm listesini gizlemez, ama sessizce de yutulmaz.
+    try {
+      const preview = await getClusterPlacement();
+      if (target.current() && id === request) { placement.value = preview; placementError.value = ""; }
+    } catch (error) {
+      if (target.current() && id === request) { placement.value = null; placementError.value = resolveApiMessage(error); }
+    }
+    if (!target.current() || id !== request) return "stale";
+    return "loaded";
   } catch (error) {
+    if (!target.current() || id !== request) return "stale";
     showNotice(resolveApiMessage(error), true);
+    return "failed";
   } finally {
-    loading.value = false;
+    if (target.current() && id === request) loading.value = false;
   }
 }
 
-function toggleForm() {
-  showForm.value = !showForm.value;
-  if (!showForm.value) {
-    resetForm();
-  }
+async function showMutationResult(target: ReturnType<typeof context>, message: string, error = false) {
+  if (!target.current()) return;
+  const refreshed = await refresh();
+  if (!target.current() || refreshed === "stale") return;
+  showNotice(refreshed === "failed" ? `${message}\n\n${notice.value}` : message, error || refreshed === "failed");
 }
 
+function toggleForm() { showForm.value = !showForm.value; if (!showForm.value) resetForm(); }
 function resetForm() {
   editingId.value = "";
-  form.label = "";
-  form.address = "";
-  form.apiToken = "";
-  form.enabled = true;
-  form.verifyTlsCertificate = true;
+  Object.assign(form, { label: "", address: "", apiToken: "", enabled: true, certificateFingerprint: "" });
+  certProbe.value = null; editingAddress.value = "";
 }
-
 function edit(row: ClusterNodeStatus) {
   editingId.value = row.node.id;
-  form.label = row.node.label;
-  form.address = row.node.address;
-  // Belirteç OKUNAMAZ: sunucu yalnız korunmuş hâlini saklar ve geri döndürmez.
-  // Boş bırakılırsa mevcut anahtar korunur.
-  form.apiToken = "";
-  form.enabled = row.node.enabled;
-  form.verifyTlsCertificate = row.node.verifyTlsCertificate;
+  Object.assign(form, { label: row.node.label, address: row.node.address, apiToken: "", enabled: row.node.enabled, certificateFingerprint: "" });
+  certProbe.value = null; editingAddress.value = row.node.address;
   showForm.value = true;
 }
 
+// Adres değişince okunmuş sertifika ve verilmiş onay GEÇERSİZDİR (başka sunucunun parmak izi).
+watch(() => form.address, () => { certProbe.value = null; form.certificateFingerprint = ""; });
+
+async function readCertificate() {
+  if (!canMutate() || probingCert.value) return;
+  const target = context(), address = form.address.trim();
+  probingCert.value = true;
+  try {
+    const result = await probeClusterCertificate(address);
+    if (!target.current() || form.address.trim() !== address) return;
+    certProbe.value = result;
+  } catch (error) { if (target.current()) showNotice(resolveApiMessage(error), true); }
+  finally { if (target.current()) probingCert.value = false; }
+}
+
+function approveProbed() {
+  if (certProbe.value?.https) form.certificateFingerprint = certProbe.value.fingerprint;
+}
+
+// Onay yok / sertifika yenilendi: yönetici parmak izini görür, onaylarsa sabitlenir.
+async function reapprove(row: ClusterNodeStatus) {
+  if (!canMutate()) return;
+  const target = context(), nodeId = row.node.id;
+  let probeResult: ClusterCertificateProbe;
+  busyId.value = nodeId;
+  try { probeResult = await probeClusterCertificate(row.node.address); }
+  catch (error) { if (target.current()) { showNotice(resolveApiMessage(error), true); busyId.value = ""; } return; }
+  if (!target.current()) return;
+  busyId.value = "";
+  const confirmed = await confirm({
+    title: t("panel.cluster.certReapproveTitle"),
+    message: t("panel.cluster.certReapproveMessage", { label: row.node.label, fingerprint: probeResult.fingerprint }),
+    impact: [row.node.certificateFingerprint ? t("panel.cluster.certOldFingerprint", { fingerprint: row.node.certificateFingerprint }) : t("panel.cluster.certNoOldFingerprint"), t("panel.cluster.certVerifyElsewhere")],
+    confirmLabel: t("panel.cluster.certApprove"), busyLabel: t("panel.cluster.certApproving")
+  });
+  if (!confirmed || !target.current() || !canMutate()) return;
+  invalidateRead(); busyId.value = nodeId;
+  try {
+    await approveClusterCertificate(nodeId, probeResult.fingerprint);
+    await showMutationResult(target, t("cluster.certificate_approved"));
+  } catch (error) { if (target.current()) showNotice(resolveApiMessage(error), true); }
+  finally { if (target.current()) busyId.value = ""; }
+}
+
 async function save() {
+  if (!canMutate()) return;
   if (form.label.trim().length < 2 || form.address.trim().length === 0) {
-    showNotice(t("panel.cluster.formIncomplete"), true);
-    return;
+    showNotice(t("panel.cluster.formIncomplete"), true); return;
   }
-
   if (!editingId.value && form.apiToken.trim().length === 0) {
-    showNotice(t("cluster.token_required"), true);
-    return;
+    showNotice(t("cluster.token_required"), true); return;
   }
-
+  // https düğüm yeni kayıtta ya da adres değişince ONAYSIZ kaydedilemez (sunucu da reddeder).
+  if (isHttpsAddress.value && !form.certificateFingerprint && (!editingId.value || addressChanged.value)) {
+    showNotice(t("cluster.certificate_approval_required"), true); return;
+  }
+  const target = context(), nodeId = editingId.value, snapshot = JSON.stringify(form);
+  const payload = { label: form.label.trim(), address: form.address.trim(), apiToken: form.apiToken.trim(), enabled: form.enabled, certificateFingerprint: form.certificateFingerprint };
+  invalidateRead();
   saving.value = true;
   try {
-    const payload = {
-      label: form.label.trim(),
-      address: form.address.trim(),
-      apiToken: form.apiToken.trim(),
-      enabled: form.enabled,
-      verifyTlsCertificate: form.verifyTlsCertificate
-    };
-
-    if (editingId.value) {
-      await updateClusterNode(editingId.value, payload);
-    } else {
-      await registerClusterNode(payload);
-    }
-
-    showForm.value = false;
-    resetForm();
-    await refresh();
-    showNotice(t("panel.cluster.saved"), false);
+    if (nodeId) await updateClusterNode(nodeId, payload); else await registerClusterNode(payload);
+    if (!target.current()) return;
+    if (editingId.value === nodeId && JSON.stringify(form) === snapshot) { showForm.value = false; resetForm(); }
+    await showMutationResult(target, t("panel.cluster.saved"));
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    saving.value = false;
-  }
+    if (target.current()) showNotice(resolveApiMessage(error), true);
+  } finally { if (target.current()) saving.value = false; }
 }
 
 async function probe(row: ClusterNodeStatus) {
-  busyId.value = row.node.id;
+  if (!canMutate()) return;
+  const target = context(); invalidateRead(); busyId.value = row.node.id;
   try {
-    const durum = await probeClusterNode(row.node.id);
-    await refresh();
-    showNotice(
-      durum.reachable
-        ? t("panel.cluster.testOk", { label: row.node.label, ms: durum.durationMs })
-        : `${t(durum.statusKey)}${durum.detail ? ` (${durum.detail})` : ""}`,
-      !durum.reachable
-    );
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busyId.value = "";
-  }
+    const result = await probeClusterNode(row.node.id);
+    await showMutationResult(target, result.reachable
+      ? t("panel.cluster.testOk", { label: row.node.label, ms: result.durationMs })
+      : `${t(result.statusKey)}${result.detail ? ` (${result.detail})` : ""}`, !result.reachable);
+  } catch (error) { if (target.current()) showNotice(resolveApiMessage(error), true); }
+  finally { if (target.current()) busyId.value = ""; }
 }
 
-/**
- * "Düğüme git": düğümün GERÇEK panel adresini (gizli giriş yolu dahil) çözer ve yeni sekmede açar.
- *
- * Bu bir OTURUM DEVRİ DEĞİLDİR ve olmaması bilinçlidir — yönetici düğümde kendi kimliğiyle
- * giriş yapar. Gerekçe sunucu tarafında (ClusterNodeLinkDto) yazılı: bir API anahtarının oturum
- * çerezine dönüşebilmesi, panelin kurduğu yetenek modelini anlamsızlaştırırdı.
- */
 async function open(row: ClusterNodeStatus) {
-  if (busyId.value) return;
-  busyId.value = row.node.id;
+  if (!canMutate()) return;
+  const target = context(); busyId.value = row.node.id;
   try {
-    await openAsyncReachable(async () => (await getClusterNodeLink(row.node.id)).url);
-    showNotice(t("panel.cluster.openedHint", { label: row.node.label }), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busyId.value = "";
-  }
+    await openAsyncReachable(async () => {
+      const link = await getClusterNodeLink(row.node.id);
+      if (!target.current()) throw new Error("Stale cluster panel link");
+      return link.url;
+    });
+    if (target.current()) showNotice(t("panel.cluster.openedHint", { label: row.node.label }), false);
+  } catch (error) { if (target.current()) showNotice(resolveApiMessage(error), true); }
+  finally { if (target.current()) busyId.value = ""; }
 }
 
 async function remove(row: ClusterNodeStatus) {
-  const confirmed = await confirm({
-    title: t("panel.cluster.removeTitle"),
-    message: t("panel.cluster.removeMessage", { label: row.node.label }),
-    impact: [t("panel.cluster.removeImpactLocal"), t("panel.cluster.removeImpactRemote")],
-    confirmLabel: t("panel.cluster.remove"),
-    busyLabel: t("panel.cluster.removing")
-  });
-
-  if (!confirmed) {
-    return;
-  }
-
-  busyId.value = row.node.id;
+  if (!canMutate()) return;
+  const target = context(), nodeId = row.node.id;
+  const confirmed = await confirm({ title: t("panel.cluster.removeTitle"), message: t("panel.cluster.removeMessage", { label: row.node.label }),
+    impact: [t("panel.cluster.removeImpactLocal"), t("panel.cluster.removeImpactRemote")], confirmLabel: t("panel.cluster.remove"), busyLabel: t("panel.cluster.removing") });
+  if (!confirmed || !target.current() || !canMutate()) return;
+  invalidateRead(); busyId.value = nodeId;
   try {
-    await removeClusterNode(row.node.id);
-    await refresh();
-    showNotice(t("panel.cluster.removed"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busyId.value = "";
-  }
+    await removeClusterNode(nodeId);
+    await showMutationResult(target, t("panel.cluster.removed"));
+  } catch (error) { if (target.current()) showNotice(resolveApiMessage(error), true); }
+  finally { if (target.current()) busyId.value = ""; }
 }
 
 async function createSite() {
-  if (siteForm.name.trim().length < 2) {
-    showNotice(t("panel.cluster.siteNameRequired"), true);
-    return;
-  }
-
-  creatingSite.value = true;
+  if (!canMutate()) return;
+  if (siteForm.name.trim().length < 2) { showNotice(t("panel.cluster.siteNameRequired"), true); return; }
+  const target = context(), snapshot = siteForm.name;
+  invalidateRead(); creatingSite.value = true;
   try {
-    const sonuc = await createClusterSite({
-      nodeId: siteForm.nodeId || null,
-      name: siteForm.name.trim(),
-      hostName: siteForm.name.trim()
-    });
-
-    siteForm.name = "";
-    await refresh();
-    showNotice(t("panel.cluster.siteCreated", { site: sonuc.siteName, label: sonuc.nodeLabel }), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    creatingSite.value = false;
-  }
+    const result = await createClusterSite({ nodeId: siteForm.nodeId || null, name: siteForm.name.trim(), hostName: siteForm.name.trim() });
+    if (!target.current()) return;
+    if (siteForm.name === snapshot) siteForm.name = "";
+    await showMutationResult(target, t("panel.cluster.siteCreated", { site: result.siteName, label: result.nodeLabel }));
+  } catch (error) { if (target.current()) showNotice(resolveApiMessage(error), true); }
+  finally { if (target.current()) creatingSite.value = false; }
 }
+
+watch(() => [auth.session, auth.session?.user?.id, auth.session?.user?.role], () => {
+  generation++; request++;
+  overview.value = null; loaded.value = loading.value = saving.value = creatingSite.value = false;
+  busyId.value = notice.value = ""; noticeError.value = showForm.value = false;
+  resetForm(); siteForm.name = siteForm.nodeId = "";
+  void refresh();
+}, { immediate: true, flush: "sync" });
 
 function statusTone(row: ClusterNodeStatus) {
   if (row.reachable) {
@@ -589,6 +671,11 @@ function showNotice(message: string, isError: boolean) {
 </script>
 
 <style scoped>
+.cert-approval { display: grid; gap: 8px; }
+.cert-details { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+.cert-details dt { color: var(--text-muted, #6b7280); }
+.cert-details dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .cert-details { grid-template-columns: 1fr; } }
 .cluster-workspace {
   align-content: start;
 }

@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createRenderer, h, nextTick, ssrContextKey, type App, type Component } from "vue";
+import { createPinia } from "pinia";
 import ClusterView from "./ClusterView.vue";
 import type { ClusterNodeStatus } from "../api/cluster";
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
@@ -9,7 +10,7 @@ let app: App | undefined;
 afterEach(() => { app?.unmount(); app = undefined; });
 async function mount() {
   const renderer = createRenderer<object, object>({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
-  app = renderer.createApp({ ...ClusterView, render: () => h("section") } as Component); app.provide(ssrContextKey, {});
+  app = renderer.createApp({ ...ClusterView, render: () => h("section") } as Component).use(createPinia()); app.provide(ssrContextKey, {});
   const state = (app.mount({}).$ as unknown as { setupState: { cpuPercent(row: ClusterNodeStatus): number | null; memoryPercent(row: ClusterNodeStatus): number | null; enDoluDisk(row: ClusterNodeStatus): number | null } }).setupState;
   await nextTick(); return state;
 }

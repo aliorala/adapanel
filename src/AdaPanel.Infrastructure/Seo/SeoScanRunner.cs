@@ -26,6 +26,12 @@ public sealed class SeoScanRunner(
     SeoScanQueue queue,
     ILogger<SeoScanRunner> logger)
 {
+    private readonly Func<SeoCrawlLimits, HttpClient> createClient = SeoHttpTransport.CreateClient;
+
+    internal SeoScanRunner(IIisSiteService sites, SeoReportStore reports, SeoScanQueue jobs,
+        ILogger<SeoScanRunner> log, Func<SeoCrawlLimits, HttpClient> clientFactory)
+        : this(sites, reports, jobs, log) => createClient = clientFactory;
+
     /// <summary>Sitemap'ten kaç adres GERÇEKTEN açılıp denenir. Tamamını denemek ikinci bir tarama olurdu.</summary>
     public const int SitemapProbeLimit = 5;
 
@@ -50,7 +56,7 @@ public sealed class SeoScanRunner(
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(limits.TotalTimeout);
 
-            using var client = SeoHttpTransport.CreateClient(limits);
+            using var client = createClient(limits);
             var crawler = new SeoCrawler(client, limits);
 
             var crawl = await crawler.CrawlAsync(
@@ -61,10 +67,21 @@ public sealed class SeoScanRunner(
 
             // robots/sitemap denetimi iptal edilmiş bir taramada ATLANIR: kullanıcı durdurduysa
             // yeni istek atmak, durdurma isteğine saygısızlık olurdu.
-            var robots = crawl.Interrupted ? new SeoRobotsDto { Error = "interrupted" } : await CheckRobotsAsync(crawler, target, timeout.Token);
-            var sitemap = crawl.Interrupted
-                ? new SeoSitemapDto { Path = "/sitemap.xml", Error = "interrupted" }
-                : await CheckSitemapAsync(crawler, target, robots, timeout.Token);
+            var robots = new SeoRobotsDto { Error = "interrupted" };
+            var sitemap = new SeoSitemapDto { Path = "/sitemap.xml", Error = "interrupted" };
+            if (!crawl.Interrupted)
+            {
+                try
+                {
+                    robots = await CheckRobotsAsync(crawler, target, timeout.Token);
+                    sitemap = await CheckSitemapAsync(crawler, target, robots, timeout.Token);
+                }
+                catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+                {
+                    // Keep pages already measured when cancellation happens in auxiliary checks.
+                    crawl.Interrupted = true;
+                }
+            }
 
             var findings = SeoFindingRules.Evaluate(crawl.Pages, robots, sitemap, crawl.LimitReached).ToList();
 
@@ -80,7 +97,8 @@ public sealed class SeoScanRunner(
                 });
             }
 
-            var history = await reportStore.ReadAsync(job.SiteName, cancellationToken);
+            // Finalization must survive cancellation, just like the report write below.
+            var history = await reportStore.ReadAsync(job.SiteName, CancellationToken.None);
             var previous = history.Reports.FirstOrDefault(report => report.Status == "completed");
             var (yeni, cozulen) = Compare(previous?.Findings, findings);
 
@@ -107,6 +125,16 @@ public sealed class SeoScanRunner(
             };
 
             await SaveAsync(job, report, CancellationToken.None);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await SaveAsync(job, new SeoScanReportDto
+            {
+                AnalysisVersion = 1, Id = job.Id, SiteName = job.SiteName,
+                StartedAtUtc = startedAt, CompletedAtUtc = DateTime.UtcNow,
+                DurationMs = stopwatch.ElapsedMilliseconds, PageLimit = limits.MaxPages,
+                Status = "cancelled"
+            }, CancellationToken.None);
         }
         catch (Exception exception)
         {

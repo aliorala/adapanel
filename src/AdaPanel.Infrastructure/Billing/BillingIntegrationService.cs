@@ -96,17 +96,19 @@ public sealed class BillingIntegrationService(
             hesaplar.Add(satir.Hesap);
         }
 
+        var failedAccounts = abonelikler.Count - hesaplar.Count;
         var rapor = new BillingUsageReportDto
         {
             GeneratedAtUtc = DateTime.UtcNow,
             Accounts = hesaplar,
-            UnmeasuredTrafficCount = olculemeyen
+            UnmeasuredTrafficCount = olculemeyen,
+            FailedAccountCount = failedAccounts
         };
 
         await KaydetAsync(
             "usage",
-            "ok",
-            $"{hesaplar.Count} abonelik raporlandi ({olculemeyen} tanesinin trafigi, " +
+            failedAccounts == 0 ? "ok" : hesaplar.Count == 0 ? "error" : "partial",
+            $"{hesaplar.Count} abonelik raporlandi, {failedAccounts} abonelik okunamadi ({olculemeyen} tanesinin trafigi, " +
             $"{olculemeyenDisk} tanesinin diski olculemedi).",
             hesaplar.Count,
             cancellationToken);

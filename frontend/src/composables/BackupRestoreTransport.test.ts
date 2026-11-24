@@ -30,6 +30,14 @@ beforeEach(() => {
   dialogs.prompt.mockResolvedValue("fixture-password"); dialogs.confirm.mockImplementation(async options => { await options.action(); return true; }); scope = effectScope();
 });
 afterEach(() => { scope.stop(); apiClient.defaults.adapter = originalAdapter; invalidateSessionRequests(); vi.unstubAllGlobals(); });
+it.each([false, true])("transmits the explicit DEFINER adaptation choice: %s", async adapt => {
+  const flow = scope.run(() => useBackupRestore())!;
+  dialogs.confirm.mockImplementation(async options => { options.checkbox.value = adapt; await options.action(); return true; });
+  await flow.restore(record(), vi.fn(), vi.fn());
+  const body = JSON.parse(calls.find(config => config.url === "/backup/restore")!.data);
+  expect(body.adaptDefiners ?? false).toBe(adapt);
+  expect(body.backupId).toBe("one");
+});
 for (const transition of ["actor", "session"] as const) for (const stage of ["chain", "password", "confirmation", "restore", "refresh"] as const) {
   it(`does not continue ${stage} into a changed ${transition} with the same administrator role`, async () => {
     const flow = scope.run(() => useBackupRestore())!, gate = deferred<void>(), result = vi.fn(), error = vi.fn();

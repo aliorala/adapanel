@@ -39,8 +39,10 @@ internal static class WebmailTlsConfiguration
 
     internal static async Task<string> PrepareAsync(JsonFileStore store, string installRoot, CancellationToken token)
     {
-        var state = await store.ReadAsync<CertificateHost?>(MailCertificateStoreReference.StatePath, null, token);
-        var host = state?.HostName?.Trim() ?? "";
+        var registry = await MailCertificateRegistry.ReadAsync(store, token);
+        // Roundcube shares one IMAP/SMTP endpoint. Adding another domain's SNI certificate
+        // must not silently replace its already validated connection hostname.
+        var host = registry.PrimaryHostName.Trim();
         var caPath = Path.Combine(installRoot, "config", "adapanel-trusted-roots.pem");
         var options = Options(host, caPath);
         // Validate both actual services before migrating an existing managed config.

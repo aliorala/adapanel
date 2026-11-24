@@ -1,3 +1,4 @@
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Firewall;
 using AdaPanel.Core.Interfaces;
@@ -18,6 +19,8 @@ namespace AdaPanel.Api.Controllers;
 [Route("api/v1/firewall")]
 public sealed class FirewallController(
     IFirewallService firewallService,
+    IIpBlockService ipBlockService,
+    AdaPanel.Data.Persistence.AdaPanelDbContext db,
     IAuditService auditService) : ControllerBase
 {
     [HttpGet]
@@ -34,6 +37,53 @@ public sealed class FirewallController(
         var panelPort = HttpContext.Connection.LocalPort;
         var status = await firewallService.GetPortStatusAsync(panelPort, cancellationToken);
         return Ok(ApiResponse<IReadOnlyCollection<PortStatusDto>>.Ok(status));
+    }
+
+    [HttpGet("ip-blocks")]
+    public async Task<ActionResult<ApiResponse<IpBlockListDto>>> GetIpBlocksAsync(CancellationToken cancellationToken) =>
+        Ok(ApiResponse<IpBlockListDto>.Ok(await ipBlockService.GetAsync(cancellationToken)));
+
+    /// <summary>
+    /// IP/CIDR engeli ekler (istege bagli sureli). Kilitlenme korumasi: istegi yapan yoneticinin IP'si,
+    /// son 12 saatte basarili giris yapmis IP'ler ve panelin kendi adresleri ASLA engellenmez.
+    /// </summary>
+    [HttpPost("ip-blocks")]
+    public async Task<ActionResult<ApiResponse<IpBlockEntryDto>>> AddIpBlockAsync(
+        [FromBody] AddIpBlockRequest request, CancellationToken cancellationToken)
+    {
+        var since = DateTime.UtcNow.AddHours(-12);
+        var recentAdminIps = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.ToArrayAsync(
+            db.AuditLogs.Where(log => log.Action == "auth.login.succeeded" && log.CreatedAtUtc >= since && log.IpAddress != null)
+                .Select(log => log.IpAddress!).Distinct().Take(200), cancellationToken);
+        var protectedAddresses = recentAdminIps
+            .Append(HttpContext.Connection.RemoteIpAddress?.ToString() ?? string.Empty)
+            .Append(HttpContext.Connection.LocalIpAddress?.ToString() ?? string.Empty)
+            .Where(value => value.Length > 0).ToArray();
+
+        try
+        {
+            var entry = await ipBlockService.AddAsync(request, User.Identity?.Name ?? "unknown", protectedAddresses, cancellationToken);
+            await auditService.AuditAsync(HttpContext, "firewall.ipblock.added", $"firewall:{entry.RuleName}",
+                $"target={entry.Target}; expires={(entry.ExpiresAtUtc is null ? "never" : entry.ExpiresAtUtc.Value.ToString("O"))}; " +
+                $"rule={entry.RuleState}" + (entry.RuleState == "applied" ? string.Empty : " (NOT enforced on the network)"));
+            return Ok(ApiResponse<IpBlockEntryDto>.Ok(entry, entry.RuleState == "applied" ? "firewall.ipblock_saved" : "firewall.ipblock_rule_failed"));
+        }
+        catch (AppException exception) when (exception.MessageKey == "firewall.ipblock_would_lock_out")
+        {
+            // Reddedilen girisim de kayda deger: yonetici kendini ya da paneli engellemeye calisti.
+            await auditService.AuditAsync(HttpContext, "firewall.ipblock.refused", "firewall:ip-block",
+                $"target={request.Target}; reason=lock-out protection");
+            throw;
+        }
+    }
+
+    [HttpDelete("ip-blocks/{id}")]
+    public async Task<ActionResult<ApiResponse<object>>> RemoveIpBlockAsync(string id, CancellationToken cancellationToken)
+    {
+        var entry = await ipBlockService.RemoveAsync(id, cancellationToken);
+        await auditService.AuditAsync(HttpContext, "firewall.ipblock.removed", $"firewall:{entry.RuleName}",
+            $"target={entry.Target}; rule removed and verified.");
+        return Ok(ApiResponse<object>.Ok(new { id }, "firewall.ipblock_removed"));
     }
 
     [HttpPost("allow")]

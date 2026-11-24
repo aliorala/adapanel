@@ -139,7 +139,8 @@ public interface IBackupService
     Task<RestoreBackupItemsResultDto> RestoreItemsAsync(RestoreBackupItemsRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// <paramref name="retentionDays"/> gününden eski yedekleri budar: yerel dosya + kayıt silinir; <paramref name="remote"/>
+    /// Sunucunun yerel takviminde <paramref name="retentionDays"/> gününü dolduran yedekleri budar;
+    /// saat beklenmez. Yerel dosya + kayıt silinir; <paramref name="remote"/>
     /// verilmişse off-site (S3/FTP/WebDAV) UZAK kopya da silinir (uzak rotasyon). 0/negatif gün hiçbir şeyi silmez.
     /// </summary>
     /// <remarks>
@@ -173,6 +174,14 @@ public interface IBackupService
     /// "yok" SAYILMAZ — geçici bir ağ arızası bütün yedek geçmişini kayıp göstermemelidir.
     /// </remarks>
     Task<BackupVerificationResultDto> VerifyBackupsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Yalitilmis TEST geri yukleme: arsiv gecici klasore acilip dosya + veritabani dokumu butunlugu
+    /// olculur, klasor silinir. Canli veriye dokunmaz; sonuc <see cref="BackupTestRestoreResultDto"/>.
+    /// </summary>
+    Task<BackupTestRestoreResultDto> TestRestoreAsync(string backupId, string? encryptionPassword,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This backup provider does not support test restore.");
 
     /// <summary>
     /// Bir aboneliğin YALNIZCA kendi yedeklerini budar: süre (<paramref name="retentionDays"/>) ve

@@ -4,7 +4,20 @@ namespace AdaPanel.Core.Interfaces;
 
 public interface IDnsService
 {
+    Task<AdaPanel.Core.Dtos.Settings.ServerAddressDnsSyncDto?> GetServerAddressDnsSyncAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult<AdaPanel.Core.Dtos.Settings.ServerAddressDnsSyncDto?>(null);
+    Task<AdaPanel.Core.Dtos.Settings.ServerAddressDnsSyncDto?> ReconcileServerAddressAsync(string currentAddress, CancellationToken cancellationToken = default)
+        => Task.FromResult<AdaPanel.Core.Dtos.Settings.ServerAddressDnsSyncDto?>(null);
+    Task PrepareServerAddressDnsSyncAsync(string oldAddress, string newAddress, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+    Task CancelPreparedServerAddressDnsSyncAsync(string oldAddress, string newAddress, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+    Task<AdaPanel.Core.Dtos.Settings.ServerAddressDnsSyncDto> SyncServerAddressAsync(string oldAddress, string newAddress, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Server address DNS synchronization is not implemented.");
     Task<SiteDnsZoneDto> GetZoneAsync(string siteName, CancellationToken cancellationToken = default);
+    /// <summary>Reads measured native DNS records for migration without persisting source state or creating defaults.</summary>
+    Task<SiteDnsZoneDto> GetMigrationSnapshotAsync(string siteName, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Read-only DNS migration snapshots are not implemented.");
     Task<SiteDnsZoneDto> UpsertRecordAsync(string siteName, UpsertDnsRecordRequest request,
         Func<IReadOnlyList<string>, CancellationToken, Task> approval, CancellationToken cancellationToken)
         => throw new NotSupportedException("Authorized DNS record updates are not implemented.");

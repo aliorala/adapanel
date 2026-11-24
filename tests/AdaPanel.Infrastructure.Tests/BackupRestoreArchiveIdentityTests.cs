@@ -117,16 +117,22 @@ public sealed class BackupRestoreArchiveIdentityTests
     }
 
     [Fact]
-    public async Task ADirectoryCannotBeEvidenceThatANewerBackupReplacesTheLastArchive()
+    public async Task CountOnlyPruning_DirectoryCannotReplaceTheLastArchive()
     {
         using var f = new Fixture();
         var old = f.Archive("old", DateTime.UtcNow.AddDays(-30));
         var directory = f.Archive("directory", DateTime.UtcNow);
         directory.Path = f.Target;
+        var owner = Guid.NewGuid();
+        foreach (var record in new[] { old, directory })
+        {
+            record.Type = "subscription";
+            record.Source = record.SubscriptionUserId = owner.ToString("N");
+        }
         await f.Area.KayitlariYazAsync(old, directory);
         Assert.True((await f.Service.GetBackupsAsync(f.Area.Iptal)).Single(item => item.Id == directory.Id).LocalMissing);
         Assert.True((await f.Service.GetChainAsync(directory.Id, f.Area.Iptal)).Broken);
-        Assert.Equal(0, (await f.Service.PruneAsync(14, cancellationToken: f.Area.Iptal)).Removed);
+        Assert.Equal(0, (await f.Service.PruneSubscriptionAsync(owner, retentionDays: 0, keepCount: 1, cancellationToken: f.Area.Iptal)).Removed);
         Assert.True(File.Exists(old.Path));
         Assert.Equal("unrelated live data", File.ReadAllText(f.Sentinel));
     }

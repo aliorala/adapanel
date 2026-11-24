@@ -154,7 +154,10 @@
         </label>
         <label>
           <span>{{ t("panel.form.password") }}</span>
-          <PasswordField v-model="loginForm.password" minlength="12" required />
+          <!-- minlength BİLEREK YOK: giriş formu parola KURMAZ, doğrular. 12 karakter kuralı yalnız parola
+               KURULAN yerlerde (kurulum, sıfırlama, değiştirme) geçerli; burada koyunca eski/kısa parolalı
+               kullanıcı tarayıcı doğrulamasına takılıp neden giriş yapamadığını anlamıyordu. -->
+          <PasswordField v-model="loginForm.password" required />
         </label>
         <label v-if="requiresTwoFactor">
           <span>{{ t("panel.auth.twoFactorCode") }}</span>
@@ -258,6 +261,7 @@
              hicbirine ayri ayri eklemek gerekmez. Madde yoksa hicbir sey gorunmez. -->
         <AttentionSectionNotice
           :items="attentionItemsFor(activeSection)"
+          @refresh="loadAttention(false)"
           @open="attentionOpen = true" />
         <p v-if="showDefaultPortWarning" class="notice warn-banner" role="status">
           {{ t("panel.dashboard.defaultPortWarning") }}
@@ -277,8 +281,17 @@
       </div>
     </template>
 
+    <!-- Rolün menüsünde olmayan bir bölüme adres çubuğundan (?section=monitor) gelinirse, eskiden sessizce
+         Ana Sayfa'ya atılıyor ya da (menüde olmayan ama şablonda rol denetimi bulunmayan bölümlerde) boş
+         ekran çiziliyordu. Artık sebebi söylenir; kural menüyle AYNI listeden (dashboardSections) gelir. -->
+    <section v-if="deniedSection" class="panel module-shell section-denied" role="alert">
+      <h2>{{ t("panel.auth.sectionDeniedTitle") }}</h2>
+      <p class="meta">{{ t("panel.auth.sectionDeniedBody") }}</p>
+      <button class="secondary compact" @click="leaveDeniedSection">{{ t("panel.navigation.home") }}</button>
+    </section>
+
     <DashboardOverviewView
-      v-if="activeSection === 'home'"
+      v-else-if="activeSection === 'home'"
       :overview="systemStore.overview"
       :overview-confirmed="systemStore.overviewConfirmed"
       :overview-error="systemStore.overviewError"
@@ -304,6 +317,8 @@
       :open-request="siteOpenRequest" />
 
     <SiteBuilderView v-else-if="activeSection === 'sitebuilder'" />
+
+    <FtpView v-else-if="activeSection === 'ftp' && (isAdmin || isReseller || isCustomer)" />
 
     <DatabasesView v-else-if="activeSection === 'database' && isAdmin" />
 
@@ -452,6 +467,7 @@
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.settings.serverAddress") }}</span>
             <input v-model="panelPreferences.serverAddress" />
+            <small class="field-hint">{{ t("panel.settings.dnsSync.autoHint") }}</small>
             <!-- Adres ayarlanmadığında sunucu makinenin İÇ IP'sini yazıyor (192.168.x.x gibi) ve
                  müşteriye e-posta ile giden bağlantılar o adresi taşıyor: müşteri açamıyor, panel
                  "gönderildi" diyordu. Uyarı ENGELLEMEZ — iç ağa kurulmuş panelde adres doğrudur.
@@ -501,13 +517,15 @@
           </label>
         </div>
         <div class="row-actions">
-          <button class="compact" @click="savePanelPreferences">{{ t("panel.settings.saveGeneral") }}</button>
+          <button class="compact" :disabled="preferencesBusy" @click="savePanelPreferences">{{ t("panel.settings.saveGeneral") }}</button>
         </div>
+        <ServerAddressDnsSyncCard :result="panelPreferences.serverAddressDnsSync" :current-address="savedServerAddress" :busy="preferencesBusy" :feedback-version="dnsSyncFeedbackVersion" @retry="retryServerAddressDns" />
 
         <!-- Panel erişimi: paneli yöneticinin KENDİ alan adıyla ve geçerli sertifikayla dışarıya
              açar. Yapay zeka istemcileri kendinden imzalı sertifikayı kabul etmiyor, bu yüzden
              MCP bağlantısının ön koşulu. -->
         <PanelAccessCard />
+        <InstallationReportingCard />
         </template>
       </section>
 
@@ -556,7 +574,7 @@
             </label>
           </div>
           <div class="row-actions">
-            <button class="compact" @click="saveBranding">{{ t("panel.branding.save") }}</button>
+            <button class="compact" :disabled="brandingBusy" @click="saveBranding">{{ t("panel.branding.save") }}</button>
           </div>
 
           <!--
@@ -576,11 +594,11 @@
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/gif,image/webp"
-                @change="uploadBrandingAsset('logo', $event)" />
+                :disabled="brandingBusy" @change="uploadBrandingAsset('logo', $event)" />
               <button
                 type="button"
                 class="secondary compact"
-                :disabled="!brandingForm.logoDataUrl"
+                :disabled="brandingBusy || !brandingForm.logoDataUrl"
                 @click="removeBrandingAsset('logo')">
                 {{ t("panel.branding.remove") }}
               </button>
@@ -596,11 +614,11 @@
               <input
                 type="file"
                 accept="image/png,image/x-icon,image/vnd.microsoft.icon,.ico"
-                @change="uploadBrandingAsset('favicon', $event)" />
+                :disabled="brandingBusy" @change="uploadBrandingAsset('favicon', $event)" />
               <button
                 type="button"
                 class="secondary compact"
-                :disabled="!brandingForm.faviconDataUrl"
+                :disabled="brandingBusy || !brandingForm.faviconDataUrl"
                 @click="removeBrandingAsset('favicon')">
                 {{ t("panel.branding.remove") }}
               </button>
@@ -643,6 +661,7 @@
 <script setup lang="ts">
 import { getFormattingLocale } from '../utils/locale';
 import { abortableDelay, pollProgress } from "../utils/progressPolling";
+import { safeRelativePath } from "../utils/url";
 import { closeConfirmDialog } from "../components/ConfirmDialog.vue";
 import { closePromptDialog } from "../components/PromptDialog.vue";
 import router from "../router";
@@ -654,20 +673,17 @@ import SectionLoadError from "../components/SectionLoadError.vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import MainLayout from "../layouts/MainLayout.vue";
+import { useBrandingWorkspace } from "../composables/useBrandingWorkspace";
+import { getMailWorkspace } from "../api/mail";
 import { getSessionEpoch, readSecureEntryPath, setSessionExpiredHandler } from "../api/client";
 import { getFtpUsers } from "../api/ftp";
 import { getMyDatabases } from "../api/myDatabases";
 import {
   emptyBranding,
-  getBranding,
-  getBrandingSettings,
   getPanelPreferences,
-  removeBrandingImage,
-  updateBrandingSettings,
   updatePanelPreferences,
-  uploadBrandingImage,
+  syncServerAddressDns,
   type Branding,
-  type BrandingImageKind,
   type PanelPreferences
 } from "../api/panelSettings";
 import { useAppsStore } from "../stores/apps";
@@ -682,6 +698,9 @@ import { useSubscriptionStore } from "../stores/subscription";
 import { useSystemStore } from "../stores/system";
 import AttentionSectionNotice from "../components/AttentionSectionNotice.vue";
 import PanelAccessCard from "../components/PanelAccessCard.vue";
+import InstallationReportingCard from "../components/InstallationReportingCard.vue";
+import ServerAddressDnsSyncCard from "../components/ServerAddressDnsSyncCard.vue";
+import { dnsSyncHasFailure, usePanelPreferencesMutation } from "../composables/usePanelPreferencesMutation";
 import DashboardOverviewView from "./DashboardOverviewView.vue";
 import { checkForUpdate, type UpdateStatus } from "../api/update";
 import { useSectionError } from "../composables/useNotice";
@@ -709,6 +728,7 @@ const AdvisorView = lazyView(() => import("./AdvisorView.vue"));
 const SeoView = lazyView(() => import("./SeoView.vue"));
 const FilesView = lazyView(() => import("./FilesView.vue"));
 const MailView = lazyView(() => import("./MailView.vue"));
+const FtpView = lazyView(() => import("./FtpView.vue"));
 const MonitoringView = lazyView(() => import("./MonitoringView.vue"));
 const NotificationsView = lazyView(() => import("./NotificationsView.vue"));
 const SecurityView = lazyView(() => import("./SecurityView.vue"));
@@ -779,11 +799,33 @@ const bannerError = ref(false);
 const requiresTwoFactor = ref(false);
 const settingsTab = ref<SettingsTab>("general");
 const activeSection = ref("home");
+// Adresle istenen ama rolün menüsünde OLMAYAN bölüm ("yetkisiz" ekranı bunu gösterir).
+const deniedSection = ref("");
+// Panelin tanıdığı TÜM bölüm kimlikleri: "yetkisiz" ile "hiç böyle bir bölüm yok"u ayırır.
+const KNOWN_SECTION_IDS = new Set([
+  "home", "sites", "accounts", "sitebuilder", "mail", "ftp", "files", "database", "monitor", "seo", "advisor",
+  "software", "tasks", "security", "audit", "billing", "tools", "migration", "cluster", "ai", "account",
+  "settings", "backup", "subusers"
+]);
+function leaveDeniedSection() {
+  deniedSection.value = "";
+  activeSection.value = "home";
+  void router.replace({ query: { section: "home" } });
+}
 let navigationReady = false;
 function restorePanelLocation() {
   const query = router.currentRoute.value.query;
   const section = typeof query.section === "string" ? query.section : activeSection.value;
-  activeSection.value = dashboardSections.value.some((item) => item.id === section) ? section : "home";
+  const allowed = dashboardSections.value.some((item) => item.id === section);
+  if (!allowed && section !== "home" && KNOWN_SECTION_IDS.has(section)) {
+    deniedSection.value = section;
+  } else if (section !== "home") {
+    // Gerçekten başka (yetkili) bir bölüme gidildi. "home" burada KASITLI olarak ayrı: yetkisiz bölümden
+    // adresi Ana Sayfa'ya çevirmemiz (aşağıdaki replace) kendi yankısı olarak tekrar buraya düşer ve
+    // açıklama ekranını daha çizilmeden silerdi.
+    deniedSection.value = "";
+  }
+  activeSection.value = allowed ? section : "home";
   if (activeSection.value === "settings") {
     const tabs = isAdmin.value ? ["general", "branding", "security", "errorReports", "notifications", "updates", "license"] : ["branding"];
     settingsTab.value = (tabs.includes(String(query.tab)) ? query.tab : tabs[0]) as SettingsTab;
@@ -807,6 +849,8 @@ const panelUpdate = ref<UpdateStatus | null>(null);
 const panelUpdateLoad = useSectionError();
 const measuredFtpCount = ref<number | null>(null);
 const measuredDatabaseCount = ref<number | null>(null);
+const measuredMailCount = ref<number | null>(null);
+const measuredAccountCount = ref<number | null>(null);
 const measuredSites = ref(false);
 let dashboardRead = 0;
 let dashboardActive = true;
@@ -848,6 +892,7 @@ const panelPreferences = reactive<PanelPreferences>({
   defaultSiteRoot: "C:\\inetpub\\wwwroot",
   defaultBackupRoot: "%ProgramData%\\AdaPanel\\backups",
   serverAddress: "",
+  serverAddressDnsSync: null,
   preferredHttpsPort: 8888,
   // Sunucudan gelmeden önceki YER TUTUCU değer KAPALI olmalı: tercihler yüklenemeden form
   // kaydedilirse (istek hata verdi, kullanıcı hızlı davrandı) açık bir yer tutucu, oturum
@@ -862,6 +907,9 @@ const panelPreferences = reactive<PanelPreferences>({
 // Tercihler sunucudan gelmeden yukarıdaki varsayılanlar gerçek ayar sanılıyordu (anahtarlar
 // yanlış konumda görünüp yanlışlıkla üzerine kaydedilebiliyordu).
 const panelPreferencesLoaded = ref(false);
+const savedServerAddress = ref("");
+const dnsSyncFeedbackVersion = ref(0);
+let savedPanelPreferences: PanelPreferences | null = null;
 const initialPanelPreferences = { ...panelPreferences };
 
 /*
@@ -875,8 +923,19 @@ const initialPanelPreferences = { ...panelPreferences };
  * değiştirdiğini sanmasına ya da tam tersine yol açardı.
  */
 const branding = ref<Branding>(emptyBranding());
-const brandingForm = ref<Branding>(emptyBranding());
-const brandingLoaded = ref(false);
+const brandingWorkspace = useBrandingWorkspace({
+  active: () => dashboardActive,
+  actor: dashboardActorKey,
+  allowed: () => authStore.session?.isAuthenticated === true && (isAdmin.value || isReseller.value),
+  apply: brand => applyBranding(brand, false),
+  notify: showBanner,
+  error: resolveApiMessage,
+  saved: () => t("panel.branding.saved"),
+  refreshFailed: () => t("panel.branding.savedRefreshFailed")
+});
+const { form: brandingForm, loaded: brandingLoaded, busy: brandingBusy, loadEffective: loadBranding,
+  loadSettings: loadBrandingSettings, save: saveBranding, upload: uploadBrandingAsset,
+  remove: removeBrandingAsset } = brandingWorkspace;
 
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const isCustomer = computed(() => authStore.session?.user?.role === "Customer");
@@ -891,14 +950,24 @@ function dashboardActorKey() {
   return JSON.stringify([getSessionEpoch(), session?.isAuthenticated, session?.user?.id, session?.user?.role,
     session?.isSubUser, session?.allowedSections?.map(section => section.toLowerCase()).sort() ?? null]);
 }
+watch(dashboardActorKey, () => {
+  if (!dashboardActive) return;
+  brandingWorkspace.invalidate();
+  brandingLoaded.value = false;
+  brandingForm.value = emptyBranding();
+  applyBranding(emptyBranding(), false);
+  void loadBranding();
+});
 function canReadDashboardSection(section: string) {
   if (!authStore.session?.isAuthenticated || !(isAdmin.value || isCustomer.value || isReseller.value)) return false;
   return !isSubUser.value || !subUserAllowedSections.value ||
     subUserAllowedSections.value.some(item => item.toLowerCase() === section);
 }
-const canReadFtpCount = computed(() => (isAdmin.value || isReseller.value) && canReadDashboardSection("sites"));
+const canReadFtpCount = computed(() => (isAdmin.value || isReseller.value || isCustomer.value) && canReadDashboardSection("sites"));
 const ftpUserCount = computed(() => canReadFtpCount.value ? measuredFtpCount.value : null);
 const databaseCount = computed(() => canReadDashboardSection("database") ? measuredDatabaseCount.value : null);
+const mailAccountCount = computed(() => canReadDashboardSection("mail") ? measuredMailCount.value : null);
+const managedAccountCount = computed(() => (isAdmin.value || isReseller.value) ? measuredAccountCount.value : null);
 const sitesCount = computed(() => canReadDashboardSection("sites") && measuredSites.value && sitesStore.loaded ? sitesStore.sites.length : null);
 const totalBindingCount = computed(() => sitesCount.value === null ? null :
   sitesStore.sites.reduce((sum, site) => sum + site.bindings.length, 0));
@@ -906,6 +975,8 @@ function resetDashboardCounts() {
   dashboardRead++;
   measuredFtpCount.value = null;
   measuredDatabaseCount.value = null;
+  measuredMailCount.value = null;
+  measuredAccountCount.value = null;
   measuredSites.value = false;
 }
 watch(dashboardActorKey, resetDashboardCounts, { flush: "sync" });
@@ -1002,11 +1073,12 @@ const dashboardSections = computed<SectionItem[]>(() => {
     { id: "sites", label: t("panel.navigation.sites"), description: t("panel.sites.workspaceSubtitle"), glyph: "WS", badge: sitesStore.sites.length ? String(sitesStore.sites.length) : undefined },
     // Plesk gibi üst-düzey "Müşteriler & Bayiler" girişi (admin) / "Müşteriler" (bayi):
     // hesap yönetimi ekranı (UsersView) — kullanıcılar, planlar, kotalar, alt kullanıcılar.
-    { id: "accounts", label: isReseller.value ? t("panel.navigation.customers") : t("panel.navigation.accounts"), description: t("panel.navigation.accountsDesc"), glyph: "MU" },
+    { id: "accounts", label: isReseller.value ? t("panel.navigation.customers") : t("panel.navigation.accounts"), description: t("panel.navigation.accountsDesc"), glyph: "MU", badge: managedAccountCount.value === null ? undefined : String(managedAccountCount.value) },
     { id: "sitebuilder", label: t("panel.navigation.siteBuilder"), description: t("panel.siteBuilder.subtitle"), glyph: "SK" },
-    { id: "mail", label: t("panel.navigation.mail"), description: t("panel.mail.subtitle"), glyph: "ML" },
+    { id: "mail", label: t("panel.navigation.mail"), description: t("panel.mail.subtitle"), glyph: "ML", badge: mailAccountCount.value === null ? undefined : String(mailAccountCount.value) },
+    { id: "ftp", label: t("panel.ftp.title"), description: t("panel.ftp.subtitle"), glyph: "FP", badge: ftpUserCount.value === null ? undefined : String(ftpUserCount.value) },
     { id: "files", label: t("panel.navigation.files"), description: t("panel.files.subtitle"), glyph: "FL" },
-    { id: "database", label: t("panel.navigation.database"), description: t("panel.database.subtitle"), glyph: "DB" },
+    { id: "database", label: t("panel.navigation.database"), description: t("panel.database.subtitle"), glyph: "DB", badge: databaseCount.value === null ? undefined : String(databaseCount.value) },
     { id: "monitor", label: t("panel.navigation.monitor"), description: t("panel.monitor.subtitle"), glyph: "MN", badgeTitle: attentionBadgeTitle("monitor"), badge: attentionBadge("monitor") },
     // Danışman rozeti = bekleyen dikkat maddesi sayısı; Mağaza rozeti = bekleyen güncelleme
     // sayısı (yoksa eskisi gibi kurulu bileşen sayısı).
@@ -1045,6 +1117,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "sitebuilder" ||
       section.id === "accounts" ||
       section.id === "mail" ||
+      section.id === "ftp" ||
       section.id === "files" ||
       section.id === "database" ||
       section.id === "tasks" ||
@@ -1072,6 +1145,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "sites" ||
       section.id === "sitebuilder" ||
       section.id === "mail" ||
+      section.id === "ftp" ||
       section.id === "database" ||
       section.id === "files" ||
       section.id === "tasks" ||
@@ -1088,7 +1162,9 @@ const dashboardSections = computed<SectionItem[]>(() => {
       if (allowed) {
         const allowedSet = new Set(allowed.map((section) => section.toLowerCase()));
         customerSections = customerSections.filter((section) =>
-          section.id === "home" || section.id === "ai" || section.id === "account" || section.id === "exit" || allowedSet.has(section.id));
+          section.id === "home" || section.id === "ai" || section.id === "account" || section.id === "exit" || allowedSet.has(section.id)
+            // FTP, backend'de "sites" bölüm iznine bağlıdır (FtpController [RequireSubUserSection("sites")]).
+            || (section.id === "ftp" && allowedSet.has("sites")));
       }
     } else {
       // Top-level müşteri: aboneliği altındaki ek kullanıcıları yönetir (Plesk "Users" sekmesi) — Hesabım'dan önce.
@@ -1118,7 +1194,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "exit");
   }
 
-  // Tam panel: domaine özel araçlar (SSL/DNS/FTP/PHP/Dosyalar) üst menüde DEĞİL, yalnızca
+  // Tam panel: domaine özel araçlar (SSL/DNS/PHP/Dosyalar) üst menüde DEĞİL, yalnızca
   // Web Siteleri > domain > araçlar altında. "Dosyalar" admin üst menüsünden çıkarılır
   // (hub'da "Dosyalar" aracı var). Müşteride üst menüde kalır (onların site hub'ı yok).
   const adminSections = sections.filter((section) => section.id !== "files");
@@ -1309,6 +1385,16 @@ async function loadAuthenticatedDashboard() {
   return true;
 }
 
+/** Yalnız tek "/" ile başlayan göreli yola yönlendirir; "//evil" ve "\evil" reddedilir. */
+function redirectToSecurePath(path: string) {
+  const safe = safeRelativePath(path);
+  if (!safe) {
+    showBanner(t("panel.setup.unsafeRedirect"), true);
+    return;
+  }
+  window.location.assign(safe);
+}
+
 async function submitSetup() {
   try {
     const result = await setupStore.initialize({ ...setupForm });
@@ -1323,7 +1409,7 @@ async function submitSetup() {
     }
 
     showBanner(`${t("panel.setup.success")} ${result.secureEntryPath}`, false);
-    window.location.assign(result.secureEntryPath);
+    redirectToSecurePath(result.secureEntryPath);
   } catch (error) {
     showBanner(resolveApiMessage(error), true);
   }
@@ -1358,7 +1444,7 @@ const installHalted = computed(() =>
  */
 function continueAfterInstall() {
   if (setupSecurePath.value) {
-    window.location.assign(setupSecurePath.value);
+    redirectToSecurePath(setupSecurePath.value);
   } else {
     window.location.reload();
   }
@@ -1478,6 +1564,16 @@ async function loadDashboardData() {
   // Each count is measured independently. A failed server overview must not turn
   // readable tenant data into zero, or prevent those scoped requests from running.
   const reads: Promise<unknown>[] = [systemStore.fetchOverview()];
+  if (canReadDashboardSection("mail")) reads.push(getMailWorkspace().then(workspace => {
+    // No selected domain: read the scoped domain inventory and its counts, without
+    // downloading individual mailboxes, aliases or mailing lists.
+    if (typeof workspace.installed !== "boolean" || typeof workspace.configured !== "boolean" ||
+      !Array.isArray(workspace.domains) || (workspace.installed && !workspace.configured) ||
+      workspace.domains.some(domain => domain.accountCountMeasured !== true ||
+        !Number.isSafeInteger(domain.accountCount) || domain.accountCount < 0))
+      throw new Error(t("panel.common.loadFailed"));
+    if (current()) measuredMailCount.value = workspace.domains.reduce((sum, domain) => sum + domain.accountCount, 0);
+  }));
   if (canReadDashboardSection("sites")) reads.push(sitesStore.fetchSites().then(() => {
     if (current()) measuredSites.value = sitesStore.loaded;
   }));
@@ -1492,27 +1588,37 @@ async function loadDashboardData() {
       throw new Error(t("panel.common.loadFailed"));
     if (current()) measuredDatabaseCount.value = databases.length;
   }));
-  if (reseller) reads.push(authStore.fetchUsers());
+  if (admin || reseller) reads.push(authStore.fetchUsers().then(users => {
+    if (!Array.isArray(users) || users.some(user => !user || typeof user.id !== "string" || !user.id ||
+      !["Administrator", "Reseller", "Customer", "Operator"].includes(user.role)) || new Set(users.map(user => user.id)).size !== users.length)
+      throw new Error(t("panel.common.loadFailed"));
+    // Additional subscription users and panel staff are not separate customers/resellers.
+    if (current()) measuredAccountCount.value = users.filter(user => !user.parentUserId &&
+      (user.role === "Customer" || (admin && user.role === "Reseller"))).length;
+  }));
   if (admin) {
-    reads.push(authStore.fetchUsers(), authStore.fetchAuditLogs(), phpStore.fetchVersions(),
+    reads.push(authStore.fetchAuditLogs(), phpStore.fetchVersions(),
       authStore.fetchSecuritySettings().then(settings => {
         if (!current()) return;
         securityForm.secureEntryPath = settings.secureEntryPath.replace("/", "");
         securityForm.allowedIpAddressesText = settings.allowedIpAddresses.join("\n");
       }),
       getPanelPreferences().then(async preferences => {
-        if (!current()) return;
+        if (!current() || preferencesBusy.value) return;
         Object.assign(panelPreferences, preferences);
+        savedServerAddress.value = preferences.serverAddress;
+        savedPanelPreferences = { ...preferences };
         panelPreferencesLoaded.value = true;
         await setPanelLocale(preferences.defaultLanguage);
         if (current()) applyAppearance(preferences);
       }),
-      softwareStore.fetchCatalog().then(async catalog => {
+      softwareStore.fetchCatalog(),
+      databasesStore.fetchEngines().then(async statuses => {
         if (!current()) return;
-        const installedIds = new Set(catalog.installed.map(component => component.componentId));
-        const engines = [["mariadb-11", "mariadb"], ["mysql-8", "mysql"], ["postgresql-16", "postgresql"]]
-          .filter(([id]) => installedIds.has(id!)).map(([, engine]) => engine!);
-        const workspaces = await Promise.all(engines.map(engine => databasesStore.fetchWorkspace(engine)));
+        const engines = statuses.filter(status => status.installed);
+        // An installed engine without working credentials is unknown, not empty.
+        if (engines.some(engine => !engine.ready)) throw new Error(t("panel.common.loadFailed"));
+        const workspaces = await Promise.all(engines.map(engine => databasesStore.fetchWorkspace(engine.engine)));
         if (workspaces.some(workspace => !Array.isArray(workspace.databases))) throw new Error(t("panel.common.loadFailed"));
         if (current()) measuredDatabaseCount.value = workspaces.reduce((sum, workspace) => sum + workspace.databases.length, 0);
       }));
@@ -1535,19 +1641,33 @@ async function loadDashboardData() {
   return true;
 }
 
-async function savePanelPreferences() {
-  try {
-    const updated = await updatePanelPreferences({ ...panelPreferences });
+const { busy: preferencesBusy, run: mutatePanelPreferences } = usePanelPreferencesMutation({
+  actor: dashboardActorKey,
+  allowed: () => dashboardActive && isAdmin.value && authStore.session?.isAuthenticated === true && panelPreferencesLoaded.value,
+  before: () => { dashboardRead++; },
+  apply: async (updated, current) => {
     Object.assign(panelPreferences, updated);
+    savedServerAddress.value = updated.serverAddress;
+    savedPanelPreferences = { ...updated };
     await setPanelLocale(updated.defaultLanguage);
+    if (!current()) return;
     applyAppearance(updated);
     setupForm.preferredHttpsPort = updated.preferredHttpsPort;
-    showBanner(t("panel.settings.saved"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  }
+    const sync = updated.serverAddressDnsSync;
+    dnsSyncFeedbackVersion.value++;
+    showBanner(t(dnsSyncHasFailure(sync) ? (sync?.pending ? "panel.settings.dnsSync.pending" : "panel.settings.dnsSync.partial") : "panel.settings.saved"), dnsSyncHasFailure(sync));
+  },
+  failure: error => showBanner(resolveApiMessage(error), true)
+});
+
+async function savePanelPreferences() {
+  const { serverAddressDnsSync: _readOnlySync, ...payload } = panelPreferences;
+  await mutatePanelPreferences(() => updatePanelPreferences({ ...payload }, true));
 }
 
+async function retryServerAddressDns(oldAddress: string) {
+  if (oldAddress.trim()) await mutatePanelPreferences(() => syncServerAddressDns(oldAddress.trim()));
+}
 function applyAppearance(preferences: PanelPreferences) {
   const resolvedTheme = preferences.themeMode === "system"
     ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
@@ -1573,16 +1693,8 @@ function applyAppearance(preferences: PanelPreferences) {
 const brandName = computed(() => branding.value.panelName || panelPreferences.panelName || "AdaPanel");
 const brandLogo = computed(() => branding.value.logoDataUrl);
 
-async function loadBranding() {
-  try {
-    applyBranding(await getBranding());
-  } catch {
-    // Marka okunamazsa panel ürün görünümüyle çalışmaya DEVAM eder; giriş ekranını bir marka
-    // isteği yüzünden kilitlemek, çalışan bir paneli görsel bir ayar uğruna erişilemez kılardı.
-  }
-}
-
-function applyBranding(brand: Branding) {
+function applyBranding(brand: Branding, invalidate = true) {
+  if (invalidate) brandingWorkspace.invalidate();
   branding.value = brand;
 
   const documentTitle = brand.panelName || panelPreferences.panelName || "AdaPanel";
@@ -1610,62 +1722,6 @@ function openBrandingTab() {
   void loadBrandingSettings();
 }
 
-async function loadBrandingSettings() {
-  try {
-    brandingForm.value = await getBrandingSettings();
-    brandingLoaded.value = true;
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  }
-}
-
-async function saveBranding() {
-  try {
-    const saved = await updateBrandingSettings({
-      panelName: brandingForm.value.panelName,
-      accentColor: brandingForm.value.accentColor,
-      logoLinkUrl: brandingForm.value.logoLinkUrl
-    });
-    brandingForm.value = saved;
-    // Kaydeden kişi kendi markasının kapsamındadır (yönetici→sunucu, bayi→kendisi), yani
-    // değişiklik kendi ekranında da GÖRÜNMELİ; aksi halde "kaydettim ama bir şey olmadı" denir.
-    await loadBranding();
-    showBanner(t("panel.branding.saved"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  }
-}
-
-async function uploadBrandingAsset(kind: BrandingImageKind, event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) {
-    return;
-  }
-
-  try {
-    brandingForm.value = await uploadBrandingImage(kind, file);
-    await loadBranding();
-    showBanner(t("panel.branding.saved"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  } finally {
-    // Seçim TEMİZLENİR: aynı dosya reddedildikten sonra düzeltilip yeniden seçilebilsin
-    // (tarayıcı aynı dosya adı için `change` olayını tekrar tetiklemez).
-    input.value = "";
-  }
-}
-
-async function removeBrandingAsset(kind: BrandingImageKind) {
-  try {
-    brandingForm.value = await removeBrandingImage(kind);
-    await loadBranding();
-    showBanner(t("panel.branding.saved"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  }
-}
-
 function pickAccentColor(event: Event) {
   brandingForm.value.accentColor = (event.target as HTMLInputElement).value;
 }
@@ -1677,12 +1733,12 @@ async function toggleTheme() {
   const next = resolvedThemeMode.value === "light" ? "dark" : "light";
   panelPreferences.themeMode = next;
   applyAppearance(panelPreferences);
-  if (isAdmin.value) {
-    try {
-      await updatePanelPreferences({ ...panelPreferences });
-    } catch {
-      // kaydedilemese bile görsel tercih localStorage'da kalır
-    }
+  if (isAdmin.value && savedPanelPreferences) {
+    // A theme click must never publish an edited server IP or other unsaved settings.
+    const { serverAddressDnsSync: _readOnlySync, ...saved } = savedPanelPreferences;
+    await mutatePanelPreferences(() => updatePanelPreferences({ ...saved, themeMode: next }), async updated => {
+      savedPanelPreferences = { ...updated };
+    });
   }
 }
 
@@ -1725,6 +1781,8 @@ async function openMailDomainFromSearch(domain: string) {
 
 async function handleNavigation(sectionId: string) {
   if (sectionId !== "attention" && !await allowNavigation()) return;
+  // Menüden bilinçli bir seçim: "yetkisiz" açıklaması kapanır.
+  if (sectionId !== "attention") deniedSection.value = "";
   if (sectionId === "exit") {
     void logout();
     return;
@@ -1815,7 +1873,7 @@ async function saveSecuritySettings() {
     showBanner(t("panel.security.saved"), false);
     const nextPath = updated.secureEntryPath.replace("/", "");
     if (nextPath && nextPath !== previousPath) {
-      window.location.assign(updated.secureEntryPath);
+      redirectToSecurePath(updated.secureEntryPath);
     }
   } catch (error) {
     showBanner(resolveApiMessage(error), true);

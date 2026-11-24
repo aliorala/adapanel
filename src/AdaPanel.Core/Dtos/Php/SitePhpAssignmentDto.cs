@@ -4,6 +4,7 @@ namespace AdaPanel.Core.Dtos.Php;
 
 public sealed class SitePhpAssignmentDto
 {
+    public PhpErrorLoggingDto? ErrorLogging { get; set; }
     public string SiteName { get; init; } = string.Empty;
 
     public string ComponentId { get; init; } = string.Empty;

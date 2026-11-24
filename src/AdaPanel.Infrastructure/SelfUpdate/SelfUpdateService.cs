@@ -13,7 +13,8 @@ internal sealed record UpdatePackageIdentity(
     string Company,
     string Product,
     string SignatureStatus,
-    string SignatureSubject);
+    string SignatureSubject,
+    string ProductVersion = "");
 
 /// <summary>
 /// Paketin kimligini isletim sisteminden okur (Win32 VersionInfo + Authenticode).
@@ -66,7 +67,8 @@ public sealed class SelfUpdateService : ISelfUpdateService
             surumBilgisi.CompanyName ?? string.Empty,
             surumBilgisi.ProductName ?? string.Empty,
             imzaDurumu,
-            imzaKonusu);
+            imzaKonusu,
+            string.IsNullOrWhiteSpace(surumBilgisi.ProductVersion) ? surumBilgisi.FileVersion ?? string.Empty : surumBilgisi.ProductVersion);
     }
 
     private const string ManifestPath = "config/update-manifest.json";
@@ -716,6 +718,12 @@ public sealed class SelfUpdateService : ISelfUpdateService
             };
         }
 
+        // SURUM DUSURME KORUMASI: kurulu surumden yeni olmayan paket indirilmez bile.
+        if (UpdatePackageTrust.SurumDusurmeKusuru(status.CurrentVersion, status.LatestVersion) is { } dusurme)
+        {
+            throw new AppException("update.downgrade_rejected", 409, 409, dusurme);
+        }
+
         var packageUri = ResolvePackageUri(url);
 
         // Adres, yapilandirilmis deponun release varligina BAGLANIR. Manifest diskte duran bir
@@ -736,24 +744,36 @@ public sealed class SelfUpdateService : ISelfUpdateService
         {
         var client = httpClientFactory.CreateClient();
         client.Timeout = Timeout.InfiniteTimeSpan;
-        using var response = await client.GetAsync(packageUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        if (response.StatusCode == HttpStatusCode.NotFound)
+        // Translate transport failures only while transferring the package. Caller
+        // cancellation and later filesystem/verification failures retain their meaning.
+        try
         {
-            throw new AppException("update.download_not_found", 404, 404, $"Url={packageUri}");
-        }
+            using var response = await client.GetAsync(packageUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                throw new AppException("update.download_not_found", 404, 404, $"Url={packageUri}");
+            }
 
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new AppException(
-                "update.download_failed",
-                (int)response.StatusCode,
-                502,
-                $"Url={packageUri}\r\nStatusCode={(int)response.StatusCode} {response.ReasonPhrase}");
-        }
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new AppException(
+                    "update.download_failed",
+                    (int)response.StatusCode,
+                    502,
+                    $"Url={packageUri}\r\nStatusCode={(int)response.StatusCode} {response.ReasonPhrase}");
+            }
 
-        await using (var stream = File.Create(destination))
-        {
+            await using var stream = File.Create(destination);
             await response.Content.CopyToAsync(stream, cancellationToken);
+        }
+        catch (HttpRequestException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new AppException("update.download_failed", 502, 502);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new AppException("update.download_timeout", 504, 504);
         }
 
         // Keep the verified bytes stable while the native identity reader and
@@ -771,7 +791,7 @@ public sealed class SelfUpdateService : ISelfUpdateService
         // sorusunu cevaplar, "yayinlanan dosyanin kendisi bulasik mi" sorusunu CEVAPLAMAZ -- kaynakta
         // bulasma varsa yayindaki ozet de bulasik dosyanin ozetidir ve karsilastirma "temiz" der.
         // Bu depoda tam olarak bu yasandi (Synaptics PE bulastiricisi).
-        await EnsureTrustedPackageAsync(destination, cancellationToken);
+        await EnsureTrustedPackageAsync(destination, status.LatestVersion, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         var pendingUpdate = new PendingUpdate
@@ -842,6 +862,10 @@ public sealed class SelfUpdateService : ISelfUpdateService
         var attempt = await ReconcileLastAttemptAsync(pendingUpdate, VersionInfo.Current, cancellationToken);
         if (IsInstallationActive(pendingUpdate, attempt))
             throw new AppException("update.install_already_scheduled", 409, 409);
+        // Hazirlanmis paket sonradan eskimis olabilir (kurulu surum ilerledi, kayit diskte kaldi).
+        if (!string.IsNullOrWhiteSpace(pendingUpdate.PackagePath) &&
+            UpdatePackageTrust.SurumDusurmeKusuru(VersionInfo.Current, pendingUpdate.Version) is { } eskiPaket)
+            throw new AppException("update.downgrade_rejected", 409, 409, eskiPaket);
         if (string.IsNullOrWhiteSpace(pendingUpdate.PackagePath) ||
             string.IsNullOrWhiteSpace(pendingUpdate.PackageSha256) ||
             !File.Exists(pendingUpdate.PackagePath))
@@ -881,7 +905,7 @@ public sealed class SelfUpdateService : ISelfUpdateService
         //
         // DURUM DOSYALARINDAN ONCE calisir: denetim reddederse ortada YENI bir deneme yoktur ve
         // onceki denemenin sonucu kullanicidan silinmemelidir.
-        await EnsureTrustedPackageAsync(packagePath, cancellationToken);
+        await EnsureTrustedPackageAsync(packagePath, pendingUpdate.Version, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         // ONCEKI denemenin durum dosyasi SILINIR. Aksi halde eski bir "failed" kaydi yeni denemenin
@@ -1009,26 +1033,18 @@ public sealed class SelfUpdateService : ISelfUpdateService
             return false;
         }
 
-        var current = TryParseVersion(currentVersion);
-        var latest = TryParseVersion(latestVersion);
+        var current = UpdatePackageTrust.SurumuCozumle(currentVersion);
+        var latest = UpdatePackageTrust.SurumuCozumle(latestVersion);
         if (current is null || latest is null)
         {
             return !string.Equals(currentVersion, latestVersion, StringComparison.OrdinalIgnoreCase);
         }
 
-        return latest > current;
+        return UpdatePackageTrust.DahaYeni(current.Value, latest.Value);
     }
 
-    private static Version? TryParseVersion(string value)
-    {
-        var core = value.Split('-', '+')[0].Trim();
-        if (!core.Contains('.'))
-        {
-            core += ".0";
-        }
-
-        return Version.TryParse(core, out var parsed) ? parsed : null;
-    }
+    // Tek ayristirici: UpdatePackageTrust.SurumuCozumle ("v" onegi, 4 bilesene normalize).
+    private static Version? TryParseVersion(string value) => UpdatePackageTrust.SurumuCozumle(value)?.Core;
 
     private static string NormalizeSha256(string? value)
     {
@@ -1075,7 +1091,7 @@ public sealed class SelfUpdateService : ISelfUpdateService
     /// olcumu yapip karari uygular. Sebep: bulasik bir paket bu makinede uretilemez, ama karar yine
     /// de sinanmak zorundadir.
     /// </remarks>
-    private async Task EnsureTrustedPackageAsync(string filePath, CancellationToken cancellationToken)
+    private async Task EnsureTrustedPackageAsync(string filePath, string? expectedVersion, CancellationToken cancellationToken)
     {
         await EnsureWindowsExecutableAsync(filePath, cancellationToken);
 
@@ -1088,6 +1104,17 @@ public sealed class SelfUpdateService : ISelfUpdateService
                 400,
                 400,
                 $"File={Path.GetFileName(filePath)}\r\n{kimlikKusuru}");
+        }
+
+        // Paketin KENDI surumu: yalniz okunabildiginde karsilastirilir (bos ise zincir kirilmaz).
+        var surumKusuru = UpdatePackageTrust.PaketSurumuKusuru(kimlik.ProductVersion, expectedVersion);
+        if (surumKusuru is not null)
+        {
+            throw new AppException(
+                "update.package_invalid",
+                400,
+                400,
+                $"File={Path.GetFileName(filePath)}\r\n{surumKusuru}");
         }
 
         var guven = await fileStore.ReadAsync(TrustConfigPath, new TrustConfig(), cancellationToken);
@@ -1118,7 +1145,7 @@ public sealed class SelfUpdateService : ISelfUpdateService
     {
         try
         {
-            var kacirilmisYol = filePath.Replace("'", "''", StringComparison.Ordinal);
+            var kacirilmisYol = PowerShellQuoting.Escape(filePath);
             var script =
                 $"$imza = Get-AuthenticodeSignature -LiteralPath '{kacirilmisYol}'\r\n" +
                 "[Console]::Out.Write($imza.Status.ToString())\r\n" +

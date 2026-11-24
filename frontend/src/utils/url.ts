@@ -84,3 +84,60 @@ export function openReachable(raw: string): void {
     window.open(url, "_blank", "noopener");
   }
 }
+
+const HREF_SEMALARI = new Set(["http:", "https:", "mailto:"]);
+
+/**
+ * Göreli yol kuralı (tek yerde): tek "/" ile başlar; "//", ters bölü, kontrol karakteri ve
+ * kodlanmış %5C / %2F içermez. Tarayıcı "/\evil" ve "/	/evil" değerlerini "//evil" gibi
+ * ağ-yolu olarak açar; kodlanmış hâller de sunucu/aracı katmanlarda çözülebilir.
+ */
+function isSafeRelativePath(value: string): boolean {
+  if (!value.startsWith("/") || value.startsWith("//")) {
+    return false;
+  }
+  if (value.includes("\\") || /[\u0000-\u001f\u007f]/.test(value)) {
+    return false;
+  }
+  // Kodlanmış %5C/%2F yalnız YOL kısmında tehlikelidir; sorgu değerleri (örn. getDownloadUrl'in
+  // encodeURIComponent ile kodladığı ?path=%2Fsite%5Ca.txt) meşru olarak bunları taşır.
+  const pathPart = value.split(/[?#]/, 1)[0];
+  return !/%(5c|2f)/i.test(pathPart);
+}
+
+/**
+ * Sunucudan gelen bir adresi `:href`e basmadan önce süzer: yalnız http, https ve mailto
+ * geçer; `javascript:`, `data:`, `vbscript:` ve ayrıştırılamayan her şey "#" olur.
+ * Göreli yollar isSafeRelativePath kuralından geçmelidir.
+ */
+export function safeHref(raw: string | null | undefined): string {
+  const value = (raw ?? "").trim();
+  if (!value) {
+    return "#";
+  }
+  if (value.startsWith("/")) {
+    return isSafeRelativePath(value) ? value : "#";
+  }
+  if (value.startsWith("\\") || /[\u0000-\u001f\u007f]/.test(value)) {
+    return "#";
+  }
+  if (value.startsWith("#") || value.startsWith("?")) {
+    return value;
+  }
+  try {
+    const url = new URL(value);
+    return HREF_SEMALARI.has(url.protocol) ? value : "#";
+  } catch {
+    // Şemasız göreli dizge ("a/b") olabilir; iki nokta içeriyorsa şema belirsizdir, reddet.
+    return value.includes(":") ? "#" : value;
+  }
+}
+
+/**
+ * Giriş sonrası yönlendirme hedefi: yalnız isSafeRelativePath kuralından geçen yol kabul
+ * edilir; aksi hâlde boş dize döner (çağıran yönlendirmez).
+ */
+export function safeRelativePath(raw: string | null | undefined): string {
+  const value = (raw ?? "").trim();
+  return isSafeRelativePath(value) ? value : "";
+}

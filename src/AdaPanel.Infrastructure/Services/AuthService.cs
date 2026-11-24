@@ -114,11 +114,32 @@ public sealed class AuthService(
         // MEŞRU kullanıcıyı 15 dk dışarıda tutmaktı ve panelde başka giriş yolu her zaman olmayabilir.
         // TAKAS: dağıtık (çok IP'li) bir tahmin saldırısında hesap-başına 5-deneme/15 dk üst sınırı
         // ortadan kalkar; kalan savunmalar IP engeli, güçlü parola ve iki adımlı doğrulamadır.
+        // HESAP BAŞINA SERT TAVAN (G10/G11): pencere içinde çok sayıda hata biriktiyse doğru parola
+        // dahil hiçbir deneme doğrulanmaz; yanıt yanlış parolayla AYNI (numaralandırma yok).
+        if (AccountAttemptThrottle.IsBlocked(user.Id))
+        {
+            // Parola YİNE DOĞRULANIR (zamanlama ve yanıt aynı kalsın). IP sayacı YALNIZ yanlış
+            // parolada artar: doğru parola IP hatası sayılsaydı sahip, saldırganın doldurduğu tavan
+            // yüzünden kendi IP'sini güvenlik duvarında engelletirdi.
+            if (passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password) == PasswordVerificationResult.Failed)
+            {
+                await auditService.WriteAsync("auth.login.failed", "auth", $"Invalid password provided for '{user.UserName}' (account throttled).", user.Id, ipAddress, cancellationToken);
+                await bruteForceProtection.RegisterFailedAttemptAsync(ipAddress, cancellationToken);
+            }
+            else
+            {
+                await auditService.WriteAsync("auth.login.throttled", "auth", $"Login for '{user.UserName}' refused: account attempt ceiling reached.", user.Id, ipAddress, cancellationToken);
+            }
+
+            throw new InvalidOperationException("auth.invalid_credentials");
+        }
+
         var wasLocked = user.LockedUntilUtc.HasValue && user.LockedUntilUtc.Value > DateTime.UtcNow;
 
         var passwordResult = passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password);
         if (passwordResult == PasswordVerificationResult.Failed)
         {
+            AccountAttemptThrottle.RegisterFailure(user.Id);
             user.FailedLoginCount += 1;
             user.UpdatedAtUtc = DateTime.UtcNow;
 
@@ -212,6 +233,7 @@ public sealed class AuthService(
                 //
                 // Parola yolundaki kilitle AYNI eşik ve süre kullanılıyor; iki yol arasında farklı
                 // davranmak için bir sebep yok.
+                AccountAttemptThrottle.RegisterFailure(user.Id);
                 user.FailedLoginCount += 1;
                 user.UpdatedAtUtc = DateTime.UtcNow;
                 if (user.FailedLoginCount >= 5)
@@ -233,6 +255,7 @@ public sealed class AuthService(
             }
         }
 
+        AccountAttemptThrottle.Reset(user.Id);
         user.FailedLoginCount = 0;
         user.LockedUntilUtc = null;
         user.LastLoginAtUtc = DateTime.UtcNow;
@@ -467,8 +490,9 @@ public sealed class AuthService(
         using var lease = await EnterTwoFactorAsync(userId, cancellationToken);
         var user = await GetFreshTwoFactorUserAsync(userId, cancellationToken, beforeMutation);
         var passwordResult = passwordHasher.VerifyHashedPassword(user, user.PasswordHash, password);
-        if (passwordResult == PasswordVerificationResult.Failed)
+        if (AccountAttemptThrottle.IsBlocked(user.Id) || passwordResult == PasswordVerificationResult.Failed)
         {
+            if (passwordResult == PasswordVerificationResult.Failed) AccountAttemptThrottle.RegisterFailure(user.Id);
             throw new InvalidOperationException("auth.invalid_credentials");
         }
 
@@ -493,8 +517,9 @@ public sealed class AuthService(
         // MEVCUT parola şart. Aksi hâlde çalınmış bir oturum çerezi tek başına hesabı kalıcı olarak
         // devralmaya yeterdi: saldırgan parolayı değiştirir, gerçek sahibi dışarıda kalırdı.
         var verification = passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.CurrentPassword);
-        if (verification == PasswordVerificationResult.Failed)
+        if (AccountAttemptThrottle.IsBlocked(user.Id) || verification == PasswordVerificationResult.Failed)
         {
+            if (verification == PasswordVerificationResult.Failed) AccountAttemptThrottle.RegisterFailure(user.Id);
             throw new InvalidOperationException("auth.invalid_credentials");
         }
 
@@ -538,7 +563,8 @@ public sealed class AuthService(
         }
 
         var erisim = await ManagedUserGuard.EnsureManagedAsync(
-            dbContext, customerScopeService, actorUserId, targetUserId, cancellationToken);
+            dbContext, customerScopeService, actorUserId, targetUserId, cancellationToken,
+            serverOwnerService, ManagedUserGuard.AdminTargetRule.NoOtherAdmin);
         var target = erisim.Target;
 
         // Parola yazma disiplininin tamamı (uzunluk kuralı, kilit açma, anahtar düşürme) TEK
@@ -592,7 +618,8 @@ public sealed class AuthService(
         CancellationToken cancellationToken = default)
     {
         var erisim = await ManagedUserGuard.EnsureManagedAsync(
-            dbContext, customerScopeService, actorUserId, targetUserId, cancellationToken);
+            dbContext, customerScopeService, actorUserId, targetUserId, cancellationToken,
+            serverOwnerService, ManagedUserGuard.AdminTargetRule.NoOtherAdmin);
         var target = erisim.Target;
 
         // PASİF hesap için bağlantı ÜRETİLMEZ: normal giriş yolu (LoginAsync) pasif kullanıcıyı

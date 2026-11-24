@@ -243,6 +243,31 @@ public sealed class ResellerParityTests : IDisposable
         Assert.Equal("reseller.site_quota_exceeded", hata.MessageKey);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Allocation_sum_does_not_wrap_at_int_boundary(bool sites)
+    {
+        tavanlar.Ata(Bayi, maxSites: sites ? int.MaxValue : 0, maxDiskMb: sites ? 0 : int.MaxValue);
+        await kapsamlar.SetOwnerAsync(Musteri, Bayi);
+        await kapsamlar.SetScopeAsync(Musteri, [], maxSites: sites ? int.MaxValue - 1 : 1, maxDiskMb: sites ? 1 : int.MaxValue - 1);
+        var error = await Assert.ThrowsAsync<AppException>(() => ResellerQuotaGuard.EnsureAllocationFitsAsync(
+            tavanlar, kapsamlar, Bayi, IkinciMusteri, newMaxSites: sites ? 2 : 1, newMaxDiskMb: sites ? 1 : 2));
+        Assert.Equal(sites ? "reseller.site_quota_exceeded" : "reseller.disk_quota_exceeded", error.MessageKey);
+    }
+
+    [Fact]
+    public async Task Usage_reports_allocations_above_single_limit_integer_range()
+    {
+        await kapsamlar.SetOwnerAsync(Musteri, Bayi);
+        await kapsamlar.SetOwnerAsync(IkinciMusteri, Bayi);
+        await kapsamlar.SetScopeAsync(Musteri, [], maxSites: int.MaxValue, maxDiskMb: int.MaxValue);
+        await kapsamlar.SetScopeAsync(IkinciMusteri, [], maxSites: 2, maxDiskMb: 2);
+        var usage = await ResellerQuotaGuard.MeasureAsync(tavanlar, kapsamlar, Bayi);
+        Assert.Equal((long)int.MaxValue + 2, usage.AllocatedSites);
+        Assert.Equal((long)int.MaxValue + 2, usage.AllocatedDiskMb);
+    }
+
     // --- 4) Plan BAGLAMA ucu: gizleme sus olmamali, tavan sistem planiyla atlanamamali ---
 
     [Fact]

@@ -6,6 +6,20 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class WebStatisticsAnalyzerTests
 {
     [Fact]
+    public async Task MissingLogDirectoryIsDistinguishedFromAnEmptyLogDirectory()
+    {
+        var directory = Directory.CreateTempSubdirectory();
+        try
+        {
+            var empty = await WebStatisticsService.ReadLogsAsync("site", 7, directory.FullName, 20);
+            var missing = await WebStatisticsService.ReadLogsAsync("site", 7, Path.Combine(directory.FullName, "missing"), 20);
+            Assert.False(empty.HasData);
+            Assert.False(empty.LogDirectoryMissing);
+            Assert.True(missing.LogDirectoryMissing);
+        }
+        finally { directory.Delete(); }
+    }
+    [Fact]
     public void AnalyzeLines_AggregatesW3CLogFields()
     {
         var today = DateTime.UtcNow.Date.ToString("yyyy-MM-dd");

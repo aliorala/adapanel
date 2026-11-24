@@ -154,18 +154,23 @@
           <span class="field-label">{{ t("panel.php.postMaxSize") }}</span>
           <input v-model.trim="settings.postMaxSize" placeholder="64M" />
         </label>
-        <label class="toggle-field">
-          <input v-model="settings.displayErrors" type="checkbox" />
-          <span>{{ t("panel.php.displayErrors") }}</span>
-        </label>
+        <p class="meta">{{ t("panel.php.productionErrors") }}</p>
         <label class="toggle-field">
           <input v-model="settings.openBasedirEnabled" type="checkbox" />
           <span>{{ t("panel.php.openBasedir") }}</span>
         </label>
       </div>
       <p class="meta">{{ t("panel.php.openBasedirHint") }}</p>
+      <section class="php-logging" :class="{ 'warn-banner': loggingResult?.status !== 'verified' }" role="status">
+        <strong>{{ loggingMessage(loggingResult) }}</strong>
+        <p v-if="loggingResult?.logPath" class="meta">{{ t("panel.php.loggingPath") }}: {{ loggingResult.logPath }}</p>
+        <p v-if="loggingResult?.detail" class="meta">{{ loggingResult.detail }}</p>
+        <p v-if="loggingResult?.status === 'pending'" class="meta">{{ t("panel.php.loggingCacheHint", { seconds: loggingResult.cacheTtlSeconds }) }}</p>
+        <p class="meta">{{ t(loggingResult?.managed && loggingResult.rollAtBytes === 52428800 && loggingResult.retention === 'indefinite' ? "panel.php.loggingManaged" : "panel.php.loggingCustom") }}</p>
+        <button class="secondary compact" v-bind="writeGate(verifyingLogging || savingSettings || actionsBusy || !actorCurrent())" @click="verifyLogging">{{ t(verifyingLogging ? "panel.php.loggingVerifying" : "panel.php.loggingVerify") }}</button>
+      </section>
       <div class="row-actions">
-        <button class="compact" v-bind="writeGate(savingSettings || !actorCurrent())" @click="saveSettings">
+        <button class="compact" v-bind="writeGate(savingSettings || verifyingLogging || !actorCurrent())" @click="saveSettings">
           {{ savingSettings ? t("panel.database.saving") : t("panel.common.save") }}
         </button>
       </div>
@@ -177,7 +182,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { enableRedisExtension, getSitePhpSettings, updateSitePhpSettings } from "../api/php";
+import { enableRedisExtension, getSitePhpSettings, updateSitePhpSettings, verifySitePhpLogging, type PhpErrorLogging } from "../api/php";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { usePhpStore, PhpInstallationRefreshError } from "../stores/php";
@@ -208,11 +213,11 @@ const sessionEpoch = getSessionEpoch();
 let viewRevision = 0;
 const isAdministrator = computed(() => auth.session?.user?.role === "Administrator");
 const actorCurrent = () => !disposed && sessionEpoch === getSessionEpoch() && auth.session?.isAuthenticated === true &&
-  ["Administrator", "Reseller"].includes(auth.session?.user?.role ?? "");
+  ["Administrator", "Reseller", "Customer"].includes(auth.session?.user?.role ?? "");
 const contextCurrent = (revision: number) => actorCurrent() && revision === viewRevision;
 const versionsMeasured = computed(() => phpStore.loaded && !verificationRequired.value);
 const catalogMeasured = computed(() => softwareStore.loaded && !verificationRequired.value);
-const actionsBusy = computed(() => refreshing.value || actionBusy.value || phpStore.loading ||
+const actionsBusy = computed(() => refreshing.value || actionBusy.value || savingSettings.value || verifyingLogging.value || phpStore.loading ||
   (isAdministrator.value && softwareStore.loading) || !!phpStore.installingComponentId || !!phpStore.assigningComponentId ||
   !!softwareStore.installingComponentId || !!softwareStore.removingComponentId || softwareStore.installingDefaults || softwareStore.checkingUpdates);
 function canMutate() { return actorCurrent() && versionsMeasured.value && !actionsBusy.value && !locked.value; }
@@ -226,6 +231,22 @@ const settings = reactive({
   openBasedirEnabled: false
 });
 const savingSettings = ref(false);
+const verifyingLogging = ref(false);
+const loggingResult = ref<PhpErrorLogging>();
+function loggingMessage(result?: PhpErrorLogging) {
+  return t(`panel.php.logging${result?.status === 'verified' ? 'Verified' : result?.status === 'failed' ? 'Failed' : result?.status === 'pending' ? 'Pending' : 'Unverified'}`);
+}
+async function verifyLogging() {
+  if (!actorCurrent() || locked.value || verifyingLogging.value || savingSettings.value || actionsBusy.value || !settingsLoaded.value || !selectedSiteName.value) return;
+  const context = settingsContext();
+  verifyingLogging.value = true;
+  try {
+    const result = await verifySitePhpLogging(context.site);
+    if (context.current() && actorCurrent()) loggingResult.value = result;
+  } catch (error) {
+    if (context.current() && actorCurrent()) { loggingResult.value = undefined; showNotice(resolveApiMessage(error), true); }
+  } finally { verifyingLogging.value = false; }
+}
 
 // Ayarların O SİTE için gerçekten okunup okunmadığı. Bu bayrak olmadan form, okuma başarısız
 // olduğunda ÖNCEKİ sitenin değerlerini gösteriyordu ve "Kaydet" onları yanlış siteye yazıyordu:
@@ -238,7 +259,7 @@ let disposed = false;
 onBeforeUnmount(() => { disposed = true; viewRevision++; });
 watch(() => [auth.session, auth.session?.user?.id, auth.session?.user?.role, auth.session?.isAuthenticated], () => {
   viewRevision++; settingsRequest++; verificationRequired.value = true; settingsLoaded.value = false;
-  settingsError.value = t("panel.common.loadFailed"); notice.value = "";
+  settingsError.value = t("panel.common.loadFailed"); notice.value = ""; loggingResult.value = undefined;
   if (!isAdministrator.value) activeTab.value = "installed";
 }, { flush: "sync" });
 
@@ -252,6 +273,7 @@ async function loadSettings(siteName: string) {
   const context = settingsContext(siteName);
   settingsLoaded.value = false;
   settingsError.value = "";
+  loggingResult.value = undefined;
   if (!siteName) {
     return;
   }
@@ -262,7 +284,8 @@ async function loadSettings(siteName: string) {
     settings.maxExecutionTime = data.maxExecutionTime;
     settings.uploadMaxFilesize = data.uploadMaxFilesize;
     settings.postMaxSize = data.postMaxSize;
-    settings.displayErrors = data.displayErrors;
+    settings.displayErrors = false;
+    loggingResult.value = data.errorLogging;
     settings.openBasedirEnabled = data.openBasedirEnabled ?? false;
     settingsLoaded.value = true;
   } catch (error) {
@@ -274,7 +297,7 @@ async function loadSettings(siteName: string) {
 }
 
 async function saveSettings() {
-  if (!actorCurrent() || locked.value || savingSettings.value || !selectedSiteName.value || !settingsLoaded.value) {
+  if (!actorCurrent() || locked.value || savingSettings.value || verifyingLogging.value || !selectedSiteName.value || !settingsLoaded.value) {
     return;
   }
   savingSettings.value = true;
@@ -285,7 +308,7 @@ async function saveSettings() {
       maxExecutionTime: settings.maxExecutionTime,
       uploadMaxFilesize: settings.uploadMaxFilesize,
       postMaxSize: settings.postMaxSize,
-      displayErrors: settings.displayErrors,
+      displayErrors: false,
       openBasedirEnabled: settings.openBasedirEnabled
     });
     if (!context.current()) return;
@@ -293,11 +316,17 @@ async function saveSettings() {
     settings.maxExecutionTime = data.maxExecutionTime;
     settings.uploadMaxFilesize = data.uploadMaxFilesize;
     settings.postMaxSize = data.postMaxSize;
-    settings.displayErrors = data.displayErrors;
+    settings.displayErrors = false;
+    loggingResult.value = data.errorLogging;
     // İzolasyon durumunu SUNUCUNUN döndürdüğü GERÇEK değerle tazele: kutucuk, kaydedilmiş sanılan
     // ama uygulanmamış bir durumu göstermesin (yanıt php.ini'den taze okunur).
     settings.openBasedirEnabled = data.openBasedirEnabled ?? settings.openBasedirEnabled;
-    showNotice(t("panel.php.settingsSaved"), false);
+    // Havuz yenilenemediyse "kaydedildi" DENMEZ: ayar yazildi ama uygulanmadi; sari uyari gosterilir.
+    if (data.poolRecycleFailed === true) {
+      showNotice(`${t("php.pool_recycle_failed")}\n\n${loggingMessage(data.errorLogging)}`, false, true);
+    } else {
+      showNotice(`${t("panel.php.settingsSaved")}\n\n${loggingMessage(data.errorLogging)}`, false, data.errorLogging?.status !== "verified");
+    }
   } catch (error) {
     // `extractApiMessage` HAM anahtar döndürür (ör. `php.settings_locked`); çevirmeden basmak
     // kullanıcıya anlamsız bir dizge gösteriyordu. Aynı dosyanın diğer 5 noktası zaten doğruydu.
@@ -384,7 +413,8 @@ async function assignVersion(componentId: string) {
   try {
     const assignment = await phpStore.assignVersion(site, componentId);
     if (contextCurrent(revision) && selectedSiteName.value === site) {
-      const warnings = [assignment.handlerOrderNoticeKey ?? "aspnet.handler_order_unverified",
+      loggingResult.value = assignment.errorLogging;
+      const warnings = [assignment.errorLogging?.status === "verified" ? "" : loggingMessage(assignment.errorLogging), assignment.handlerOrderNoticeKey ?? "aspnet.handler_order_unverified",
         assignment.isFastCgiRegistered ? "" : "panel.php.fastCgiMissing"].filter(Boolean);
       showNotice(warnings.length ? warnings.map(translate).join("\n\n") : t("php.assignment.success"), false, warnings.length > 0);
     }
@@ -479,6 +509,7 @@ function showNotice(message: string, isError: boolean, isWarning = false) {
 
 <style scoped>
 .page-notice { white-space: pre-line; overflow-wrap: anywhere; }
+.php-logging { padding: 12px; margin: 12px 0; border: 1px solid var(--panel-border); border-radius: 8px; overflow-wrap: anywhere; }
 .php-read-state {
   display: flex;
   align-items: center;

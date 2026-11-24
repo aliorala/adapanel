@@ -160,9 +160,51 @@ public sealed class AuthTwoFactorLifecycleTests
         var before = await fixture.Recovery();
         await fixture.RejectWrites("audit");
         var controller = fixture.Controller();
-        await Assert.ThrowsAsync<DbUpdateException>(() => controller.RegenerateRecoveryCodesAsync(default));
+        await Assert.ThrowsAsync<DbUpdateException>(() => controller.RegenerateRecoveryCodesAsync(new TwoFactorPasswordRequest { Password = Fixture.Password }, default));
         Assert.Equal(before, await fixture.Recovery());
         Assert.True((await fixture.Reload()).IsTwoFactorEnabled);
+    }
+
+    // G12: ikinci adım kurulumu/kurtarma kodu yenileme MEVCUT parola ister; çalınmış çerez yetmez.
+    [Theory]
+    [InlineData("begin", false)]
+    [InlineData("regenerate", true)]
+    public async Task TwoFactorSetupAndRecoveryRequireTheCurrentPassword(string operation, bool enabled)
+    {
+        await using var fixture = await Fixture.Create(enabled);
+        var before = await fixture.Recovery();
+        var controller = fixture.Controller();
+        var wrong = new TwoFactorPasswordRequest { Password = "Wrong!Password999" };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => operation == "begin"
+            ? controller.BeginTwoFactorSetupAsync(wrong, default)
+            : controller.RegenerateRecoveryCodesAsync(wrong, default));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => operation == "begin"
+            ? controller.BeginTwoFactorSetupAsync(new TwoFactorPasswordRequest(), default)
+            : controller.RegenerateRecoveryCodesAsync(new TwoFactorPasswordRequest(), default));
+        Assert.Equal(before, await fixture.Recovery());
+        Assert.Null((await fixture.Reload()).PendingTwoFactorSecretProtected);
+    }
+
+    // G12: kimliğe bürünme oturumu müşterinin 2FA'sını kuramaz / kodlarını yenileyemez.
+    [Theory]
+    [InlineData("begin")]
+    [InlineData("confirm")]
+    [InlineData("regenerate")]
+    [InlineData("disable")]
+    public async Task TwoFactorChangesAreRejectedWhileImpersonating(string operation)
+    {
+        await using var fixture = await Fixture.Create(enabled: operation is "regenerate" or "disable", pending: operation == "confirm");
+        var controller = fixture.Controller();
+        ((ClaimsIdentity)controller.HttpContext.User.Identity!).AddClaim(new Claim("impersonator_id", Guid.NewGuid().ToString()));
+        var password = new TwoFactorPasswordRequest { Password = Fixture.Password };
+        var error = await Assert.ThrowsAsync<AdaPanel.Core.Common.AppException>(() => operation switch
+        {
+            "begin" => controller.BeginTwoFactorSetupAsync(password, default),
+            "confirm" => controller.ConfirmTwoFactorSetupAsync(new VerifyTwoFactorRequest { Code = "123456", Password = Fixture.Password }, default),
+            "disable" => controller.DisableTwoFactorAsync(new DisableTwoFactorRequest { Password = Fixture.Password }, default),
+            _ => controller.RegenerateRecoveryCodesAsync(password, default)
+        });
+        Assert.Equal(403, error.HttpStatusCode);
     }
 
     [Theory]
@@ -190,9 +232,9 @@ public sealed class AuthTwoFactorLifecycleTests
         {
             switch (operation)
             {
-                case "begin": await controller.BeginTwoFactorSetupAsync(default); break;
-                case "confirm": await controller.ConfirmTwoFactorSetupAsync(new VerifyTwoFactorRequest { Code = "123456" }, default); break;
-                case "regenerate": await controller.RegenerateRecoveryCodesAsync(default); break;
+                case "begin": await controller.BeginTwoFactorSetupAsync(new TwoFactorPasswordRequest { Password = Fixture.Password }, default); break;
+                case "confirm": await controller.ConfirmTwoFactorSetupAsync(new VerifyTwoFactorRequest { Code = "123456", Password = Fixture.Password }, default); break;
+                case "regenerate": await controller.RegenerateRecoveryCodesAsync(new TwoFactorPasswordRequest { Password = Fixture.Password }, default); break;
                 case "disable": await controller.DisableTwoFactorAsync(new DisableTwoFactorRequest { Password = Fixture.Password }, default); break;
             }
         });

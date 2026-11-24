@@ -74,10 +74,14 @@ public static class PanelServerLimits
     /// hâlde ayrıştırıcıda <c>InvalidDataException</c> ile ölüyordu.
     /// </para>
     /// <para>
-    /// Değer artık TEK yerden okunuyor: hem denetleyicinin özniteliği hem form ayrıştırıcısı.
+    /// Dosya/parça boyutu tek kaynaktır. Toplam istek için ayrıca sınırlı multipart
+    /// başlık/sınırlandırıcı payı FileUploadRequestMaxBytes ile ayrılır.
     /// </para>
     /// </remarks>
     public const long FileUploadMaxBytes = 1024L * 1024L * 200L;
+
+    /// <summary>One file plus bounded multipart headers/boundaries; the file itself remains limited to 200 MiB.</summary>
+    public const long FileUploadRequestMaxBytes = FileUploadMaxBytes + 64L * 1024L;
 
     /// <summary>
     /// KİMLİKSİZ formların gövde tavanı: 64 KiB.

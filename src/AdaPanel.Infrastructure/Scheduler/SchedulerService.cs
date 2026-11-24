@@ -11,7 +11,7 @@ using Microsoft.Extensions.Options;
 
 namespace AdaPanel.Infrastructure.Scheduler;
 
-public sealed class SchedulerService(
+public sealed partial class SchedulerService(
     IIisSiteService siteService,
     IOptions<PanelRuntimeOptions> runtimeOptions,
     ILogger<SchedulerService> logger,
@@ -441,8 +441,9 @@ if (-not $gorev) {{
     /// engellemek olurdu.
     /// </para>
     /// </summary>
-    private async Task<string?> PrepareLogPathAsync(string taskName, string? principalUserId, CancellationToken cancellationToken)
+    internal async Task<string?> PrepareLogPathAsync(string taskName, string? principalUserId, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             var klasor = TaskLogDirectory;
@@ -452,8 +453,13 @@ if (-not $gorev) {{
             // yonlendirmesi basarisiz olur ve gorev HIC calismaz -- yani kolaylik, isi bozar.
             if (!string.IsNullOrWhiteSpace(principalUserId))
             {
-                var script = $@"& icacls.exe '{EscapeSingleQuoted(klasor)}' /grant '{EscapeSingleQuoted(principalUserId)}:(OI)(CI)M' | Out-Null";
-                await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+                var script = $@"$ErrorActionPreference = 'Stop'
+& icacls.exe '{EscapeSingleQuoted(klasor)}' /grant '{EscapeSingleQuoted(principalUserId)}:(OI)(CI)M' | Out-Null
+if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}";
+                var result = await RunTaskCommandAsync(script, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!result.Success)
+                    throw new IOException($"Task log permission grant failed (exit code {result.ExitCode}).");
             }
 
             return Path.Combine(klasor, ResolveLogFileName(taskName));
@@ -767,6 +773,14 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
         CancellationToken cancellationToken = default)
     {
         ValidateRequest(request);
+        if (request.MigrationFreshDisabled)
+        {
+            ValidateMigrationRequest(request);
+            privilege = ScheduledTaskPrivilege.Limited;
+            request.RunAs = "limited";
+            if ((await GetTasksAsync(cancellationToken)).Any(task => task.Name.Equals(request.Name.Trim(), StringComparison.OrdinalIgnoreCase)))
+                throw new AppException("migration.target_task_exists", 409, 409);
+        }
         await EnsureTaskUrlTargetAllowedAsync(request, cancellationToken);
 
         // Betik görevi IIS'e (site kökü + havuz adı) bakmak zorunda olduğundan çözüm ASENKRON;
@@ -774,6 +788,11 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
         // "script" DIŞINDAKİ tipler için plan yalnız kimlik düşürüldüğünde üretilir (aşağıda).
         var plan = await ResolveScriptPlanAsync(request, privilege, cancellationToken)
                    ?? PlanForLimitedIdentity(request, privilege);
+        if (request.MigrationFreshDisabled && plan?.PrincipalUserId != ScriptTaskPlanner.LimitedUserId)
+        {
+            var action = ResolveAction(request);
+            plan = new ScriptPlan(action.Execute, action.Arguments, action.WorkingDirectory, ScriptTaskPlanner.LimitedUserId);
+        }
 
         // BETİK OLMAYAN sınırlı görev bir SİTEYE aitse o sitenin kökü açılır.
         //
@@ -802,7 +821,11 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
         }
 
         var logPath = await PrepareLogPathAsync(request.Name, plan?.PrincipalUserId, cancellationToken);
-        var result = await RunTaskCommandAsync(BuildCreateScript(request, plan, logPath), cancellationToken);
+        var migrationMarker = "AdaPanel-Migration-" + Guid.NewGuid().ToString("N");
+        var script = request.MigrationFreshDisabled ? BuildMigrationCreateScript(request, plan, logPath, migrationMarker) : BuildCreateScript(request, plan, logPath);
+        var result = await RunTaskCommandAsync(script, cancellationToken);
+        if (request.MigrationFreshDisabled && (!result.Success || !result.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Contains("ADAPANEL-MIGRATION-CREATED=" + migrationMarker)))
+            throw new AppException("migration.task_registration_unverified", 409, 409);
         if (!result.Success)
         {
             // Uygulama havuzu kimliğiyle kayıt başarısızsa SYSTEM'e SESSİZCE DÜŞME — bu, kullanıcının
@@ -839,6 +862,7 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
 
         if (kaydedilen is null)
         {
+            if (request.MigrationFreshDisabled) throw new AppException("migration.task_registration_unverified", 409, 409);
             throw new AppException(
                 "cron.write_unverified",
                 500,
@@ -846,6 +870,8 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
                 $"'{request.Name.Trim()}' kaydi basarili dondu ama gorev listesinde bulunamadi.");
         }
 
+        if (request.MigrationFreshDisabled && !kaydedilen.State.Equals("Disabled", StringComparison.OrdinalIgnoreCase))
+            throw new AppException("migration.task_disabled_state_unverified", 409, 409);
         return kaydedilen;
     }
 
@@ -958,7 +984,9 @@ else {{ [Console]::Out.WriteLine('ADAPANEL-DURUM=' + $gorev.State) }}";
 
     internal static string BuildCreateScript(CreateScheduledTaskRequest request, ScriptPlan? plan, string? logPath = null)
     {
-        var scheduleType = request.ScheduleType.Trim().ToLowerInvariant();
+        if (request.MigrationFreshDisabled) return BuildMigrationCreateScript(request, plan, logPath);
+        // M6: bilinmeyen tür artık sessizce saatliğe DÜŞMEZ; ValidateRequest ile aynı kural.
+        var scheduleType = NormalizeScheduleType(request.ScheduleType);
         var interval = Math.Max(1, request.Interval);
         var (execute, arguments, workingDirectory) = plan is null
             ? ResolveAction(request)
@@ -991,7 +1019,8 @@ else {{ [Console]::Out.WriteLine('ADAPANEL-DURUM=' + $gorev.State) }}";
         {
             "minute" or "minutely" => $"New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes {interval}) -RepetitionDuration (New-TimeSpan -Days 3650)",
             "daily" => $"New-ScheduledTaskTrigger -Daily -At ([datetime]::ParseExact('{NormalizeTime(request.TimeOfDay)}','HH:mm',[System.Globalization.CultureInfo]::InvariantCulture))",
-            _ => $"New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Hours {interval}) -RepetitionDuration (New-TimeSpan -Days 3650)"
+            "hourly" => $"New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Hours {interval}) -RepetitionDuration (New-TimeSpan -Days 3650)",
+            _ => throw new AppException("cron.invalid_schedule_type", 400, 400)
         };
 
         // Principal'i ACIKCA ver: panel servisi LocalSystem'dir ve principal'siz "-RunLevel Highest"
@@ -1191,9 +1220,38 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(req
         }
     }
 
+    /// <summary>Panelin zamanlayıcı kodunun gerçekten kurabildiği türler (frontend seçenekleriyle aynı).</summary>
+    internal const int MaxMinuteInterval = 1439;   // 24 saat ve üstü "saatlik" ya da "günlük" ile ifade edilir
+    internal const int MaxHourInterval = 744;      // Görev Zamanlayıcı tekrar aralığı üst sınırı ~31 gün
+
+    internal static string NormalizeScheduleType(string? raw)
+    {
+        var tip = (raw ?? string.Empty).Trim().ToLowerInvariant();
+        return tip switch
+        {
+            "minute" or "minutely" => "minute",
+            "hourly" => "hourly",
+            "daily" => "daily",
+            // weekly/monthly: tetikleyici kurma ve geri okuma (düzenleme) kodu yok; sessizce saatliğe
+            // çevirmek yerine açıkça reddedilir.
+            _ => throw new AppException("cron.invalid_schedule_type", 400, 400)
+        };
+    }
+
+    internal static void ValidateSchedule(CreateScheduledTaskRequest request)
+    {
+        var tip = NormalizeScheduleType(request.ScheduleType);
+        var max = tip switch { "minute" => MaxMinuteInterval, "hourly" => MaxHourInterval, _ => int.MaxValue };
+        if (tip != "daily" && request.Interval > max)
+        {
+            throw new AppException("cron.invalid_interval", 400, 400);
+        }
+    }
+
     private static void ValidateRequest(CreateScheduledTaskRequest request)
     {
         SanitizeRequest(request);
+        ValidateSchedule(request);
 
         // GÖREV ADI BİR GÜVENLİK SINIRIDIR, bir etiket değil.
         //
@@ -1622,13 +1680,13 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(req
     /// SİTE KÖKÜYLE sınırlıdır ve alternatifin (SYSTEM) yanında hâlâ çok dardır.
     /// </para>
     /// </summary>
-    private static async Task GrantLimitedIdentityAccessAsync(string siteRoot, CancellationToken cancellationToken)
+    private async Task GrantLimitedIdentityAccessAsync(string siteRoot, CancellationToken cancellationToken)
     {
         var script = $@"$ErrorActionPreference = 'Stop'
 & icacls.exe '{EscapeSingleQuoted(siteRoot)}' /grant '{EscapeSingleQuoted(ScriptTaskPlanner.LimitedUserId)}:(OI)(CI)M' /T | Out-Null
 if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        var result = await RunTaskCommandAsync(script, cancellationToken);
         if (!result.Success)
         {
             throw new AppException("cron.limited_grant_failed", 500, 500, result.StandardError);
@@ -1808,7 +1866,7 @@ if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
     /// listesinden geçer (bkz. <see cref="EnsureUsableName"/> ve <see cref="ValidateRequest"/>).
     /// </para>
     /// </summary>
-    private static string EscapeSingleQuoted(string value) => value.Replace("'", "''");
+    private static string EscapeSingleQuoted(string value) => PowerShellQuoting.Escape(value);
 
     /// <summary>
     /// Var olan bir göreve dokunmadan önce adın kabuk için zararsız olduğunu doğrular.

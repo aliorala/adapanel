@@ -117,27 +117,33 @@ public sealed class AntivirusService(
         var stopwatch = Stopwatch.StartNew();
         await YuvayiAyirtAsync(target, startedAt, cancellationToken);
 
-        CommandResult result;
         try
         {
             // --infected: yalnız bulgular yazılır (dev sitelerde çıktı şişmez); özet (Scanned files) korunur.
-            result = await ProcessRunner.RunAsync(
+            var result = await ProcessRunner.RunAsync(
                 clamscan,
                 $"--database=\"{databaseDirectory}\" --recursive --infected \"{path}\"",
                 workingDirectory: Path.GetDirectoryName(clamscan),
                 cancellationToken: cancellationToken,
                 timeout: TimeSpan.FromHours(2));
+            stopwatch.Stop();
+            var scan = ParseScanResult(result, target, startedAt, stopwatch.Elapsed);
+            // Persist the result before releasing the slot. Even if persistence is
+            // canceled or fails, the finally block releases the completed scan's slot.
+            await fileStore.WriteAsync(StatePath, scan, cancellationToken);
+            return scan;
         }
-        catch
+        finally
         {
-            // Tarama patlarsa "sürüyor" kaydı DİSKTE KALMAMALI: kalsaydı panel bir daha asla
-            // tarama başlatmaz ve sonsuza kadar "tarama sürüyor" derdi.
+            // Parsing and result persistence can also fail after the process exits.
+            // They must not leave this process owning a permanently busy slot.
             await ClearRunningScanAsync(startedAt, CancellationToken.None);
-            throw;
         }
+    }
 
-        stopwatch.Stop();
-
+    internal static AntivirusScanResultDto ParseScanResult(
+        CommandResult result, string target, DateTime startedAt, TimeSpan duration)
+    {
         // clamscan çıkış kodları: 0 = temiz, 1 = virüs bulundu, 2+ = gerçek hata.
         AntivirusScanResultDto scan;
         if (result.ExitCode is 0 or 1)
@@ -161,7 +167,7 @@ public sealed class AntivirusService(
                 var scanned = ScannedFilesLine.Match(trimmed);
                 if (scanned.Success)
                 {
-                    scannedFiles = int.Parse(scanned.Groups["count"].Value);
+                    _ = int.TryParse(scanned.Groups["count"].Value, out scannedFiles);
                 }
             }
 
@@ -169,11 +175,14 @@ public sealed class AntivirusService(
             {
                 Target = target,
                 StartedAtUtc = startedAt,
-                DurationSeconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 1),
+                DurationSeconds = Math.Round(duration.TotalSeconds, 1),
                 ScannedFiles = scannedFiles,
                 InfectedCount = findings.Count,
                 Infected = findings,
-                Status = findings.Count > 0 ? "infected" : "clean"
+                Status = findings.Count > 0 ? "infected" : result.ExitCode == 0 ? "clean" : "failed",
+                Detail = result.ExitCode == 1 && findings.Count == 0
+                    ? "ClamAV reported an infection, but its finding details could not be read. Review the scanner output and repeat the scan."
+                    : string.Empty
             };
         }
         else
@@ -182,17 +191,12 @@ public sealed class AntivirusService(
             {
                 Target = target,
                 StartedAtUtc = startedAt,
-                DurationSeconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 1),
+                DurationSeconds = Math.Round(duration.TotalSeconds, 1),
                 Status = "failed",
                 Detail = Truncate(result.StandardError.Length > 0 ? result.StandardError : result.StandardOutput)
             };
         }
 
-        // ÖNCE sonuç, SONRA "sürüyor" kaydının temizlenmesi. Ters sırada, iki yazma arasında
-        // gelen bir `status` isteği hem "tarama yok" hem de "son tarama eski" derdi — sonuç bir
-        // an için kaybolmuş görünürdü.
-        await fileStore.WriteAsync(StatePath, scan, cancellationToken);
-        await ClearRunningScanAsync(startedAt, CancellationToken.None);
         return scan;
     }
 

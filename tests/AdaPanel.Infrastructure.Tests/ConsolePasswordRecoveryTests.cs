@@ -425,6 +425,7 @@ public sealed class ConsolePasswordRecoveryTests
                     new Claim(ClaimTypes.Name, kullanici.UserName),
                     new Claim(ClaimTypes.Role, kullanici.Role.ToString()),
                     new Claim(CookieSessionValidator.CredentialStampClaim, damga),
+                    new Claim(CookieSessionValidator.TwoFactorStateClaim, "0"),
                     OturumTestOrtami.OturumKimligiTalebi()
                 ],
                 CookieAuthenticationDefaults.AuthenticationScheme);

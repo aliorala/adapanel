@@ -20,7 +20,14 @@ export type PhpVersionRecord = {
   installedAtUtc: string;
 };
 
+export type PhpErrorLogging = {
+  status: "verified" | "pending" | "failed" | "unverified";
+  logPath: string; detail: string; cacheTtlSeconds: number; checkedAtUtc: string | null;
+  managed: boolean; rollAtBytes: number; retention: string;
+};
+
 export type SitePhpAssignment = {
+  errorLogging?: PhpErrorLogging;
   siteName: string;
   componentId: string;
   displayName: string;
@@ -86,13 +93,35 @@ function handlerOrder(value: unknown): HandlerOrderMeasurement {
     blockingHandlerName: text(row, "blockingHandlerName", ""), insertedAtFront: optionalBool(row, "insertedAtFront") ?? false,
     ordered, shadowedByCatchAll: measured && handlerFound && !precedesCatchAll, missing, unverified, noticeKey };
 }
+function errorLogging(value: unknown): PhpErrorLogging | undefined {
+  if (value == null) return undefined;
+  const row = object(value);
+  const status = text(row, "status");
+  if (!["verified", "pending", "failed", "unverified"].includes(status)) return unconfirmed();
+  const cacheTtlSeconds = row.cacheTtlSeconds, rollAtBytes = row.rollAtBytes;
+  if (typeof cacheTtlSeconds !== "number" || !Number.isInteger(cacheTtlSeconds) || cacheTtlSeconds < 0 ||
+      typeof rollAtBytes !== "number" || !Number.isSafeInteger(rollAtBytes) || rollAtBytes < 0 ||
+      (row.checkedAtUtc !== null && (typeof row.checkedAtUtc !== "string" || !Number.isFinite(Date.parse(row.checkedAtUtc))))) return unconfirmed();
+  // Only an explicit runtime measurement can be positive.
+  if (status === "verified" && (!row.checkedAtUtc || !text(row, "logPath").trim())) return unconfirmed();
+  return {status: status as PhpErrorLogging["status"], logPath: text(row, "logPath"), detail: text(row, "detail"),
+    cacheTtlSeconds, checkedAtUtc: row.checkedAtUtc as string | null, managed: bool(row, "managed"),
+    rollAtBytes, retention: text(row, "retention")};
+}
+
+export async function verifySitePhpLogging(siteName: string) {
+  const response = await apiClient.post<ApiEnvelope<unknown>>(`/sites/${encodeURIComponent(siteName)}/php/logging/verify`, {});
+  const result = errorLogging(data(response.data));
+  return result ?? unconfirmed();
+}
+
 function assignmentRecord(value: unknown, siteName: string, componentId: string): SitePhpAssignment {
   const row = object(value), actualSite = identity(row, "siteName"), actualComponent = identity(row, "componentId");
   if (!sameIdentity(actualSite, siteName) || !sameIdentity(actualComponent, componentId)) return unconfirmed();
   const order = handlerOrder(row.handlerOrder);
   return { siteName: actualSite, componentId: actualComponent, displayName: text(row, "displayName"),
     version: text(row, "version", ""), executablePath: text(row, "executablePath", ""), handlerName: text(row, "handlerName"),
-    isFastCgiRegistered: bool(row, "isFastCgiRegistered"), handlerOrder: order, handlerOrderNoticeKey: order.noticeKey };
+    isFastCgiRegistered: bool(row, "isFastCgiRegistered"), errorLogging: errorLogging(row.errorLogging), handlerOrder: order, handlerOrderNoticeKey: order.noticeKey };
 }
 
 export async function getPhpVersions() {
@@ -122,6 +151,7 @@ export async function setSitePhpVersion(siteName: string, componentId: string) {
 }
 
 export type SitePhpSettings = {
+  errorLogging?: PhpErrorLogging;
   siteName: string;
   memoryLimit: string;
   maxExecutionTime: number;
@@ -131,16 +161,20 @@ export type SitePhpSettings = {
   openBasedirEnabled?: boolean;
   configured: boolean;
   redisEnabled?: boolean;
+  /** Izolasyon degisti ama sitenin havuzu yenilenemedi: degisiklik bir sonraki havuz donusunde gecerli olur. */
+  poolRecycleFailed?: boolean;
 };
 
 function settingsRecord(value: unknown, siteName: string): SitePhpSettings {
   const row = object(value), actualSite = identity(row, "siteName"), maxExecutionTime = row.maxExecutionTime;
   if (!sameIdentity(actualSite, siteName) || typeof maxExecutionTime !== "number" || !Number.isInteger(maxExecutionTime)) return unconfirmed();
-  const openBasedirEnabled = optionalBool(row, "openBasedirEnabled"), redisEnabled = optionalBool(row, "redisEnabled");
+  const openBasedirEnabled = optionalBool(row, "openBasedirEnabled"), redisEnabled = optionalBool(row, "redisEnabled"), poolRecycleFailed = optionalBool(row, "poolRecycleFailed");
   return { siteName: actualSite, memoryLimit: text(row, "memoryLimit"), maxExecutionTime,
     uploadMaxFilesize: text(row, "uploadMaxFilesize"), postMaxSize: text(row, "postMaxSize"),
     displayErrors: bool(row, "displayErrors"), configured: bool(row, "configured"),
-    ...(openBasedirEnabled === undefined ? {} : { openBasedirEnabled }), ...(redisEnabled === undefined ? {} : { redisEnabled }) };
+    ...(row.errorLogging == null ? {} : { errorLogging: errorLogging(row.errorLogging) }),
+    ...(openBasedirEnabled === undefined ? {} : { openBasedirEnabled }), ...(redisEnabled === undefined ? {} : { redisEnabled }),
+    ...(poolRecycleFailed === undefined ? {} : { poolRecycleFailed }) };
 }
 
 export async function getSitePhpSettings(siteName: string) {
@@ -148,7 +182,7 @@ export async function getSitePhpSettings(siteName: string) {
   return settingsRecord(data(response.data), siteName);
 }
 
-export async function updateSitePhpSettings(siteName: string, payload: Omit<SitePhpSettings, "siteName" | "configured">) {
+export async function updateSitePhpSettings(siteName: string, payload: Omit<SitePhpSettings, "siteName" | "configured" | "errorLogging">) {
   const response = await apiClient.post<ApiEnvelope<unknown>>(`/sites/${encodeURIComponent(siteName)}/php/settings`, payload);
   return settingsRecord(data(response.data), siteName);
 }
@@ -167,7 +201,7 @@ export async function getGlobalPhpSettings() {
   return settingsRecord(data(response.data), "global");
 }
 
-export async function updateGlobalPhpSettings(payload: Omit<SitePhpSettings, "siteName" | "configured">) {
+export async function updateGlobalPhpSettings(payload: Omit<SitePhpSettings, "siteName" | "configured" | "errorLogging">) {
   const response = await apiClient.post<ApiEnvelope<unknown>>("/php/global-settings", payload);
   return settingsRecord(data(response.data), "global");
 }

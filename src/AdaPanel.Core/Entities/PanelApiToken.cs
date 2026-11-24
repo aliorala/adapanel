@@ -41,6 +41,19 @@ public sealed class PanelApiToken
     /// </summary>
     public bool AllowTerminal { get; set; }
 
+    /// <summary>
+    /// SALT OKUNUR kapsam: true ise REST'te GET/HEAD/OPTIONS dışındaki istekler 403 alır; MCP'de tüm yazma
+    /// araçları reddedilir ve yıkıcı/terminal yetkisi kapalıdır; phpMyAdmin/Adminer vekili (dbtools)
+    /// anahtarla zaten kullanılamaz. Varsayılan false: mevcut anahtarlar değişmeden kalır.
+    /// </summary>
+    public bool ReadOnly { get; set; }
+
+    /// <summary>
+    /// İsteğe bağlı IP/CIDR izin listesi (virgülle ayrılmış, normalleştirilmiş). Boş/null = kısıt yok.
+    /// Doluysa yalnız bu adreslerden gelen istekler kabul edilir.
+    /// </summary>
+    public string? AllowedIps { get; set; }
+
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
     /// <summary>Boşsa süresiz. Dolduğunda anahtar reddedilir.</summary>

@@ -21,4 +21,19 @@ public sealed class NotificationSettingsDto
     public bool UseSsl { get; set; } = true;
 
     public string WebhookUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Webhook imza anahtarı (HMAC-SHA256). Diskte <c>ISecretProtector</c> ile korunur; istemciye
+    /// düz gider ki alıcı taraf imzayı doğrulayabilsin. Boşsa ilk kayıt/gönderimde otomatik üretilir.
+    /// İstek DTO'sunda YOK: istemci anahtarı belirleyemez.
+    /// </summary>
+    public string WebhookSecret { get; set; } = string.Empty;
+}
+
+/// <summary>Webhook anahtarı döndürme sonucu: tam değer YALNIZ bu yanıtta bulunur.</summary>
+public sealed class WebhookSecretRotationDto
+{
+    public string WebhookSecret { get; init; } = string.Empty;
+
+    public string Masked { get; init; } = string.Empty;
 }

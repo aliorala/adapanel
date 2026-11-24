@@ -5,20 +5,16 @@ using AdaPanel.Core.Interfaces;
 namespace AdaPanel.Infrastructure.Mail;
 
 /// <summary>
-/// IMailService dağıtıcısı. BİRİNCİL = Stalwart (modern, DKIM/SPF/DMARC yerleşik, CLI yönetimi);
-/// kuruluysa her zaman o kullanılır. MailEnable yalnızca YEDEK: Stalwart yokken ama MailEnable
-/// kuruluyken devreye girer. İkisi aynı anda çalışmaz (kurulum sırasında çakışma engellenir).
+/// Routes operations to the configured or unambiguously running mail provider.
+/// Ambiguous installations and simultaneously running engines fail closed.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class MailServiceRouter(
     MailService stalwartMailService,
-    MailEnableMailService mailEnableMailService) : IMailService
+    MailEnableMailService mailEnableMailService,
+    MailProviderSelection providerSelection) : IMailService
 {
-    private IMailService Active => MailService.IsInstalled()
-        ? stalwartMailService
-        : MailEnableMailService.IsInstalled()
-            ? mailEnableMailService
-            : stalwartMailService;
+    private IMailService Active => providerSelection.Current == "mailenable" ? mailEnableMailService : stalwartMailService;
 
     public Task<MailDnsDto> GetDnsRecordsAsync(string domain, CancellationToken cancellationToken = default)
         => Active.GetDnsRecordsAsync(domain, cancellationToken);
@@ -28,6 +24,9 @@ public sealed class MailServiceRouter(
 
     public Task<MailCertificateDto> GetCertificateStatusAsync(CancellationToken cancellationToken = default)
         => Active.GetCertificateStatusAsync(cancellationToken);
+
+    public Task<MailCertificateDto> GetCertificateStatusForDomainAsync(string domain, CancellationToken cancellationToken = default)
+        => Active.GetCertificateStatusForDomainAsync(domain, cancellationToken);
 
     public Task<MailCertificateDto> IssueCertificateAsync(IssueMailCertificateRequest request, CancellationToken cancellationToken = default)
         => Active.IssueCertificateAsync(request, cancellationToken);
@@ -46,8 +45,20 @@ public sealed class MailServiceRouter(
     public Task<bool> EnsureServerHostnameAsync(bool applyChanges = true, CancellationToken cancellationToken = default)
         => Active.EnsureServerHostnameAsync(applyChanges, cancellationToken);
 
-    public Task<MailWorkspaceDto> GetWorkspaceAsync(string? domain, CancellationToken cancellationToken = default)
-        => Active.GetWorkspaceAsync(domain, cancellationToken);
+    public Task<MailServerIdentityDto> GetServerIdentityAsync(CancellationToken cancellationToken = default)
+        => Active.GetServerIdentityAsync(cancellationToken);
+
+    public Task<MailServerIdentityDto> SetServerIdentityAsync(SetMailServerIdentityRequest request, CancellationToken cancellationToken = default)
+        => Active.SetServerIdentityAsync(request, cancellationToken);
+
+    public async Task<MailWorkspaceDto> GetWorkspaceAsync(string? domain, CancellationToken cancellationToken = default)
+    {
+        var provider = providerSelection.Current;
+        var workspace = await (provider == "mailenable" ? (IMailService)mailEnableMailService : stalwartMailService)
+            .GetWorkspaceAsync(domain, cancellationToken);
+        workspace.Provider = provider;
+        return workspace;
+    }
 
     public Task<MailWorkspaceDto> ConfigureAsync(ConfigureMailRequest request, CancellationToken cancellationToken = default)
         => Active.ConfigureAsync(request, cancellationToken);
@@ -132,4 +143,22 @@ public sealed class MailServiceRouter(
 
     public Task<MailClientSettingsDto?> GetClientSettingsAsync(string domain, CancellationToken cancellationToken = default)
         => Active.GetClientSettingsAsync(domain, cancellationToken);
+
+    public Task<MailWorkspaceDto> SetAccountActiveAsync(SetMailAccountActiveRequest request, CancellationToken cancellationToken = default)
+        => Active.SetAccountActiveAsync(request, cancellationToken);
+
+    public Task<MailWorkspaceDto> UpdateAliasAsync(UpdateMailAliasRequest request, CancellationToken cancellationToken = default)
+        => Active.UpdateAliasAsync(request, cancellationToken);
+
+    public Task<MailForwardDto> GetForwardAsync(string address, CancellationToken cancellationToken = default)
+        => Active.GetForwardAsync(address, cancellationToken);
+
+    public Task<MailForwardDto> SetForwardAsync(SetMailForwardRequest request, CancellationToken cancellationToken = default)
+        => Active.SetForwardAsync(request, cancellationToken);
+
+    public Task<MailDkimRotationDto> RotateDkimAsync(RotateMailDkimRequest request, CancellationToken cancellationToken = default)
+        => Active.RotateDkimAsync(request, cancellationToken);
+
+    public Task<int> FinalizeDkimRotationsAsync(CancellationToken cancellationToken = default)
+        => Active.FinalizeDkimRotationsAsync(cancellationToken);
 }

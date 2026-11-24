@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace AdaPanel.Infrastructure.Mail;
 
@@ -12,24 +13,25 @@ internal static class MailCertificateStoreReference
         try
         {
             await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: token);
-            if (document.RootElement.ValueKind != JsonValueKind.Object) return Usage.Unknown;
-            string? Field(string name)
+            var document = await JsonSerializer.DeserializeAsync<JsonObject>(stream, cancellationToken: token);
+            if (document is null) return Usage.Unknown;
+            var records = MailCertificateRegistry.Parse(document).Records;
+            // Older references could contain only source/thumbprint, without a host field.
+            if (records.Count == 0) records = [document];
+            var unknown = false;
+            foreach (var record in records)
             {
-                var fields = document.RootElement.EnumerateObject()
-                    .Where(property => property.Name.Equals(name, StringComparison.OrdinalIgnoreCase)).ToArray();
-                return fields.Length == 1 && fields[0].Value.ValueKind == JsonValueKind.String
-                    ? fields[0].Value.GetString() : null;
+                var source = MailCertificateRegistry.Field(record, "source");
+                if (source.Equals("letsencrypt", StringComparison.OrdinalIgnoreCase)
+                    || source.Equals("self-signed", StringComparison.OrdinalIgnoreCase)) continue;
+                var savedThumbprint = MailCertificateRegistry.Field(record, "thumbprint");
+                if (!source.Equals("windows-store", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(savedThumbprint))
+                { unknown = true; continue; }
+                if (savedThumbprint.Equals(thumbprint, StringComparison.OrdinalIgnoreCase)) return Usage.InUse;
             }
-            var source = Field("source");
-            if (string.Equals(source, "letsencrypt", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(source, "self-signed", StringComparison.OrdinalIgnoreCase)) return Usage.None;
-            if (!string.Equals(source, "windows-store", StringComparison.OrdinalIgnoreCase)) return Usage.Unknown;
-            var savedThumbprint = Field("thumbprint");
-            if (string.IsNullOrWhiteSpace(savedThumbprint)) return Usage.Unknown;
-            return string.Equals(savedThumbprint, thumbprint, StringComparison.OrdinalIgnoreCase) ? Usage.InUse : Usage.None;
+            return unknown ? Usage.Unknown : Usage.None;
         }
         catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { return Usage.None; }
-        catch (Exception error) when (error is JsonException or IOException or UnauthorizedAccessException) { return Usage.Unknown; }
+        catch (Exception error) when (error is JsonException or IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { return Usage.Unknown; }
     }
 }

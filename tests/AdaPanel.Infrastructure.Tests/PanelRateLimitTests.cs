@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace AdaPanel.Infrastructure.Tests;
@@ -508,11 +509,40 @@ public sealed class PanelRateLimitTests
         var context = new DefaultHttpContext();
         context.Request.Path = yol;
         context.Connection.RemoteIpAddress = System.Net.IPAddress.Parse(ip);
+        context.RequestServices = CerezHizmetleri;
         if (cerez is not null)
         {
-            context.Request.Headers.Cookie = $"{CerezAdi}={cerez}";
+            // Cerez artik yalniz panelin veri koruma anahtariyla COZULEBILIYORSA oturum sayilir:
+            // "cerez" parametresi gercek bir bilet uretir (farkli deger = farkli oturum).
+            context.Request.Headers.Cookie = $"{CerezAdi}={GercekCerez(cerez)}";
         }
 
         return context;
+    }
+
+    internal static readonly IServiceProvider CerezHizmetleri = YeniCerezHizmetleri();
+
+    internal static IServiceProvider YeniCerezHizmetleri()
+    {
+        var hizmetler = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        hizmetler.AddLogging();
+        Microsoft.AspNetCore.DataProtection.DataProtectionBuilderExtensions.UseEphemeralDataProtectionProvider(hizmetler.AddDataProtection());
+        hizmetler.AddAuthentication().AddCookie(
+            Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme,
+            secenek => secenek.Cookie.Name = CerezAdi);
+        return hizmetler.BuildServiceProvider();
+    }
+
+    internal static string GercekCerez(string kimlik, IServiceProvider? hizmetler = null)
+    {
+        var secenek = (hizmetler ?? CerezHizmetleri)
+            .GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationOptions>>()
+            .Get(Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme);
+        var bilet = new Microsoft.AspNetCore.Authentication.AuthenticationTicket(
+            new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(
+                [new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Name, kimlik)], "Cookies")),
+            new Microsoft.AspNetCore.Authentication.AuthenticationProperties(),
+            Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme);
+        return secenek.TicketDataFormat.Protect(bilet);
     }
 }

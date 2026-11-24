@@ -1,3 +1,4 @@
+using AdaPanel.Api.Extensions;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Docker;
 using AdaPanel.Core.Interfaces;
@@ -20,11 +21,28 @@ namespace AdaPanel.Api.Controllers;
 [Route("api/v1/docker")]
 public sealed class DockerController(
     IDockerService dockerService,
+    IServerOwnerService serverOwnerService,
     IAuditService auditService) : ControllerBase
 {
+    // G31: Docker motoru sunucuda (çoğu kurulumda SYSTEM/yönetici ayrıcalığıyla) keyfî imaj ve port
+    // çalıştırır — terminalle aynı sınıf. Rol tek başına yetmez (bir yönetici ikinci yönetici
+    // yaratabilir); TerminalController ile AYNI kural: yalnız sunucu sahibi, taklit oturumu giremez.
+    private async Task EnsureServerOwnerAsync(CancellationToken cancellationToken)
+    {
+        var taklit = User.FindFirst("impersonator_id") is not null;
+        if (taklit || !await serverOwnerService.IsServerOwnerAsync(User.GetRequiredUserId(), cancellationToken))
+        {
+            await auditService.AuditAsync(HttpContext, "docker.denied", "docker",
+                "Docker request rejected: caller is not the server owner" + (taklit ? " (impersonated session)" : string.Empty)
+                + $". {Request.Method} {Request.Path}");
+            throw new AdaPanel.Core.Common.AppException("docker.owner_only", 403, 403);
+        }
+    }
+
     [HttpGet]
     public async Task<ActionResult<ApiResponse<DockerWorkspaceDto>>> GetAsync(CancellationToken cancellationToken)
     {
+        await EnsureServerOwnerAsync(cancellationToken);
         var workspace = await dockerService.GetWorkspaceAsync(cancellationToken);
         return Ok(ApiResponse<DockerWorkspaceDto>.Ok(workspace));
     }
@@ -32,6 +50,7 @@ public sealed class DockerController(
     [HttpPost("containers/{id}/start")]
     public async Task<ActionResult<ApiResponse<DockerWorkspaceDto>>> StartAsync(string id, CancellationToken cancellationToken)
     {
+        await EnsureServerOwnerAsync(cancellationToken);
         var workspace = await dockerService.StartContainerAsync(id, cancellationToken);
 
         // Başlatma da durum değiştirir: duran bir konteyner yeniden port dinlemeye başlar.
@@ -47,6 +66,7 @@ public sealed class DockerController(
     [HttpPost("containers/{id}/stop")]
     public async Task<ActionResult<ApiResponse<DockerWorkspaceDto>>> StopAsync(string id, CancellationToken cancellationToken)
     {
+        await EnsureServerOwnerAsync(cancellationToken);
         var workspace = await dockerService.StopContainerAsync(id, cancellationToken);
 
         // Durdurma bir KESİNTİDİR; "servis neden düştü" sorusunun ilk bakılacak yeri budur.
@@ -62,6 +82,7 @@ public sealed class DockerController(
     [HttpPost("containers/{id}/restart")]
     public async Task<ActionResult<ApiResponse<DockerWorkspaceDto>>> RestartAsync(string id, CancellationToken cancellationToken)
     {
+        await EnsureServerOwnerAsync(cancellationToken);
         var workspace = await dockerService.RestartContainerAsync(id, cancellationToken);
 
         await auditService.AuditAsync(
@@ -76,6 +97,7 @@ public sealed class DockerController(
     [HttpDelete("containers/{id}")]
     public async Task<ActionResult<ApiResponse<DockerWorkspaceDto>>> RemoveAsync(string id, CancellationToken cancellationToken)
     {
+        await EnsureServerOwnerAsync(cancellationToken);
         // Kaldırmadan ÖNCE anlık görüntü alınır: silinen konteyner sonraki listede yoktur, tanımı
         // (ad/imaj) ancak silme öncesinden okunabilir. Kaydın "neyi kaybettik" sorusuna cevap
         // verebilmesi buna bağlı.
@@ -96,13 +118,46 @@ public sealed class DockerController(
     [HttpGet("containers/{id}/logs")]
     public async Task<ActionResult<ApiResponse<DockerLogsDto>>> LogsAsync(string id, [FromQuery] int tail = 200, CancellationToken cancellationToken = default)
     {
+        await EnsureServerOwnerAsync(cancellationToken);
         var logs = await dockerService.GetLogsAsync(id, tail, cancellationToken);
         return Ok(ApiResponse<DockerLogsDto>.Ok(logs));
+    }
+
+    [HttpGet("containers/{id}/limits")]
+    public async Task<ActionResult<ApiResponse<DockerContainerLimitsDto>>> GetLimitsAsync(string id, CancellationToken cancellationToken)
+    {
+        await EnsureServerOwnerAsync(cancellationToken);
+        return Ok(ApiResponse<DockerContainerLimitsDto>.Ok(await dockerService.GetContainerLimitsAsync(id, cancellationToken)));
+    }
+
+    // CPU/RAM sınırı değişikliği çalışan bir servisin kaynağını keser/açar: iz bırakılır.
+    [HttpPut("containers/{id}/limits")]
+    public async Task<ActionResult<ApiResponse<DockerWorkspaceDto>>> UpdateLimitsAsync(
+        string id, [FromBody] UpdateContainerLimitsRequest request, CancellationToken cancellationToken)
+    {
+        await EnsureServerOwnerAsync(cancellationToken);
+        var workspace = await dockerService.UpdateContainerLimitsAsync(id, request, cancellationToken);
+        await auditService.AuditAsync(
+            HttpContext,
+            "docker.container.limits.updated",
+            $"docker-container:{id}",
+            $"Container {Tanim(workspace, id)} limits set (cpu: {(string.IsNullOrWhiteSpace(request.CpuLimit) ? "unlimited" : request.CpuLimit.Trim())}, "
+            + $"memory: {(string.IsNullOrWhiteSpace(request.MemoryLimit) ? "unlimited" : request.MemoryLimit.Trim())}).");
+        return Ok(ApiResponse<DockerWorkspaceDto>.Ok(workspace, "docker.limits_updated"));
     }
 
     [HttpPost("containers/run")]
     public async Task<ActionResult<ApiResponse<DockerWorkspaceDto>>> RunAsync([FromBody] RunContainerRequest request, CancellationToken cancellationToken)
     {
+        await EnsureServerOwnerAsync(cancellationToken);
+        // Site ilişkisi uydurulamaz: var olmayan siteye etiketli konteyner hiçbir silmede temizlenmez.
+        if (!string.IsNullOrWhiteSpace(request.SiteName))
+        {
+            var sites = HttpContext.RequestServices.GetRequiredService<IIisSiteService>();
+            var site = await sites.GetSiteAsync(request.SiteName.Trim(), cancellationToken);
+            // Etikete KANONİK ad yazılır: harf farkı silme sırasında konteyneri sessizce bırakmasın.
+            request.SiteName = site.Name;
+        }
         var workspace = await dockerService.RunContainerAsync(request, cancellationToken);
 
         // Ortam DEĞİŞKENLERİ kasten yazılmaz: parola/jeton taşımaları olağandır ve kayıt, korumaya
@@ -113,7 +168,10 @@ public sealed class DockerController(
             $"docker-image:{request.Image}",
             $"Container '{request.Name}' started from image '{request.Image}' "
             + $"(ports: {(string.IsNullOrWhiteSpace(request.Ports) ? "none" : request.Ports)}, "
-            + $"env vars: {OrtamDegiskeniSayisi(request.Environment)}).");
+            + $"env vars: {OrtamDegiskeniSayisi(request.Environment)}, "
+            + $"site: {(string.IsNullOrWhiteSpace(request.SiteName) ? "none" : request.SiteName.Trim())}, "
+            + $"cpu limit: {(string.IsNullOrWhiteSpace(request.CpuLimit) ? "none" : request.CpuLimit.Trim())}, "
+            + $"memory limit: {(string.IsNullOrWhiteSpace(request.MemoryLimit) ? "none" : request.MemoryLimit.Trim())}).");
 
         return Ok(ApiResponse<DockerWorkspaceDto>.Ok(workspace, "docker.container_started"));
     }
@@ -121,6 +179,7 @@ public sealed class DockerController(
     [HttpPost("images/pull")]
     public async Task<ActionResult<ApiResponse<DockerWorkspaceDto>>> PullAsync([FromBody] PullImageRequest request, CancellationToken cancellationToken)
     {
+        await EnsureServerOwnerAsync(cancellationToken);
         var workspace = await dockerService.PullImageAsync(request, cancellationToken);
 
         // Dışarıdan sunucuya KOD indirir: "bu imaj sunucuya nereden geldi" tedarik zinciri sorusudur.
@@ -136,6 +195,7 @@ public sealed class DockerController(
     [HttpDelete("images/{id}")]
     public async Task<ActionResult<ApiResponse<DockerWorkspaceDto>>> RemoveImageAsync(string id, CancellationToken cancellationToken)
     {
+        await EnsureServerOwnerAsync(cancellationToken);
         var workspace = await dockerService.RemoveImageAsync(id, cancellationToken);
 
         // İmaj kaldırma YIKICIDIR: kayıt defterinden çekilemeyen (yerel olarak üretilmiş) bir imaj

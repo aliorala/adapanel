@@ -16,6 +16,13 @@ public sealed class ComponentServiceStopTests
         var bootstrapper = new ComponentBootstrapper(null!, null!, null!, null!,
             Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions()), null!, null!,
             NullLogger<ComponentBootstrapper>.Instance);
-        await bootstrapper.StopManagedRuntimeAsync(id, Path.Combine(Path.GetTempPath(), id), CancellationToken.None);
+        var installDirectory = Path.Combine(Path.GetTempPath(), id);
+        var exception = await Record.ExceptionAsync(
+            () => bootstrapper.StopManagedRuntimeAsync(id, installDirectory, CancellationToken.None));
+
+        // Eksik servis/görev "başarısız durdurma" sayılmamalı ve durdurma işlemi kurulum
+        // dizinini YARATMAMALI (yan etkisiz).
+        Assert.Null(exception);
+        Assert.False(Directory.Exists(installDirectory));
     }
 }

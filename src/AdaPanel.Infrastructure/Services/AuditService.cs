@@ -7,18 +7,23 @@ using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Services;
 
 public sealed class AuditService(
     AdaPanelDbContext dbContext,
     ICustomerScopeService customerScopes,
-    JsonFileStore fileStore) : IAuditService
+    JsonFileStore fileStore,
+    ILogger<AuditService>? logger = null) : IAuditService
 {
     private const string RetentionStatePath = "config/audit-retention.json";
 
     /// <summary>Varsayılan saklama: 365 gün. Sıfır (sınırsız) DEĞİL — bkz. <see cref="GetRetentionAsync"/>.</summary>
     private const int DefaultRetentionDays = 365;
+
+    /// <summary>Bir silme işleminde en çok bu kadar satır (yazma kilidini kısa tutar).</summary>
+    internal const int PurgeBatchSize = 5000;
 
     /// <inheritdoc />
     public Task WriteAsync(
@@ -44,7 +49,8 @@ public sealed class AuditService(
         // Yazımın kendisi AuditWriter'da: aynı gövde sunucu konsolundan çalışan kurtarma aracı
         // tarafından da kullanılıyor ve sır temizliği iki kopyaya bölünemez.
         => AuditWriter.WriteAsync(
-            dbContext, action, resource, details, userId, subscriptionUserId, ipAddress, cancellationToken);
+            dbContext, action, resource, details, userId, subscriptionUserId, ipAddress, cancellationToken,
+            logger: logger);
 
     public async Task<IReadOnlyCollection<AuditLogDto>> GetRecentAsync(int take, CancellationToken cancellationToken = default)
     {
@@ -72,10 +78,11 @@ public sealed class AuditService(
 
         var total = await filtered.CountAsync(cancellationToken);
 
-        var items = await filtered
+        var offset = (long)(page - 1) * pageSize;
+        List<AuditLog> items = offset >= total ? [] : await filtered
             .OrderByDescending(log => log.CreatedAtUtc)
             .ThenByDescending(log => log.Id) // aynı milisaniyedeki kayıtlar sayfalar arasında kaymasın
-            .Skip((page - 1) * pageSize)
+            .Skip((int)offset)
             .Take(pageSize)
             .ToListAsync(cancellationToken);
 
@@ -203,11 +210,26 @@ public sealed class AuditService(
 
         var cutoff = DateTime.UtcNow.AddDays(-state.RetentionDays);
 
-        // ExecuteDelete: kayıtlar belleğe çekilmeden tek SQL ile silinir. Milyonluk bir tabloyu
-        // önce nesneye çevirmek, temizliğin kendisini bir bellek sorununa dönüştürürdü.
-        var deleted = await dbContext.AuditLogs
-            .Where(log => log.CreatedAtUtc < cutoff)
-            .ExecuteDeleteAsync(cancellationToken);
+        // PARTİLİ silme: tek devasa DELETE, SQLite'ta tüm süre boyunca yazma kilidi tutar ve diğer
+        // yazarları (oturum, denetim, görevler) bloklardı. Her tur ayrı işlem = kilit kısa süre tutulur.
+        // ExecuteDelete + Id alt sorgusu: kayıtlar belleğe çekilmez.
+        var deleted = 0;
+        while (true)
+        {
+            var batchIds = dbContext.AuditLogs
+                .Where(log => log.CreatedAtUtc < cutoff)
+                .OrderBy(log => log.CreatedAtUtc)
+                .Select(log => log.Id)
+                .Take(PurgeBatchSize);
+            var count = await dbContext.AuditLogs
+                .Where(log => batchIds.Contains(log.Id))
+                .ExecuteDeleteAsync(cancellationToken);
+            deleted += count;
+            if (count < PurgeBatchSize)
+            {
+                break;
+            }
+        }
 
         await fileStore.UpdateAsync<RetentionState>(
             RetentionStatePath,

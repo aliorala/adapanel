@@ -63,6 +63,25 @@
         <p v-else class="meta">{{ t("panel.update.noNotes") }}</p>
       </section>
 
+      <!-- GELİŞMİŞ: güncelleme deposu. Bu depo, panelin indirip SİSTEM yetkisiyle çalıştıracağı kurulum
+           dosyasının KAYNAĞIDIR; sunucu yalnız izin listesindeki depoları kabul eder (update.github_repo_invalid).
+           Varsayılan kapalı: günlük kullanımda dokunulmaz. -->
+      <details class="update-details update-source" data-testid="update-source">
+        <summary>{{ t("panel.update.sourceTitle") }}</summary>
+        <p class="meta">{{ t("panel.update.sourceHint") }}</p>
+        <form class="form-grid" @submit.prevent="saveSourceRepo">
+          <label class="stacked-field">
+            <span class="field-label">{{ t("panel.update.sourceRepo") }}</span>
+            <input v-model.trim="sourceRepo" placeholder="owner/repo" spellcheck="false" autocomplete="off" maxlength="100" />
+          </label>
+          <div class="row-actions form-actions">
+            <button type="submit" class="secondary compact" :disabled="!canSaveSource">
+              {{ savingSource ? t("panel.common.loading") : t("panel.update.sourceSave") }}
+            </button>
+          </div>
+        </form>
+      </details>
+
       <details v-if="status.packageSha256 || status.packagePath" class="update-details">
         <summary>{{ t("panel.update.technicalDetails") }}</summary>
         <dl class="detail-grid">
@@ -82,6 +101,7 @@ import {
   applyUpdate,
   checkForUpdate,
   installPreparedUpdate,
+  setUpdateGithubRepo,
   type UpdateAttempt,
   type UpdateStatus,
 } from "../api/update";
@@ -136,8 +156,43 @@ onMounted(async () => {
   await refresh(true);
 });
 
-// NOT: Güncelleme kaynağı (GitHub depo) ayarı kullanıcı isteğiyle UI'dan KALDIRILDI; backend
-// varsayılanı (SelfUpdateService.DefaultRepo) kullanılır, gerekirse config/update-github.json'dan değişir.
+// Güncelleme kaynağı (GitHub deposu) ayarı bir zamanlar UI'dan kaldırılmıştı; artık yalnız yöneticiye,
+// "Gelişmiş" başlığı altında, KAPALI bir bölüm olarak geri geldi (backend izin listesi + denetim kaydı + onay).
+const sourceRepo = ref("");
+const savingSource = ref(false);
+const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const canSaveSource = computed(() => statusConfirmed.value && !!status.value && !busy.value && !refreshing.value && !monitoring.value &&
+  !savingSource.value && REPO_PATTERN.test(sourceRepo.value) && sourceRepo.value !== status.value.githubRepo);
+
+async function saveSourceRepo() {
+  if (!current() || !canSaveSource.value || !status.value) return;
+  const repo = sourceRepo.value;
+  const approved = await confirm({
+    title: t("panel.confirm.updateSourceTitle"),
+    message: t("panel.update.sourceConfirm", { repo }),
+    impact: [`${t("panel.update.sourceRepo")}: ${status.value.githubRepo || "-"} → ${repo}`],
+    confirmLabel: t("panel.update.sourceSave")
+  });
+  if (!approved || !current()) return;
+  savingSource.value = true;
+  const revision = ++statusRevision;
+  try {
+    const result = await setUpdateGithubRepo(repo);
+    if (!current() || revision !== statusRevision) return;
+    // Sunucunun döndürdüğü değer istenenle aynı değilse "kaydedildi" denmez.
+    if (result.githubRepo !== repo) {
+      showNotice(t("panel.update.resultUnconfirmed"), true);
+      return;
+    }
+    status.value = result;
+    statusConfirmed.value = true;
+    showNotice(t("panel.update.sourceSaved", { repo }), false);
+  } catch (error) {
+    if (current() && revision === statusRevision) showNotice(resolveApiMessage(error), true);
+  } finally {
+    if (current()) savingSource.value = false;
+  }
+}
 async function refresh(force = true) {
   if (!current() || busy.value || refreshing.value || monitoring.value) return;
   refreshing.value = true;
@@ -147,6 +202,7 @@ async function refresh(force = true) {
     if (!current() || revision !== statusRevision) return;
     status.value = next;
     statusConfirmed.value = true;
+    if (!sourceRepo.value) sourceRepo.value = next.githubRepo ?? "";
     // A fresh measurement replaces a finished watch; any still-scheduled
     // installation remains represented by the returned server status.
     if (installPhase.value === "failed" || installPhase.value === "timeout") {

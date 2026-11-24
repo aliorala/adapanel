@@ -260,6 +260,22 @@ public sealed class PanelWordingAndPlaceholderTests
     /// (<c>`panel.x.${...}</c>), C# enterpolasyonu (<c>$"panel.x.{...}</c>) ve dizge birleştirme
     /// (<c>"panel.x." +</c>).
     /// </summary>
+    [Fact]
+    public void Dinamik_Hata_Kodunun_Alt_Cizgi_Onekini_Gorur_Ama_Sabit_Anahtari_Muaf_Tutmaz()
+    {
+        var onekler = DinamikOnekler([
+            "new AppException(\"migration.mail_\" + code, 409, 409)",
+            "new AppException(\"migration.dns_\" + code, 409, 409)",
+            "var unused = \"migration.unused_key\";",
+            "var host = \"mail.\" + domain;"
+        ]);
+        Assert.Contains("migration.mail_", onekler);
+        Assert.Contains("migration.dns_", onekler);
+        Assert.DoesNotContain("migration.", onekler);
+        Assert.DoesNotContain("migration.unused_key", onekler);
+        Assert.DoesNotContain("mail.", onekler);
+    }
+
     private static IReadOnlyCollection<string> DinamikOnekler(IReadOnlyList<string> metinler)
     {
         // ELLE DOĞRULANAN kara liste: bunlar çeviri anahtarı DEĞİL, ana bilgisayar adı üretimidir
@@ -274,7 +290,7 @@ public sealed class PanelWordingAndPlaceholderTests
         {
             new Regex(@"`([A-Za-z0-9_.]*?)\$\{", RegexOptions.Compiled),
             new Regex(@"\$@?""([A-Za-z0-9_.]*?)\{", RegexOptions.Compiled),
-            new Regex(@"[""']([a-zA-Z0-9_.]+\.)[""']\s*\+", RegexOptions.Compiled)
+            new Regex(@"[""']([a-zA-Z0-9_.]+[._])[""']\s*\+", RegexOptions.Compiled)
         };
 
         var onekler = new HashSet<string>(StringComparer.Ordinal);

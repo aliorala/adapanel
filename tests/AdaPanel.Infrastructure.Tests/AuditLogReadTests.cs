@@ -84,6 +84,19 @@ public sealed class AuditLogReadTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(int.MaxValue, 200)]
+    [InlineData(10737419, 200)]
+    [InlineData(21474837, 200)]
+    public async Task Out_of_range_page_returns_empty_instead_of_overflowing_to_first_page(int page, int pageSize)
+    {
+        await KayitYazAsync(MusteriA, "fixture.paging", "fixture");
+        var result = await servis.SearchAsync(new AuditLogQuery { Page = page, PageSize = pageSize }, AuditVisibility.Unlimited);
+        Assert.Empty(result.Items);
+        Assert.Equal(1, result.TotalCount);
+        Assert.Equal(page, result.Page);
+    }
+
     // ------------------------------------------------------------------
     // KAPSAM İZOLASYONU
     // ------------------------------------------------------------------

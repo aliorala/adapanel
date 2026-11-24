@@ -680,7 +680,16 @@ async function restore(record: BackupRecord) {
   await fullRestore.restore(record, (result) => {
     const report = restoreResult(result, t);
     showNotice(t(report.failed ? "panel.backup.restoredWithErrors" : "panel.backup.restored"), report.failed);
-  }, (error) => showNotice(error instanceof Error && !(error instanceof UserFacingError) && !("isAxiosError" in error) ? error.message : resolveApiMessage(error), true), refresh);
+  }, (error) => {
+    // Beklenmeyen (ham) JS hatasinin metni kullaniciya GOSTERILMEZ: dahili ayrinti sizdirir ve
+    // anlasilmazdir. Genel mesaj + konsol kaydi; API/UserFacing hatalari eskisi gibi cevrilir.
+    if (error instanceof Error && !(error instanceof UserFacingError) && !("isAxiosError" in error)) {
+      console.error("Backup restore failed unexpectedly", error);
+      showNotice(t("common.unexpected_error"), true);
+      return;
+    }
+    showNotice(resolveApiMessage(error), true);
+  }, refresh);
 }
 
 /** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */

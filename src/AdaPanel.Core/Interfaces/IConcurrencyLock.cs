@@ -36,6 +36,9 @@ public static class ConcurrencyKeys
     /// <summary>applicationHost.config yazanlar: site, PHP, ASP.NET, reverse proxy, app runtime.</summary>
     public const string Iis = "iis";
 
+    /// <summary>win-acme's HTTP.sys challenge listener and the probe which temporarily uses its prefix.</summary>
+    public const string AcmeHttp = "acme-http";
+
     /// <summary>Giriş güvenliği durumu (bruteforce.json). Girişin SICAK YOLU — uzun işlerle asla paylaşılmaz.</summary>
     public const string Auth = "auth";
 

@@ -47,7 +47,8 @@ public sealed class AutomationService(
     IRunningJobService runningJobs,
     ILogger<AutomationService> logger,
     ISiteDatabaseLinkService? siteDatabaseLinks = null,
-    ICustomerScopeService? customerScopes = null) : IAutomationService
+    ICustomerScopeService? customerScopes = null,
+    IAlertDeliveryFailureStore? alertFailures = null) : IAutomationService
 {
     private const string StatePath = "config/automation.json";
     private const string AlertCooldownPath = "config/automation-alerts.json";
@@ -100,11 +101,14 @@ public sealed class AutomationService(
             // Uzak yedek hedefi: parola DPAPI ile korunur; boş gönderilirse mevcut korunur.
             // Hedef listesi BackupService'in tek kaynağından gelir; burada elle liste tutulmaz.
             var targetType = Backup.BackupService.NormalizeScheduleTargetType(request.BackupTargetType);
+            var sameRemote = SameRemoteIdentity(state.BackupTargetType, state.BackupRemoteUrl,
+                state.BackupRemoteUserName, state.BackupRemoteRegion, targetType, request.BackupRemoteUrl,
+                request.BackupRemoteUserName, request.BackupRemoteRegion);
             state.BackupTargetType = targetType;
             state.BackupRemoteUrl = request.BackupRemoteUrl?.Trim() ?? string.Empty;
             state.BackupRemoteUserName = request.BackupRemoteUserName?.Trim() ?? string.Empty;
             state.BackupRemoteRegion = request.BackupRemoteRegion?.Trim() ?? string.Empty;
-            if (state.BackupTargetType == "local")
+            if (state.BackupTargetType == "local" || (!sameRemote && string.IsNullOrEmpty(request.BackupRemotePassword)))
             {
                 state.BackupRemotePasswordProtected = string.Empty;
             }
@@ -190,6 +194,10 @@ public sealed class AutomationService(
         {
             // İstekte parola yoksa kayıtlı (korumalı) parolayı kullan → kullanıcı kayıtlı hedefi tekrar parola girmeden test eder.
             var state = await LoadAsync(cancellationToken);
+            if (!string.IsNullOrWhiteSpace(state.BackupRemotePasswordProtected) &&
+                !SameRemoteIdentity(state.BackupTargetType, state.BackupRemoteUrl, state.BackupRemoteUserName,
+                    state.BackupRemoteRegion, request.TargetType, request.RemoteUrl, request.RemoteUserName, request.RemoteRegion))
+                throw new AppException("backup.remote_password_required", 400, 400);
             password = ResolveRemotePassword(state);
         }
 
@@ -205,7 +213,26 @@ public sealed class AutomationService(
             cancellationToken);
     }
 
+    internal static bool SameRemoteIdentity(string? type, string? url, string? user, string? region,
+        string? otherType, string? otherUrl, string? otherUser, string? otherRegion) =>
+        string.Equals(type?.Trim(), otherType?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(url?.Trim(), otherUrl?.Trim(), StringComparison.Ordinal) &&
+        string.Equals(user?.Trim(), otherUser?.Trim(), StringComparison.Ordinal) &&
+        string.Equals(region?.Trim(), otherRegion?.Trim(), StringComparison.Ordinal);
+
+    /// <summary>Eski tek-tur davranışı (testler ve tek seferlik çağrılar): önce nöbetçiler, sonra uzun işler.</summary>
     public async Task RunDueJobsAsync(CancellationToken cancellationToken = default)
+    {
+        await RunWatchdogsAsync(cancellationToken);
+        await RunLongJobsAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Kısa, sık nöbetçiler: brute-force temizliği, hata bildirimi, izleme örneği, disk/SSL uyarıları,
+    /// DNS bind nöbetçisi. Saatler süren yedeğin ARKASINDA beklememesi için worker bunları ayrı
+    /// döngüde çağırır.
+    /// </summary>
+    public async Task RunWatchdogsAsync(CancellationToken cancellationToken = default)
     {
         // Süresi dolmuş brute-force engellerini temizle. Paylaşılan kilit reentrant
         // olmadığından bu çağrı exclusive bloğun dışında kalmalı.
@@ -277,6 +304,11 @@ public sealed class AutomationService(
             logger.LogWarning(exception, "DNS bind nöbetçisi çalıştırılamadı.");
         }
 
+    }
+
+    /// <summary>Uzun süren işler: bileşen güncelleme kontrolü, otomatik yedek, SSL yenileme, log temizliği.</summary>
+    public async Task RunLongJobsAsync(CancellationToken cancellationToken = default)
+    {
         // Bileşen güncelleme kontrolü günde bir. KİLİDİN DIŞINDA çalışmalı: hem uzun süren ağ
         // istekleri hem de otomatik kurulum yüzünden. Kurulum (ör. Roundcube/phpMyAdmin) IIS sitesi
         // oluşturur, o da AYNI non-reentrant kilidi almaya çalışır → kilit içinde çağrılırsa panel
@@ -341,8 +373,16 @@ public sealed class AutomationService(
                 changed = true;
             }
 
+            // Backup and SSL may both take a long time. A pending cleanup must use the
+            // current permission and schedule, and a skipped cleanup must preserve newer results.
+            var currentLogs = await LoadAsync(cancellationToken);
+            state.LogCleanupEnabled = currentLogs.LogCleanupEnabled;
+            state.LogRetentionDays = currentLogs.LogRetentionDays;
+            state.LastLogCleanupRunUtc = currentLogs.LastLogCleanupRunUtc;
+            state.LastLogCleanupStatus = currentLogs.LastLogCleanupStatus;
+            state.LastLogCleanupDetails = currentLogs.LastLogCleanupDetails;
             // Log temizliği günde bir çalışır (aralık ayarı yok; retention gün sayısı ayarlıdır).
-            if (state.LogCleanupEnabled && IsDue(state.LastLogCleanupRunUtc, 24, now))
+            if (state.LogCleanupEnabled && IsDue(state.LastLogCleanupRunUtc, 24, DateTime.UtcNow))
             {
                 await RunLogCleanupAsync(state, cancellationToken);
                 changed = true;
@@ -368,15 +408,46 @@ public sealed class AutomationService(
         var summary = new StringBuilder();
         var hasError = false;
         var siteCount = 0;
-        var dbCount = 0;
+        var bagimsizYedeklenen = new HashSet<string>(StringComparer.Ordinal);
 
         // Sitenin arşivine giren veritabanları: aynı dökümü bir de tek başına yedeklemeyelim diye
         // hangilerinin siteye gittiği burada tutulur (anahtar "motor|ad").
         var siteIcindeYedeklenen = new HashSet<string>(StringComparer.Ordinal);
         var bagimsizDenenen = new HashSet<string>(StringComparer.Ordinal);
+        var prePruned = new BackupPruneResultDto();
+
+        async Task<BackupPruneResultDto> PrunePhaseAsync()
+        {
+            if (approval is not null) await approval.CheckAsync(cancellationToken);
+            var remote = string.Equals(state.BackupTargetType, "local", StringComparison.OrdinalIgnoreCase)
+                ? null
+                : new BackupPruneRemoteOptions
+                {
+                    RemoteUrl = state.BackupRemoteUrl,
+                    UserName = state.BackupRemoteUserName,
+                    Password = ResolveRemotePassword(state),
+                    Region = state.BackupRemoteRegion
+                };
+            return approval is null
+                ? await backupService.PruneAsync(state.BackupRetentionDays, remote, cancellationToken)
+                : await backupService.PruneAsync(state.BackupRetentionDays, remote, approval.CheckAsync, cancellationToken);
+        }
 
         try
         {
+            // Free only already replaceable restore points before allocating new archives.
+            // The normal post-production pass can then retire points replaced by this run.
+            try
+            {
+                prePruned = await PrunePhaseAsync();
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException && approval?.Rejected(exception) != true)
+            {
+                hasError = true;
+                summary.AppendLine($"pre-prune: {exception.Message}");
+                logger.LogWarning(exception, "Yedek oncesi budama basarisiz; yedek uretimi devam edecek.");
+            }
+
             if (state.BackupSites)
             {
                 var sites = await iisSiteService.GetSitesAsync(cancellationToken);
@@ -451,9 +522,26 @@ public sealed class AutomationService(
                 //
                 // Kullanıcı motorları AÇIKÇA seçtiyse ona dokunulmaz (kurulu olmayan bir motoru
                 // seçmişse bunu bilmesi gerekir, hata mesajı bilinçli olarak korunur).
-                var engines = state.BackupDatabaseEngines.Count > 0
-                    ? state.BackupDatabaseEngines
-                    : await ResolveInstalledEnginesAsync(cancellationToken);
+                IReadOnlyCollection<string> engines = state.BackupDatabaseEngines;
+                if (engines.Count == 0)
+                {
+                    try
+                    {
+                        var installed = await databaseService.GetEnginesAsync(cancellationToken);
+                        engines = SelectBackupEngines(installed);
+                        foreach (var unavailable in installed.Where(engine => engine.Installed && !engine.Ready))
+                        {
+                            hasError = true;
+                            summary.AppendLine($"engine {unavailable.Engine}: kurulu ancak yönetilebilir değil; veritabanı kapsamı yedeklenemedi (database.engine_not_ready).");
+                        }
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException && approval?.Rejected(exception) != true)
+                    {
+                        hasError = true;
+                        summary.AppendLine($"engine discovery: {exception.Message}; veritabanı kapsamı belirlenemedi.");
+                        logger.LogWarning(exception, "Kurulu veritabanı motorları okunamadı; veritabanı yedek kapsamı doğrulanamadı.");
+                    }
+                }
                 foreach (var engine in engines)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -490,8 +578,8 @@ public sealed class AutomationService(
                                     : await backupService.BackupDatabaseAsync(request, approval.CheckAsync, cancellationToken);
                                 var outcome = EvaluateBackupResult(record, "database", $"{engine}:{database.Name}",
                                     [new BackupDatabaseRef { Engine = engine, DatabaseName = database.Name }]);
-                                if (outcome.Complete) dbCount++;
-                                else
+                                bagimsizYedeklenen.UnionWith(outcome.IncludedDatabases);
+                                if (!outcome.Complete)
                                 {
                                     hasError = true;
                                     summary.AppendLine($"db {engine}/{database.Name}: {outcome.Detail}");
@@ -568,26 +656,12 @@ public sealed class AutomationService(
                 }
             }
 
-            // Uzak rotasyon: hedef off-site ise budama uzak kopyaları da silsin (kimlikleri güncel ayardan geçir).
-            var pruneRemote = string.Equals(state.BackupTargetType, "local", StringComparison.OrdinalIgnoreCase)
-                ? null
-                : new BackupPruneRemoteOptions
-                {
-                    RemoteUrl = state.BackupRemoteUrl,
-                    UserName = state.BackupRemoteUserName,
-                    Password = ResolveRemotePassword(state),
-                    Region = state.BackupRemoteRegion
-                };
-            // DIKKAT: buraya hasError=true iken de gelinir (her kaynak ayri try/catch ile yedeklenir).
-            // Budamanin kendisi bu yuzden KAYNAK BAZINDA korumali: cutoff sonrasi kullanilabilir
-            // yedegi olmayan bir kaynagin eskilerine dokunmaz (bkz. BackupService.PruneAsync).
-            // Burada "hata varsa hic budama" demek, tek bir sitenin hatasi yuzunden butun sunucunun
-            // saklama politikasini durdurmak olurdu.
-            var pruned = approval is null
-                ? await backupService.PruneAsync(state.BackupRetentionDays, pruneRemote, cancellationToken)
-                : await backupService.PruneAsync(state.BackupRetentionDays, pruneRemote, approval.CheckAsync, cancellationToken);
+            // The explicit age limit still applies after failed production. The planner
+            // selects whole restore points, so an active incremental chain remains intact.
+            var postPruned = await PrunePhaseAsync();
+            var pruned = CombinePrunePhases(prePruned, postPruned);
 
-            var budama = SummarizePrune(pruned);
+            var budama = SummarizePrune(pruned, failureCountsAreAttempts: true);
             foreach (var satir in budama.TechnicalLines)
             {
                 summary.AppendLine(satir);
@@ -595,8 +669,10 @@ public sealed class AutomationService(
 
             state.LastBackupRunUtc = DateTime.UtcNow;
             state.LastBackupStatus = ResolveBackupStatus(hasError, budama);
+            var dbCount = siteIcindeYedeklenen.Union(bagimsizYedeklenen, StringComparer.Ordinal).Count();
             state.LastBackupDetails = BuildDetails(
-                $"{siteCount} site, {dbCount} veritabanı yedeklendi, {budama.Sentence}.",
+                $"{siteCount} site, {dbCount} veritabanı kopyası doğrulandı " +
+                $"(site arşivlerinde: {siteIcindeYedeklenen.Count}, ayrı dökümlerde: {bagimsizYedeklenen.Count}), {budama.Sentence}.",
                 summary.ToString());
         }
         catch (OperationCanceledException)
@@ -607,12 +683,24 @@ public sealed class AutomationService(
         {
             state.LastBackupRunUtc = DateTime.UtcNow;
             state.LastBackupStatus = "failed";
-            state.LastBackupDetails = exception.Message;
+            var preSummary = SummarizePrune(prePruned);
+            state.LastBackupDetails = BuildDetails(exception.Message,
+                summary + $"pre-prune: {preSummary.Sentence}.\n" + string.Join('\n', preSummary.TechnicalLines));
             logger.LogError(exception, "Otomatik yedekleme job'u başarısız oldu.");
         }
     }
 
     private sealed record BackupOutcome(bool Complete, HashSet<string> IncludedDatabases, string Detail);
+
+    internal static BackupPruneResultDto CombinePrunePhases(BackupPruneResultDto before, BackupPruneResultDto after) => new()
+    {
+        Removed = before.Removed + after.Removed,
+        LocalDeleteFailed = before.LocalDeleteFailed + after.LocalDeleteFailed,
+        RemoteDeleteFailed = before.RemoteDeleteFailed + after.RemoteDeleteFailed,
+        Failures = [.. before.Failures, .. after.Failures],
+        RetainedExpired = after.RetainedExpired,
+        RetentionNotes = [.. after.RetentionNotes]
+    };
 
     private static BackupOutcome EvaluateBackupResult(
         BackupRecordDto? record,
@@ -711,30 +799,39 @@ public sealed class AutomationService(
     /// <c>scan=truncated; reason=...</c> olarak var).
     /// </para>
     /// </remarks>
-    internal static PruneSummary SummarizePrune(BackupPruneResultDto pruned)
+    internal static PruneSummary SummarizePrune(BackupPruneResultDto pruned, bool failureCountsAreAttempts = false)
     {
         var cumle = $"{pruned.Removed} eski yedek silindi";
+        if (pruned.RetainedExpired > 0)
+            cumle += $", {pruned.RetainedExpired} suresi dolmus yedek geri yukleme korumasi nedeniyle tutuldu";
         if (pruned.RemoteDeleteFailed > 0)
         {
-            cumle += $", {pruned.RemoteDeleteFailed} yedegin uzak kopyasi SILINEMEDI";
+            cumle += failureCountsAreAttempts
+                ? $", {pruned.RemoteDeleteFailed} uzak kopya silme denemesi basarisiz"
+                : $", {pruned.RemoteDeleteFailed} yedegin uzak kopyasi SILINEMEDI";
         }
 
         if (pruned.LocalDeleteFailed > 0)
         {
-            cumle += $", {pruned.LocalDeleteFailed} yedegin yerel dosyasi silinemedi";
+            cumle += failureCountsAreAttempts
+                ? $", {pruned.LocalDeleteFailed} yerel dosya silme denemesi basarisiz"
+                : $", {pruned.LocalDeleteFailed} yedegin yerel dosyasi silinemedi";
         }
 
         if (!pruned.HasFailures)
         {
-            return new PruneSummary(false, cumle, []);
+            return new PruneSummary(false, cumle,
+                pruned.RetentionNotes.Select(note => $"retention: {note}").ToArray());
         }
 
         var satirlar = new List<string>
         {
-            $"prune: removed={pruned.Removed}; remote_delete_failed={pruned.RemoteDeleteFailed}; "
+            (failureCountsAreAttempts ? "prune: failed_delete_attempts; " : "prune: ")
+            + $"removed={pruned.Removed}; remote_delete_failed={pruned.RemoteDeleteFailed}; "
             + $"local_delete_failed={pruned.LocalDeleteFailed}"
         };
         satirlar.AddRange(pruned.Failures.Select(basarisiz => $"prune: {basarisiz}"));
+        satirlar.AddRange(pruned.RetentionNotes.Select(note => $"retention: {note}"));
 
         return new PruneSummary(true, cumle, satirlar);
     }
@@ -874,8 +971,7 @@ public sealed class AutomationService(
                 ? "HIC BASARILI YEDEK YOK."
                 : $"En son basarili yedek: {lastSuccess.Value:yyyy-MM-dd HH:mm} UTC ({(now - lastSuccess.Value).TotalDays:F1} gun once).";
 
-            // Saklama suresinden eski tek yedek: budama korumasi onu tutuyor ama artik ESKI veriyi
-            // geri yukluyorsunuz demektir. Bunu ayrica soylemek gerekir.
+            // An old archive may remain until rotation succeeds or while its chain is active.
             var retentionNote = state.BackupRetentionDays > 0 &&
                                 lastSuccess is not null &&
                                 now - lastSuccess.Value > TimeSpan.FromDays(state.BackupRetentionDays)
@@ -890,8 +986,8 @@ public sealed class AutomationService(
                 "backup-health",
                 "AdaPanel uyari: otomatik yedekleme saglikli degil",
                 $"{runText}\r\n{state.LastBackupDetails}\r\n\r\n{lastSuccessText}{retentionNote}\r\n\r\n" +
-                "Yeni yedek uretilemedigi surece eski yedekler budanmaz (kaynak bazinda koruma devrede), " +
-                "ancak elinizde GUNCEL bir geri yukleme noktasi olusmaz. Yedekleme ekranindan elle bir " +
+                "Pozitif saklama suresini dolduran yedekler yeni kopya olmasa da silinir; " +
+                "suresi dolmamis bir halkaya bagli zincir butun tutulur. Yedekleme ekranindan elle bir " +
                 "yedek deneyip donen hatayi giderin."));
         }
         catch (Exception exception)
@@ -1063,7 +1159,7 @@ public sealed class AutomationService(
     /// </summary>
     private static readonly string[] AutoUpdateExcludedPrefixes =
     [
-        "mysql", "mariadb", "postgres", "mssql", "sqlserver", "stalwart", "docker"
+        "mysql", "mariadb", "postgres", "mssql", "sqlserver", "stalwart", "mailenable", "docker"
     ];
 
     internal static bool IsAutoUpdatable(string componentId)
@@ -1119,6 +1215,12 @@ public sealed class AutomationService(
                 foreach (var component in outdated.Where(item => !item.VersionCheckFailed && IsAutoUpdatable(item.ComponentId)))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    // Catalog resolution and each installation can outlive an administrator's
+                    // approval. Finish the running install, but do not start another after opt-out.
+                    // Stay outside the automation lock: installers can acquire it themselves.
+                    var current = await LoadAsync(cancellationToken);
+                    if (!current.UpdateCheckEnabled || !current.AutoApplyComponentUpdates)
+                        break;
                     try
                     {
                         // Kurulum akışı aynı bileşeni yeni sürümle yeniden kurar (upgrade yolu budur).
@@ -1227,7 +1329,9 @@ public sealed class AutomationService(
             LastSslStatus = state.LastSslStatus,
             LastSslDetails = state.LastSslDetails,
             NextSslRunUtc = state.AutoSslRenewEnabled
-                ? (state.LastSslRunUtc ?? DateTime.UtcNow).AddHours(Math.Max(1, state.SslRenewIntervalHours))
+                ? IsDue(state.LastSslRunUtc, state.SslRenewIntervalHours, now)
+                    ? now
+                    : state.LastSslRunUtc!.Value.AddHours(Math.Max(1, state.SslRenewIntervalHours))
                 : null,
             LastLogCleanupRunUtc = state.LastLogCleanupRunUtc,
             LastLogCleanupStatus = state.LastLogCleanupStatus,
@@ -1250,6 +1354,16 @@ public sealed class AutomationService(
     /// Disk doluluk ve sertifika bitiş eşiklerini kontrol eder; aşım varsa e-posta/webhook
     /// uyarısı gönderir. Aynı uyarı için 24 saat tekrar gönderilmez (cooldown dosyası).
     /// </summary>
+    private async Task<Dictionary<string, AlertDeliveryFailure>> SafeReadFailuresAsync(CancellationToken cancellationToken)
+    {
+        try { return await alertFailures!.ReadAsync(cancellationToken) ?? new Dictionary<string, AlertDeliveryFailure>(); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Uyari teslim hatasi kayitlari okunamadi.");
+            return new Dictionary<string, AlertDeliveryFailure>();
+        }
+    }
+
     private async Task RunAlertChecksAsync(CancellationToken cancellationToken)
     {
         var state = await LoadAsync(cancellationToken);
@@ -1401,6 +1515,9 @@ public sealed class AutomationService(
         await AddBackupHealthAlertsAsync(state, alerts, now, cancellationToken);
 
         var changed = false;
+        var failures = alertFailures is null
+            ? new Dictionary<string, AlertDeliveryFailure>()
+            : await SafeReadFailuresAsync(cancellationToken);
         foreach (var (key, subject, body) in alerts)
         {
             if (cooldown.TryGetValue(key, out var last) && now - last < AlertCooldown)
@@ -1408,23 +1525,71 @@ public sealed class AutomationService(
                 continue;
             }
 
+            // Önceki denemeler başarısız olduysa geri çekilme süresi dolmadan tekrar denenmez
+            // (eskiden her dakika e-posta + webhook yeniden denenir ve kimse görmezdi).
+            if (failures.TryGetValue(key, out var failure) && failure.NextRetryUtc > now)
+            {
+                continue;
+            }
+
             var delivered = false;
+            var failureNotes = new List<string>();
             if (emailReady)
             {
                 try { await notificationService.SendEmailAsync(subject, body, cancellationToken); delivered = true; }
-                catch (Exception ex) { logger.LogWarning(ex, "Uyari e-postasi gonderilemedi: {Key}", key); }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Uyari e-postasi gonderilemedi: {Key}", key);
+                    failureNotes.Add($"email:{ex.GetType().Name}");
+                }
             }
 
             if (webhookReady)
             {
                 try { await notificationService.SendWebhookAsync("adapanel.alert", body, cancellationToken); delivered = true; }
-                catch (Exception ex) { logger.LogWarning(ex, "Uyari webhook gonderilemedi: {Key}", key); }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Uyari webhook gonderilemedi: {Key}", key);
+                    failureNotes.Add($"webhook:{ex.GetType().Name}");
+                }
             }
 
             if (delivered)
             {
                 cooldown[key] = now;
                 changed = true;
+            }
+
+            if (alertFailures is not null)
+            {
+                try
+                {
+                    if (delivered)
+                    {
+                        if (failures.Remove(key)) await alertFailures.ClearAsync([key], cancellationToken);
+                    }
+                    else
+                    {
+                        await alertFailures.RecordFailureAsync(key, $"{key} ({string.Join(", ", failureNotes)})", now, cancellationToken);
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger.LogWarning(ex, "Uyari teslim hatasi kaydi yazilamadi: {Key}", key);
+                }
+            }
+        }
+
+        // Koşulu geçmiş (artık üretilmeyen) uyarıların başarısızlık kayıtlarını temizle:
+        // yönetici çözülmüş bir sorun için "teslim edilemiyor" rozeti görmesin.
+        if (alertFailures is not null && failures.Count > 0)
+        {
+            var current = alerts.Select(item => item.Key).ToHashSet(StringComparer.Ordinal);
+            var gone = failures.Keys.Where(k => !current.Contains(k)).ToList();
+            try { await alertFailures.ClearAsync(gone, cancellationToken); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Eski uyari teslim hatasi kayitlari temizlenemedi.");
             }
         }
 
@@ -1442,36 +1607,9 @@ public sealed class AutomationService(
     }
 
     /// <summary>
-    /// Otomatik yedeğin dokunacağı veritabanı motorları: KURULU ve YÖNETİLEBİLİR olanlar.
+    /// Motor durumlarından yedeklenebilir olanları seçer (saf; test edilebilir).
+    /// Kurulu ama hazır olmayan motorlar çağıran tarafından eksik kapsam olarak raporlanır.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Sabit bir liste tutmak, panelin kendi kurduğu motor değiştiğinde yedeği sessizce
-    /// devre dışı bırakır — nitekim bıraktı: liste <c>["mysql"]</c> idi, panel MariaDB kuruyor.
-    /// </para>
-    /// <para>
-    /// <see cref="DatabaseEngineStatusDto.Ready"/> şartı bilinçli: motor kurulu ama panel ona
-    /// bağlanamıyorsa (yönetici parolası yok) döküm zaten alınamaz. Onu listeye koymak her gece
-    /// bir hata satırı üretir ve gerçek arızaları gürültüye gömerdi.
-    /// </para>
-    /// </remarks>
-    private async Task<IReadOnlyList<string>> ResolveInstalledEnginesAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            return SelectBackupEngines(await databaseService.GetEnginesAsync(cancellationToken));
-        }
-        catch (Exception exception)
-        {
-            // Motor listesi okunamıyorsa SESSİZ KALMA: yedek "0 veritabanı" der ve sebebi
-            // görünmezdi. Boş liste dönüp özet satırında bunu söylemek, uydurma bir motor
-            // listesiyle devam etmekten dürüsttür.
-            logger.LogWarning(exception, "Kurulu veritabanı motorları okunamadı; otomatik veritabanı yedeği atlanıyor.");
-            return [];
-        }
-    }
-
-    /// <summary>Motor durumlarından yedeklenebilir olanları seçer (saf; test edilebilir).</summary>
     internal static IReadOnlyList<string> SelectBackupEngines(IEnumerable<DatabaseEngineStatusDto> engines)
     {
         return engines

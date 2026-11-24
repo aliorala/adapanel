@@ -11,6 +11,7 @@
     </div>
 
     <p v-if="notice" class="notice page-notice error" role="alert">{{ notice }}</p>
+    <p v-if="repairResult" :class="['notice', { error: !repairResult.verified }]" role="status">{{ repairResult.message }}</p>
 
     <!-- SIFIR SAYAÇ TEHLİKE RENGİNDE OLMAZ.
          ÖLÇÜLDÜ: "0 kritik" rozeti kırmızı dolgu + kırmızı kenarla çiziliyordu; panelin
@@ -55,6 +56,7 @@
             <span v-if="item.detailKey">{{ t(item.detailKey) }} </span>
             <code v-if="item.detail">{{ item.detail }}</code>
           </p>
+          <SslBindingRepair v-if="item.sslRepair" :target="item.sslRepair" @result="repairResult = $event" @refresh="refresh" />
         </div>
         <!-- ALTI SATIRIN ALTISI DA AYNI DÜĞMEYDİ: kritik bir bulgunun "Düzelt"i ile bilgi
              niteliğindeki bir satırınki birebir aynı çiziliyordu, yani ekranda hiyerarşi
@@ -62,7 +64,7 @@
              Yalnız KRİTİK satırların düğmesi birincil olur (panelin `compact` düğmesi);
              uyarı ve bilgi satırları ikincil kalır. Düğme sayısı, yeri ve metni AYNI. -->
         <button
-          v-if="item.actionSection"
+          v-if="item.actionSection && !item.sslRepair"
           :class="['compact', { secondary: item.severity !== 'critical' }]"
           @click="go(item.actionSection)">
           {{ t("panel.advisor.fix") }}
@@ -78,6 +80,7 @@ import { useI18n } from "vue-i18n";
 import { getAdvisorReport, type AdvisorReport } from "../api/advisor";
 import { extractApiMessage } from "../stores/auth";
 import { formatDateTime } from "../utils/datetime";
+import SslBindingRepair from '../components/SslBindingRepair.vue';
 
 const { t } = useI18n();
 const emit = defineEmits<{ (event: "navigate", sectionId: string): void }>();
@@ -85,6 +88,7 @@ const emit = defineEmits<{ (event: "navigate", sectionId: string): void }>();
 const report = ref<AdvisorReport | null>(null);
 const loading = ref(false);
 const notice = ref("");
+const repairResult = ref<{ message: string; verified: boolean } | null>(null);
 
 onMounted(refresh);
 

@@ -19,11 +19,11 @@ public sealed class BackupPlannerSourceIdentityTests
     [InlineData("postgresql:Foo", "postgresql:foo")]
     [InlineData("POSTGRESQL:Foo", "postgresql:foo")]
     [InlineData("postgres:Foo", "postgresql:foo")]
-    public void AnotherPostgresDatabaseDoesNotAuthorizeAgePruning(string oldSource, string recentSource)
+    public void AnotherPostgresDatabaseDoesNotSatisfyCountLimitWithinTheAgeWindow(string oldSource, string recentSource)
     {
-        var old = Record("old", oldSource, 40);
+        var old = Record("old", oldSource, 10);
         var recent = Record("recent", recentSource, 1);
-        Assert.Empty(BackupPrunePlanner.Select([old, recent], Now.AddDays(-14), 0, _ => true));
+        Assert.Empty(BackupPrunePlanner.Select([old, recent], Now.AddDays(-14), 1, _ => true));
     }
 
     [Theory]
@@ -57,22 +57,24 @@ public sealed class BackupPlannerSourceIdentityTests
         var old = Record("old", "SHOP.Example", 40, type: "SITE");
         var recent = Record("recent", "shop.example", 1, type: "site");
         var unrelated = Record("database", "shop.example", 40);
-        Assert.Equal(["old"], BackupPrunePlanner.Select([old, recent, unrelated], Now.AddDays(-14), 0, _ => true).Select(item => item.Id));
+        Assert.Equal(["old"], BackupPrunePlanner.Select([old, recent, unrelated], DateTime.MinValue, 1, _ => true).Select(item => item.Id));
     }
 
     [Fact]
-    public void AgePolicyDoesNotDeletePointsProtectedByTheMinimumKeepCount()
+    public void ExplicitAgeLimitExpiresEveryOldPointRegardlessOfMinimumKeepCount()
     {
         var records = new[] { 1, 20, 30, 40 }.Select(days => Record("backup-" + days, "postgresql:Foo", days)).ToArray();
-        Assert.Equal(["backup-40"], BackupPrunePlanner.Select(records, Now.AddDays(-14), 3, _ => true).Select(item => item.Id));
+        Assert.Equal(["backup-20", "backup-30", "backup-40"],
+            BackupPrunePlanner.Select(records, Now.AddDays(-14), 3, _ => true).Select(item => item.Id));
+        Assert.Equal(["backup-40"], BackupPrunePlanner.Select(records, DateTime.MinValue, 3, _ => true).Select(item => item.Id));
     }
 
     [Fact]
-    public void AnOrphanIncrementalPointCannotReplaceAFullBackup()
+    public void AnOrphanCannotReplaceAFullBackupForCountPruningButDoesNotOverrideExplicitExpiry()
     {
         var old = Record("old-full", "postgresql:Foo", 40);
         var orphan = Record("orphan", "postgresql:Foo", 1, "broken-chain", 1);
-        Assert.Empty(BackupPrunePlanner.Select([old, orphan], Now.AddDays(-14), 0, _ => true));
+        Assert.Equal([old.Id], BackupPrunePlanner.Select([old, orphan], Now.AddDays(-14), 0, _ => true).Select(item => item.Id));
         Assert.Empty(BackupPrunePlanner.Select([old, orphan], DateTime.MinValue, 1, _ => true));
     }
 
@@ -151,13 +153,13 @@ public sealed class BackupPlannerSourceIdentityTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void ReusedChainIdCannotCombineDifferentPostgresSourcesForPruning(bool reverseOrder)
+    public void ReusedChainIdCannotCombineDifferentPostgresSourcesForCountPruning(bool reverseOrder)
     {
         var lower = Record("lower-old", "postgresql:foo", 40, "shared", 0);
         var upper = Record("upper-old", "postgresql:Foo", 40, "shared", 0);
         var current = Record("lower-current", "postgresql:foo", 1);
         BackupRecordDto[] records = reverseOrder ? [upper, lower, current] : [lower, upper, current];
-        Assert.Equal(["lower-old"], BackupPrunePlanner.Select(records, Now.AddDays(-14), 0, _ => true).Select(item => item.Id));
+        Assert.Equal(["lower-old"], BackupPrunePlanner.Select(records, DateTime.MinValue, 1, _ => true).Select(item => item.Id));
     }
 
     [Fact]
@@ -196,7 +198,7 @@ public sealed class BackupPlannerSourceIdentityTests
     }
 
     [Fact]
-    public async Task RealDatabaseBackupProducerAndPrunePreserveOtherQuotedDatabase()
+    public async Task RealDatabaseProducerPreservesQuotedSourcesForCountPruningWhileAgeLimitExpiresOldCopy()
     {
         using var fixture = new Fixture();
         var service = fixture.Service();
@@ -204,10 +206,16 @@ public sealed class BackupPlannerSourceIdentityTests
         old.CreatedAtUtc = DateTime.UtcNow.AddDays(-40);
         var recent = await service.BackupDatabaseAsync(new BackupDatabaseRequest { Engine = "postgresql", DatabaseName = "foo" });
         await fixture.Save(old, recent);
-        var result = await service.PruneAsync(14);
-        Assert.Equal(0, result.Removed);
+        var stored = await service.GetBackupsAsync();
+        Assert.Equal("postgresql:Foo", old.Source);
+        Assert.Equal("postgresql:foo", recent.Source);
+        Assert.Empty(BackupPrunePlanner.Select(stored, DateTime.MinValue, 1, record => File.Exists(record.Path)));
         Assert.True(File.Exists(old.Path));
-        Assert.Equal(2, (await service.GetBackupsAsync()).Count);
+        var result = await service.PruneAsync(14);
+        Assert.Equal(1, result.Removed);
+        Assert.False(File.Exists(old.Path));
+        Assert.True(File.Exists(recent.Path));
+        Assert.Equal(recent.Id, Assert.Single(await service.GetBackupsAsync()).Id);
     }
 
     [Theory]

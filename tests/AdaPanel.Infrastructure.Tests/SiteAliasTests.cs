@@ -89,7 +89,46 @@ public sealed class SiteAliasTests : IDisposable
         var webConfig = await File.ReadAllTextAsync(Path.Combine(siteKoku, "web.config"));
         Assert.Contains("AdaPanel.AliasRedirect", webConfig);
         Assert.Contains("ornek\\.com\\.tr", webConfig);
-        Assert.Contains("https://ornek.com/", webConfig);
+        Assert.Contains("http://ornek.com/", webConfig);
+    }
+
+    [Theory]
+    [InlineData("http", 8080, "http://ornek.com:8080/{R:1}")]
+    [InlineData("https", 443, "https://ornek.com/{R:1}")]
+    [InlineData("https", 8443, "https://ornek.com:8443/{R:1}")]
+    public async Task Yonlendirme_ana_hostun_olculen_baglamasini_ve_portunu_korur(string protocol, int port, string expected)
+    {
+        if (protocol == "http")
+            await siteServisi.RemoveBindingAsync("ornek", new RemoveSiteBindingRequest { Protocol = "http", HostName = "ornek.com", Port = 80 });
+        await siteServisi.AddBindingAsync("ornek", new SiteBindingRequest { Protocol = protocol, HostName = "ornek.com", Port = port });
+        var result = await servis.AddAliasAsync("ornek", new AddSiteAliasRequest { HostName = "alias.test", RedirectToPrimary = true });
+        var config = System.Xml.Linq.XDocument.Load(Path.Combine(siteKoku, "web.config"));
+        Assert.Equal(expected, (string?)config.Descendants("action").Single().Attribute("url"));
+        Assert.True(result.RedirectRule!.Applied);
+    }
+
+    [Theory]
+    [InlineData("unrelated.test")]
+    [InlineData("")]
+    [InlineData("*.ornek.com")]
+    public async Task Baska_host_veya_wildcard_HTTPS_ana_host_icin_varsayilmaz(string httpsHost)
+    {
+        await siteServisi.AddBindingAsync("ornek", new SiteBindingRequest { Protocol = "https", HostName = httpsHost, Port = 8443 });
+        await servis.AddAliasAsync("ornek", new AddSiteAliasRequest { HostName = "alias.test", RedirectToPrimary = true });
+        var config = System.Xml.Linq.XDocument.Load(Path.Combine(siteKoku, "web.config"));
+        Assert.Equal("http://ornek.com/{R:1}", (string?)config.Descendants("action").Single().Attribute("url"));
+    }
+
+    [Fact]
+    public async Task Laravel_kurali_uygulama_kokune_degil_IIS_belge_kokune_yazilir()
+    {
+        siteServisi.ApplicationRootPath = dataRoot;
+        var existing = Path.Combine(dataRoot, "web.config");
+        await File.WriteAllTextAsync(existing, "application-root-untouched");
+        var result = await servis.AddAliasAsync("ornek", new AddSiteAliasRequest { HostName = "alias.test", RedirectToPrimary = true });
+        Assert.True(result.RedirectRule!.Applied);
+        Assert.Contains("AdaPanel.AliasRedirect", await File.ReadAllTextAsync(Path.Combine(siteKoku, "web.config")));
+        Assert.Equal("application-root-untouched", await File.ReadAllTextAsync(existing));
     }
 
     [Fact]
@@ -136,12 +175,14 @@ public sealed class SiteAliasTests : IDisposable
 
         public List<string> EklenenHostlar { get; } = [];
         public List<string> KaldirilanHostlar { get; } = [];
+        public string ApplicationRootPath { get; set; } = site.ApplicationRootPath;
 
         public Task<SiteDto> GetSiteAsync(string siteName, CancellationToken cancellationToken = default)
             => Task.FromResult(new SiteDto
             {
                 Name = site.Name,
                 PhysicalPath = site.PhysicalPath,
+                ApplicationRootPath = ApplicationRootPath,
                 Bindings = [.. baglamalar]
             });
 

@@ -21,7 +21,7 @@ public sealed class BackupScopeRetentionTests
     [Theory]
     [InlineData("files")]
     [InlineData("config")]
-    public async Task ARealSiteArchiveWithReducedScopeCannotReplaceTheOlderCompleteArchive(string omitted)
+    public async Task ExplicitAgeLimitExpiresOlderSiteEvenWhenNewScopeIsReduced(string omitted)
     {
         using var fixture = new Fixture();
         var complete = await fixture.Create("site");
@@ -32,8 +32,8 @@ public sealed class BackupScopeRetentionTests
             Assert.Null(archive.GetEntry(omitted == "files" ? "files/index.txt" : "config/site.json"));
         await fixture.Age((complete, 40), (reduced, 1));
 
-        Assert.Equal(0, (await fixture.Prune("site")).Removed);
-        await fixture.AssertPresent(complete, reduced);
+        Assert.Equal(1, (await fixture.Prune("site")).Removed);
+        await fixture.AssertPresent(reduced);
     }
 
     [Fact]
@@ -54,7 +54,7 @@ public sealed class BackupScopeRetentionTests
     [InlineData("site", true)]
     [InlineData("subscription", false)]
     [InlineData("subscription", true)]
-    public async Task TheLastIncrementalDumpScopeCannotBorrowCurrentCoverageFromItsOldBase(string type, bool excludeAll)
+    public async Task ReducedIncrementalScopeBlocksCountPruningButNotIndependentPointAgeExpiry(string type, bool excludeAll)
     {
         using var fixture = new Fixture();
         var complete = await fixture.Create(type);
@@ -68,8 +68,8 @@ public sealed class BackupScopeRetentionTests
             Assert.DoesNotContain(archive.Entries, entry => entry.FullName.Contains("Foo", StringComparison.Ordinal));
         await fixture.Age((complete, 40), (chainBase, 20), (recent, 1));
 
-        Assert.Equal(0, (await fixture.Prune(type)).Removed);
-        await fixture.AssertPresent(complete, chainBase, recent);
+        Assert.Equal(type == "site" ? 1 : 0, (await fixture.Prune(type)).Removed);
+        await fixture.AssertPresent(type == "site" ? [chainBase, recent] : [complete, chainBase, recent]);
     }
 
     [Theory]
@@ -95,7 +95,7 @@ public sealed class BackupScopeRetentionTests
     [InlineData("site", true)]
     [InlineData("subscription", false)]
     [InlineData("subscription", true)]
-    public async Task ALocalReplacementCannotRemoveTheLastOffsiteArchive(string type, bool failedUpload)
+    public async Task LocalReplacementBlocksOffsiteCountPruningButNotExplicitAgeExpiry(string type, bool failedUpload)
     {
         using var fixture = new Fixture();
         var offsite = await fixture.Create(type, remote: true);
@@ -105,24 +105,24 @@ public sealed class BackupScopeRetentionTests
         Assert.True(string.IsNullOrEmpty(local.RemoteUri));
         await fixture.Age((offsite, 40), (local, 1));
 
-        Assert.Equal(0, (await fixture.Prune(type)).Removed);
-        Assert.Equal(0, fixture.RemoteDeletes);
-        await fixture.AssertPresent(offsite, local);
+        Assert.Equal(type == "site" ? 1 : 0, (await fixture.Prune(type)).Removed);
+        Assert.Equal(type == "site" ? 1 : 0, fixture.RemoteDeletes);
+        await fixture.AssertPresent(type == "site" ? [local] : [offsite, local]);
     }
 
     [Theory]
     [InlineData("site")]
     [InlineData("subscription")]
-    public async Task AnOffsiteIncrementalLinkStillRequiresItsBaseOffsiteBeforeReplacingAnOffsitePoint(string type)
+    public async Task OffsiteChainCoverageIsRequiredForCountReplacementButNotExpiredIndependentPoint(string type)
     {
         using var fixture = new Fixture();
         var offsite = await fixture.Create(type, remote: true);
         var localBase = await fixture.Create(type, incremental: true);
         var remoteDelta = await fixture.Create(type, incremental: true, remote: true);
         await fixture.Age((offsite, 40), (localBase, 20), (remoteDelta, 1));
-        Assert.Equal(0, (await fixture.Prune(type)).Removed);
-        Assert.Equal(0, fixture.RemoteDeletes);
-        await fixture.AssertPresent(offsite, localBase, remoteDelta);
+        Assert.Equal(type == "site" ? 1 : 0, (await fixture.Prune(type)).Removed);
+        Assert.Equal(type == "site" ? 1 : 0, fixture.RemoteDeletes);
+        await fixture.AssertPresent(type == "site" ? [localBase, remoteDelta] : [offsite, localBase, remoteDelta]);
     }
 
     [Theory]
@@ -165,21 +165,21 @@ public sealed class BackupScopeRetentionTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task MeasuredAndUnknownComponentScopesCannotReplaceEachOther(bool previousUnknown)
+    public async Task ExplicitAgeLimitExpiresPointDespiteUnknownComponentCoverage(bool previousUnknown)
     {
         using var fixture = new Fixture();
         var previous = await fixture.Create("site");
         var replacement = await fixture.Create("site");
         (previousUnknown ? previous : replacement).IncludedComponents = null;
         await fixture.Age((previous, 40), (replacement, 1));
-        Assert.Equal(0, (await fixture.Prune("site")).Removed);
-        await fixture.AssertPresent(previous, replacement);
+        Assert.Equal(1, (await fixture.Prune("site")).Removed);
+        await fixture.AssertPresent(replacement);
     }
 
     [Theory]
     [InlineData("site")]
     [InlineData("subscription")]
-    public async Task AnUploadLaterMeasuredMissingCannotReplaceTheLastOffsiteCopy(string type)
+    public async Task MissingRemoteReplacementBlocksCountPruningButNotExplicitAgeExpiry(string type)
     {
         using var fixture = new Fixture();
         var previous = await fixture.Create(type, remote: true);
@@ -187,15 +187,15 @@ public sealed class BackupScopeRetentionTests
         replacement.RemoteState = BackupPresence.Missing;
         replacement.RemoteMissing = true;
         await fixture.Age((previous, 40), (replacement, 1));
-        Assert.Equal(0, (await fixture.Prune(type)).Removed);
-        Assert.Equal(0, fixture.RemoteDeletes);
-        await fixture.AssertPresent(previous, replacement);
+        Assert.Equal(type == "site" ? 1 : 0, (await fixture.Prune(type)).Removed);
+        Assert.Equal(type == "site" ? 1 : 0, fixture.RemoteDeletes);
+        await fixture.AssertPresent(type == "site" ? [replacement] : [previous, replacement]);
     }
 
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task ExplicitRemoteMeasurementHasAuthorityOverALegacyBooleanOnTheOldCopy(bool present)
+    public async Task ExplicitAgeExpiryDeletesRecordedRemoteCopyRegardlessOfLegacyPresenceFlags(bool present)
     {
         using var fixture = new Fixture();
         var previous = await fixture.Create("site", remote: true);
@@ -203,14 +203,15 @@ public sealed class BackupScopeRetentionTests
         previous.RemoteState = present ? BackupPresence.Present : BackupPresence.Missing;
         previous.RemoteMissing = present; // Deliberately contradictory legacy field.
         await fixture.Age((previous, 40), (replacement, 1));
-        Assert.Equal(present ? 0 : 1, (await fixture.Prune("site")).Removed);
-        await fixture.AssertPresent(present ? [previous, replacement] : [replacement]);
+        Assert.Equal(1, (await fixture.Prune("site")).Removed);
+        Assert.Equal(1, fixture.RemoteDeletes);
+        await fixture.AssertPresent(replacement);
     }
 
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task ExplicitRemoteMeasurementHasAuthorityOverALegacyBooleanOnTheReplacement(bool present)
+    public async Task ExplicitAgeExpiryDoesNotRequireAnAvailableRemoteReplacement(bool present)
     {
         using var fixture = new Fixture();
         var previous = await fixture.Create("site", remote: true);
@@ -218,8 +219,9 @@ public sealed class BackupScopeRetentionTests
         replacement.RemoteState = present ? BackupPresence.Present : BackupPresence.Missing;
         replacement.RemoteMissing = present;
         await fixture.Age((previous, 40), (replacement, 1));
-        Assert.Equal(present ? 1 : 0, (await fixture.Prune("site")).Removed);
-        await fixture.AssertPresent(present ? [replacement] : [previous, replacement]);
+        Assert.Equal(1, (await fixture.Prune("site")).Removed);
+        Assert.Equal(1, fixture.RemoteDeletes);
+        await fixture.AssertPresent(replacement);
     }
 
     [Fact]

@@ -24,7 +24,8 @@ public sealed partial class FtpService(
     IPanelPreferencesService panelPreferencesService,
     IOptions<PanelRuntimeOptions> runtimeOptions,
     ILogger<FtpService>? logger = null,
-    IConcurrencyLock? serverConcurrency = null) : IFtpService
+    IConcurrencyLock? serverConcurrency = null,
+    AdaPanel.Data.Persistence.AdaPanelDbContext? ftpCertificateDb = null) : IFtpService
 {
     // Shared by ensure, TLS updates and account creation's infrastructure preparation.
     internal IConcurrencyLock InfrastructureLock { get; } = serverConcurrency ?? new ConcurrencyLock();
@@ -36,6 +37,36 @@ public sealed partial class FtpService(
     private const int FtpPort = 21;
     private const int PassivePortStart = 50000;
     private const int PassivePortEnd = 51000;
+    // FTP sites have their own runtime methods/state. Site.Start()/Get-Website.State belong
+    // to the HTTP runtime and can fail with 0x800710D8 for an FTP-only site.
+    // Microsoft: iis/configuration/system.applicationhost/sites/site/ftpserver/start
+    private const string FtpRuntimeScript = """
+        # Importing WebAdministration does not reliably load MWA in a fresh PowerShell process.
+        # Use the installed IIS assembly, matching this process's System32 filesystem view.
+        Add-Type -Path "$env:windir\System32\inetsrv\Microsoft.Web.Administration.dll" -ErrorAction Stop
+        function Read-AdaFtpRuntime([string]$name, [switch]$Start) {
+          $manager = New-Object Microsoft.Web.Administration.ServerManager -ErrorAction Stop
+          try {
+            $sites = $manager.GetApplicationHostConfiguration().GetSection('system.applicationHost/sites').GetCollection()
+            $matches = @($sites | Where-Object { [string]$_.GetAttributeValue('name') -eq $name })
+            if ($matches.Count -gt 1) { throw 'Ambiguous FTP site measurement.' }
+            if ($matches.Count -eq 0) {
+              if ($Start) { throw "FTP site not found: $name" }
+              return [pscustomobject]@{ Exists = $false; State = ''; LastStartupStatus = '' }
+            }
+            $ftp = $matches[0].GetChildElement('ftpServer')
+            $state = [int]$ftp.GetAttributeValue('state')
+            # FTPSVC can already be starting this site through serverAutoStart.
+            if ($Start -and $state -ne 1 -and $state -ne 0) {
+              $ftp.Methods['Start'].CreateInstance().Execute() | Out-Null
+            }
+            $state = [int]$ftp.GetAttributeValue('state')
+            $stateNames = @('Starting', 'Started', 'Stopping', 'Stopped', 'Unknown')
+            if ($state -lt 0 -or $state -ge $stateNames.Count) { throw "Unknown FTP runtime state: $state" }
+            return [pscustomobject]@{ Exists = $true; State = $stateNames[$state]; LastStartupStatus = $ftp.GetAttributeValue('lastStartupStatus') }
+          } finally { $manager.Dispose() }
+        }
+        """;
     private readonly string dataRoot = Path.GetFullPath(Environment.ExpandEnvironmentVariables(runtimeOptions.Value.DataRoot));
 
     // Per-instance transport seams keep lifecycle tests off native accounts and IIS.
@@ -92,10 +123,8 @@ public sealed partial class FtpService(
         cancellationToken.ThrowIfCancellationRequested();
         var durum = new FtpServerStatusDto
         {
-            ServerAddress = preferences.ServerAddress,
-            ControlPort = FtpPort,
-            PassivePortStart = PassivePortStart,
-            PassivePortEnd = PassivePortEnd
+            ServerAddress = await GetFtpClientHostAsync(preferences.ServerAddress, cancellationToken),
+            ControlPort = FtpPort
         };
 
         var olcum = await ProbeFtpRuntimeAsync(cancellationToken);
@@ -109,6 +138,8 @@ public sealed partial class FtpService(
         }
 
         durum.ServiceState = olcum.ServiceState;
+        durum.PassivePortStart = olcum.PassivePortStart;
+        durum.PassivePortEnd = olcum.PassivePortEnd;
         durum.SiteState = olcum.SiteState;
         durum.IsSiteRunning = olcum.SiteExists && olcum.SiteState.Equals("Started", StringComparison.OrdinalIgnoreCase);
 
@@ -219,7 +250,9 @@ public sealed partial class FtpService(
         string ServiceState,
         IReadOnlyCollection<int> ServicePids,
         bool PortOlculebildi,
-        IReadOnlyCollection<FtpPortDinleyici> Listeners);
+        IReadOnlyCollection<FtpPortDinleyici> Listeners,
+        int? PassivePortStart,
+        int? PassivePortEnd);
 
     /// <summary>
     /// FTP çalışma zamanını TEK bir PowerShell çağrısında ölçer (servis, site, portu dinleyen tüm
@@ -235,6 +268,7 @@ public sealed partial class FtpService(
     {
         var script = $$"""
             $ErrorActionPreference = 'Stop'
+            {{FtpRuntimeScript}}
             $portOlculdu = $false
             $siteOlculdu = $false
             $servisOlculdu = $false
@@ -242,6 +276,8 @@ public sealed partial class FtpService(
             $siteDurum = ''
             $servisDurum = ''
             $servisPidleri = @()
+            $passiveLow = $null
+            $passiveHigh = $null
             try {
               $svc = Get-CimInstance Win32_Service -Filter "Name='FTPSVC'" -ErrorAction Stop
               if ($svc) {
@@ -252,11 +288,15 @@ public sealed partial class FtpService(
             } catch { }
             try {
               Import-Module WebAdministration -ErrorAction Stop
-              $siteler = @(Get-Website -ErrorAction Stop | Where-Object { $_.Name -eq '{{EscapePowerShellLiteral(FtpSiteName)}}' })
-              if ($siteler.Count -gt 1) { throw 'Ambiguous FTP site measurement.' }
-              if ($siteler.Count -eq 1) { $siteVar = $true; $siteDurum = [string]$siteler[0].State }
+              $ftpRuntime = Read-AdaFtpRuntime '{{EscapePowerShellLiteral(FtpSiteName)}}'
+              $siteVar = $ftpRuntime.Exists
+              $siteDurum = $ftpRuntime.State
               $siteOlculdu = $true
             } catch { }
+            try {
+              $passiveLow = (Get-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.ftpServer/firewallSupport' -Name lowDataChannelPort -ErrorAction Stop).Value
+              $passiveHigh = (Get-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.ftpServer/firewallSupport' -Name highDataChannelPort -ErrorAction Stop).Value
+            } catch { $passiveLow = $null; $passiveHigh = $null }
             $satirlar = @()
             if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
               try {
@@ -278,6 +318,8 @@ public sealed partial class FtpService(
               serviceState = $servisDurum
               servicePids = @($servisPidleri)
               portMeasured = $portOlculdu
+              passivePortStart = $passiveLow
+              passivePortEnd = $passiveHigh
               listeners = @($satirlar | Group-Object pid | ForEach-Object { $_.Group[0] })
             } | ConvertTo-Json -Depth 5 -Compress
             """;
@@ -323,10 +365,16 @@ public sealed partial class FtpService(
             var servicePids = DiziOku(kok, "servicePids").ToArray();
             if (servicePids.Any(item => item.ValueKind != JsonValueKind.Number || !item.TryGetInt32(out var pid) || pid <= 0)) return null;
 
+            int? passiveStart = null, passiveEnd = null;
+            if (kok.TryGetProperty("passivePortStart", out var low) && low.ValueKind == JsonValueKind.Number && low.TryGetInt32(out var measuredLow)
+                && kok.TryGetProperty("passivePortEnd", out var high) && high.ValueKind == JsonValueKind.Number && high.TryGetInt32(out var measuredHigh)
+                && measuredLow >= 1025 && measuredHigh <= 65535 && measuredHigh >= measuredLow)
+            { passiveStart = measuredLow; passiveEnd = measuredHigh; }
+
             return new FtpRuntimeOlcum(
                 siteExists, siteState.GetString() ?? string.Empty, serviceState.GetString() ?? string.Empty,
                 servicePids.Select(item => item.GetInt32()).ToArray(), portMeasured,
-                dinleyiciler);
+                dinleyiciler, passiveStart, passiveEnd);
         }
         catch (JsonException)
         {
@@ -410,7 +458,7 @@ public sealed partial class FtpService(
             if (measurement.Verified == true)
             {
                 await fileStore.UpdateAsync(TlsStatePath, new FtpTlsState(),
-                    _ => new FtpTlsState { RequireSsl = requireSsl },
+                    current => { current.RequireSsl = requireSsl; return current; },
                     token => ApproveInfrastructureAsync(beforeMutation, token), cancellationToken);
                 saved = requireSsl;
                 await PublishInfrastructureReadyAsync(beforeMutation, cancellationToken);
@@ -422,6 +470,12 @@ public sealed partial class FtpService(
     private sealed class FtpTlsState
     {
         public bool RequireSsl { get; set; }
+        public string? HostName { get; set; }
+        public string[] HostNames { get; set; } = [];
+        public string? CertificateThumbprint { get; set; }
+        public string? CertificateStoreName { get; set; }
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public Dictionary<string, JsonElement>? ExtensionData { get; set; }
     }
 
     // FTP altyapısı (IIS FTP sitesi + SSL + firewall) bir kez tam kurulduğunda işaretlenir → sonraki kullanıcı
@@ -436,6 +490,7 @@ public sealed partial class FtpService(
         cancellationToken.ThrowIfCancellationRequested();
         var records = await fileStore.ReadAsync(StatePath, Array.Empty<FtpUserState>(), cancellationToken);
         var list = new List<FtpUserDto>(records.Length);
+        var ftpClientHost = await GetFtpClientHostAsync(Environment.MachineName, cancellationToken);
 
         foreach (var record in records.OrderBy(item => item.UserName, StringComparer.OrdinalIgnoreCase))
         {
@@ -451,11 +506,12 @@ public sealed partial class FtpService(
                 SiteName = record.SiteName,
                 CreatedAtUtc = record.CreatedAtUtc,
                 IsEnabled = record.IsEnabled,
+                ReadOnly = record.ReadOnly,
                 ExistsOnSystem = exists,
                 HomeLinkPath = ev.LinkPath,
                 HomeLinkExists = ev.LinkExists,
                 HomeTargetExists = ev.TargetExists,
-                ServerAddress = Environment.MachineName,
+                ServerAddress = ftpClientHost,
                 Port = FtpPort
             });
         }
@@ -483,6 +539,7 @@ public sealed partial class FtpService(
         }
 
         EnsureCommandSafePassword(request.Password);
+        var ftpClientHost = await GetFtpClientHostAsync(Environment.MachineName, cancellationToken);
 
         // Interactive callers pin the site generation through native effects/publication.
         // Trusted provisioning already owns its exclusive site intent and uses the old overload;
@@ -536,7 +593,14 @@ public sealed partial class FtpService(
         approvedHomePath = homePath;
         await Approve(cancellationToken);
         Directory.CreateDirectory(homePath);
-        await EnsureFtpInfrastructureAsync(false, cancellationToken, Approve);
+        var infrastructure = await EnsureFtpInfrastructureAsync(false, cancellationToken, Approve);
+        // A measured broken policy/certificate cannot produce a usable new account. The
+        // fast path is deliberately unmeasured and remains valid; optional TLS stays optional.
+        if (infrastructure.Failed)
+            throw new AppException("ftp.site_configuration_failed", 500, 500, infrastructure.Detail);
+
+        // Enroll only this approved site's canonical DNS name; existing shared aliases remain.
+        await EnsureSiteCertificateAsync(request.SiteName, Approve, cancellationToken);
 
         // BU ÇAĞRI hesabı gerçekten AÇTI mı? Geri alma yalnız BUNA bakar (gerekçe: RollbackCreateAsync).
         var hesabiBuCagriActi = false;
@@ -639,7 +703,7 @@ public sealed partial class FtpService(
                 IsEnabled = true,
                 ExistsOnSystem = true,
                 PasswordNeverExpires = parolaSuresiz,
-                ServerAddress = Environment.MachineName,
+                ServerAddress = ftpClientHost,
                 Port = FtpPort
             };
         }
@@ -774,7 +838,8 @@ public sealed partial class FtpService(
 
     private async Task ChangeHomePermissionsAsync(string userName, string homePath, bool grant,
         Func<CancellationToken, Task>? beforeMutation, Action<string, FtpPermissionChange?>? nativeStarting, CancellationToken cancellationToken,
-        IReadOnlyCollection<string>? permissionPaths = null)
+        IReadOnlyCollection<string>? permissionPaths = null, bool readOnly = false, bool replace = false,
+        Func<string, bool>? skipPath = null)
     {
         // /T traverses junction descendants even with /L on supported Windows builds.
         // Plan ordinary entries ourselves, then issue only nonrecursive native operations.
@@ -803,6 +868,8 @@ public sealed partial class FtpService(
             }
             if (paths.Any(path => !PathContainment.IsRootOrInside(homePath, path)))
                 throw new AppException("ftp.home_outside_site", 403, 403);
+            // Güncellemede eski ağaçtan hak kaldırılırken yeni ev dizininin içine düşen yollar korunur.
+            if (skipPath is not null) paths = paths.Where(path => !skipPath(path)).ToList();
 
             // A fake command transport does not imply permission to query live SAM.
             // Native ACL fixtures opt in with their current-process SID; production
@@ -828,13 +895,14 @@ public sealed partial class FtpService(
                         ? new DirectoryInfo(path).GetAccessControl(AccessControlSections.Access)
                         : new FileInfo(path).GetAccessControl(AccessControlSections.Access);
                     token.ThrowIfCancellationRequested();
-                    if (!HomePermissionChangeNeeded(security, identity, isDirectory, grant)) continue;
+                    if (!HomePermissionChangeNeeded(security, identity, isDirectory, grant, readOnly)) continue;
                     // Reading a descriptor is not permission to follow a replacement.
                     EnsureHomePathBoundary(path);
                 }
-                var rights = isDirectory ? "(OI)(CI)M" : "M";
-                var operation = grant ? $"/grant \"{userName}:{rights}\"" : $"/remove:g \"{userName}\"";
-                FtpPermissionChange? change = grant && identity is not null
+                var rights = readOnly ? (isDirectory ? "(OI)(CI)RX" : "RX") : (isDirectory ? "(OI)(CI)M" : "M");
+                // /grant:r = açık (explicit) hakları DEĞİŞTİRİR; Modify <-> salt-okunur geçişinde eski hak kalmasın.
+                var operation = grant ? $"/grant{(replace ? ":r" : "")} \"{userName}:{rights}\"" : $"/remove:g \"{userName}\"";
+                FtpPermissionChange? change = grant && identity is not null && !readOnly && !replace
                     ? FtpPermissionChange.Capture(path, identity, isDirectory) : null;
                 var retained = false;
                 try
@@ -858,9 +926,39 @@ public sealed partial class FtpService(
         }
     }
 
-    internal static bool HomePermissionChangeNeeded(FileSystemSecurity security, SecurityIdentifier identity,
-        bool isDirectory, bool grant)
+    private const FileSystemRights WriteBits = FileSystemRights.WriteData | FileSystemRights.AppendData
+        | FileSystemRights.Delete | FileSystemRights.DeleteSubdirectoriesAndFiles | FileSystemRights.WriteAttributes
+        | FileSystemRights.WriteExtendedAttributes | FileSystemRights.ChangePermissions | FileSystemRights.TakeOwnership;
+
+    /// <summary>
+    /// Hesabın bu nesnedeki KENDİ izin girdilerinden ölçüm: <c>true</c> yalnız okuma/çalıştırma,
+    /// <c>false</c> yazma hakkı var, <c>null</c> hiç izin girdisi yok.
+    /// </summary>
+    internal static bool? MeasureReadOnly(FileSystemSecurity security, SecurityIdentifier identity)
     {
+        var rules = security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+            .Cast<FileSystemAccessRule>().Where(rule => rule.IdentityReference.Equals(identity)
+                && rule.AccessControlType == AccessControlType.Allow).ToList();
+        if (rules.Count == 0) return null;
+        return !rules.Any(rule => (rule.FileSystemRights & WriteBits) != 0);
+    }
+
+    internal static bool HomePermissionChangeNeeded(FileSystemSecurity security, SecurityIdentifier identity,
+        bool isDirectory, bool grant, bool readOnly = false)
+    {
+        if (grant && readOnly)
+        {
+            // Salt-okunur hedef: yazma biti kalmamalı VE okuma/çalıştırma (uygun kalıtımla) verilmiş olmalı.
+            var own = security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+                .Cast<FileSystemAccessRule>().Where(rule => rule.IdentityReference.Equals(identity)
+                    && rule.AccessControlType == AccessControlType.Allow).ToList();
+            if (own.Any(rule => (rule.FileSystemRights & WriteBits) != 0)) return true;
+            return !own.Any(rule => (rule.FileSystemRights & FileSystemRights.ReadAndExecute) == FileSystemRights.ReadAndExecute
+                && (rule.PropagationFlags & PropagationFlags.InheritOnly) == 0
+                && (!isDirectory || (rule.InheritanceFlags == (InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit)
+                    && rule.PropagationFlags == PropagationFlags.None)));
+        }
+
         var rules = security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
             .Cast<FileSystemAccessRule>().Where(rule => rule.IdentityReference.Equals(identity)
                 && rule.AccessControlType == AccessControlType.Allow);
@@ -985,7 +1083,7 @@ public sealed partial class FtpService(
             {
                 // net.exe başarısızsa (lokalizasyon/kilit) PowerShell Remove-LocalUser ile dene.
                 var psScript = $"$ErrorActionPreference='SilentlyContinue'; " +
-                    $"Remove-LocalUser -Name '{normalizedUserName.Replace("'", "''")}'";
+                    $"Remove-LocalUser -Name '{PowerShellQuoting.Escape(normalizedUserName)}'";
                 await Approve(cancellationToken);
                 await RunScriptAsync(psScript, cancellationToken);
 
@@ -1008,6 +1106,228 @@ public sealed partial class FtpService(
             Approve, cancellationToken);
     }
 
+    public Task SetFtpUserEnabledAsync(string userName, bool enabled, CancellationToken cancellationToken = default) =>
+        SetFtpUserEnabledCoreAsync(userName, enabled, null, cancellationToken);
+
+    public Task SetFtpUserEnabledAsync(string userName, bool enabled,
+        Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        SetFtpUserEnabledCoreAsync(userName, enabled, beforeMutation, cancellationToken);
+
+    private async Task SetFtpUserEnabledCoreAsync(string userName, bool enabled,
+        Func<FtpUserDto?, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
+    {
+        var normalized = NormalizeUserName(userName);
+
+        // YALNIZ PANELİN KENDİ AÇTIĞI hesap (parola değiştirmeyle aynı kapı): Administrator da bir
+        // yerel hesaptır ve burası ad doğrulamasından başka bir şey sormaz.
+        var kayit = await ReadAccountAsync(normalized, cancellationToken);
+        using var accountLease = await FtpAccountLifecycle.EnterAsync(normalized, cancellationToken);
+        async Task Approve(CancellationToken token)
+        {
+            await EnsureAccountUnchangedAsync(normalized, kayit, token);
+            if (beforeMutation is not null) await beforeMutation(ToAccountDto(kayit), token);
+            token.ThrowIfCancellationRequested();
+        }
+        // Arayanın yetkisi kayıt YOKKEN de önce sorulur: yanıt farkı hesap numaralandırmaya yol açmasın.
+        await Approve(cancellationToken);
+        if (kayit is null)
+        {
+            throw new AppException("ftp.user_not_found", 404, 404);
+        }
+
+        var ad = EscapePowerShellLiteral(normalized);
+        var verb = enabled ? "Enable-LocalUser" : "Disable-LocalUser";
+        // GERİ OKUMA ŞART: cmdlet hatasız dönüp bayrak değişmemiş olabilir.
+        var script = $@"$ErrorActionPreference = 'Stop'
+{verb} -Name '{ad}'
+$hesap = Get-LocalUser -Name '{ad}'
+[Console]::Out.WriteLine('ADAPANEL-ENABLED=' + $hesap.Enabled)";
+        await Approve(cancellationToken);
+        var sonuc = await RunStrictScriptAsync(script, cancellationToken);
+        var cikti = sonuc.StandardOutput ?? string.Empty;
+        var beklenen = enabled ? "ADAPANEL-ENABLED=True" : "ADAPANEL-ENABLED=False";
+        if (!sonuc.Success || !cikti.Contains(beklenen, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new AppException("ftp.enable_state_unverified", 500, 500,
+                SecretRedactor.SanitizeDetails(BuildCommandDetails(sonuc)));
+        }
+
+        await fileStore.UpdateAsync(
+            StatePath,
+            Array.Empty<FtpUserState>(),
+            mevcut =>
+            {
+                foreach (var item in mevcut)
+                {
+                    if (string.Equals(item.UserName.Trim(), normalized, StringComparison.OrdinalIgnoreCase))
+                    {
+                        item.IsEnabled = enabled;
+                    }
+                }
+
+                return mevcut;
+            },
+            cancellationToken);
+    }
+
+    public Task<FtpUserDto> UpdateFtpUserAsync(string userName, UpdateFtpUserRequest request,
+        Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        UpdateFtpUserCoreAsync(userName, request, beforeMutation, cancellationToken);
+
+    /// <summary>
+    /// Ev dizinini ve/veya salt-okunur bayrağını değiştirir. Sıra: yeni dizine hak ver -> IIS kuralı +
+    /// junction -> İKİ yerden ölçüm (IIS izni, NTFS) -> eski dizinden hak kaldır -> kaydı yaz.
+    /// Herhangi bir adım patlarsa yapılanlar geri alınır (eski dizin/mod yeniden uygulanır).
+    /// </summary>
+    private async Task<FtpUserDto> UpdateFtpUserCoreAsync(string userName, UpdateFtpUserRequest request,
+        Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken)
+    {
+        var name = NormalizeUserName(userName);
+        var expected = await ReadAccountAsync(name, cancellationToken);
+        using var accountLease = await FtpAccountLifecycle.EnterAsync(name, cancellationToken);
+        async Task Approve(CancellationToken token)
+        {
+            await EnsureAccountUnchangedAsync(name, expected, token);
+            await beforeMutation(ToAccountDto(expected), token);
+            token.ThrowIfCancellationRequested();
+        }
+        await Approve(cancellationToken);
+        if (expected is null || !await UserExistsAsync(name, cancellationToken))
+            throw new AppException("ftp.user_not_found", 404, 404);
+
+        var oldHome = Path.GetFullPath(expected.HomePath);
+        var oldReadOnly = expected.ReadOnly;
+        var newHome = string.IsNullOrWhiteSpace(request.HomePath) ? oldHome
+            : Path.GetFullPath(Environment.ExpandEnvironmentVariables(request.HomePath.Trim()));
+        var newReadOnly = request.ReadOnly ?? oldReadOnly;
+        var homeChanged = !string.Equals(Path.TrimEndingDirectorySeparator(newHome),
+            Path.TrimEndingDirectorySeparator(oldHome), StringComparison.OrdinalIgnoreCase);
+        var modeChanged = newReadOnly != oldReadOnly;
+        if (!homeChanged && !modeChanged) return ToUpdatedDto(expected, newHome, newReadOnly);
+
+        if (homeChanged)
+        {
+            // Reparse (junction) zinciri ve varlık: yeni dizin yan etkiden ÖNCE doğrulanır; dizin burada oluşturulmaz.
+            EnsureHomePathBoundary(newHome);
+            if (!Directory.Exists(newHome)) throw new AppException("ftp.home_not_found", 404, 404);
+        }
+
+        var identity = ResolveHomeIdentity(name);
+        var newAclTouched = false;
+        var junctionChanged = false;
+        var oldAclRemoved = false;
+        try
+        {
+            await Approve(cancellationToken);
+            newAclTouched = true;
+            await ChangeHomePermissionsAsync(name, newHome, grant: true, Approve, null, cancellationToken,
+                null, readOnly: newReadOnly, replace: true);
+
+            await Approve(cancellationToken);
+            junctionChanged = true;
+            await ConfigureUserHomeAsync(name, newHome, cancellationToken, newReadOnly);
+
+            // ÖLÇÜM: "yazdım" başarı değildir. IIS kuralındaki izin ve NTFS hakkı geri okunur.
+            await Approve(cancellationToken);
+            var measuredIis = await MeasureAuthorizationPermissionsAsync(name, cancellationToken);
+            var wantedIis = newReadOnly ? 1 : 3;
+            if (measuredIis != wantedIis)
+                throw new AppException("ftp.permission_unverified", 500, 500,
+                    $"IIS FTP authorization permissions measured {(measuredIis?.ToString() ?? "unreadable")}, expected {wantedIis}.");
+            if (identity is not null)
+            {
+                var security = new DirectoryInfo(newHome).GetAccessControl(AccessControlSections.Access);
+                var measuredNtfs = MeasureReadOnly(security, identity);
+                if (measuredNtfs != newReadOnly)
+                    throw new AppException("ftp.permission_unverified", 500, 500,
+                        $"NTFS access measured {(measuredNtfs is null ? "none" : measuredNtfs.Value ? "read-only" : "writable")}, expected {(newReadOnly ? "read-only" : "writable")}.");
+            }
+
+            if (homeChanged && Directory.Exists(oldHome))
+            {
+                await Approve(cancellationToken);
+                oldAclRemoved = true;
+                await ChangeHomePermissionsAsync(name, oldHome, grant: false, Approve, null, cancellationToken,
+                    skipPath: path => PathContainment.IsRootOrInside(newHome, path));
+            }
+
+            await fileStore.UpdateAsync(
+                StatePath,
+                Array.Empty<FtpUserState>(),
+                mevcut =>
+                {
+                    foreach (var item in mevcut)
+                    {
+                        if (string.Equals(item.UserName.Trim(), name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            item.HomePath = newHome;
+                            item.ReadOnly = newReadOnly;
+                        }
+                    }
+                    return mevcut;
+                },
+                Approve, cancellationToken);
+        }
+        catch (Exception error)
+        {
+            var notes = new List<string>();
+            async Task Try(string label, Func<Task> work)
+            {
+                try { await work(); } catch (Exception inner) { notes.Add($"{label}: {inner.Message}"); }
+            }
+            if (junctionChanged)
+                await Try("yetki-junction-geri-alma", () => ConfigureUserHomeAsync(name, oldHome, CancellationToken.None, oldReadOnly));
+            if (newAclTouched && homeChanged)
+                await Try("yeni-dizin-acl-geri-alma", () => ChangeHomePermissionsAsync(name, newHome, grant: false, null, null,
+                    CancellationToken.None, skipPath: path => PathContainment.IsRootOrInside(oldHome, path)));
+            if ((newAclTouched || oldAclRemoved) && Directory.Exists(oldHome))
+                await Try("eski-dizin-acl-geri-alma", () => ChangeHomePermissionsAsync(name, oldHome, grant: true, null, null,
+                    CancellationToken.None, null, readOnly: oldReadOnly, replace: true));
+            var suffix = notes.Count == 0 ? string.Empty
+                : $"{Environment.NewLine}GeriAlmaUyarilari:{Environment.NewLine}{string.Join(Environment.NewLine, notes)}";
+            if (error is AppException app)
+                throw new AppException(app.MessageKey, app.Code, app.HttpStatusCode, app.Details + suffix);
+            if (notes.Count == 0) throw;
+            throw new AppException("ftp.update_failed", 500, 500, error.Message + suffix);
+        }
+
+        return ToUpdatedDto(expected, newHome, newReadOnly);
+    }
+
+    private FtpUserDto ToUpdatedDto(FtpUserState record, string homePath, bool readOnly) => new()
+    {
+        UserName = record.UserName, SiteName = record.SiteName, HomePath = homePath, ReadOnly = readOnly,
+        IsEnabled = record.IsEnabled, CreatedAtUtc = record.CreatedAtUtc, ExistsOnSystem = true, Port = FtpPort
+    };
+
+    private SecurityIdentifier? ResolveHomeIdentity(string userName) =>
+        HomePermissionIdentity is { } resolve ? resolve(userName)
+        : NativeCommand is null
+            ? (SecurityIdentifier)new NTAccount(Environment.MachineName, userName).Translate(typeof(SecurityIdentifier))
+            : null;
+
+    /// <summary>IIS FTP yetkilendirme kuralındaki izin bitleri (Read=1, Write=2); okunamazsa null.</summary>
+    private async Task<int?> MeasureAuthorizationPermissionsAsync(string userName, CancellationToken cancellationToken)
+    {
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            Import-Module WebAdministration -ErrorAction Stop
+            $siteName = '{{EscapePowerShellLiteral(FtpSiteName)}}'
+            $userName = '{{EscapePowerShellLiteral(userName)}}'
+            $rules = @(Get-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization/add' | Where-Object { [string]$_.users -eq $userName })
+            if ($rules.Count -ne 1) { [Console]::Out.WriteLine('ADAPANEL-PERMS=rules:' + $rules.Count); return }
+            $n = 0
+            foreach ($p in ([string]$rules[0].permissions -split '[,\s]+')) {
+              if ($p -eq 'Read') { $n += 1 } elseif ($p -eq 'Write') { $n += 2 } elseif ($p -match '^\d+$') { $n += [int]$p }
+            }
+            [Console]::Out.WriteLine('ADAPANEL-PERMS=' + $n)
+            """;
+        var result = await RunStrictScriptAsync(script, cancellationToken);
+        if (!result.Success) return null;
+        var match = Regex.Match(result.StandardOutput ?? string.Empty, @"ADAPANEL-PERMS=(\d+)\s*$", RegexOptions.Multiline);
+        return match.Success && int.TryParse(match.Groups[1].Value, out var value) ? value : null;
+    }
+
     private async Task<FtpUserState?> ReadAccountAsync(string name, CancellationToken token) =>
         (await fileStore.ReadAsync(StatePath, Array.Empty<FtpUserState>(), token))
             .SingleOrDefault(item => string.Equals(item.UserName.Trim(), name, StringComparison.OrdinalIgnoreCase));
@@ -1021,7 +1341,7 @@ public sealed partial class FtpService(
     }
 
     private static FtpUserDto? ToAccountDto(FtpUserState? value) => value is null ? null : new FtpUserDto
-    { UserName = value.UserName, SiteName = value.SiteName, HomePath = value.HomePath, CreatedAtUtc = value.CreatedAtUtc, IsEnabled = value.IsEnabled };
+    { UserName = value.UserName, SiteName = value.SiteName, HomePath = value.HomePath, CreatedAtUtc = value.CreatedAtUtc, IsEnabled = value.IsEnabled, ReadOnly = value.ReadOnly };
 
     /// <summary>
     /// Kayıtlı FTP kullanıcılarının EKSİK ev bağlantısını tamamlar. Kaç tanesinin onarıldığını döner.
@@ -1168,7 +1488,7 @@ public sealed partial class FtpService(
         // iyilestirilecek sey altyapi degil KULLANICI kayitlaridir.
         await HealHomeLinksAsync(cancellationToken, beforeMutation);
 
-        // HIZLI YOL: altyapı bir kez tam kurulduysa (bayrak) ve FTPSVC çalışıyorsa ağır yeniden-kurulumu + FTPSVC
+        // HIZLI YOL: altyapı bir kez tam kurulduysa (bayrak), FTPSVC ve FTP sitesi çalışıyorsa ağır yeniden-kurulumu + FTPSVC
         // yeniden başlatmayı ATLA → 2. ve sonraki FTP kullanıcısı eklemesi saniyelerce beklemeden, anında olur.
         // (SSL politikası değişimi gibi gerçekten gereken durumlar force=true ile tam yeniden kurar.)
         if (!forceReconfigure && await IsFtpInfrastructureReadyAsync(cancellationToken))
@@ -1181,14 +1501,14 @@ public sealed partial class FtpService(
 
         // Pasif (PASV) mod: sunucu, veri kanalı için istemciye bir IP bildirir. Bu IP yanlış/iç IP olursa
         // istemci bağlanır, giriş yapar ama DİZİN LİSTESİ/transfer TAKILIR. Panelde tanımlı public IPv4'ü
-        // FTP sitesine externalIp4Address olarak yazıyoruz; tanımlı değilse IIS kendi IP'sini kullanır.
+        // FTP sitesinin boş externalIp4Address ayarını doldururuz; mevcut NAT tercihi korunur.
         var preferences = await panelPreferencesService.GetAsync(cancellationToken);
         await ApproveInfrastructureAsync(beforeMutation, cancellationToken);
         var externalIp = preferences.ServerAddress?.Trim() ?? string.Empty;
-        var externalIpLine = System.Net.IPAddress.TryParse(externalIp, out var parsedIp)
+        var defaultExternalIp = System.Net.IPAddress.TryParse(externalIp, out var parsedIp)
                 && parsedIp.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
-            ? $"Set-ItemProperty \"IIS:\\Sites\\$siteName\" -Name ftpServer.firewallSupport.externalIp4Address -Value '{EscapePowerShellLiteral(externalIp)}'"
-            : "# sunucu IPv4 adresi panelde tanimli degil; pasif mod sunucunun kendi IP'sini kullanir";
+            ? externalIp
+            : string.Empty;
 
         // M5 (profesyonel paneller gibi opsiyonel): FTPS zorunlu mu? 0=SslAllow (düz+FTPS, varsayılan), 1=SslRequire (yalnız FTPS).
         var requireSsl = requestedPolicy ?? await GetRequireSslAsync(cancellationToken);
@@ -1198,12 +1518,13 @@ public sealed partial class FtpService(
         var script = $$"""
             $ErrorActionPreference = 'Stop'
             Import-Module WebAdministration -ErrorAction Stop
+            {{FtpRuntimeScript}}
             $siteName = '{{EscapePowerShellLiteral(FtpSiteName)}}'
             $root = '{{EscapePowerShellLiteral(ftpRoot)}}'
             if (-not (Test-Path "IIS:\Sites\$siteName")) {
               New-WebFtpSite -Name $siteName -Port {{FtpPort}} -PhysicalPath $root -Force | Out-Null
             }
-            Set-ItemProperty "IIS:\Sites\$siteName" -Name serverAutoStart -Value $true
+            Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.serverAutoStart -Value $true
             # KRITIK KOK NEDEN (2026-06-21): FTP per-site ayarlari Set-WebConfigurationProperty -Location ile
             # YAZILAMAZ. ftpServer config <site> etiketinin ICINE gomulu; -Location ise <location> bloklarina
             # bakar -> sessizce "configuration object not found at location" UYARISI verip HICBIR SEYI
@@ -1215,30 +1536,39 @@ public sealed partial class FtpService(
             Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.userIsolation.mode -Value 3
             Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.ssl.controlChannelPolicy -Value {{policy}}
             Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.ssl.dataChannelPolicy -Value {{policy}}
-            # FTPS sertifikasi: yoksa self-signed olustur ve bagla. serverCertHash bos olursa IIS "AUTH TLS"i
-            # reddeder; bagliyken FTPS calisir. controlChannelPolicy=0 ile duz baglanti da kabul -> kimse kilitlenmez.
-            $ftpsCert = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -eq 'AdaPanel FTPS' } | Select-Object -First 1
-            if (-not $ftpsCert) {
-              try { $ftpsCert = New-SelfSignedCertificate -DnsName $env:COMPUTERNAME -FriendlyName 'AdaPanel FTPS' -CertStoreLocation 'Cert:\LocalMachine\My' -KeyExportPolicy Exportable -NotAfter (Get-Date).AddYears(5) } catch { $ftpsCert = $null }
-            }
-            if ($ftpsCert) {
-              try {
-                Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.ssl.serverCertHash -Value $ftpsCert.Thumbprint
-                Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.ssl.ssl128 -Value $true
-              } catch { }
-            }
+            # Certificate lifecycle is explicit: never overwrite an administrator's existing
+            # certificate with a generated self-signed certificate during account/policy setup.
+            # The FTPS certificate endpoint validates the DNS name, store/key/chain and AUTH TLS.
             # Pasif port araligi SUNUCU seviyesinde (location'siz) -> Set-WebConfigurationProperty dogru calisir.
-            Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.ftpServer/firewallSupport' -Name lowDataChannelPort -Value {{PassivePortStart}}
-            Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.ftpServer/firewallSupport' -Name highDataChannelPort -Value {{PassivePortEnd}}
-            {{externalIpLine}}
-            Start-WebSite -Name $siteName -ErrorAction Stop
+            $defaultPassiveLow = {{PassivePortStart}}
+            $defaultPassiveHigh = {{PassivePortEnd}}
+            $defaultExternalIp = '{{EscapePowerShellLiteral(defaultExternalIp)}}'
+            {{FtpNetworkSettingsScript}}
             # Restart failure must not be reported as a verified TLS application.
             Restart-Service FTPSVC -Force -ErrorAction Stop
+            $ftpService = Get-Service FTPSVC -ErrorAction Stop
+            $ftpService.WaitForStatus('Running', [TimeSpan]::FromSeconds(15))
+            Read-AdaFtpRuntime $siteName -Start | Out-Null
+            $startDeadline = [DateTime]::UtcNow.AddSeconds(10)
+            do {
+              # A fresh manager reads runtime state after the start, not the HTTP site's state.
+              $ftpRuntime = Read-AdaFtpRuntime $siteName
+              if ($ftpRuntime.Exists -and $ftpRuntime.State -eq 'Started') { break }
+              if ([DateTime]::UtcNow -ge $startDeadline) {
+                throw "FTP site failed to start: $siteName; state=$($ftpRuntime.State); lastStartupStatus=$($ftpRuntime.LastStartupStatus)"
+              }
+              Start-Sleep -Milliseconds 250
+            } while ($true)
             if (-not (Get-NetFirewallRule -DisplayName 'AdaPanel FTP Control' -ErrorAction SilentlyContinue)) {
               New-NetFirewallRule -DisplayName 'AdaPanel FTP Control' -Direction Inbound -Action Allow -Protocol TCP -LocalPort {{FtpPort}} -Profile Any | Out-Null
             }
-            if (-not (Get-NetFirewallRule -DisplayName 'AdaPanel FTP Passive' -ErrorAction SilentlyContinue)) {
-              New-NetFirewallRule -DisplayName 'AdaPanel FTP Passive' -Direction Inbound -Action Allow -Protocol TCP -LocalPort {{PassivePortStart}}-{{PassivePortEnd}} -Profile Any | Out-Null
+            $passiveRules = @(Get-NetFirewallRule -DisplayName 'AdaPanel FTP Passive' -ErrorAction SilentlyContinue)
+            if ($passiveRules.Count -eq 0) {
+              New-NetFirewallRule -DisplayName 'AdaPanel FTP Passive' -Direction Inbound -Action Allow -Protocol TCP -LocalPort "$passiveLow-$passiveHigh" -Profile Any | Out-Null
+            } else {
+              # Only the panel-managed rule follows its effective range. Other firewall
+              # rules are administrator-owned and are never rewritten or removed here.
+              $passiveRules | Get-NetFirewallPortFilter -ErrorAction Stop | Set-NetFirewallPortFilter -Protocol TCP -LocalPort "$passiveLow-$passiveHigh" -ErrorAction Stop | Out-Null
             }
             # SESSIZ BASARISIZLIK BIR DAHA OLMASIN: ayarin gercekten uygulandigini geri-okuyup dogrula.
             # NOT: bu geri-okuma yalnız OLCER, ASLA throw etmez. Bazı IIS sürümlerinde Get-ItemProperty
@@ -1312,9 +1642,8 @@ public sealed partial class FtpService(
         return olcum;
     }
 
-    // Altyapı hazır mı (hızlı kontrol): daha önce tam kuruldu (bayrak) VE FTPSVC çalışıyor mu. FTPSVC kontrolü
-    // Get-Service ile yapılır (yavaş 'Import-Module WebAdministration' YOK → sub-saniye). Biri bile sağlanmazsa false →
-    // çağıran tam kurulumu çalıştırır (kendini onarır). Böylece ağır betik + servis restart yalnız gerektiğinde çalışır.
+    // A running FTP service does not prove this FTP site is started. Check both before
+    // skipping repair, otherwise a stopped site can remain broken behind a stale ready marker.
     private async Task<bool> IsFtpInfrastructureReadyAsync(CancellationToken cancellationToken)
     {
         var state = await fileStore.ReadAsync(InfraStatePath, new FtpInfraState(), cancellationToken);
@@ -1323,10 +1652,16 @@ public sealed partial class FtpService(
             return false;
         }
 
-        var probe = await RunScriptAsync(
-            "if ((Get-Service FTPSVC -ErrorAction SilentlyContinue).Status -eq 'Running') { 'up' } else { 'down' }",
-            cancellationToken);
-        return probe.Success && probe.StandardOutput.Contains("up", StringComparison.OrdinalIgnoreCase);
+        var probe = await RunScriptAsync($$"""
+            if ((Get-Service FTPSVC -ErrorAction SilentlyContinue).Status -eq 'Running') {
+              $ErrorActionPreference = 'Stop'
+              Import-Module WebAdministration -ErrorAction Stop
+              {{FtpRuntimeScript}}
+              $runtime = Read-AdaFtpRuntime '{{EscapePowerShellLiteral(FtpSiteName)}}'
+              if ($runtime.Exists -and $runtime.State -eq 'Started') { 'up' } else { 'down' }
+            } else { 'down' }
+            """, cancellationToken);
+        return probe.Success && probe.StandardOutput.Trim().Equals("up", StringComparison.OrdinalIgnoreCase);
     }
 
     // IIS FTP sunucu rolü (FTPSVC servisi) yoksa OTOMATİK KURAR. Windows Server: Web-Ftp-Server (+ yönetim
@@ -1484,10 +1819,12 @@ public sealed partial class FtpService(
         };
     }
 
-    private async Task ConfigureUserHomeAsync(string userName, string homePath, CancellationToken cancellationToken)
+    private async Task ConfigureUserHomeAsync(string userName, string homePath, CancellationToken cancellationToken, bool readOnly = false)
     {
         var userRoots = HomeLinkPaths(userName);
         var rootLiterals = string.Join(",", userRoots.Select(yol => $"'{EscapePowerShellLiteral(yol)}'"));
+        // IIS FTP yetkilendirme izni: 1 = Read, 3 = Read+Write (salt-okunur hesapta yazma izni VERİLMEZ).
+        var permissionValue = readOnly ? 1 : 3;
 
         // KATI çalıştırma (RunPowerShellStrictAsync): bu betiğin ortasında patlayan bir ifade
         // eskiden çıkış koduna yansımıyordu — PowerShell'in çıkış kodu SON ifadenin sonucudur.
@@ -1504,7 +1841,7 @@ public sealed partial class FtpService(
               New-Item -ItemType Junction -Path $userRoot -Target $homePath | Out-Null
             }
             {{RemoveUserAuthorizationSnippet}}
-            Add-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization' -Value @{accessType='Allow';users=$userName;permissions=3}
+            Add-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization' -Value @{accessType='Allow';users=$userName;permissions={{permissionValue}} }
             """;
 
         var result = await RunStrictScriptAsync(script, cancellationToken);
@@ -1804,7 +2141,7 @@ public sealed partial class FtpService(
         return normalized;
     }
 
-    private static string EscapePowerShellLiteral(string value) => value.Replace("'", "''");
+    private static string EscapePowerShellLiteral(string value) => PowerShellQuoting.Escape(value);
 
     /// <summary>
     /// FTP hesabının parolasını SÜRESİZ yapar ve sonucu GERİ OKUR.
@@ -1917,6 +2254,9 @@ else {{ [Console]::Out.WriteLine('ADAPANEL-SON=' + $hesap.PasswordExpires.ToStri
         public string HomePath { get; set; } = string.Empty;
 
         public bool IsEnabled { get; set; }
+
+        /// <summary>Salt-okunur hesap (NTFS ReadAndExecute + IIS FTP izni Read). Eski kayıtlarda yok = false.</summary>
+        public bool ReadOnly { get; set; }
 
         public DateTime CreatedAtUtc { get; set; }
     }

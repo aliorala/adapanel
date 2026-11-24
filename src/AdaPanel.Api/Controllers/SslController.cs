@@ -1,4 +1,4 @@
-﻿using AdaPanel.Api.Security;
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Ssl;
@@ -116,7 +116,12 @@ public sealed class SslController(
             owner);
 
         await target.RunAsync(current => ApproveAsync(current, cancellationToken), cancellationToken);
-        await TrySecureWebmailAsync(certificate.HostName, input.ContactEmail, cancellationToken);
+        await TrySecureWebmailAsync(certificate.HostName, input.ContactEmail, async token =>
+        {
+            var original = await iisSiteService.GetSiteAsync(input.SiteName, token);
+            target.ValidateSnapshot(original);
+            await ApproveAsync(original, token);
+        }, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.issued"));
     }
@@ -178,7 +183,12 @@ public sealed class SslController(
             owner);
 
         await target.RunAsync(current => ApproveAsync(current, cancellationToken), cancellationToken);
-        await TrySecureWebmailAsync(certificate.HostName, string.Empty, cancellationToken);
+        await TrySecureWebmailAsync(certificate.HostName, string.Empty, async token =>
+        {
+            var original = await iisSiteService.GetSiteAsync(input.SiteName, token);
+            target.ValidateSnapshot(original);
+            await ApproveAsync(original, token);
+        }, cancellationToken);
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.imported"));
     }
 
@@ -199,19 +209,26 @@ public sealed class SslController(
         };
 
     // Best-effort: site SSL aldıktan sonra webmail.<domain>'i de otomatik HTTPS yap (profesyonel paneller gibi).
-    // İsteği ASLA bozmaz — webmail kurulu değilse / DNS yoksa / sertifika alınamazsa sessiz geçer.
-    private async Task TrySecureWebmailAsync(string? domain, string? contactEmail, CancellationToken cancellationToken)
+    // Webmail failures are best-effort; cancellation and revoked authority must propagate.
+    private async Task TrySecureWebmailAsync(string? domain, string? contactEmail,
+        Func<CancellationToken, Task> beforeMutation, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(domain))
         {
             return;
         }
 
+        var rejected = false;
+        async Task Approve(CancellationToken token)
+        {
+            try { await beforeMutation(token); }
+            catch { rejected = true; throw; }
+        }
         try
         {
-            await webmailService.SecureWebmailForDomainAsync(domain, contactEmail ?? string.Empty, cancellationToken);
+            await webmailService.SecureWebmailForDomainAsync(domain, contactEmail ?? string.Empty, Approve, cancellationToken);
         }
-        catch
+        catch (Exception error) when (!rejected && error is not OperationCanceledException)
         {
             // best-effort — SSL akışını bozma
         }
@@ -327,10 +344,33 @@ public sealed class SslController(
             // removed" diyor; ayrinti HAM basildigi icin buradaki Turkce cumle Ingilizce
             // panelde de gorunurdu.
             $"binding={result.HostName}:{result.Port}; removed={result.BindingRemoved}; " +
-            $"httpsRedirectDisabled={result.HttpsRedirectDisabled}; certificate={result.CertificateAction}",
+            $"httpsRedirectDisabled={result.HttpsRedirectDisabled}; certificate={result.CertificateAction}; " +
+            $"renewal={result.RenewalAction}",
             await SiteSahibiAsync(result.SiteName, cancellationToken));
 
         return Ok(ApiResponse<RemoveSslCertificateResultDto>.Ok(result, "ssl.binding_removed"));
+    }
+
+    /// <summary>
+    /// Bir kaydin otomatik yenilemesini duraklatir / surdurur / iptal eder. Yalniz yonetici: win-acme
+    /// sunucu geneli kaynaktir ve iptal geri alinamaz. Her eylem denetim kaydi yazar.
+    /// </summary>
+    [HttpPost("renewal")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<SslCertificateDto>>> SetRenewalStateAsync(
+        [FromBody] SslRenewalActionRequest request, CancellationToken cancellationToken)
+    {
+        var action = (request.Action ?? string.Empty).Trim().ToLowerInvariant();
+        var certificate = await sslService.SetRenewalStateAsync(
+            request.SiteName, request.HostName, request.Port, action, cancellationToken);
+        await auditService.AuditAsync(
+            HttpContext,
+            $"ssl.renewal.{action}",
+            $"ssl:{certificate.SiteName}",
+            $"host={certificate.HostName}:{certificate.Port}; renewalPaused={certificate.RenewalPaused}; " +
+            $"managedRenewal={(string.IsNullOrWhiteSpace(certificate.ManagedRenewalId) ? "none" : "present")}",
+            await SiteSahibiAsync(certificate.SiteName, cancellationToken));
+        return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.renewal_" + action));
     }
 
     /// <summary>

@@ -9,6 +9,7 @@ internal static class ReadOnlyPostRoutes
         if (!string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase)) return false;
         var normalized = path?.TrimEnd('/');
         return string.Equals(normalized, "/api/v1/backup/download-items", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "/api/v1/migration/source/export", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(normalized, "/api/v1/files/search", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(normalized, "/api/v1/files/size", StringComparison.OrdinalIgnoreCase);
     }

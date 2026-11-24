@@ -36,6 +36,8 @@ public sealed class SiteHostingSettingsService(
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
     private const string HstsHeaderName = "Strict-Transport-Security";
     internal Func<Stream, Stream>? ConfigurationStream { get; init; }
+    internal Func<string, bool?>? WebConfigurationProbe { get; init; }
+    internal Action<string, long, long>? IisLimitsWriter { get; init; }
 
     // ".woff2" gibi: nokta + harf/rakam ile başlar, ayırıcı/boşluk/yol karakteri içermez.
     private static readonly Regex MimeExtensionPattern = new(@"^\.[a-z0-9][a-z0-9._-]{0,31}$", RegexOptions.Compiled);
@@ -46,7 +48,12 @@ public sealed class SiteHostingSettingsService(
         @"^[a-zA-Z0-9][a-zA-Z0-9!#$&^_+.-]{0,62}/[a-zA-Z0-9][a-zA-Z0-9!#$&^_+.-]{0,62}(; ?charset=[a-zA-Z0-9._-]{1,32})?$",
         RegexOptions.Compiled);
 
-    public async Task<SiteHostingSettingsDto> GetAsync(string siteName, CancellationToken cancellationToken = default)
+    private string SettingsLock(string siteName) => $"hosting-settings:{fileStore.ResolvePath(StatePath)}:{siteName.Trim().ToUpperInvariant()}";
+
+    public Task<SiteHostingSettingsDto> GetAsync(string siteName, CancellationToken cancellationToken = default) =>
+        concurrencyLock.RunExclusiveAsync(SettingsLock(siteName), () => GetCoreAsync(siteName, cancellationToken), cancellationToken);
+
+    private async Task<SiteHostingSettingsDto> GetCoreAsync(string siteName, CancellationToken cancellationToken)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var states = (await fileStore.ReadAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), cancellationToken)).ToList();
@@ -71,8 +78,10 @@ public sealed class SiteHostingSettingsService(
             AllowedReferrerHosts = string.IsNullOrWhiteSpace(zoneHost) ? [] : [zoneHost],
             ProtectedExtensions = ["jpg", "jpeg", "png", "gif", "webp", "svg", "mp4"]
         };
-        states.Add(state);
-        await fileStore.WriteAsync(StatePath, states, cancellationToken);
+        var published = await fileStore.UpdateAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), current =>
+            current.Any(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase))
+                ? current : [.. current, state], cancellationToken);
+        state = published.First(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase));
 
         // BURADA web.config YAZILMAZ. Okuma işleminin yan etkisi olmamalı — hele ki müşterinin
         // sitesini düşürebilecek bir yan etkisi.
@@ -89,10 +98,14 @@ public sealed class SiteHostingSettingsService(
         return state;
     }
 
-    public async Task<SiteHostingSettingsDto> UpdateAsync(
+    public Task<SiteHostingSettingsDto> UpdateAsync(
         string siteName,
         UpdateSiteHostingSettingsRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        concurrencyLock.RunExclusiveAsync(SettingsLock(siteName), () => UpdateCoreAsync(siteName, request, cancellationToken), cancellationToken);
+
+    private async Task<SiteHostingSettingsDto> UpdateCoreAsync(string siteName,
+        UpdateSiteHostingSettingsRequest request, CancellationToken cancellationToken)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         Validate(site.PhysicalPath, request);
@@ -101,7 +114,7 @@ public sealed class SiteHostingSettingsService(
         // vardı; panel koşulsuz "kaydedildi" diyordu. XML olarak geçerli bir belge IIS için hâlâ
         // geçersiz olabilir (tanımsız bölüm → sitenin TAMAMINA 500.19), o yüzden ikinci bir
         // kapı var. IIS yoksa cevap "reddetti" DEĞİL, "ölçülemedi"dir.
-        var yazma = UpdateWebConfig(site.PhysicalPath, request, () => IisWebConfigOkuyabiliyorMu(site.Name),
+        var yazma = UpdateWebConfig(site.PhysicalPath, request, () => (WebConfigurationProbe ?? IisWebConfigOkuyabiliyorMu)(site.Name),
             configureStream: ConfigurationStream, cancellationToken: cancellationToken);
         if (!yazma.Verified || (yazma.IisProbed && !yazma.IisAccepted))
         {
@@ -116,7 +129,7 @@ public sealed class SiteHostingSettingsService(
             // yazımda biri sessizce kaybolur. Gerekçe WafService.IsolateAppPoolAsync'te.
             await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Iis, () =>
             {
-                UpdateIisLimits(siteName, request.MaximumBandwidthBytesPerSecond, request.MaximumConnections);
+                (IisLimitsWriter ?? UpdateIisLimits)(siteName, request.MaximumBandwidthBytesPerSecond, request.MaximumConnections);
                 return Task.CompletedTask;
             }, cancellationToken);
         }
@@ -155,10 +168,9 @@ public sealed class SiteHostingSettingsService(
             HstsPreload = request.HstsPreload
         };
 
-        var states = (await fileStore.ReadAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), cancellationToken)).ToList();
-        states.RemoveAll(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase));
-        states.Add(state);
-        await fileStore.WriteAsync(StatePath, states, cancellationToken);
+        await fileStore.UpdateAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), current =>
+            current.Where(item => !string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase))
+                .Append(state).ToArray(), cancellationToken);
 
         // ÖLÇÜM KAYDEDİLDİKTEN SONRA İLİŞTİRİLİR. Durum dosyasına yazılsaydı, bir sonraki OKUMA
         // eski bir ölçümü BUGÜNÜN gerçeği gibi gösterirdi — düzeltmeye çalıştığımız hata sınıfının
@@ -417,7 +429,10 @@ public sealed class SiteHostingSettingsService(
         return await DurumuOlcAsync(QueueTaskName(siteName), null, cancellationToken);
     }
 
-    public async Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default)
+    public Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default) =>
+        concurrencyLock.RunExclusiveAsync(SettingsLock(siteName), () => RemoveSiteCoreAsync(siteName, cancellationToken), cancellationToken);
+
+    private async Task RemoveSiteCoreAsync(string siteName, CancellationToken cancellationToken)
     {
         // ÖNCE ARKA PLAN GÖREVLERİ, sonra ayar kaydı.
         //
@@ -431,13 +446,16 @@ public sealed class SiteHostingSettingsService(
         await StopQueueWorkerAsync(siteName, cancellationToken);
         await StopLaravelSchedulerAsync(siteName, cancellationToken);
 
-        var states = (await fileStore.ReadAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), cancellationToken)).ToList();
-        var kaldirilan = states.RemoveAll(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase));
-
-        if (kaldirilan > 0)
+        // Same-site Get/Update/Remove calls share SettingsLock, so an absent record
+        // stays absent until this cleanup exits. Other sites still use atomic removal.
+        var states = await fileStore.ReadAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), cancellationToken);
+        if (!states.Any(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase)))
         {
-            await fileStore.WriteAsync(StatePath, states, cancellationToken);
+            return;
         }
+
+        await fileStore.UpdateAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), current =>
+            current.Where(item => !string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase)).ToArray(), cancellationToken);
     }
 
     public async Task<QueueWorkerStatusDto> StopQueueWorkerAsync(string siteName, CancellationToken cancellationToken = default)
@@ -658,12 +676,26 @@ public sealed class SiteHostingSettingsService(
             trimmed = trimmed["wp ".Length..].Trim();
         }
 
+        ValidateWpCliCommand(trimmed);
+
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var workDir = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
         if (!File.Exists(Path.Combine(workDir, "wp-load.php")) && !File.Exists(Path.Combine(workDir, "wp-config.php")))
         {
             throw new AppException("wpcli.not_wordpress", 409, 409);
         }
+
+        // G24 (tur 2): WP-CLI proje yapılandırmasını (wp-cli.yml / wp-cli.local.yml, çalışma dizininden yukarı)
+        // KENDİSİ okur ve `require:`/`path:`/`exec:`/`ssh:`/`http:` ile keyfî dosya yükletebilir ya da hedef
+        // değiştirebilir. Komut satırı denetimi bunu görmez; bu yüzden böyle bir dosya varsa çalıştırma REDDEDİLİR.
+        var configViolation = FindWpCliProjectConfigViolation(workDir);
+        if (configViolation is not null)
+        {
+            throw new AppException("wpcli.unsafe_config", 409, 409, configViolation);
+        }
+
+        // plugin/theme install, media import, core download: URL hedefleri iç ağa gidemez.
+        await EnsureWpCliUrlTargetsAllowedAsync(trimmed, OutboundAddressGuard.SystemResolver, cancellationToken);
 
         var phpPath = await ResolvePhpExecutableAsync(cancellationToken);
         var wpCli = await EnsureWpCliAsync(cancellationToken);
@@ -684,6 +716,141 @@ public sealed class SiteHostingSettingsService(
         };
     }
 
+    // G24: WP-CLI alt komut beyaz listesi. Metakarakter engeli tek başına yetmez: `eval`/`eval-file`/`shell`
+    // keyfî PHP, `--require`/`--exec` keyfî dosya/PHP yükler, `--path` başka dizine, `--ssh`/`--http`
+    // uzak hedefe çıkar. İlk jeton (alt komut) listede olmalı; genel bayraklar alt komuttan ÖNCE verilemez.
+    private static readonly HashSet<string> WpCliAllowedCommands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "plugin", "theme", "core", "user", "cache", "option", "search-replace", "cron", "rewrite", "db",
+        "transient", "language", "post", "comment", "menu", "widget", "sidebar", "site", "role", "cap",
+        "maintenance-mode", "media", "term", "taxonomy", "block", "help"
+    };
+
+    private static readonly HashSet<string> WpCliBlockedWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "eval", "eval-file", "shell", "package", "server", "cli", "scaffold", "config"
+    };
+
+    private static readonly string[] WpCliBlockedFlags = { "--path", "--require", "--exec", "--ssh", "--http", "--config", "--debug", "--prompt" };
+
+    private static readonly HashSet<string> WpCliOptionAllowed = new(StringComparer.OrdinalIgnoreCase) { "get", "update", "list", "add", "delete", "pluck" };
+
+    private static readonly HashSet<string> WpCliDbAllowed = new(StringComparer.OrdinalIgnoreCase) { "export", "check", "optimize", "repair", "size", "tables", "prefix" };
+
+    private static readonly System.Text.RegularExpressions.Regex WpCliDangerousConfigKey = new(
+        @"^\s*-?\s*(require|path|exec|ssh|http|config|alias|url)\s*:",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Çalışma dizininden köke kadar wp-cli.yml / wp-cli.local.yml taranır; tehlikeli anahtar içeren ilk dosya döner.
+    /// Okunamayan dosya da (içeriği bilinemez) ihlal sayılır.
+    /// </summary>
+    internal static string? FindWpCliProjectConfigViolation(string workDir)
+    {
+        var directory = new DirectoryInfo(workDir);
+        while (directory is not null)
+        {
+            foreach (var name in new[] { "wp-cli.local.yml", "wp-cli.yml" })
+            {
+                var file = Path.Combine(directory.FullName, name);
+                if (!File.Exists(file)) continue;
+                try
+                {
+                    var match = WpCliDangerousConfigKey.Match(File.ReadAllText(file));
+                    if (match.Success)
+                    {
+                        return $"'{name}' defines '{match.Groups[1].Value.ToLowerInvariant()}:'";
+                    }
+                }
+                catch (Exception exception)
+                {
+                    return $"'{name}' could not be read ({exception.GetType().Name})";
+                }
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
+    }
+
+    /// <summary>URL alan alt komutlarda ("plugin install", "theme install", "media import", "core download|update") adresin konağı denetlenir.</summary>
+    internal static async Task EnsureWpCliUrlTargetsAllowedAsync(string command, OutboundAddressGuard.OutboundHostResolver resolver, CancellationToken cancellationToken)
+    {
+        var tokens = command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length < 2) return;
+        var fetches =
+            (tokens[0].Equals("plugin", StringComparison.OrdinalIgnoreCase) && tokens[1].Equals("install", StringComparison.OrdinalIgnoreCase)) ||
+            (tokens[0].Equals("theme", StringComparison.OrdinalIgnoreCase) && tokens[1].Equals("install", StringComparison.OrdinalIgnoreCase)) ||
+            (tokens[0].Equals("media", StringComparison.OrdinalIgnoreCase) && tokens[1].Equals("import", StringComparison.OrdinalIgnoreCase)) ||
+            (tokens[0].Equals("core", StringComparison.OrdinalIgnoreCase) && tokens[1] is "download" or "update");
+        if (!fetches) return;
+
+        foreach (var token in tokens.Skip(2))
+        {
+            var value = token.Trim('\'');
+            var equals = value.StartsWith("--", StringComparison.Ordinal) ? value.IndexOf('=') : -1;
+            if (equals >= 0) value = value[(equals + 1)..];
+            if (!value.Contains("://", StringComparison.Ordinal)) continue;
+
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            {
+                throw new AppException("wpcli.invalid_command", 400, 400);
+            }
+
+            var blocked = await OutboundAddressGuard.FindBlockedHostAsync(
+                uri.DnsSafeHost,
+                resolver,
+                new OutboundTargetPolicy(AllowInternalTargets: false, BlockUnresolvedHost: false),
+                cancellationToken);
+            if (blocked is not null)
+            {
+                throw new AppException("wpcli.url_forbidden", 403, 403);
+            }
+        }
+    }
+
+    internal static void ValidateWpCliCommand(string command)
+    {
+        var tokens = command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0 || !WpCliAllowedCommands.Contains(tokens[0]))
+        {
+            throw new AppException("wpcli.invalid_command", 400, 400);
+        }
+
+        foreach (var token in tokens)
+        {
+            var bare = token.Trim('\'');
+            if (WpCliBlockedWords.Contains(bare))
+            {
+                throw new AppException("wpcli.invalid_command", 400, 400);
+            }
+
+            foreach (var flag in WpCliBlockedFlags)
+            {
+                if (bare.StartsWith(flag, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new AppException("wpcli.invalid_command", 400, 400);
+                }
+            }
+        }
+
+        if (tokens.Length > 1)
+        {
+            var sub = tokens[1];
+            if ((tokens[0].Equals("option", StringComparison.OrdinalIgnoreCase) && !WpCliOptionAllowed.Contains(sub)) ||
+                (tokens[0].Equals("db", StringComparison.OrdinalIgnoreCase) && !WpCliDbAllowed.Contains(sub)))
+            {
+                throw new AppException("wpcli.invalid_command", 400, 400);
+            }
+        }
+        else if (tokens[0].Equals("db", StringComparison.OrdinalIgnoreCase) || tokens[0].Equals("option", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new AppException("wpcli.invalid_command", 400, 400);
+        }
+    }
+
     // wp-cli.phar yoksa ilk kullanımda resmi build'den indirir (panel WP Toolkit'in altında da wp-cli vardır).
     private async Task<string> EnsureWpCliAsync(CancellationToken cancellationToken)
     {
@@ -695,7 +862,7 @@ public sealed class SiteHostingSettingsService(
         }
 
         Directory.CreateDirectory(toolsDir);
-        var dest = wpCli.Replace("'", "''");
+        var dest = PowerShellQuoting.Escape(wpCli);
         var script =
             "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; " +
             $"Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar' -OutFile '{dest}' -UseBasicParsing";
@@ -823,9 +990,9 @@ public sealed class SiteHostingSettingsService(
     internal static string BuildImportScript(bool ftp, string url, string archive, string extractDir)
         => (ftp
                 ? "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; " +
-                  $"Invoke-WebRequest -Uri '{url}' -OutFile '{archive.Replace("'", "''")}' -UseBasicParsing; "
+                  $"Invoke-WebRequest -Uri '{url}' -OutFile '{PowerShellQuoting.Escape(archive)}' -UseBasicParsing; "
                 : string.Empty) +
-           $"Expand-Archive -Path '{archive.Replace("'", "''")}' -DestinationPath '{extractDir.Replace("'", "''")}' -Force";
+           $"Expand-Archive -Path '{PowerShellQuoting.Escape(archive)}' -DestinationPath '{PowerShellQuoting.Escape(extractDir)}' -Force";
 
     private async Task DenetlenenIndirmeAsync(string url, string hedefDosya, CancellationToken cancellationToken)
     {

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { type AxiosResponse, type InternalAxiosRequestConfig } from "axios";
 import { apiClient, invalidateSessionRequests } from "./client";
-import { enableRedisExtension, getGlobalPhpSettings, getPhpVersions, getSitePhpSettings, installPhpVersion, setSitePhpVersion, updateGlobalPhpSettings, updateSitePhpSettings } from "./php";
+import { enableRedisExtension, getGlobalPhpSettings, getPhpVersions, getSitePhpSettings, installPhpVersion, setSitePhpVersion, updateGlobalPhpSettings, updateSitePhpSettings, verifySitePhpLogging } from "./php";
 import { UserFacingError } from "../utils/apiError";
 
 const site = "Örnek site.test", component = "php-8.3";
@@ -136,4 +136,24 @@ it.each([false, true])("keeps the client session cancellation boundary on a dela
   const pending = (post ? setSitePhpVersion(site, component) : getPhpVersions()).catch(error => error);
   await vi.waitFor(() => expect(calls).toHaveLength(1)); invalidateSessionRequests(); release();
   await expect(pending).resolves.toHaveProperty("code", "ERR_CANCELED");
+});
+
+it("preserves runtime logging measurement on settings save", async () => {
+  const errorLogging = {status:"pending",logPath:"C:/logs/php.log",detail:"Cache pending",cacheTtlSeconds:300,checkedAtUtc:null,managed:true,rollAtBytes:52428800,retention:"indefinite"};
+  body = envelope({...settings(),errorLogging});
+  expect(await updateSitePhpSettings(site,payload())).toHaveProperty("errorLogging", errorLogging);
+});
+
+const loggingMeasurement = () => ({status:"verified",logPath:"C:/logs/php.log",detail:"measured",cacheTtlSeconds:300,checkedAtUtc:"2026-11-18T00:00:00Z",managed:true,rollAtBytes:52428800,retention:"indefinite"});
+it.each(["verified","pending","failed","unverified"])("preserves explicit %s logging outcome", async status => {
+  const measurement={...loggingMeasurement(),status};body=envelope(measurement);
+  const result=await verifySitePhpLogging(site);expect(result).toEqual(measurement);
+  expect(calls[0].url).toBe(`/sites/${encodeURIComponent(site)}/php/logging/verify`);expect(calls[0].method).toBe("post");
+});
+it.each([{status:"success"},{status:true},{managed:"true"},{cacheTtlSeconds:-1},{rollAtBytes:"52428800"},{checkedAtUtc:null},{checkedAtUtc:"invalid"},{logPath:""}])("rejects malformed or unmeasured logging %j", async change => {
+  body=envelope({...loggingMeasurement(),...change});await expect(verifySitePhpLogging(site)).rejects.toBeInstanceOf(UserFacingError);
+});
+it("leaves legacy logging absent instead of inventing positive evidence",async()=>{
+  body=envelope(settings());expect((await getSitePhpSettings(site)).errorLogging).toBeUndefined();
+  body=envelope(assignment());expect((await setSitePhpVersion(site,component)).errorLogging).toBeUndefined();
 });

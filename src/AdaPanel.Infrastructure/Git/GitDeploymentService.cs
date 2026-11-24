@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Git;
@@ -13,7 +13,7 @@ namespace AdaPanel.Infrastructure.Git;
 /// sonraki dağıtımlarda <c>git fetch</c> + <c>git reset --hard</c> kullanır. Yapılandırma
 /// <c>config/git/&lt;site&gt;.json</c> dosyasında tutulur.
 /// </summary>
-public sealed class GitDeploymentService(
+public sealed partial class GitDeploymentService(
     IIisSiteService iisSiteService,
     JsonFileStore fileStore,
     IConcurrencyLock concurrencyLock,
@@ -24,8 +24,14 @@ public sealed class GitDeploymentService(
     OutboundAddressGuard.OutboundHostResolver? outboundResolver = null,
     // İSTEĞE BAĞLI: DENETLENEN giden istemci (yönlendirme zincirini panel çözsün diye). Verilmezse
     // ön çözümleme yapılmaz; git yine yönlendirmesiz koşar (bkz. RunGitAsync).
-    IHttpClientFactory? httpClientFactory = null) : IGitDeploymentService
+    IHttpClientFactory? httpClientFactory = null,
+    // İSTEĞE BAĞLI: dağıtım anahtarı/jetonu koruması. Yoksa anahtar/jeton işlemleri KAPALI başarısız olur (düz metin saklanmaz).
+    ISecretProtector? secretProtector = null,
+    // İSTEĞE BAĞLI: derleme sonrası komut araçlarının (composer/node) kurulum yollarını bulmak için.
+    AdaPanel.Data.Persistence.AdaPanelDbContext? dbContext = null) : IGitDeploymentService
 {
+    internal Func<string, string?, CancellationToken, Task<CommandResult>>? CommandRunner { get; init; }
+    private string DeploymentKey(string siteName) => "git:" + fileStore.ResolvePath(ConfigPath(siteName)).ToUpperInvariant();
     /// <summary>
     /// Depo adresinin KONAĞI panelin ulaşmaması gereken bir yere mi çözülüyor.
     /// </summary>
@@ -99,14 +105,23 @@ public sealed class GitDeploymentService(
 
     public async Task<GitDeploymentDto> ConfigureAsync(string siteName, ConfigureGitDeploymentRequest request, CancellationToken cancellationToken = default)
     {
-        var path = await ResolveSitePathAsync(siteName, cancellationToken);
         ValidateRepositoryUrl(request.RepositoryUrl);
         await EnsureRepositoryHostAllowedAsync(request.RepositoryUrl, cancellationToken);
 
-        return await concurrencyLock.RunExclusiveAsync(async () =>
+        return await concurrencyLock.RunExclusiveAsync(DeploymentKey(siteName), async () =>
         {
+            var path = await ResolveSitePathAsync(siteName, cancellationToken);
             var record = await LoadAsync(siteName, cancellationToken);
             record.RepositoryUrl = request.RepositoryUrl.Trim();
+            // Adres BAŞKA konağa çevrildiyse kayıtlı jeton silinir: eski konağa verilmiş sır yenisine gitmesin.
+            var tokenRemoved = false;
+            if (!string.IsNullOrEmpty(record.HttpsTokenProtected) && (record.HttpsTokenHost.Length == 0 || HostKey(record.RepositoryUrl) != record.HttpsTokenHost))
+            {
+                record.HttpsTokenProtected = string.Empty;
+                record.HttpsUsername = string.Empty;
+                record.HttpsTokenHost = string.Empty;
+                tokenRemoved = true;
+            }
             record.Branch = NormalizeBranch(request.Branch);
             if (request.RegenerateSecret || string.IsNullOrWhiteSpace(record.WebhookSecret))
             {
@@ -114,40 +129,37 @@ public sealed class GitDeploymentService(
             }
 
             await SaveAsync(siteName, record, cancellationToken);
-            return ToDto(siteName, path, record);
+            var configured = ToDto(siteName, path, record);
+            configured.HttpsTokenRemoved = tokenRemoved;
+            return configured;
         }, cancellationToken);
     }
 
     public async Task<GitDeployResultDto> DeployAsync(string siteName, CancellationToken cancellationToken = default)
     {
-        var path = await ResolveSitePathAsync(siteName, cancellationToken);
-        var record = await LoadAsync(siteName, cancellationToken);
-        if (string.IsNullOrWhiteSpace(record.RepositoryUrl))
+        return await concurrencyLock.RunExclusiveAsync(DeploymentKey(siteName), async () =>
         {
-            throw new AppException("git.not_configured", 409, 409);
-        }
-
-        return await concurrencyLock.RunExclusiveAsync(() => RunDeployAsync(siteName, path, record, cancellationToken), cancellationToken);
+            var path = await ResolveSitePathAsync(siteName, cancellationToken);
+            var record = await LoadAsync(siteName, cancellationToken);
+            if (string.IsNullOrWhiteSpace(record.RepositoryUrl)) throw new AppException("git.not_configured", 409, 409);
+            return await RunDeployCoreAsync(siteName, path, record, "manual", null, cancellationToken);
+        }, cancellationToken);
     }
 
     public async Task<GitDeployResultDto> DeployViaWebhookAsync(string siteName, string token, CancellationToken cancellationToken = default)
     {
-        var path = await ResolveSitePathAsync(siteName, cancellationToken);
-        var record = await LoadAsync(siteName, cancellationToken);
-        if (string.IsNullOrWhiteSpace(record.RepositoryUrl) || string.IsNullOrWhiteSpace(record.WebhookSecret))
+        return await concurrencyLock.RunExclusiveAsync(DeploymentKey(siteName), async () =>
         {
-            throw new AppException("git.not_configured", 409, 409);
-        }
-
-        if (!FixedTimeEquals(token, record.WebhookSecret))
-        {
-            throw new AppException("git.webhook_unauthorized", 401, 401);
-        }
-
-        return await concurrencyLock.RunExclusiveAsync(() => RunDeployAsync(siteName, path, record, cancellationToken), cancellationToken);
+            var path = await ResolveSitePathAsync(siteName, cancellationToken);
+            var record = await LoadAsync(siteName, cancellationToken);
+            if (string.IsNullOrWhiteSpace(record.RepositoryUrl) || string.IsNullOrWhiteSpace(record.WebhookSecret))
+                throw new AppException("git.not_configured", 409, 409);
+            if (!FixedTimeEquals(token, record.WebhookSecret)) throw new AppException("git.webhook_unauthorized", 401, 401);
+            return await RunDeployCoreAsync(siteName, path, record, "webhook", null, cancellationToken);
+        }, cancellationToken);
     }
 
-    private async Task<GitDeployResultDto> RunDeployAsync(string siteName, string path, GitDeploymentRecord record, CancellationToken cancellationToken)
+    private async Task<GitDeployResultDto> RunDeployCoreAsync(string siteName, string path, GitDeploymentRecord record, string trigger, string? rollbackCommit, CancellationToken cancellationToken)
     {
         // DENETİM ARTIK DAĞITIM ANINDA DA YAPILIYOR.
         //
@@ -165,89 +177,297 @@ public sealed class GitDeploymentService(
         await EnsureGitAvailableAsync(cancellationToken);
         Directory.CreateDirectory(path);
 
-        var isRepository = Directory.Exists(Path.Combine(path, ".git"));
+        // G6 (tur 2): git dizini KİRACININ yazabildiği site kökünde DEĞİL, panele ait yerdedir
+        // (<DataRoot>\git\<site>.git, SYSTEM+Administrators). Kiracının .git/config'i (filter.*.smudge,
+        // core.worktree, http.cookieFile ...) ve .gitattributes sürücüleri artık SYSTEM'e ulaşamaz.
+        var gitDir = GitDirFor(siteName);
+        var locationWarning = await EnsureRepositoryLocationAsync(path, gitDir, cancellationToken);
+
+        var isRepository = File.Exists(Path.Combine(gitDir, "HEAD"));
         CommandResult result;
+        var entry = new GitDeployHistoryEntry { Id = Guid.NewGuid().ToString("N"), Utc = DateTime.UtcNow, Trigger = trigger };
+        if (rollbackCommit is not null && !isRepository) throw new AppException("git.rollback_unavailable", 409, 409);
+
+        // Kimlik doğrulama (jeton ortamı / geçici anahtar dosyası) YALNIZ bu dağıtım boyunca yaşar.
+        using var auth = PrepareAuth(record, adres);
+        var env = auth.Environment.Count == 0 ? null : auth.Environment;
 
         if (!isRepository)
         {
-            if (Directory.EnumerateFileSystemEntries(path).Any())
-            {
-                // Boş olmayan dizine clone başarısız olur; mevcut içeriği koruyup init+fetch yap.
-                result = await InitAndFetchAsync(path, adres, record.Branch, cancellationToken);
-            }
-            else
-            {
-                result = await RunGitAsync(
-                    $"clone --branch {QuoteArg(record.Branch)} --single-branch {QuoteArg(adres)} .",
-                    path,
-                    cancellationToken);
-            }
+            // Boş ya da dolu dizin: aynı yol (init + fetch + checkout). `clone` site köküne .git yazardı.
+            result = await InitAndFetchAsync(path, gitDir, adres, record.Branch, env, cancellationToken);
         }
         else
         {
-            // DİKKAT: bu üç komutun sonuçları ayrı ayrı denetlenmeli. `reset --hard origin/<dal>`
-            // YEREL remote-tracking ref'ini kullanır; önceki başarılı bir fetch'ten kalmış bir
-            // `origin/<dal>` varsa fetch TAMAMEN başarısız olsa bile reset 0 ile çıkar. Yalnızca
-            // reset'e bakmak, süresi dolmuş bir deploy token'ında her dağıtımın "başarılı" görünmesine
-            // ve sitenin günlerce eski kodda kalmasına yol açıyordu.
-            var setUrl = await RunGitAsync($"remote set-url origin {QuoteArg(adres)}", path, cancellationToken);
-            if (!setUrl.Success)
+            // GERİ ALMA İÇİN KAYIT: reset ÖNCESİ HEAD ve ezilecek yerel değişiklikler kaydedilir.
+            entry.PreviousCommit = await GetFullCommitAsync(path, gitDir, cancellationToken);
+            await PreserveLocalChangesAsync(path, gitDir, entry, cancellationToken);
+
+            if (rollbackCommit is not null)
             {
-                // Depo adresi güncellenemediyse sonraki adımlar ESKİ depodan çeker; "dağıtıldı" demek yanıltıcı olur.
-                result = setUrl;
+                var exists = await ExecuteGitAsync($"cat-file -e {QuoteArg(rollbackCommit + "^{commit}")}", path, cancellationToken, gitDir);
+                result = !exists.Success
+                    ? exists
+                    : await ExecuteGitAsync($"reset --hard {rollbackCommit}", path, cancellationToken, gitDir);
             }
             else
             {
-                var fetch = await RunGitAsync($"fetch origin {QuoteArg(record.Branch)} --prune", path, cancellationToken);
-                result = !fetch.Success
-                    ? fetch
-                    : await RunGitAsync($"reset --hard {QuoteArg($"origin/{record.Branch}")}", path, cancellationToken);
+                // DİKKAT: bu üç komutun sonuçları ayrı ayrı denetlenmeli. `reset --hard origin/<dal>`
+                // YEREL remote-tracking ref'ini kullanır; önceki başarılı bir fetch'ten kalmış bir
+                // `origin/<dal>` varsa fetch TAMAMEN başarısız olsa bile reset 0 ile çıkar. Yalnızca
+                // reset'e bakmak, süresi dolmuş bir deploy token'ında her dağıtımın "başarılı" görünmesine
+                // ve sitenin günlerce eski kodda kalmasına yol açıyordu.
+                var setUrl = await ExecuteGitAsync($"remote set-url origin {QuoteArg(adres)}", path, cancellationToken, gitDir);
+                if (!setUrl.Success)
+                {
+                    // Depo adresi güncellenemediyse sonraki adımlar ESKİ depodan çeker; "dağıtıldı" demek yanıltıcı olur.
+                    result = setUrl;
+                }
+                else
+                {
+                    var fetch = await ExecuteGitAsync($"fetch origin {QuoteArg(record.Branch)} --prune", path, cancellationToken, gitDir, env: env);
+                    result = !fetch.Success
+                        ? fetch
+                        : await ExecuteGitAsync($"reset --hard {QuoteArg($"origin/{record.Branch}")}", path, cancellationToken, gitDir);
+                }
             }
         }
 
-        var commit = await GetCurrentCommitAsync(path, cancellationToken);
+        // Anahtar dosyası fetch/reset biter bitmez silinir; derleme sonrası komutlar boyunca diskte KALMAZ.
+        auth.Dispose();
+        var commit = await GetCurrentCommitAsync(path, gitDir, cancellationToken);
         var success = result.Success;
+        var outputText = CombineOutput(result);
 
+        // Derleme sonrası komutlar yalnız kod gerçekten güncellendiyse koşar; başarısızlığı dağıtımı BAŞARISIZ yapar.
+        if (success && record.PostDeployCommands.Count > 0)
+        {
+            var post = await RunPostDeployAsync(path, record, cancellationToken);
+            entry.PostDeploy = post.Summary;
+            outputText = string.Join(Environment.NewLine, new[] { outputText, post.Output }.Where(value => !string.IsNullOrWhiteSpace(value)));
+            success = post.Success;
+        }
+
+        entry.NewCommit = await GetFullCommitAsync(path, gitDir, cancellationToken);
+        entry.Success = success;
         record.LastCommit = commit;
         record.LastDeployUtc = DateTime.UtcNow;
         record.LastDeployStatus = success ? "succeeded" : "failed";
-        await SaveAsync(siteName, record, cancellationToken);
+        using (var publication = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
+        {
+            var published = await fileStore.UpdateAsync(ConfigPath(siteName), record, current =>
+            {
+                current.LastCommit = record.LastCommit;
+                current.LastDeployUtc = record.LastDeployUtc;
+                current.LastDeployStatus = record.LastDeployStatus;
+                current.History.Add(entry);
+                if (current.History.Count > MaxHistory) current.History.RemoveRange(0, current.History.Count - MaxHistory);
+                return current;
+            }, publication.Token);
+            record.History = published.History;
+        }
 
         if (!success)
         {
-            logger.LogWarning("Git dağıtımı başarısız: {SiteName} -> {Error}", siteName, result.StandardError);
+            logger.LogWarning("Git dağıtımı başarısız: {SiteName} -> {Error}", siteName, Scrub(result.StandardError, auth.Secrets));
         }
 
         return new GitDeployResultDto
         {
             Success = success,
             Commit = commit,
-            Output = CombineOutput(result),
+            Output = Scrub(string.Join(Environment.NewLine, new[] { outputText, locationWarning ?? string.Empty }.Where(value => !string.IsNullOrWhiteSpace(value))), auth.Secrets),
             DeployedAtUtc = record.LastDeployUtc.Value,
             Deployment = ToDto(siteName, path, record)
         };
     }
 
-    private static async Task<CommandResult> InitAndFetchAsync(string path, string adres, string branch, CancellationToken cancellationToken)
+    private async Task<CommandResult> InitAndFetchAsync(string path, string gitDir, string adres, string branch, IReadOnlyDictionary<string, string>? env, CancellationToken cancellationToken)
     {
-        await RunGitAsync("init", path, cancellationToken);
-        await RunGitAsync($"remote add origin {QuoteArg(adres)}", path, cancellationToken);
-        await RunGitAsync($"fetch origin {QuoteArg(branch)} --prune", path, cancellationToken);
-        await RunGitAsync($"checkout -f -B {QuoteArg(branch)} {QuoteArg($"origin/{branch}")}", path, cancellationToken);
-        return await RunGitAsync($"reset --hard {QuoteArg($"origin/{branch}")}", path, cancellationToken);
+        Directory.CreateDirectory(Path.GetDirectoryName(gitDir)!);
+
+        // init: --work-tree VERİLMEZ (verilirse git core.worktree yazar; izin listesi onu reddeder).
+        var init = await ExecuteGitAsync("init", path, cancellationToken, gitDir, useWorkTree: false);
+        if (!init.Success) return init;
+
+        string[] stages = [$"remote add origin {QuoteArg(adres)}",
+            $"fetch origin {QuoteArg(branch)} --prune", $"checkout -f -B {QuoteArg(branch)} {QuoteArg($"origin/{branch}")}"];
+        foreach (var stage in stages)
+        {
+            var result = await ExecuteGitAsync(stage, path, cancellationToken, gitDir, env: env);
+            if (!result.Success) return result;
+        }
+        return await ExecuteGitAsync($"reset --hard {QuoteArg($"origin/{branch}")}", path, cancellationToken, gitDir);
     }
 
-    private static async Task<string> GetCurrentCommitAsync(string path, CancellationToken cancellationToken)
+    private async Task<string> GetCurrentCommitAsync(string path, string gitDir, CancellationToken cancellationToken)
     {
-        var result = await RunGitAsync("rev-parse --short HEAD", path, cancellationToken);
+        var result = await ExecuteGitAsync("rev-parse --short HEAD", path, cancellationToken, gitDir);
         return result.Success ? result.StandardOutput.Trim() : string.Empty;
     }
 
-    private static async Task EnsureGitAvailableAsync(CancellationToken cancellationToken)
+    /// <summary>Sitenin git dizini: kiracı kökünde değil, panelin veri kökünde.</summary>
+    internal string GitDirFor(string siteName) =>
+        fileStore.ResolvePath($"git/{WindowsReservedNames.MakeSafe($"{SanitizeFileName(siteName)}.git")}");
+
+    /// <summary>
+    /// Dağıtımdan ÖNCE. (1) Kiracı kökündeki <c>.git</c> KULLANILMAZ ve KOPYALANMAZ (commondir /
+    /// objects/info/alternates ile panel deposunu kiracı klasörüne bağlatıp SYSTEM'de sürücü
+    /// çalıştırmak mümkündü); web kökünden panel klasörüne TAŞINIR (silme yok) çünkü içindeki remote URL
+    /// jeton taşıyabilir ve web kökünde okunabilir. Panel git dizini her zaman sıfırdan kurulur.
+    /// (2) Panel git dizinindeki commondir/gitdir/alternates ve izin dışı config reddedilir.
+    /// Dönen metin (varsa) dağıtım çıktısına eklenecek uyarıdır.
+    /// </summary>
+    internal async Task<string?> EnsureRepositoryLocationAsync(string path, string gitDir, CancellationToken cancellationToken)
+    {
+        await Task.CompletedTask;
+        string? warning = null;
+        var tenantGit = Path.Combine(path, ".git");
+
+        // gitfile ya da reparse point: başka bir yere bağlayabilir -> reddet.
+        if (File.Exists(tenantGit))
+        {
+            throw new AppException("git.unsafe_repository", 409, 409, "'.git' is a file (gitfile).");
+        }
+
+        if (Directory.Exists(tenantGit))
+        {
+            if ((File.GetAttributes(tenantGit) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new AppException("git.unsafe_repository", 409, 409, "'.git' is a reparse point.");
+            }
+
+            warning = RelocateTenantGitDirectory(tenantGit, gitDir);
+        }
+
+        if (Directory.Exists(gitDir))
+        {
+            foreach (var forbidden in new[] { "commondir", "gitdir", Path.Combine("objects", "info", "alternates"), Path.Combine("objects", "info", "http-alternates") })
+            {
+                if (File.Exists(Path.Combine(gitDir, forbidden)) || Directory.Exists(Path.Combine(gitDir, forbidden)))
+                {
+                    throw new AppException("git.unsafe_repository", 409, 409, $"'{forbidden}' is present in the repository directory.");
+                }
+            }
+
+            ValidateGitDirectoryConfig(gitDir);
+        }
+
+        return warning;
+    }
+
+    private static void ValidateGitDirectoryConfig(string gitDir)
+    {
+        var config = Path.Combine(gitDir, "config");
+        var text = File.Exists(config) ? File.ReadAllText(config) : string.Empty;
+        var violation = GitConfigAllowList.FindViolation(text);
+        if (violation is not null)
+        {
+            throw new AppException("git.unsafe_config", 409, 409, violation);
+        }
+    }
+
+    private static readonly Regex UserInfoInUrl = new(@"(?<=://)[^/@\s""]+@", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Eski kiracı <c>.git</c>'ini web kökünden <c>&lt;DataRoot&gt;\git\&lt;site&gt;.tenant-old-&lt;zaman&gt;</c> altına taşır.
+    /// Aynı birimde <see cref="Directory.Move"/>; farklı birimde kopyala, doğrula, sonra kaynağı sil.
+    /// Taşınamazsa kalan config'teki remote URL'lerin userinfo (jeton/parola) kısmı silinir ve uyarı döner.
+    /// </summary>
+    private string? RelocateTenantGitDirectory(string tenantGit, string gitDir)
+    {
+        var parent = Path.GetDirectoryName(gitDir)!;
+        var name = Path.GetFileName(gitDir);
+        var baseName = name.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? name[..^4] : name;
+        var target = Path.Combine(parent, $"{baseName}.tenant-old-{DateTime.UtcNow:yyyyMMddHHmmssfff}");
+
+        try
+        {
+            Directory.CreateDirectory(parent);
+            var sameVolume = string.Equals(Path.GetPathRoot(Path.GetFullPath(tenantGit)), Path.GetPathRoot(Path.GetFullPath(target)), StringComparison.OrdinalIgnoreCase);
+            if (sameVolume)
+            {
+                Directory.Move(tenantGit, target);
+            }
+            else
+            {
+                CopyTreeRejectingReparsePoints(tenantGit, target);
+                if (CountFiles(tenantGit) != CountFiles(target))
+                {
+                    throw new IOException("Copied tree does not match the source.");
+                }
+
+                foreach (var file in Directory.EnumerateFiles(tenantGit, "*", SearchOption.AllDirectories))
+                {
+                    File.SetAttributes(file, FileAttributes.Normal);
+                }
+
+                Directory.Delete(tenantGit, true);
+            }
+
+            logger.LogInformation("Kiracı .git web kökünden taşındı: {Source} -> {Target}", tenantGit, target);
+            return null;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Kiracı .git web kökünden taşınamadı: {Path}", tenantGit);
+            var sanitized = SanitizeRemoteUrls(Path.Combine(tenantGit, "config"));
+            return "WARNING: the old .git directory could not be moved out of the web root"
+                + (sanitized ? "; credentials in its remote URLs were removed" : "; its remote URLs could NOT be sanitized")
+                + ". Remove or protect the directory manually.";
+        }
+    }
+
+    private static int CountFiles(string directory) => Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).Count();
+
+    private static bool SanitizeRemoteUrls(string configPath)
     {
         try
         {
-            var result = await RunGitAsync("--version", null, cancellationToken);
+            if (!File.Exists(configPath)) return true;
+            var text = File.ReadAllText(configPath);
+            var cleaned = UserInfoInUrl.Replace(text, string.Empty);
+            if (!ReferenceEquals(cleaned, text) && cleaned != text)
+            {
+                File.SetAttributes(configPath, FileAttributes.Normal);
+                File.WriteAllText(configPath, cleaned);
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void CopyTreeRejectingReparsePoints(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var entry in new DirectoryInfo(source).EnumerateFileSystemInfos())
+        {
+            if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new AppException("git.unsafe_repository", 409, 409, $"'{entry.Name}' is a reparse point.");
+            }
+
+            var target = Path.Combine(destination, entry.Name);
+            if (entry is DirectoryInfo directory)
+            {
+                CopyTreeRejectingReparsePoints(directory.FullName, target);
+            }
+            else
+            {
+                File.Copy(entry.FullName, target, overwrite: false);
+            }
+        }
+    }
+
+    private async Task EnsureGitAvailableAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await ExecuteGitAsync("--version", null, cancellationToken);
             if (!result.Success)
             {
                 throw new AppException("git.not_available", 409, 409);
@@ -307,7 +527,18 @@ public sealed class GitDeploymentService(
             // Arayüz jetonu artık BAŞLIKLA göstermeli (sorgu dizesi erişim günlüklerine yazılır).
             // Adı sunucudan taşımak zorunlu: arayüz sabit yazsaydı, ad değiştiğinde panel
             // kullanıcıya sunucunun okumadığı bir başlık gösterirdi. Gerekçe GitWebhookToken'da.
-            WebhookHeaderName = AdaPanel.Core.Common.GitWebhookToken.HeaderName
+            WebhookHeaderName = AdaPanel.Core.Common.GitWebhookToken.HeaderName,
+            // Özel anahtar ve jeton DEĞERLERİ buraya ASLA girmez: yalnız var/yok ve genel anahtar.
+            HasDeployKey = !string.IsNullOrEmpty(record.DeployKeyProtected),
+            DeployPublicKey = record.DeployPublicKey,
+            DeployKeyFingerprint = record.DeployKeyFingerprint,
+            DeployKeyCreatedUtc = record.DeployKeyCreatedUtc,
+            HasHttpsToken = !string.IsNullOrEmpty(record.HttpsTokenProtected),
+            HttpsUsername = record.HttpsUsername,
+            PostDeployCommands = record.PostDeployCommands.ToArray(),
+            PostDeployTimeoutSeconds = record.PostDeployTimeoutSeconds is >= 30 and <= 1800 ? record.PostDeployTimeoutSeconds : DefaultPostDeployTimeoutSeconds,
+            AllowedPostDeployCommands = PostDeployAllowList.Keys.ToArray(),
+            RecentDeployments = ToHistoryDtos(record.History)
         };
     }
 
@@ -420,17 +651,33 @@ public sealed class GitDeploymentService(
     /// Bu değişkenlerle git, "kimlik doğrulama gerekli" diyerek HEMEN hata verir.
     /// </para>
     /// </summary>
-    private static Task<CommandResult> RunGitAsync(string arguments, string? workingDirectory, CancellationToken cancellationToken)
+    private Task<CommandResult> ExecuteGitAsync(string arguments, string? workingDirectory, CancellationToken token, string? gitDir = null, bool useWorkTree = true, IReadOnlyDictionary<string, string>? env = null) =>
+        CommandRunner?.Invoke(arguments, workingDirectory, token) ?? RunGitAsync(arguments, workingDirectory, token, gitDir, useWorkTree, env);
+
+    private static Task<CommandResult> RunGitAsync(string arguments, string? workingDirectory, CancellationToken cancellationToken, string? gitDir = null, bool useWorkTree = true, IReadOnlyDictionary<string, string>? extraEnvironment = null)
         => ProcessRunner.RunAsync(
             "git",
-            BuildGitArguments(arguments),
+            BuildGitArguments(gitDir is null
+                ? arguments
+                : $"--git-dir={QuoteArg(gitDir)} " + (useWorkTree && workingDirectory is not null ? $"--work-tree={QuoteArg(workingDirectory)} " : string.Empty) + arguments),
             workingDirectory,
             cancellationToken,
-            new Dictionary<string, string>
+            BaseEnvironment(extraEnvironment));
+
+    private static Dictionary<string, string> BaseEnvironment(IReadOnlyDictionary<string, string>? extra)
+    {
+        var environment = new Dictionary<string, string>
             {
                 ["GIT_TERMINAL_PROMPT"] = "0",
                 ["GCM_INTERACTIVE"] = "never",
                 ["GIT_ASKPASS"] = "echo",
+
+                // G6: git SYSTEM olarak, kiracının YAZABİLDİĞİ dizinde koşar; .git/config'i kiracı
+                // düzenleyebilir. Kullanıcı/global yapılandırma okunmaz (SYSTEM profili zaten kiracının
+                // değil; yine de deterministik). Sistem yapılandırması BİLEREK açık bırakıldı: yalnız
+                // yönetici yazabilir ve Git for Windows'ta TLS arka ucu/CA yolu orada durur
+                // (GIT_CONFIG_NOSYSTEM=1 https depolarını sessizce kırabilir).
+                ["GIT_CONFIG_GLOBAL"] = "NUL",
 
                 // İKİNCİ VE BAĞIMSIZ KATMAN: git'in KENDİ taşıyıcı beyaz listesi. ValidateRepositoryUrl
                 // `ext::` biçimini reddediyor, ama o doğrulama yalnız ConfigureAsync'te çalışıyor —
@@ -438,7 +685,13 @@ public sealed class GitDeploymentService(
                 // yeniden ölçmüyor. Bu değişken kararı git'in transport katmanına taşır: listede
                 // olmayan hiçbir taşıyıcı (ext, file, ftp…) çalıştırılmaz.
                 ["GIT_ALLOW_PROTOCOL"] = "http:https:ssh"
-            });
+            };
+        // Kimlik doğrulama değişkenleri en SON eklenir; temel sertleştirme değişkenlerini ezemez (aynı ad yok).
+        if (extra is not null)
+            foreach (var (key, value) in extra)
+                if (!environment.ContainsKey(key)) environment[key] = value;
+        return environment;
+    }
 
     /// <summary>
     /// Her <c>git</c> çağrısının ÖNÜNE konan yapılandırma: <b>yönlendirme İZLENMEZ</b>.
@@ -469,14 +722,25 @@ public sealed class GitDeploymentService(
     /// </para>
     /// </remarks>
     internal static string BuildGitArguments(string arguments) =>
-        "-c http.followRedirects=false " + arguments;
+        "-c http.followRedirects=false " + HardeningArguments + arguments;
+
+    /// <summary>
+    /// G6: kiracının <c>.git/config</c> dosyasıyla kod çalıştırmasını kapatan komut satırı geçersiz
+    /// kılmaları (komut satırı depo içi yapılandırmadan yüksek önceliklidir). fsmonitor/hook/ssh/askpass
+    /// yürütücüleri etkisiz; <c>file</c> taşıyıcısı kapalı. Not: depodaki <c>filter.*</c> sürücüleri
+    /// bu yolla kapatılamaz (bakiye).
+    /// </summary>
+    internal const string HardeningArguments =
+        "-c core.fsmonitor=false -c core.hooksPath=NUL -c core.sshCommand=ssh " +
+        "-c protocol.file.allow=never -c core.askPass=echo -c credential.helper= " +
+        "-c core.symlinks=false -c core.protectNTFS=true -c http.cookieFile= -c http.saveCookies=false ";
 
     /// <summary>
     /// Testlerin ÜRETİMDEKİ git çağrısını (aynı ortam değişkenleri + aynı ön yapılandırma ile)
     /// gerçekten koşturabilmesi için. Kaynak taraması yerine DAVRANIŞ ölçülsün diye var.
     /// </summary>
-    internal static Task<CommandResult> RunGitForTests(string arguments, string? workingDirectory, CancellationToken cancellationToken)
-        => RunGitAsync(arguments, workingDirectory, cancellationToken);
+    internal static Task<CommandResult> RunGitForTests(string arguments, string? workingDirectory, CancellationToken cancellationToken, string? gitDir = null, bool useWorkTree = true)
+        => RunGitAsync(arguments, workingDirectory, cancellationToken, gitDir, useWorkTree);
 
     /// <summary>
     /// <c>http/https</c> depolarında YÖNLENDİRME ZİNCİRİNİ panelin DENETLENEN istemcisiyle çözer ve
@@ -583,5 +847,16 @@ public sealed class GitDeploymentService(
         public string LastCommit { get; set; } = string.Empty;
         public DateTime? LastDeployUtc { get; set; }
         public string LastDeployStatus { get; set; } = string.Empty;
+        // Özel anahtar ve jeton ISecretProtector ile KORUNMUŞ saklanır; düz metin hiçbir yerde yok.
+        public string DeployKeyProtected { get; set; } = string.Empty;
+        public string DeployPublicKey { get; set; } = string.Empty;
+        public string DeployKeyFingerprint { get; set; } = string.Empty;
+        public DateTime? DeployKeyCreatedUtc { get; set; }
+        public string HttpsUsername { get; set; } = string.Empty;
+        public string HttpsTokenProtected { get; set; } = string.Empty;
+        public string HttpsTokenHost { get; set; } = string.Empty;
+        public List<string> PostDeployCommands { get; set; } = [];
+        public int PostDeployTimeoutSeconds { get; set; } = 600;
+        public List<GitDeployHistoryEntry> History { get; set; } = [];
     }
 }

@@ -107,7 +107,7 @@ public sealed partial class AppRuntimeLifecycleTests
             else
             {
                 var id = f.Current.Id;
-                await f.Native.CreateSiteAsync(f.Request());
+                await f.Native.CreateSiteAsync(f.Request(replaceExisting: true));
                 f.Current.Id = id;
             }
         }
@@ -230,7 +230,7 @@ public sealed partial class AppRuntimeLifecycleTests
         var blocker = f.Gates.RunExclusiveAsync(ConcurrencyKeys.Iis, async () =>
         { entered.TrySetResult(); await release.Task.WaitAsync(Deadline); });
         await entered.Task.WaitAsync(Deadline);
-        var replacement = f.Native.CreateSiteAsync(f.Request());
+        var replacement = f.Native.CreateSiteAsync(f.Request(replaceExisting: true));
         var action = Capture(() => f.Invoke(runtime));
         release.TrySetResult();
         await blocker.WaitAsync(Deadline); await replacement.WaitAsync(Deadline);
@@ -432,7 +432,7 @@ public sealed partial class AppRuntimeLifecycleTests
         }
         private AdaPanelDbContext Context()
         { var db = new AdaPanelDbContext(new DbContextOptionsBuilder<AdaPanelDbContext>().UseSqlite(keeper.ConnectionString).Options); contexts.Add(db); return db; }
-        public CreateSiteRequest Request() => new() { Name = Name, HostName = Name, PhysicalPath = SitePath, Port = 8080 };
+        public CreateSiteRequest Request(bool replaceExisting = false) => new() { Name = Name, HostName = Name, PhysicalPath = SitePath, Port = 8080, ReplaceExisting = replaceExisting };
         private async Task<SoftwareCatalogDto> ReadCatalog(CancellationToken token)
         {
             if (BeforeCatalog is not null) await BeforeCatalog(token);

@@ -53,6 +53,9 @@ namespace AdaPanel.Data.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CreatedAtUtc")
+                        .HasDatabaseName("ix_audit_logs_created_at");
+
                     b.HasIndex("SubscriptionUserId")
                         .HasDatabaseName("ix_audit_logs_subscription");
 
@@ -204,6 +207,10 @@ namespace AdaPanel.Data.Persistence.Migrations
                     b.Property<bool>("AllowTerminal")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("AllowedIps")
+                        .HasMaxLength(1536)
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("TEXT");
 
@@ -217,6 +224,9 @@ namespace AdaPanel.Data.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
+
+                    b.Property<bool>("ReadOnly")
+                        .HasColumnType("INTEGER");
 
                     b.Property<DateTime?>("RevokedAtUtc")
                         .HasColumnType("TEXT");

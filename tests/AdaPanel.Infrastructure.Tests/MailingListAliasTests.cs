@@ -475,10 +475,11 @@ public sealed class MailingListAliasTests
     /// aynı anahtarla geliyor — yani tek bir yerin değişmesi hepsini birden değiştirir.
     /// </remarks>
     [Fact]
-    public async Task MailEnable_Yedeginde_Alias_Uclari_Desteklenmiyor_Diyor()
+    public async Task MailEnable_Alias_Uclari_Native_Okuma_Hatasini_Basari_Saymaz()
     {
         var mailEnable = new MailEnableMailService(
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<MailEnableMailService>.Instance);
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<MailEnableMailService>.Instance)
+        { KomutKosucusu = (_, _) => throw new AppException("mail.command_failed", 502, 502) };
         var istek = new MailListAliasRequest
         {
             ListAddress = "duyuru@ornek.com",
@@ -490,8 +491,8 @@ public sealed class MailingListAliasTests
         var kaldirma = await Assert.ThrowsAsync<AppException>(
             () => mailEnable.RemoveMailListAliasAsync(istek));
 
-        Assert.Equal("mail.lists_unsupported", ekleme.MessageKey);
-        Assert.Equal("mail.lists_unsupported", kaldirma.MessageKey);
+        Assert.Equal("mail.command_failed", ekleme.MessageKey);
+        Assert.Equal("mail.command_failed", kaldirma.MessageKey);
 
         // Var olan liste uçlarıyla AYNI anahtar: ikisi ayrışırsa arayüz iki farklı metin gösterir.
         var mevcut = await Assert.ThrowsAsync<AppException>(

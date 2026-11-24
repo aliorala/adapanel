@@ -77,4 +77,15 @@ public interface IDatabaseService
     /// Gerekçe: <see cref="DatabaseHardeningReport"/>.
     /// </remarks>
     Task<DatabaseHardeningReport> HardenAdminAccountsAsync(string engine, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Verilen veritabanlarına yetkili hesapları ve kilit durumlarını okur (abonelik askısı).
+    /// Varsayılan: desteklenmiyor (çağıran kapatılamadı olarak gösterir).
+    /// </summary>
+    Task<IReadOnlyCollection<DatabaseUserLockDto>> GetUserLocksAsync(string engine, IReadOnlyCollection<string> databaseNames, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Database account lock is not supported by this implementation.");
+
+    /// <summary>MariaDB/MySQL hesabını kilitler/açar (ALTER USER ... ACCOUNT LOCK|UNLOCK) ve GERİ OKUR; yoksa/doğrulanamazsa istisna.</summary>
+    Task SetUserLockedAsync(string engine, string userName, string host, bool locked, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Database account lock is not supported by this implementation.");
 }

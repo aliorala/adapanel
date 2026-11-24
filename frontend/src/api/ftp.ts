@@ -16,13 +16,21 @@ function measured<T>(body: unknown, valid: (data: unknown) => data is T): T {
 function isUser(value: unknown): value is FtpUser {
   return record(value) && typeof value.userName === 'string' && value.userName.trim().length > 0
     && ['homePath','siteName','createdAtUtc'].every(key => typeof value[key] === 'string')
-    && typeof value.isEnabled === 'boolean' && typeof value.existsOnSystem === 'boolean';
+    && typeof value.isEnabled === 'boolean' && typeof value.existsOnSystem === 'boolean'
+    && (value.readOnly == null || typeof value.readOnly === 'boolean');
 }
 function sameIdentity(value: unknown, expected: string) { return typeof value === 'string' && value.trim().toLowerCase() === expected.trim().toLowerCase(); }
 function isStatus(value: unknown): value is FtpServerStatus {
   return record(value) && ['serverAddress','statusMessage','serviceState','siteState','controlPortOwner'].every(key => typeof value[key] === 'string')
     && ['isConfigured','isSiteRunning','hasControlPortConflict'].every(key => typeof value[key] === 'boolean')
-    && ['controlPort','passivePortStart','passivePortEnd'].every(key => typeof value[key] === 'number' && Number.isInteger(value[key]) && (value[key] as number) > 0 && (value[key] as number) <= 65535);
+    && typeof value.controlPort === 'number' && Number.isInteger(value.controlPort) && value.controlPort > 0 && value.controlPort <= 65535
+    && ['passivePortStart','passivePortEnd'].every(key => value[key] == null || (typeof value[key] === 'number' && Number.isInteger(value[key]) && (value[key] as number) >= 1025 && (value[key] as number) <= 65535))
+    && (value.passivePortStart == null || value.passivePortEnd == null || (value.passivePortStart as number) <= (value.passivePortEnd as number));
+}
+function measuredStatus(body: unknown): FtpServerStatus {
+  const status = measured(body, isStatus);
+  return status.passivePortStart == null || status.passivePortEnd == null
+    ? { ...status, passivePortStart: null, passivePortEnd: null } : status;
 }
 
 export type FtpUser = {
@@ -46,14 +54,16 @@ export type FtpUser = {
   /** Oluşturmada ölçülür: true = süre dolumu kapalı, false = açık, null = doğrulanamadı. */
   passwordNeverExpires?: boolean | null;
   isEnabled: boolean;
+  /** Salt-okunur hesap. Listede panel kaydı; güncelleme yanıtında IIS/NTFS'ten geri okunmuş değer. Eski sunucuda yok. */
+  readOnly?: boolean;
   createdAtUtc: string;
 };
 
 export type FtpServerStatus = {
   serverAddress: string;
   controlPort: number;
-  passivePortStart: number;
-  passivePortEnd: number;
+  passivePortStart: number | null;
+  passivePortEnd: number | null;
   /** YALNIZ `statusMessage === "ftp.server_ready"` iken true (bkz. FtpService.GetServerStatusAsync). */
   isConfigured: boolean;
   /** Durumun SEBEBİ, i18n anahtarı olarak: `ftp.server_ready`, `ftp.control_port_conflict`, … */
@@ -71,7 +81,7 @@ export type FtpServerStatus = {
 
 export async function ensureFtpServer() {
   const response = await apiClient.post<ApiEnvelope<FtpServerStatus>>("/ftp/ensure", {});
-  return measured(response.data, isStatus);
+  return measuredStatus(response.data);
 }
 
 /**
@@ -83,7 +93,7 @@ export async function ensureFtpServer() {
  */
 export async function getFtpStatus() {
   const response = await apiClient.get<ApiEnvelope<FtpServerStatus>>("/ftp/status");
-  return measured(response.data, isStatus);
+  return measuredStatus(response.data);
 }
 
 export async function getFtpUsers() {
@@ -105,10 +115,36 @@ export async function setFtpPassword(userName: string, password: string) {
   measured(response.data, (value): value is {userName: string} => record(value) && sameIdentity(value.userName, userName));
 }
 
-export type FtpTlsStatus = {
+export type FtpCertificate = {
+  hostName?: string;
+  hostNames?: string[];
+  certificateThumbprint?: string;
+  certificateSubject?: string;
+  certificateNotAfterUtc?: string | null;
+  certificateStoreName?: string;
+  certificateVerified?: boolean | null;
+  certificateDetail?: string;
+};
+
+function isCertificate(value: unknown): value is FtpCertificate {
+  return record(value) && ['hostName', 'certificateThumbprint', 'certificateSubject', 'certificateNotAfterUtc', 'certificateStoreName', 'certificateDetail'].every(key => value[key] == null || typeof value[key] === 'string')
+    && (value.hostNames == null || (Array.isArray(value.hostNames) && value.hostNames.every(host => typeof host === 'string')))
+    && (value.certificateVerified == null || typeof value.certificateVerified === 'boolean');
+}
+
+export async function applyFtpCertificate(hostName: string): Promise<FtpCertificate> {
+  const hostNames = hostName.split(',').map(host => host.trim()).filter(Boolean);
+  const primary = hostNames[0] ?? '';
+  const response = await apiClient.post<ApiEnvelope<FtpCertificate>>("/ftp/certificate", { hostName: primary, ...(hostNames.length > 1 ? { hostNames } : {}) });
+  return measured(response.data, (value): value is FtpCertificate => isCertificate(value)
+    && (value.certificateVerified !== true || ((sameIdentity(value.hostName, primary) || value.hostNames?.some(host => sameIdentity(host, primary)) === true) && Boolean(value.certificateThumbprint?.trim())
+      && hostNames.every(host => sameIdentity(value.hostName, host) || value.hostNames?.some(accepted => sameIdentity(accepted, host)) === true))));
+}
+
+export type FtpTlsStatus = FtpCertificate & {
   requireSsl: boolean;
   // IIS'ten ÖLÇÜLEN sonuç: true = yürürlükte, false = uygulanmadı, null = ölçülemedi.
-  // Okuma ucunda (GET /ftp/tls) her zaman null'dır: orası yalnız panelin kendi kaydını okur.
+  // Eski sunucularda null olabilir; bilinmeyen durum doğrulanmış sayılmaz.
   verified?: boolean | null;
   detail?: string;
 };
@@ -116,7 +152,9 @@ export type FtpTlsStatus = {
 // M5 (panel "yalnız güvenli FTP"): admin-only server-level FTPS zorunluluğu.
 export async function getFtpTls() {
   const response = await apiClient.get<ApiEnvelope<FtpTlsStatus>>("/ftp/tls");
-  return measured(response.data, (value): value is FtpTlsStatus => record(value) && typeof value.requireSsl === 'boolean');
+  return measured(response.data, (value): value is FtpTlsStatus => record(value) && typeof value.requireSsl === 'boolean'
+    && (value.verified == null || typeof value.verified === 'boolean')
+    && (value.detail == null || typeof value.detail === 'string') && isCertificate(value));
 }
 
 export async function setFtpTls(requireSsl: boolean) {
@@ -124,10 +162,33 @@ export async function setFtpTls(requireSsl: boolean) {
   return measured(response.data, (value): value is FtpTlsStatus => record(value) && typeof value.requireSsl === 'boolean'
     && (value.verified == null || typeof value.verified === 'boolean')
     && (value.verified !== true || value.requireSsl === requireSsl)
-    && (value.detail == null || typeof value.detail === 'string'));
+    && (value.detail == null || typeof value.detail === 'string') && isCertificate(value));
 }
 
 export async function deleteFtpUser(userName: string) {
   const response = await apiClient.delete<ApiEnvelope<object>>(`/ftp/users/${encodeURIComponent(userName)}`);
   measured(response.data, (value): value is {userName: string} => record(value) && sameIdentity(value.userName, userName));
+}
+
+/**
+ * Ev dizini (site kökü içinde) ve/veya salt-okunur bayrağı. Yanıt, istenen değerleri SUNUCUNUN
+ * ölçtüğü haliyle taşımıyorsa başarı sayılmaz (`panel.ftp.resultUnconfirmed`).
+ */
+function samePath(a: string, b: string) {
+  const norm = (v: string) => v.trim().split("\\").join("/").replace(/\/+$/, "").toLowerCase();
+  return norm(a) === norm(b);
+}
+
+export async function updateFtpUser(userName: string, changes: { homePath?: string; readOnly?: boolean }): Promise<FtpUser> {
+  const response = await apiClient.put<ApiEnvelope<FtpUser>>(`/ftp/users/${encodeURIComponent(userName)}`, { ...changes });
+  return measured(response.data, (value): value is FtpUser => isUser(value) && sameIdentity(value.userName, userName)
+    && (changes.readOnly === undefined || value.readOnly === changes.readOnly)
+    && (!changes.homePath?.trim() || samePath(String(value.homePath), changes.homePath)));
+}
+
+/** Hesabı aç/kapat. Sunucu Windows hesabını geri okur; yanıt istenen durumu doğrulamıyorsa başarı sayılmaz. */
+export async function setFtpUserEnabled(userName: string, enabled: boolean) {
+  const response = await apiClient.post<ApiEnvelope<object>>(`/ftp/users/${encodeURIComponent(userName)}/enabled`, { enabled });
+  measured(response.data, (value): value is { userName: string; enabled: boolean } => record(value)
+    && sameIdentity(value.userName, userName) && value.enabled === enabled);
 }

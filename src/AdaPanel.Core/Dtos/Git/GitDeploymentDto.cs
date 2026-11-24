@@ -36,4 +36,33 @@ public sealed class GitDeploymentDto
     /// Değerin tek kaynağı <see cref="AdaPanel.Core.Common.GitWebhookToken.HeaderName"/>.
     /// </remarks>
     public string WebhookHeaderName { get; set; } = AdaPanel.Core.Common.GitWebhookToken.HeaderName;
+
+    /// <summary>SSH dağıtım anahtarı var mı (özel anahtar DPAPI ile korunur ve ASLA dönmez).</summary>
+    public bool HasDeployKey { get; set; }
+
+    /// <summary>Depo sağlayıcısına "deploy key" olarak eklenecek GENEL anahtar.</summary>
+    public string DeployPublicKey { get; set; } = string.Empty;
+
+    public string DeployKeyFingerprint { get; set; } = string.Empty;
+
+    public DateTime? DeployKeyCreatedUtc { get; set; }
+
+    /// <summary>HTTPS jetonu kayıtlı mı (jetonun kendisi ASLA dönmez).</summary>
+    public bool HasHttpsToken { get; set; }
+
+    /// <summary>Bu yapılandırma çağrısında depo konağı değiştiği için kayıtlı jeton SİLİNDİ.</summary>
+    public bool HttpsTokenRemoved { get; set; }
+
+    public string HttpsUsername { get; set; } = string.Empty;
+
+    /// <summary>Seçili derleme sonrası komut kimlikleri (sıralı).</summary>
+    public string[] PostDeployCommands { get; set; } = [];
+
+    public int PostDeployTimeoutSeconds { get; set; } = 600;
+
+    /// <summary>Seçilebilecek beyaz liste kimlikleri — arayüz bunu SUNUCUDAN okur.</summary>
+    public string[] AllowedPostDeployCommands { get; set; } = [];
+
+    /// <summary>Son dağıtımlar (yeniden eskiye, en çok 15).</summary>
+    public GitDeployHistoryDto[] RecentDeployments { get; set; } = [];
 }

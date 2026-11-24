@@ -13,6 +13,7 @@ using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Support;
 using AdaPanel.Infrastructure.Iis;
+using AdaPanel.Infrastructure.Mail;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -34,7 +35,9 @@ public sealed class WinAcmeSslService(
     // MailEnableMailService (KomutKosucusu) icinde de var.
     Func<CancellationToken, Task<IReadOnlyCollection<IisHttpsBinding>?>>? bindingReader = null,
     IConcurrencyLock? concurrencyLock = null,
-    IMailService? mailService = null) : ISslService
+    IMailService? mailService = null,
+    MailEnableWebmail? mailEnableWebmail = null,
+    IFtpService? ftpService = null) : ISslService
 {
     private const string StatePath = "config/ssl.json";
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
@@ -70,10 +73,16 @@ public sealed class WinAcmeSslService(
             cancellationToken: token, timeout: TimeSpan.FromMinutes(10));
 
     internal Func<string, X509Certificate2?> IssueCertificateLookup { get; init; } = FindBestCertificate;
+    internal Func<string, X509Certificate2?> RenewalCertificateLookup { get; init; } = FindRenewalCertificate;
     internal Func<string, string, X509Certificate2> IssueFallbackCertificate { get; init; } = CreateSelfSignedCertificate;
     internal Action<X509Certificate2> PersistIssuedCertificate { get; init; } = PersistCertificate;
     internal Func<string, CancellationToken, Task<CommandResult>> DnsPreflightCommand { get; init; } =
         ProcessRunner.RunPowerShellAsync;
+
+    internal Func<IReadOnlyCollection<string>, CancellationToken, Task> HttpPreflightAsync { get; init; } =
+        AcmeHttpPreflight.VerifySelfHostingAsync;
+    internal Func<string, bool, CancellationToken, Task<IReadOnlyList<System.Text.Json.JsonElement>>> RenewalRecordsAsync { get; init; } =
+        SslRenewalVerification.ReadAsync;
 
     public Task<SslWorkspaceDto> GetSiteWorkspaceAsync(string siteName, CancellationToken cancellationToken = default) =>
         GetSiteWorkspaceCoreAsync(siteName, null, cancellationToken);
@@ -281,7 +290,12 @@ public sealed class WinAcmeSslService(
             var dto = await OlcVeIsleAsync(
                 ToDto(site.Name, hostName, issuedCertificate, ResolveCertificateSource(issuedCertificate), null),
                 site.Name, hostName, 443, issuedCertificate.Thumbprint ?? string.Empty, cancellationToken);
+            if (outcome.Certificate is not null)
+                await VerifyIssuedBindingsAsync(site, [hostName], issuedCertificate.Thumbprint ?? string.Empty, cancellationToken);
             dto.FallbackReason = outcome.Certificate is null ? outcome.FailureReason : string.Empty;
+            dto.ManagedRenewalId = outcome.RenewalId;
+            dto.ManagedRenewalSiteId = outcome.RenewalId is null ? null : site.Id;
+            dto.ManagedRenewalStaging = input.UseStaging;
             await PublishAsync(dto);
             if (mailService is not null && dto.Source != "self-signed")
                 await mailService.SyncWebCertificateAsync(hostName, ApproveAsync, cancellationToken);
@@ -387,11 +401,21 @@ public sealed class WinAcmeSslService(
             }, token);
             return result;
         }
-        // Dependency installation must not retain the global IIS gate. The site pin stays live.
-        await ApplyHttpsRedirectCoreAsync(site.Name, true, cancellationToken, ReapproveAsync, RunRedirectAsync);
+        // A certificate for one host/port does not make that port a valid target
+        // for every other HTTP host of this site. Preserve the existing rule if
+        // there is no single common measured TLS endpoint.
+        int? redirectPort = null;
+        try { redirectPort = ResolveRedirectPort(site, await ReadHttpsBindingsAsync(cancellationToken)); }
+        catch (Exception error) when (error is not OperationCanceledException)
+        { logger.LogWarning(error, "Imported certificate; site-wide HTTPS redirect preserved for {SiteName}.", site.Name); }
+        await ReapproveAsync(cancellationToken);
+        var redirectApplied = redirectPort is not null && await ApplyHttpsRedirectCoreAsync(
+            site.Name, true, cancellationToken, ReapproveAsync, RunRedirectAsync, targetPort: redirectPort.Value);
         await ReapproveAsync(cancellationToken);
         var dto = ToDto(site.Name, hostName, certificate, ResolveCertificateSource(certificate), null);
         dto.Port = port;
+        dto.FallbackReason = redirectPort is null ? "ssl.https_redirect_preserved"
+            : redirectApplied ? string.Empty : "ssl.https_redirect_failed";
         await OlcVeIsleAsync(dto, site.Name, hostName, port, certificate.Thumbprint ?? string.Empty, cancellationToken);
         await target.RunAsync(async current =>
         {
@@ -444,10 +468,9 @@ public sealed class WinAcmeSslService(
     {
         var wacs = await ResolveWinAcmeExecutableAsync(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        // Executable discovery may await storage after the caller passed the automation gate.
-        if (beforeMutation is not null) await beforeMutation(cancellationToken);
         if (string.IsNullOrWhiteSpace(wacs))
         {
+            if (beforeMutation is not null) await beforeMutation(cancellationToken);
             // OLCUM YAPILAMADI. "0 sertifika yenilendi" DEMEK DEGIL -- yenileme hic denenemedi.
             //
             // Ama KAYDI DOGRULAMAK win-acme'ye BAGLI DEGIL: sertifika deposu her hâlükârda
@@ -458,14 +481,18 @@ public sealed class WinAcmeSslService(
             // BAG OLCUMU win-acme'ye BAGLI DEGIL: IIS bagi her halukarda okunabilir. win-acme
             // kurulu olmasa bile bagin yanlis sertifikada kalmasi GERCEK bir arizadir ve
             // soylenmelidir.
+            var webmailErrors = await SyncManagedWebmailAsync(beforeMutation, cancellationToken);
             var bagYok = await MeasureBindingsAndPersistAsync(cancellationToken);
-            var mailResult = await SyncMailCertificateAsync(beforeMutation, cancellationToken);
+            var mailSync = await SyncMailForRenewalAsync(beforeMutation, cancellationToken);
+            var mailResult = mailSync.Certificate;
+            webmailErrors = webmailErrors.Concat(mailSync.Errors)
+                .Concat(await SyncFtpForRenewalAsync(beforeMutation, cancellationToken)).ToArray();
             return new RenewAllResultDto
             {
                 RenewedCount = 0,
                 Measured = false,
-                FailureReason = "win-acme kurulu degil; sertifikalar yenilenemiyor.",
-                Output = "win-acme kurulu degil.",
+                FailureReason = string.Join("\n", new[] { "win-acme kurulu degil; sertifikalar yenilenemiyor." }.Concat(webmailErrors)),
+                Output = string.Join("\n", new[] { "win-acme kurulu degil." }.Concat(webmailErrors)),
                 VerifiedCount = dogrulamaYok.Verified,
                 MissingFromStoreCount = dogrulamaYok.MissingFromStore,
                 UnverifiedCount = dogrulamaYok.Unmeasured,
@@ -476,7 +503,16 @@ public sealed class WinAcmeSslService(
             };
         }
 
-        var result = await RenewalCommand(wacs, "--renew --baseuri https://acme-v02.api.letsencrypt.org/", cancellationToken);
+        var preflightFailures = new List<string>();
+        var preflightNotes = new List<string>();
+        var result = await AcmeHttpPreflight.ExclusiveAsync(async () =>
+        {
+            await PreflightManagedHttpRenewalsAsync(wacs, beforeMutation, preflightFailures, preflightNotes, cancellationToken);
+            // External checks may await the network. Revoked authority must still stop WACS.
+            if (beforeMutation is not null) await beforeMutation(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return await RunRenewalAsync(wacs, cancellationToken);
+        }, cancellationToken);
         var cikti = string.IsNullOrWhiteSpace(result.StandardOutput) ? result.StandardError : result.StandardOutput;
         // Keep both diagnostic streams: progress on stdout must not hide errors/timeouts on stderr.
         // Counting retains its original stream selection so a diagnostic copy is not counted twice.
@@ -507,6 +543,39 @@ public sealed class WinAcmeSslService(
                 .Where(reason => !string.IsNullOrWhiteSpace(reason)));
         }
 
+        // Check managed web renewal plans too: a clean process exit does not prove these
+        // hosts are still scheduled or installed in the intended IIS site.
+        try
+        {
+            var managed = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
+            var owned = managed.Where(item => !string.IsNullOrEmpty(item.ManagedRenewalId) && !item.ManagedRenewalStaging).ToArray();
+            var records = owned.Length == 0 ? [] : await RenewalRecordsAsync(wacs, false, cancellationToken);
+            foreach (var record in owned)
+            {
+                var site = await iisSiteService.GetSiteAsync(record.SiteName, cancellationToken);
+                if (site.Id != record.ManagedRenewalSiteId) throw SslRenewalVerification.Invalid();
+                var wildcard = record.HostName.StartsWith("*.", StringComparison.Ordinal);
+                var hosts = wildcard ? new[] { record.HostName, record.HostName[2..] } : new[] { record.HostName };
+                var saved = SslRenewalVerification.Select(records, site, hosts,
+                    wildcard ? fileStore.ResolvePath("tools/acme-dns01.ps1") : null);
+                if (!saved.HasValue || SslRenewalVerification.String(saved.Value, "Id") != record.ManagedRenewalId)
+                    throw SslRenewalVerification.Invalid();
+                using var certificate = RenewalCertificateLookup(SslRenewalVerification.LastThumbprint(saved.Value))
+                    ?? throw SslRenewalVerification.Invalid();
+                SslRenewalVerification.VerifyIssued(null, saved.Value, certificate, hosts);
+                // Reconciliation may discover another valid certificate for this name.
+                // Verify the thumbprint in this specific renewal against the live IIS inventory.
+                await VerifyIssuedBindingsAsync(site, [wildcard ? record.HostName[2..] : record.HostName],
+                    certificate.Thumbprint, cancellationToken);
+            }
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            failureReason = string.Join(" ", new[] { failureReason, "Web sertifikalarinin win-acme yenileme kaydi dogrulanamadi." }
+                .Where(reason => !string.IsNullOrWhiteSpace(reason)));
+            logger.LogWarning(error, "Managed web renewal configuration verification failed.");
+        }
+
         // YENILEMEDEN SONRA KAYIT MUTLAKA TAZELENIR.
         //
         // Bu satirin yoklugu, panelin en gurultulu yanlis alarminin kok nedeniydi: win-acme
@@ -521,16 +590,20 @@ public sealed class WinAcmeSslService(
         // gurultulu bir YANLIS POZITIFTEN sessiz bir YANLIS NEGATIFE cevirmisti: kayit
         // saglikli gorunur, bag eski sertifikada kalir, site o sertifika dolana kadar onu
         // sunar ve panel hicbir sey soylemez.
+        var webmailFailures = await SyncManagedWebmailAsync(beforeMutation, cancellationToken);
         var bag = await MeasureBindingsAndPersistAsync(cancellationToken);
 
-        var syncedMail = await SyncMailCertificateAsync(beforeMutation, cancellationToken);
+        var synchronizedMail = await SyncMailForRenewalAsync(beforeMutation, cancellationToken);
+        var syncedMail = synchronizedMail.Certificate;
+        webmailFailures = webmailFailures.Concat(synchronizedMail.Errors)
+            .Concat(await SyncFtpForRenewalAsync(beforeMutation, cancellationToken)).ToArray();
 
         return new RenewAllResultDto
         {
             RenewedCount = yenilenen,
             Measured = result.Success,
-            FailureReason = failureReason,
-            Output = diagnostics,
+            FailureReason = string.Join("\n", new[] { failureReason }.Concat(preflightFailures).Concat(webmailFailures).Where(s => !string.IsNullOrWhiteSpace(s))),
+            Output = string.Join("\n", new[] { diagnostics }.Concat(preflightNotes).Concat(preflightFailures).Concat(webmailFailures).Where(s => !string.IsNullOrWhiteSpace(s))),
             VerifiedCount = dogrulama.Verified,
             MissingFromStoreCount = dogrulama.MissingFromStore,
             UnverifiedCount = dogrulama.Unmeasured,
@@ -539,6 +612,139 @@ public sealed class WinAcmeSslService(
             MailSynchronizationPerformed = mailService is not null,
             MailCertificate = syncedMail
         };
+    }
+
+    /// <summary>
+    /// Panel tetikli yenileme. Duraklatilmis kayit YOKSA eski davranis (tek <c>--renew</c> turu) aynen
+    /// korunur. Varsa win-acme'nin "bunu atla" bayragi olmadigi icin duraklatilmamis panel kayitlari
+    /// kimlikle (<c>--renew --id</c>) tek tek yenilenir ve cikti bunu acikca soyler.
+    /// </summary>
+    private async Task<CommandResult> RunRenewalAsync(string wacs, CancellationToken cancellationToken)
+    {
+        const string baseUri = "https://acme-v02.api.letsencrypt.org/";
+        var records = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
+        var production = records.Where(item => !string.IsNullOrWhiteSpace(item.ManagedRenewalId) && !item.ManagedRenewalStaging).ToArray();
+        if (!production.Any(item => item.RenewalPaused))
+            return await RenewalCommand(wacs, "--renew --baseuri " + baseUri, cancellationToken);
+
+        var pausedIds = production.Where(item => item.RenewalPaused).Select(item => item.ManagedRenewalId!.Trim()).ToHashSet(StringComparer.Ordinal);
+        var ids = production.Select(item => item.ManagedRenewalId!.Trim()).Where(id => !pausedIds.Contains(id)).Distinct(StringComparer.Ordinal).ToArray();
+        var output = new StringBuilder();
+        var success = true;
+        var errors = new StringBuilder();
+        foreach (var id in ids)
+        {
+            var one = await RenewalCommand(wacs, $"--renew --id \"{id.Replace("\"", string.Empty)}\" --baseuri {baseUri}", cancellationToken);
+            success &= one.Success;
+            if (!string.IsNullOrWhiteSpace(one.StandardOutput)) output.AppendLine(one.StandardOutput);
+            if (!string.IsNullOrWhiteSpace(one.StandardError)) errors.AppendLine(one.StandardError);
+        }
+        output.AppendLine($"Panel duraklatilmis {pausedIds.Count} yenileme kaydini atladi; kimliksiz (panel disi) win-acme kayitlari bu turda yenilenmedi.");
+        return new CommandResult { ExitCode = success ? 0 : 1, StandardOutput = output.ToString(), StandardError = errors.ToString() };
+    }
+
+    private async Task PreflightManagedHttpRenewalsAsync(string wacs, Func<CancellationToken, Task>? approve,
+        List<string> failures, List<string> notes, CancellationToken token)
+    {
+        SslCertificateDto[] owned;
+        IReadOnlyList<System.Text.Json.JsonElement> plans;
+        try
+        {
+            owned = (await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), token))
+                .Where(record => !string.IsNullOrEmpty(record.ManagedRenewalId) && record.ManagedRenewalSiteId.HasValue
+                    && !record.ManagedRenewalStaging && !record.RenewalPaused && !string.IsNullOrWhiteSpace(record.HostName)
+                    && !record.HostName.Contains('*') && !IsPreviewHost(record.HostName)).ToArray();
+            if (owned.Length == 0) return;
+            plans = await RenewalRecordsAsync(wacs, false, token);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            failures.Add("HTTP-01 on kontrolu: panelin yonettigi yenileme hedefleri okunamadi: " + Kirp(error.Message));
+            return; // Global renewal still services unrelated/manual/DNS-01 orders.
+        }
+        var measured = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var record in owned)
+        {
+            if (approve is not null) await approve(token);
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                // Ownership metadata alone must not turn a subsequently changed manual or
+                // DNS-01 plan into an HTTP probe. Validate the current exact selfhosting plan.
+                var site = await iisSiteService.GetSiteAsync(record.SiteName, token);
+                if (site.Id != record.ManagedRenewalSiteId) throw SslRenewalVerification.Invalid();
+                var plan = SslRenewalVerification.Select(plans, site, [record.HostName]);
+                if (!plan.HasValue || SslRenewalVerification.String(plan.Value, "Id") != record.ManagedRenewalId)
+                    throw SslRenewalVerification.Invalid();
+                if (measured.Add(record.HostName))
+                {
+                    // Renewal JSON/history doesn't contain WACS' authoritative effective due
+                    // decision (scheduler settings and server ARI also participate). Do not
+                    // infer it from certificate expiry and accidentally skip a due order.
+                    notes.Add(record.HostName + ": win-acme'nin etkin ARI/zamanlama vadesi kesin bilinmiyor; panelin yonettigi HTTP-01 hedefi bir kez disaridan kontrol edildi.");
+                    await HttpPreflightAsync([record.HostName], token);
+                }
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                var detail = error is AppException app && !string.IsNullOrWhiteSpace(app.Details) ? app.Details : error.Message;
+                failures.Add(record.HostName + ": HTTP-01 on kontrolu basarisiz: " + Kirp(detail));
+            }
+            // This gate is intentionally outside the per-host error handler: revoked local
+            // authority is not a network diagnostic and must abort the whole native action.
+            if (approve is not null) await approve(token);
+            token.ThrowIfCancellationRequested();
+        }
+    }
+
+    private async Task<IReadOnlyList<string>> SyncFtpForRenewalAsync(Func<CancellationToken, Task>? beforeMutation, CancellationToken token)
+    {
+        if (ftpService is null) return [];
+        var rejected = false;
+        async Task Approve(CancellationToken ct)
+        {
+            if (beforeMutation is null) return;
+            try { await beforeMutation(ct); }
+            catch { rejected = true; throw; }
+        }
+        try
+        {
+            var certificate = await ftpService.SyncCertificateAsync(beforeMutation is null ? null : Approve, token);
+            return certificate is null || certificate.CertificateVerified == true ? []
+                : ["FTPS certificate synchronization failed: " + certificate.CertificateDetail];
+        }
+        catch (Exception error) when (!rejected && error is not OperationCanceledException)
+        { return ["FTPS certificate synchronization failed: " + (error is AppException app ? app.MessageKey : error.GetType().Name)]; }
+    }
+
+    private async Task<IReadOnlyList<string>> SyncManagedWebmailAsync(Func<CancellationToken, Task>? beforeMutation, CancellationToken token)
+    {
+        if (mailEnableWebmail is null) return [];
+        var rejected = false;
+        async Task Approve(CancellationToken ct)
+        {
+            if (beforeMutation is null) return;
+            try { await beforeMutation(ct); }
+            catch { rejected = true; throw; }
+        }
+        try { return await mailEnableWebmail.SyncManagedAsync(Approve, token); }
+        catch (Exception error) when (!rejected && error is not OperationCanceledException)
+        { return ["MailEnable webmail synchronization failed: " + (error is AppException app ? app.MessageKey : error.GetType().Name)]; }
+    }
+
+    private async Task<(MailCertificateDto? Certificate, IReadOnlyList<string> Errors)> SyncMailForRenewalAsync(
+        Func<CancellationToken, Task>? beforeMutation, CancellationToken token)
+    {
+        var rejected = false;
+        async Task Approve(CancellationToken ct)
+        {
+            if (beforeMutation is null) return;
+            try { await beforeMutation(ct); }
+            catch { rejected = true; throw; }
+        }
+        try { return (await SyncMailCertificateAsync(beforeMutation is null ? null : Approve, token), []); }
+        catch (Exception error) when (!rejected && error is not OperationCanceledException)
+        { return (null, ["SMTP certificate synchronization failed: " + (error is AppException app ? app.MessageKey : error.GetType().Name)]); }
     }
 
     private async Task<MailCertificateDto?> SyncMailCertificateAsync(Func<CancellationToken, Task>? beforeMutation, CancellationToken token)
@@ -728,8 +934,57 @@ public sealed class WinAcmeSslService(
             return SslStoreProbe.Unmeasured();
         }
 
-        var sertifika = FindBestCertificate(kayit.HostName, out var depoOkunabildi);
-        return BuildProbe(depoOkunabildi, sertifika);
+        return ProbeReconciliationCertificate(kayit, name =>
+        {
+            using var store = new X509Store(name, StoreLocation.LocalMachine);
+            store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
+            return store.Certificates.Cast<X509Certificate2>().ToArray();
+        });
+    }
+
+    internal static SslStoreProbe ProbeReconciliationCertificate(SslCertificateDto record,
+        Func<string, IReadOnlyCollection<X509Certificate2>> readStore, Action<X509ChainPolicy>? configureTrust = null)
+    {
+        var certificates = new List<X509Certificate2>();
+        var complete = true;
+        try
+        {
+            foreach (var name in new[] { "My", "WebHosting" })
+            {
+                try { certificates.AddRange(readStore(name)); }
+                catch (CryptographicException error) when (error.HResult is unchecked((int)0x80092004) or unchecked((int)0x80070002))
+                { /* A known absent store is an empty inventory, not an access failure. */ }
+                catch (Exception error) when (error is CryptographicException or UnauthorizedAccessException or System.Security.SecurityException or IOException)
+                { complete = false; }
+            }
+            return BuildReconciliationProbe(record, certificates, complete, configureTrust);
+        }
+        finally { foreach (var certificate in certificates) certificate.Dispose(); }
+    }
+
+    internal static SslStoreProbe BuildReconciliationProbe(SslCertificateDto record, IReadOnlyCollection<X509Certificate2> certificates,
+        bool storesComplete, Action<X509ChainPolicy>? configureTrust = null,
+        Func<X509Certificate2, SslCertificateSelection.TrustOutcome>? trustAssessment = null)
+    {
+        // A failed store read cannot prove a replacement or absence. Material already
+        // measured at the recorded thumbprint can still refresh its own metadata.
+        var existing = certificates.Where(c => c.Thumbprint.Equals(record.Thumbprint, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(c => c.HasPrivateKey).FirstOrDefault();
+        var outcomes = new Dictionary<X509Certificate2, SslCertificateSelection.TrustOutcome>(ReferenceEqualityComparer.Instance);
+        SslCertificateSelection.TrustOutcome Assess(X509Certificate2 certificate)
+        {
+            if (!outcomes.TryGetValue(certificate, out var outcome))
+                outcomes[certificate] = outcome = trustAssessment?.Invoke(certificate)
+                    ?? SslCertificateSelection.EvaluateTrust(certificate, record.HostName, configureTrust);
+            return outcome;
+        }
+        // A transient OCSP/CRL/AIA failure is not evidence that a different expected
+        // certificate should replace the recorded one, even when another chain builds.
+        if (existing is not null && (!storesComplete || Assess(existing) == SslCertificateSelection.TrustOutcome.Unknown))
+            return BuildProbe(true, existing);
+        var selected = storesComplete ? SslCertificateSelection.SelectForReconciliation(certificates, record.HostName, configureTrust, Assess) : null;
+        if (selected is not null || existing is not null) return BuildProbe(true, selected ?? existing);
+        return storesComplete ? SslStoreProbe.NotFound() : SslStoreProbe.Unmeasured();
     }
 
     /// <summary>
@@ -794,7 +1049,12 @@ public sealed class WinAcmeSslService(
         }, cancellationToken);
         try
         {
-            if (!await ApplyHttpsRedirectCoreAsync(site.Name, request.Enabled, cancellationToken, ApproveAsync, RunCommandAsync))
+            // Enabling must lead to a measured TLS endpoint. Disabling is also
+            // the recovery path for a broken redirect and must not require TLS.
+            var targetPort = request.Enabled
+                ? ResolveRedirectPort(site, await ReadHttpsBindingsAsync(cancellationToken))
+                : 443;
+            if (!await ApplyHttpsRedirectCoreAsync(site.Name, request.Enabled, cancellationToken, ApproveAsync, RunCommandAsync, targetPort))
                 throw new AppException("ssl.https_redirect_failed", 502, 502);
             var workspace = await GetSiteWorkspaceCoreAsync(site.Name, ValidateAsync, cancellationToken, PublishAsync);
             await ApproveAsync(cancellationToken);
@@ -817,11 +1077,31 @@ public sealed class WinAcmeSslService(
     private Task<bool> ApplyHttpsRedirectAsync(string siteName, bool enabled, CancellationToken cancellationToken) =>
         ApplyHttpsRedirectCoreAsync(siteName, enabled, cancellationToken, null);
 
+    private static int ResolveRedirectPort(SiteDto site, IReadOnlyCollection<IisHttpsBinding>? bindings)
+    {
+        var usable = (bindings ?? []).Where(binding =>
+            string.Equals(binding.SiteName, site.Name, StringComparison.OrdinalIgnoreCase) &&
+            binding.CertificateReadable && !string.IsNullOrWhiteSpace(binding.Thumbprint) &&
+            binding.Port is > 0 and <= 65535).ToArray();
+        var httpHosts = site.Bindings.Where(binding => string.Equals(binding.Protocol, "http", StringComparison.OrdinalIgnoreCase))
+            .Select(binding => binding.HostName.TrimEnd('.')).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var ports = usable.Select(binding => binding.Port).Distinct().Where(port => httpHosts.All(host =>
+            usable.Any(binding => binding.Port == port && (string.IsNullOrWhiteSpace(binding.HostName) ||
+                string.Equals(binding.HostName.TrimEnd('.'), host, StringComparison.OrdinalIgnoreCase))))).ToArray();
+        if (ports.Length != 1)
+            throw new AppException("ssl.https_redirect_failed", 409, 409,
+                "HTTPS redirect needs one unambiguous, certificate-bound TLS port shared by every HTTP host of this site.");
+        return ports[0];
+    }
+
     private async Task<bool> ApplyHttpsRedirectCoreAsync(string siteName, bool enabled, CancellationToken cancellationToken,
         Func<CancellationToken, Task>? beforeMutation,
-        Func<string, CancellationToken, Task<CommandResult>>? commandRunner = null)
+        Func<string, CancellationToken, Task<CommandResult>>? commandRunner = null, int targetPort = 443)
     {
-        var site = siteName.Replace("'", "''");
+        var site = PowerShellQuoting.Escape(siteName);
+        // HTTP_HOST may carry the incoming HTTP port. Capture only its host so
+        // an HTTP request on :8080 cannot redirect to TLS on that old port.
+        var redirectUrl = targetPort == 443 ? "https://{C:1}/{R:1}" : $"https://{{C:1}}:{targetPort}/{{R:1}}";
         /*
          * $ErrorActionPreference = 'Stop' EKLENDI — ve bu, ayni surumde kapatilan hata sinifinin
          * bir ornegi daha.
@@ -853,17 +1133,20 @@ public sealed class WinAcmeSslService(
                 Set-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/match" -name 'url' -value '(.*)'
                 Add-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/conditions" -name '.' -value @{input='{HTTPS}'; pattern='off'}
                 Add-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/conditions" -name '.' -value @{input='{REQUEST_URI}'; pattern='^/\.well-known/acme-challenge/'; negate='True'}
+                Add-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/conditions" -name '.' -value @{input='{HTTP_HOST}'; pattern='^(\[[^\]]+\]|[^:]+)(?::[0-9]+)?$'}
                 Set-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'type' -value 'Redirect'
-                Set-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'url' -value 'https://{HTTP_HOST}/{R:1}'
+                Set-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'url' -value '{{redirectUrl}}'
                 Set-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'redirectType' -value 'Permanent'
                 # YAZDIGINI GERI OKU. Bu satirlar olmadan betik, kural YARIM yazilmis olsa bile
                 # 'OK' basiyordu (gerekcesi asagida, $ErrorActionPreference notunda).
                 $adaKural = Get-WebConfiguration -pspath "IIS:\Sites\$site" -filter $r
                 $adaEylem = Get-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'type' -ErrorAction SilentlyContinue
                 $adaDesen = Get-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/match" -name 'url' -ErrorAction SilentlyContinue
+                $adaHedef = Get-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'url' -ErrorAction Stop
                 if (-not $adaKural) { throw "kural yazildi ama geri okunamadi: $name" }
                 if ("$($adaEylem.Value)" -ne 'Redirect') { throw "kural YARIM: action/type='$($adaEylem.Value)' (beklenen Redirect)" }
                 if ([string]::IsNullOrWhiteSpace("$($adaDesen.Value)")) { throw "kural YARIM: match/url bos" }
+                if ("$($adaHedef.Value)" -cne '{{redirectUrl}}') { throw 'HTTPS redirect target was not applied.' }
                 'OK'
                 """
             : $$"""
@@ -938,7 +1221,7 @@ public sealed class WinAcmeSslService(
 
     private async Task<bool?> ReadHttpsRedirectAsync(string siteName, CancellationToken cancellationToken)
     {
-        var site = siteName.Replace("'", "''");
+        var site = PowerShellQuoting.Escape(siteName);
         var script = $$"""
             $ErrorActionPreference = 'Stop'
             Import-Module WebAdministration -ErrorAction Stop
@@ -983,7 +1266,9 @@ public sealed class WinAcmeSslService(
             using var existing = IssueCertificateLookup(hostName);
             if (existing is not null && existing.NotAfter > DateTime.Now)
             {
+                SslRenewalVerification.VerifyCertificate(existing, [hostName]);
                 await EnsureHttpsBindingAsync(site.Name, hostName, 443, existing, cancellationToken);
+                await VerifyIssuedBindingsAsync(site, [hostName], existing.Thumbprint, cancellationToken);
                 if (mailService is not null && ResolveCertificateSource(existing) != "self-signed")
                     await mailService.SyncWebCertificateAsync(hostName, cancellationToken: cancellationToken);
                 return true;
@@ -1014,6 +1299,7 @@ public sealed class WinAcmeSslService(
             using var certificate = issued.Certificate;
             PersistIssuedCertificate(certificate);
             await EnsureHttpsBindingAsync(site.Name, hostName, 443, certificate, cancellationToken);
+            await VerifyIssuedBindingsAsync(site, [hostName], certificate.Thumbprint, cancellationToken);
             if (mailService is not null && ResolveCertificateSource(certificate) != "self-signed")
                 await mailService.SyncWebCertificateAsync(hostName, cancellationToken: cancellationToken);
             return true;
@@ -1332,6 +1618,8 @@ public sealed class WinAcmeSslService(
         await approve(cancellationToken);
 
         var scriptPath = fileStore.ResolvePath("tools/acme-dns01.ps1");
+        string[] requestedHosts = [$"*.{domain}", domain];
+        var prior = SslRenewalVerification.Select(await RenewalRecordsAsync(wacs, request.UseStaging, cancellationToken), site, requestedHosts, scriptPath);
         await mutate(async () =>
         {
             fileStore.EnsureDirectory("tools");
@@ -1342,9 +1630,10 @@ public sealed class WinAcmeSslService(
             ? "https://acme-staging-v02.api.letsencrypt.org/"
             : "https://acme-v02.api.letsencrypt.org/";
 
-        var args =
-            $"--source manual --host \"*.{domain},{domain}\" " +
-            $"--validation script --dnsscript \"{scriptPath}\" --dnsscriptparallelism 0 " +
+        var args = prior.HasValue
+            ? $"--renew --id \"{SslRenewalVerification.String(prior.Value, "Id")}\" --baseuri {baseUri}"
+            : $"--source manual --host \"*.{domain},{domain}\" " +
+            $"--validationmode dns-01 --validation script --dnsscript \"{scriptPath}\" --dnsscriptparallelism 0 " +
             $"--installation iis --installationsiteid {site.Id} " +
             $"--emailaddress \"{request.ContactEmail.Trim()}\" --accepttos --baseuri {baseUri}";
 
@@ -1358,19 +1647,33 @@ public sealed class WinAcmeSslService(
             throw new AppException("ssl.wildcard_failed", 502, 502, detail.Length > 2000 ? detail[^2000..] : detail);
         }
 
-        using var certificate = IssueCertificateLookup($"*.{domain}")
-            ?? throw new AppException("ssl.wildcard_failed", 502, 502, "win-acme succeeded but the wildcard certificate was not found in the store.");
+        var saved = SslRenewalVerification.Select(await RenewalRecordsAsync(wacs, request.UseStaging, cancellationToken), site, requestedHosts, scriptPath);
+        if (!saved.HasValue || prior.HasValue && SslRenewalVerification.String(prior.Value, "Id") != SslRenewalVerification.String(saved.Value, "Id"))
+            throw SslRenewalVerification.Invalid();
+        using var certificate = RenewalCertificateLookup(SslRenewalVerification.LastThumbprint(saved.Value))
+            ?? throw SslRenewalVerification.Invalid();
+        SslRenewalVerification.VerifyIssued(prior, saved.Value, certificate, requestedHosts);
 
         await mutate(() => { PersistIssuedCertificate(certificate); return Task.CompletedTask; });
         await applyRedirect();
         await approve(cancellationToken);
 
-        // Joker sertifikada bağlamayı win-acme kuruyor ve host başlığı "*.domain" OLMAK ZORUNDA
-        // DEĞİL (alt alan adı başına ayrı bağlama açabilir). O yüzden burada belirli bir host
-        // aranmaz; sitede HERHANGİ bir HTTPS bağlaması olması sorulur.
+        var expectedBindings = site.Bindings.Select(binding => binding.HostName)
+            .Where(host => !string.IsNullOrWhiteSpace(host) && !host.StartsWith("*.", StringComparison.Ordinal)
+                && SslCertificateSelection.MatchesHost(certificate, host)).Append(domain)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        await VerifyIssuedBindingsAsync(site, expectedBindings, certificate.Thumbprint, cancellationToken);
+
+        // The DNS order includes the apex. Its exact IIS binding must present this
+        // certificate, alongside every covered concrete host already configured on the site.
         var dto = await OlcVeIsleAsync(
             ToDto(site.Name, $"*.{domain}", certificate, ResolveCertificateSource(certificate), null),
-            site.Name, string.Empty, 443, certificate.Thumbprint ?? string.Empty, cancellationToken);
+            site.Name, domain, 443, certificate.Thumbprint ?? string.Empty, cancellationToken);
+        if (dto.IsCertificateBound != true)
+            throw new AppException("ssl.issue_binding_verification_failed", 502, 502, $"{site.Name}: wildcard certificate apex binding {domain}:443 could not be confirmed.");
+        dto.ManagedRenewalId = SslRenewalVerification.String(saved.Value, "Id");
+        dto.ManagedRenewalSiteId = site.Id;
+        dto.ManagedRenewalStaging = request.UseStaging;
         await publish(dto);
         if (mailService is not null && dto.Source != "self-signed")
             await mailService.SyncWebCertificateAsync(dto.HostName, approve, cancellationToken);
@@ -1378,7 +1681,7 @@ public sealed class WinAcmeSslService(
     }
 
     /// <summary>Let's Encrypt denemesinin sonucu: sertifika ya da NEDEN alınamadığı.</summary>
-    private sealed record AcmeIssueResult(X509Certificate2? Certificate, string FailureReason);
+    private sealed record AcmeIssueResult(X509Certificate2? Certificate, string FailureReason, string? RenewalId = null);
 
     private async Task<AcmeIssueResult> TryIssueWithWinAcmeAsync(
         AdaPanel.Core.Dtos.Sites.SiteDto site,
@@ -1418,11 +1721,13 @@ public sealed class WinAcmeSslService(
             ? "https://acme-staging-v02.api.letsencrypt.org/"
             : "https://acme-v02.api.letsencrypt.org/";
 
-        var before = IssueCertificateLookup(hostName);
+        var prior = SslRenewalVerification.Select(await RenewalRecordsAsync(wacs, useStaging, cancellationToken), site, [hostName]);
         // Değerler ayrıca TIRNAKLANIYOR. Doğrulamadan sonra tırnak gereksiz görünür; kasten
         // konuyor: doğrulama bir gün gevşerse tek satırlık bir değişiklik sessizce argüman
         // enjeksiyonunu geri getirmesin. İki katman birbirinden bağımsız.
-        var args = $"--target iis --siteid {site.Id} --host \"{hostName.Trim()}\" --installation iis --emailaddress \"{contactEmail.Trim()}\" --accepttos --baseuri {baseUri}";
+        var args = prior.HasValue
+            ? $"--renew --id \"{SslRenewalVerification.String(prior.Value, "Id")}\" --baseuri {baseUri}"
+            : $"--source iis --siteid {site.Id} --host \"{hostName.Trim()}\" --validation selfhosting --installation iis --installationsiteid {site.Id} --emailaddress \"{contactEmail.Trim()}\" --accepttos --baseuri {baseUri}";
 
         // SÜRE SINIRI 10 DAKİKA. Eskiden 120 saniyeydi ve bu, MEŞRU bir yayınlamayı ortasında
         // kesiyordu: Let's Encrypt doğrulaması DNS yayılmasını, yeniden denemeleri ve hız
@@ -1431,7 +1736,13 @@ public sealed class WinAcmeSslService(
         // (IssueWildcardAsync) zaten 10 dakika kullanıyor; tekil yol ondan geri kalmıştı.
         if (beforeMutation is not null) await beforeMutation(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        var result = await IssueCommand(wacs, args, cancellationToken);
+        var result = await AcmeHttpPreflight.ExclusiveAsync(async () =>
+        {
+            await HttpPreflightAsync([hostName], cancellationToken);
+            if (beforeMutation is not null) await beforeMutation(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return await IssueCommand(wacs, args, cancellationToken);
+        }, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (beforeMutation is not null) await beforeMutation(cancellationToken);
         if (!result.Success)
@@ -1444,14 +1755,35 @@ public sealed class WinAcmeSslService(
             return new AcmeIssueResult(null, "ssl.fallback.acme_failed");
         }
 
-        var after = IssueCertificateLookup(hostName);
-        var certificate = after?.Thumbprint != before?.Thumbprint ? after : before;
+        var saved = SslRenewalVerification.Select(await RenewalRecordsAsync(wacs, useStaging, cancellationToken), site, [hostName]);
+        if (!saved.HasValue || prior.HasValue && SslRenewalVerification.String(prior.Value, "Id") != SslRenewalVerification.String(saved.Value, "Id"))
+            throw SslRenewalVerification.Invalid();
+        var certificate = RenewalCertificateLookup(SslRenewalVerification.LastThumbprint(saved.Value))
+            ?? throw SslRenewalVerification.Invalid();
+        try
+        {
+            SslRenewalVerification.VerifyIssued(prior, saved.Value, certificate, [hostName]);
+            return new AcmeIssueResult(certificate, string.Empty, SslRenewalVerification.String(saved.Value, "Id"));
+        }
+        catch { certificate.Dispose(); throw; }
+    }
 
-        // win-acme "basarili" cikis kodu dondurup ORTADA SERTIFIKA BIRAKMAYABILIR. Cikis kodunu
-        // sonuc yerine koymak, bu dosyada bir kez daha duzeltilen hatanin ta kendisiydi.
-        return certificate is null
-            ? new AcmeIssueResult(null, "ssl.fallback.certificate_not_found")
-            : new AcmeIssueResult(certificate, string.Empty);
+    private async Task VerifyIssuedBindingsAsync(SiteDto site, string[] hosts, string thumbprint, CancellationToken token)
+    {
+        IReadOnlyCollection<IisHttpsBinding>? bindings;
+        try { bindings = await ReadHttpsBindingsAsync(token); }
+        catch (Exception error) when (error is not OperationCanceledException)
+        { throw new AppException("ssl.issue_binding_verification_failed", 502, 502, $"{site.Name}: IIS HTTPS bindings could not be read after certificate installation."); }
+        foreach (var host in hosts)
+        {
+            var matches = bindings?.Where(binding => binding.Port == 443
+                && string.Equals(binding.SiteName, site.Name, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(binding.HostName, host, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (matches is not { Length: > 0 } || matches.Any(binding => !binding.CertificateReadable
+                || !string.Equals(binding.Thumbprint, thumbprint, StringComparison.OrdinalIgnoreCase)))
+                throw new AppException("ssl.issue_binding_verification_failed", 502, 502,
+                    $"{site.Name}: certificate was issued, but HTTPS binding for {host}:443 with its thumbprint could not be verified.");
+        }
     }
 
     private static string Kirp(string? value)
@@ -1650,6 +1982,28 @@ public sealed class WinAcmeSslService(
         SslCertificateImport.PersistToStore(machineStore, certificate);
     }
 
+    private static X509Certificate2? FindRenewalCertificate(string thumbprint)
+    {
+        foreach (var name in new[] { "My", "WebHosting" })
+        {
+            try
+            {
+                using var store = new X509Store(name, StoreLocation.LocalMachine);
+                store.Open(OpenFlags.ReadOnly);
+                X509Certificate2? selected = null;
+                foreach (var certificate in store.Certificates)
+                {
+                    if (selected is null && string.Equals(certificate.Thumbprint, thumbprint, StringComparison.OrdinalIgnoreCase)) selected = certificate;
+                    else certificate.Dispose();
+                }
+                if (selected is not null) return selected;
+            }
+            catch (Exception error) when (error is CryptographicException or UnauthorizedAccessException or System.Security.SecurityException)
+            { /* The other machine store may still contain this exact certificate. */ }
+        }
+        return null;
+    }
+
     private static X509Certificate2? FindBestCertificate(string hostName)
         => FindBestCertificate(hostName, out _);
 
@@ -1697,10 +2051,9 @@ public sealed class WinAcmeSslService(
         }
     }
 
-    // IIS HTTPS binding'i artık PowerShell WebAdministration ile yapılır (New-WebBinding -SslFlags 1
-    // + AddSslCertificate). Microsoft.Web.Administration reflection bazı IIS sürümlerinde SNI
-    // sertifikası bağlamayı "bağlanamadı" ile reddediyordu; PowerShell yöntemi güvenilir çalışır.
-    private async Task EnsureHttpsBindingAsync(string siteName, string hostName, int port, X509Certificate2 certificate, CancellationToken cancellationToken)
+    // Existing bindings retain their IP and SSL flags. The native script measures the
+    // IIS snapshot before/after attachment and restores only a still-owned target.
+    internal async Task EnsureHttpsBindingAsync(string siteName, string hostName, int port, X509Certificate2 certificate, CancellationToken cancellationToken)
     {
         var thumbprint = certificate.Thumbprint ?? string.Empty;
         if (string.IsNullOrWhiteSpace(thumbprint))
@@ -1708,35 +2061,10 @@ public sealed class WinAcmeSslService(
             throw new AppException("ssl.binding_failed", 500, 500, "Sertifika parmak izi (thumbprint) yok.");
         }
 
-        var site = siteName.Replace("'", "''");
-        var dn = (hostName ?? string.Empty).Replace("'", "''");
-        var thumb = thumbprint.Replace("'", "''");
-
-        var script = $$"""
-            Import-Module WebAdministration -ErrorAction Stop
-            $ErrorActionPreference = 'Stop'
-            $site = '{{site}}'; $dn = '{{dn}}'; $port = {{port}}; $thumb = '{{thumb}}'
-            Get-WebBinding -Name $site -Protocol https -Port $port -HostHeader $dn -ErrorAction SilentlyContinue |
-              Remove-WebBinding -ErrorAction SilentlyContinue
-            if ($dn) {
-              New-WebBinding -Name $site -Protocol https -Port $port -HostHeader $dn -SslFlags 1
-              $b = Get-WebBinding -Name $site -Protocol https -Port $port -HostHeader $dn
-            } else {
-              New-WebBinding -Name $site -Protocol https -Port $port
-              $b = Get-WebBinding -Name $site -Protocol https -Port $port
-            }
-            # Sertifika hangi depodaysa ORADAN bağla. win-acme LE sertifikasını WebHosting'e koyar;
-            # self-signed/import ise My'da olur. Yanlış depo "güvenli değil" / boş binding'e yol açar.
-            $store = 'My'
-            if (-not (Test-Path "Cert:\LocalMachine\My\$thumb") -and (Test-Path "Cert:\LocalMachine\WebHosting\$thumb")) {
-              $store = 'WebHosting'
-            }
-            $b.AddSslCertificate($thumb, $store)
-            'OK'
-            """;
+        var script = SslBindingMutation.Script(siteName, hostName ?? string.Empty, port, thumbprint);
 
         var result = await HttpsBindingCommand(script, cancellationToken);
-        if (!result.Success)
+        if (!result.Success || result.StandardOutput.Trim() != "OK")
         {
             throw new AppException(
                 "ssl.binding_failed",
@@ -1871,6 +2199,41 @@ public sealed class WinAcmeSslService(
             var current = await generation.ValidateAsync(token);
             if (beforeMutation is not null) await beforeMutation(current, token);
         }, cancellationToken));
+
+        // (3b) win-acme yenilemesi. Panel kaydi gitti ama yenileme kaydi kaldiysa win-acme her gun
+        // bu bagi/siteyi yeniden kurmaya calisir (ya da bagi sessizce geri getirir). RemoveSiteAsync
+        // ile AYNI iptal+dogrulama kapisi; basarisizlik GIZLENMEZ, sonuca yazilir.
+        var renewalIds = expectedState
+            .Where(item => !string.IsNullOrWhiteSpace(item.ManagedRenewalId))
+            .Select(item => (Id: item.ManagedRenewalId!.Trim(), item.ManagedRenewalStaging))
+            .Distinct().ToArray();
+        if (renewalIds.Length > 0)
+        {
+            var remainingState = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
+            var details = new List<string>();
+            var action = "cancelled";
+            foreach (var (id, staging) in renewalIds)
+            {
+                if (remainingState.Any(o => string.Equals(o.ManagedRenewalId?.Trim(), id, StringComparison.Ordinal)))
+                {
+                    // Ayni yenileme baska bir kayitta da var (ör. joker): iptal digerini bozar.
+                    if (action == "cancelled") action = "kept_shared";
+                    details.Add("ssl.renewal_shared");
+                    continue;
+                }
+                (bool Cancelled, string? Problem) outcome = default;
+                await MutateAsync(async () => { outcome = await CancelManagedRenewalAsync(id, staging, cancellationToken); });
+                if (!outcome.Cancelled)
+                {
+                    action = "cancel_failed";
+                    logger.LogWarning("Renewal cancel failed after binding removal: {Problem}", outcome.Problem);
+                    details.Add("ssl.renewal_cancel_failed");
+                }
+            }
+            result.RenewalAction = action;
+            // Mesaj ANAHTARI doner (arayuz cevirir); ham metin yalniz gunluge gider.
+            result.RenewalDetail = details.Distinct().FirstOrDefault() ?? string.Empty;
+        }
 
         // (4) Sertifika deposu kararı — ÖLÇÜMLE.
         var digerKullananlar = SslRemovalPlan.FindOtherUsersOfCertificate(afterBindings, target);
@@ -2019,11 +2382,11 @@ public sealed class WinAcmeSslService(
 
     private async Task RemoveHttpsBindingAsync(string siteName, IisHttpsBinding target, CancellationToken cancellationToken)
     {
-        var site = siteName.Replace("'", "''");
-        var dn = target.HostName.Replace("'", "''");
-        var bindingInformation = target.BindingInformation.Replace("'", "''");
-        var thumbprint = target.Thumbprint.Replace("'", "''");
-        var storeName = target.StoreName.Replace("'", "''");
+        var site = PowerShellQuoting.Escape(siteName);
+        var dn = PowerShellQuoting.Escape(target.HostName);
+        var bindingInformation = PowerShellQuoting.Escape(target.BindingInformation);
+        var thumbprint = PowerShellQuoting.Escape(target.Thumbprint);
+        var storeName = PowerShellQuoting.Escape(target.StoreName);
 
         var script = $$"""
             Import-Module WebAdministration -ErrorAction Stop
@@ -2069,7 +2432,7 @@ public sealed class WinAcmeSslService(
             return ("remove_failed", "Sertifika parmak izi okunamadi.", []);
         }
 
-        var thumb = thumbprint.Replace("'", "''");
+        var thumb = PowerShellQuoting.Escape(thumbprint);
         var script = $$"""
             Import-Module WebAdministration -ErrorAction Stop
             $ErrorActionPreference = 'Stop'
@@ -2079,6 +2442,16 @@ public sealed class WinAcmeSslService(
             # The managed inventory may predate process startup. Recheck ALL sites here;
             # a recreated target binding is a current user too.
             foreach ($site in @(Get-Website -ErrorAction Stop)) {
+              if (@($site.Bindings.Collection | Where-Object { $_.protocol -eq 'ftp' }).Count -gt 0) {
+                try {
+                  $ftpSsl = $site.ftpServer.security.ssl
+                  if ($null -eq $ftpSsl) { throw 'FTP SSL configuration unreadable' }
+                  $ftpHash = $ftpSsl.serverCertHash
+                  if ($ftpHash -is [byte[]]) { $ftpHash = [BitConverter]::ToString($ftpHash).Replace('-', '') }
+                  elseif ($ftpHash -isnot [string] -and $null -ne $ftpHash) { throw 'Unsupported FTP certificate hash type' }
+                  if ([string]$ftpHash -ieq $thumb) { $users += ([string]$site.Name + ' (FTPS)') }
+                } catch { $users += ([string]$site.Name + ' (FTPS status unknown)'); $bindingsMeasured = $false }
+              }
               foreach ($binding in @($site.Bindings.Collection)) {
                 if ($binding.protocol -ne 'https') { continue }
                 $used = $false
@@ -2204,11 +2577,184 @@ public sealed class WinAcmeSslService(
         }, beforePublication, cancellationToken);
     }
 
+    /// <summary>
+    /// Bir win-acme yenileme kaydini IPTAL eder ve listeden GERCEKTEN kalktigini olcer (cikis koduna
+    /// guvenilmez). <see cref="RemoveSiteAsync"/> ve tek baglama kaldirma AYNI kapiyi kullanir: ikiz yol
+    /// ayrisirsa biri yenilemeyi iptal edip digeri unutur (tek baglama kaldirma bu yuzden unutuyordu).
+    /// </summary>
+    private async Task<(bool Cancelled, string? Problem)> CancelManagedRenewalAsync(
+        string renewalId, bool staging, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var wacs = await ResolveWinAcmeExecutableAsync(cancellationToken);
+            if (string.IsNullOrWhiteSpace(wacs))
+                return (false, $"win-acme yenilemesi {renewalId} iptal edilemedi: win-acme kurulu/bulunamadı.");
+
+            var baseUri = staging
+                ? "https://acme-staging-v02.api.letsencrypt.org/"
+                : "https://acme-v02.api.letsencrypt.org/";
+            var cancel = await RenewalCommand(wacs,
+                $"--cancel --id \"{renewalId.Replace("\"", string.Empty)}\" --baseuri {baseUri}", cancellationToken);
+            if (!cancel.Success)
+                return (false, $"win-acme yenilemesi {renewalId} iptal edilemedi: " +
+                    Kirp(SecretRedactor.Redact(string.IsNullOrWhiteSpace(cancel.StandardError) ? cancel.StandardOutput : cancel.StandardError)));
+
+            // Çıkış koduna GÜVENME: kimliğin win-acme listesinden gerçekten kalktığını ölç.
+            var remaining = await RenewalRecordsAsync(wacs, staging, cancellationToken);
+            if (remaining.Any(item => string.Equals(SslRenewalVerification.String(item, "Id"), renewalId, StringComparison.Ordinal)))
+                return (false, $"win-acme yenilemesi {renewalId} iptal komutu başarılı döndü ama liste hâlâ içeriyor.");
+            return (true, null);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return (false, $"win-acme yenilemesi {renewalId} iptal edilemedi: {Kirp(exception.Message)}");
+        }
+    }
+
+    /// <summary>Tek bir panel kaydinin (site+host+port) yenilemesini duraklatir/surdurur/iptal eder.</summary>
+    public async Task<SslCertificateDto> SetRenewalStateAsync(
+        string siteName, string hostName, int port, string action, CancellationToken cancellationToken = default)
+    {
+        if (action is not ("pause" or "resume" or "cancel"))
+            throw new AppException("ssl.renewal_action_invalid", 400, 400);
+        var effectivePort = port <= 0 ? 443 : port;
+        SslCertificateDto? updated = null;
+        string? problem = null;
+        // Iptal, win-acme'ye dis komut calistirir; ssl.json guncellemesinin ICINDE yapilmaz (kilit tutulmaz).
+        var all = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
+        var record = all.FirstOrDefault(item => SameRecord(item, siteName, hostName, effectivePort))
+            ?? throw new AppException("ssl.certificate_not_found", 404, 404);
+        if (string.IsNullOrWhiteSpace(record.ManagedRenewalId))
+            throw new AppException("ssl.renewal_not_managed", 409, 409);
+        var renewalId = record.ManagedRenewalId.Trim();
+
+        // Ortak kimlik: duraklatmak da iptal etmek de ayni yenilemeye bagli DIGER kaydi etkiler
+        // (duraklatma bayragi kayit basina, ama yenileme kimlikle yurur). Acikca reddedilir.
+        if (action is "pause" or "cancel"
+            && all.Any(o => !ReferenceEquals(o, record) && string.Equals(o.ManagedRenewalId?.Trim(), renewalId, StringComparison.Ordinal)))
+            throw new AppException("ssl.renewal_shared", 409, 409);
+
+        if (action == "cancel")
+        {
+            // Dis komut IIS kapisi altinda calisir (RemoveCertificate'in MutateAsync'iyle ayni kilit).
+            await siteGates.RunExclusiveAsync(ConcurrencyKeys.Iis, async () =>
+            {
+                var outcome = await CancelManagedRenewalAsync(renewalId, record.ManagedRenewalStaging, cancellationToken);
+                if (!outcome.Cancelled) problem = outcome.Problem;
+            }, cancellationToken);
+            if (problem is not null) throw new AppException("ssl.renewal_cancel_failed", 500, 500, problem);
+        }
+
+        await fileStore.UpdateAsync(StatePath, Array.Empty<SslCertificateDto>(), existing =>
+        {
+            var fresh = existing.FirstOrDefault(item => SameRecord(item, siteName, hostName, effectivePort))
+                ?? throw new AppException("ssl.certificate_not_found", 404, 404);
+            if (!string.Equals(fresh.ManagedRenewalId?.Trim(), renewalId, StringComparison.Ordinal))
+                throw new AppException("ssl.renewal_changed", 409, 409);
+            switch (action)
+            {
+                case "pause": fresh.RenewalPaused = true; break;
+                case "resume": fresh.RenewalPaused = false; break;
+                default: fresh.ManagedRenewalId = null; fresh.ManagedRenewalSiteId = null; fresh.RenewalPaused = false; break;
+            }
+            updated = fresh;
+            return existing.ToArray();
+        }, cancellationToken);
+        return updated!;
+    }
+
+    private static bool SameRecord(SslCertificateDto item, string siteName, string hostName, int port) =>
+        string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(item.HostName, hostName, StringComparison.OrdinalIgnoreCase)
+        && (item.Port <= 0 ? 443 : item.Port) == port;
+
+    /// <summary>
+    /// Site silinirken panelin SSL izini TAM temizler: (1) panelin kurduğu win-acme yenilemesini iptal eder
+    /// (aksi halde her gün sitesi olmayan bir yenileme başarısız olur), (2) ssl.json kayıtlarını siler,
+    /// (3) sertifikayı depodan YALNIZ başka hiçbir bağlama/FTPS/SMTP TLS/başka panel kaydı kullanmıyorsa siler.
+    /// Çağıran, IIS sitesini bu çağrıdan ÖNCE kaldırmış olmalıdır (sertifika kullanım ölçümü canlı IIS'ten gelir).
+    /// Yapılamayan adım olursa kayıtlar yine temizlenir, ama sonunda <c>ssl.site_cleanup_incomplete</c> fırlatılır
+    /// ve nedenler Details'te yer alır; çağıran bunu kalıntı olarak raporlar.
+    /// </summary>
     public async Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default)
     {
+        var all = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
+        var records = all.Where(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase)).ToArray();
+        var otherRecords = all.Where(item => !string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase)).ToArray();
+        var problems = new List<string>();
+
+        // (1) win-acme yenilemelerini iptal et (yalnız panelin kendi ManagedRenewalId'si).
+        var cancelled = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var group in records.Where(r => !string.IsNullOrWhiteSpace(r.ManagedRenewalId))
+                     .GroupBy(r => (Id: r.ManagedRenewalId!.Trim(), Staging: r.ManagedRenewalStaging)))
+        {
+            if (otherRecords.Any(o => string.Equals(o.ManagedRenewalId?.Trim(), group.Key.Id, StringComparison.Ordinal)))
+            {
+                // Aynı yenileme başka bir sitenin kaydında da var: iptal etmek onu da bozar.
+                problems.Add($"win-acme yenilemesi {group.Key.Id} başka bir site kaydıyla paylaşılıyor — iptal edilmedi.");
+                continue;
+            }
+
+            var outcome = await CancelManagedRenewalAsync(group.Key.Id, group.Key.Staging, cancellationToken);
+            if (outcome.Cancelled) cancelled.Add(group.Key.Id);
+            else problems.Add(outcome.Problem!);
+        }
+
+        // Kimliği kayıtlı olmayan eski Let's Encrypt kayıtları: hangi yenilemeye ait olduğu bilinmiyor,
+        // tahminle iptal edilmez; kalıntı olarak adıyla bildirilir.
+        foreach (var legacy in records.Where(r => string.IsNullOrWhiteSpace(r.ManagedRenewalId)
+                     && string.Equals(r.Source, "letsencrypt", StringComparison.OrdinalIgnoreCase)))
+        {
+            problems.Add($"{legacy.HostName}: Let's Encrypt kaydında win-acme yenileme kimliği yok; yenileme varsa win-acme'den elle iptal edin.");
+        }
+
+        // (2) Panel kayıtları.
         await fileStore.UpdateAsync(StatePath, Array.Empty<SslCertificateDto>(), existing => existing
             .Where(item => !string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase))
             .ToArray(), cancellationToken);
+
+        // (3) Sertifika deposu: yalnız yenilemesi başarıyla iptal edilenlerin (panelin kurduğu) sertifikaları,
+        // ve yalnız hiçbir kullanan yoksa. İçe aktarılmış/elle sertifikalara (ManagedRenewalId yok) dokunulmaz.
+        var thumbprints = records
+            .Where(r => !string.IsNullOrWhiteSpace(r.Thumbprint) && !string.IsNullOrWhiteSpace(r.ManagedRenewalId)
+                        && cancelled.Contains(r.ManagedRenewalId!.Trim()))
+            .Select(r => r.Thumbprint.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (var thumbprint in thumbprints)
+        {
+            try
+            {
+                // Aynı sıra, ikiz RemoveCertificateCoreAsync gibi: önce mail yaşam döngüsü, sonra IIS kilidi.
+                using var mailOperation = await Mail.MailCertificateLifecycle.EnterAsync(
+                    fileStore.ResolvePath(Mail.MailCertificateStoreReference.StatePath), cancellationToken);
+                await siteGates.RunExclusiveAsync(AdaPanel.Core.Interfaces.ConcurrencyKeys.Iis, async () =>
+                {
+                    // Kilit altında TAZE oku: bekleme sırasında başka bir site aynı sertifikayı kaydetmiş olabilir.
+                    var fresh = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
+                    if (fresh.Any(o => string.Equals(o.Thumbprint?.Trim(), thumbprint, StringComparison.OrdinalIgnoreCase)))
+                        return; // Başka kayıt kullanıyor: depoda kalır (bilinçli, kalıntı değil).
+
+                    var mailUsage = await Mail.MailCertificateStoreReference.ReadAsync(
+                        fileStore.ResolvePath(Mail.MailCertificateStoreReference.StatePath), thumbprint, cancellationToken);
+                    if (mailUsage != Mail.MailCertificateStoreReference.Usage.None)
+                        return; // SMTP TLS kullanıyor: silinmez.
+
+                    var deletion = await TryDeleteCertificateAsync(thumbprint, cancellationToken);
+                    if (deletion.Action == "remove_failed" && !deletion.Detail.StartsWith("Sertifika depoda bulunamadi", StringComparison.Ordinal))
+                        problems.Add($"Sertifika {thumbprint} depodan silinemedi: {deletion.Detail}");
+                }, cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                problems.Add($"Sertifika {thumbprint} depodan silinemedi: {Kirp(exception.Message)}");
+            }
+        }
+
+        if (problems.Count > 0)
+        {
+            throw new AppException("ssl.site_cleanup_incomplete", 500, 500, string.Join(" | ", problems));
+        }
     }
 
     private async Task UpsertAsync(SslCertificateDto dto, CancellationToken cancellationToken,

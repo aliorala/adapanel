@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
@@ -83,6 +83,10 @@ internal static class ProcessRunner
         }
 
         ConfigureWindowsPowerShellEnvironment(startInfo);
+        // win-acme derives some option names using CurrentCulture. Set this on the
+        // child after inheriting its environment, before the .NET runtime starts.
+        if (Path.GetFileName(fileName).Equals("wacs.exe", StringComparison.OrdinalIgnoreCase))
+            startInfo.Environment["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1";
 
         using var process = new Process
         {
@@ -316,41 +320,19 @@ internal static class ProcessRunner
     /// Görevlerin kendi hataları yutulur — burada amaç veri toplamak değil, görevi SAHİPSİZ
     /// bırakmamak.
     /// </summary>
-    private static async Task<(string Output, string Error)> TopluyorAsync(Task<string> outputTask, Task<string> errorTask)
+    internal static async Task<(string Output, string Error)> TopluyorAsync(Task<string> outputTask, Task<string> errorTask,
+        TimeSpan? collectionTimeout = null)
     {
-        try
-        {
-            var tamamlanan = await Task.WhenAny(
-                Task.WhenAll(outputTask, errorTask),
-                Task.Delay(TimeSpan.FromSeconds(5)));
-
-            if (tamamlanan is not Task<string[]>)
-            {
-                // 5 sn içinde bitmediler; yine de gözlemlenmiş sayılsınlar ki süreç düzeyinde
-                // "unobserved exception" olayı tetiklenmesin.
-                _ = outputTask.ContinueWith(static task => _ = task.Exception, TaskScheduler.Default);
-                _ = errorTask.ContinueWith(static task => _ = task.Exception, TaskScheduler.Default);
-                return (string.Empty, string.Empty);
-            }
-        }
+        var readers = Task.WhenAll(outputTask, errorTask);
+        try { await readers.WaitAsync(collectionTimeout ?? TimeSpan.FromSeconds(5)); }
         catch
         {
-            // Borular kapandığı için okuma düşmüş olabilir; bu beklenen bir durum.
+            // Observe a late pipe fault after bounded cleanup without holding the request.
+            _ = readers.ContinueWith(static task => _ = task.Exception,
+                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
         }
-
-        return (Guvenli(outputTask), Guvenli(errorTask));
-
-        static string Guvenli(Task<string> task)
-        {
-            try
-            {
-                return task.IsCompletedSuccessfully ? task.Result : string.Empty;
-            }
-            catch
-            {
-                return string.Empty;
-            }
-        }
+        return (outputTask.IsCompletedSuccessfully ? outputTask.Result : string.Empty,
+            errorTask.IsCompletedSuccessfully ? errorTask.Result : string.Empty);
     }
 
     /// <summary>

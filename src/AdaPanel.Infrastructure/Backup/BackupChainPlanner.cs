@@ -62,7 +62,8 @@ internal static class BackupChainPlanner
             // Üç soru (Plesk ile aynı ölçü): indekste var mıydı, boyutu aynı mı, tarihi aynı mı.
             if (!oncekiler.TryGetValue(entry.Path, out var onceki) ||
                 onceki.Size != entry.Size ||
-                onceki.ModifiedUtcTicks != entry.ModifiedUtcTicks)
+                onceki.ModifiedUtcTicks != entry.ModifiedUtcTicks ||
+                !string.Equals(onceki.Sha256, entry.Sha256, StringComparison.OrdinalIgnoreCase))
             {
                 degisen.Add(entry.Path);
             }

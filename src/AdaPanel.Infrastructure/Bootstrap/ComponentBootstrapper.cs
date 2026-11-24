@@ -122,7 +122,7 @@ public sealed class ComponentBootstrapper(
             "adminer" or "clamav" or "memcached" or
             "nodejs-lts" or "roundcube" or "stalwart-cli" or "stalwart-mail" or "win-acme" or
             "php-8.3" or "mariadb-11" or "mysql-8" or "postgresql-16" or "pgadmin4" or
-            "nginx" or "python-3" or "redis";
+            "nginx" or "python-3" or "redis" or "mailenable-standard";
     }
 
     public async Task<int> GetPendingUpdateCountAsync(CancellationToken cancellationToken = default)
@@ -225,7 +225,8 @@ public sealed class ComponentBootstrapper(
         HttpClient client, CancellationToken cancellationToken)
     {
         var supported = SupportsVersionCheck(component.Id);
-        var available = previous is not null && IsNewerVersion(previous.AvailableVersion, component.Version)
+        var available = previous is not null && ParseVersionParts(previous.AvailableVersion) is not null
+            && (ParseVersionParts(component.Version) is null || IsNewerVersion(previous.AvailableVersion, component.Version))
             ? previous.AvailableVersion : component.Version;
         var failed = false;
         if (supported)
@@ -235,7 +236,7 @@ public sealed class ComponentBootstrapper(
             timeout.CancelAfter(TimeSpan.FromSeconds(20));
             try
             {
-                var resolved = await ResolveDynamicComponentAsync(component, client, timeout.Token);
+                var resolved = await ResolveDynamicComponentAsync(component, client, timeout.Token, versionCheckOnly: true);
                 if (resolved is null || ParseVersionParts(resolved.Version) is null)
                     throw new InvalidDataException("The upstream version could not be verified.");
                 available = resolved.Version;
@@ -795,7 +796,7 @@ public sealed class ComponentBootstrapper(
 
         try
         {
-            // Mail sunucusu çakışmasını engelle: biri kurulurken diğeri durdurulup yedeğe alınır
+            // Refuse an installation that conflicts with another active mail engine.
             // (ikisi de port 25/110/143'e bağlanamaz). Stalwart birincil, MailEnable yedek.
             await ResolveMailServerConflictAsync(component.Id, cancellationToken);
 
@@ -1204,12 +1205,8 @@ public sealed class ComponentBootstrapper(
         {
             try
             {
-                await TryRunManagedUninstallerAsync(
-                    component,
-                    component.Id,
-                    cleanupPath,
-                    cancellationToken);
-                DeleteManagedPath(cleanupPath, component.Id);
+                await RollbackInstallerFilesAsync(component, cleanupPath, () =>
+                    TryRunManagedUninstallerAsync(component, component.Id, cleanupPath, cancellationToken));
             }
             catch (Exception exception)
             {
@@ -1239,6 +1236,19 @@ public sealed class ComponentBootstrapper(
         {
             logger.LogWarning(exception, "Rollback cleanup failed for path {CleanupPath}", cleanupPath);
         }
+    }
+
+    internal async Task RollbackInstallerFilesAsync(ComponentManifestItemDto component, string cleanupPath, Func<Task> uninstallAsync)
+    {
+        // The installer/uninstaller may remove the whole installation tree. Move existing
+        // customer state aside before either cleanup step and restore it even on failure.
+        var preserved = IsManagedPath(cleanupPath) ? PreserveDataDirectories(component, cleanupPath) : null;
+        try
+        {
+            await uninstallAsync();
+            DeleteManagedPath(cleanupPath, component.Id);
+        }
+        finally { preserved?.Restore(); }
     }
 
     internal void RollbackInstallationFiles(ComponentManifestItemDto component, string cleanupPath, bool preserveNginxConfiguration)
@@ -1474,11 +1484,14 @@ public sealed class ComponentBootstrapper(
     private async Task<ComponentManifestItemDto?> ResolveDynamicComponentAsync(
         ComponentManifestItemDto component,
         HttpClient client,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool versionCheckOnly = false)
     {
         var normalizedId = component.Id.Trim().ToLowerInvariant();
         switch (normalizedId)
         {
+            case "mailenable-standard":
+                return await ResolveLatestMailEnableAsync(component, client, cancellationToken);
             case "adminer":
                 return await ResolveLatestGitHubAssetAsync(
                     component,
@@ -1487,7 +1500,7 @@ public sealed class ComponentBootstrapper(
                     assetName =>
                         assetName.EndsWith(".php", StringComparison.OrdinalIgnoreCase) &&
                         !assetName.Contains("mysql", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    cancellationToken, versionCheckOnly);
 
             case "memcached":
                 return await ResolveLatestGitHubAssetAsync(
@@ -1497,7 +1510,7 @@ public sealed class ComponentBootstrapper(
                     assetName =>
                         assetName.StartsWith("memcached-", StringComparison.OrdinalIgnoreCase) &&
                         assetName.EndsWith("win64-mingw.zip", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    cancellationToken, versionCheckOnly);
 
             case "nodejs-lts":
                 return await ResolveLatestNodeLtsAsync(component, client, cancellationToken);
@@ -1513,7 +1526,7 @@ public sealed class ComponentBootstrapper(
                     assetName =>
                         assetName.StartsWith("roundcubemail-", StringComparison.OrdinalIgnoreCase) &&
                         assetName.EndsWith("-complete.tar.gz", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    cancellationToken, versionCheckOnly);
 
             // --- Manifeste sabitlenmis surumler icin canli cozumleyiciler ---
             // ORTAK KURAL: hepsi bilesenin KENDI SERISINDE kalir (php-8.3 -> 8.3.x, mariadb-11 -> 11.8.x,
@@ -1548,7 +1561,7 @@ public sealed class ComponentBootstrapper(
                     assetName =>
                         assetName.StartsWith("Redis-x64-", StringComparison.OrdinalIgnoreCase) &&
                         assetName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    cancellationToken, versionCheckOnly);
 
             // Antivirus imza motoru: eski surum = yeni tehditleri kacirma.
             case "clamav":
@@ -1559,15 +1572,15 @@ public sealed class ComponentBootstrapper(
                     assetName =>
                         assetName.EndsWith(".win.x64.zip", StringComparison.OrdinalIgnoreCase) &&
                         !assetName.Contains("debug", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    cancellationToken, versionCheckOnly);
 
             case "win-acme":
                 return await ResolveLatestGitHubAssetAsync(
                     component,
                     client,
                     "win-acme/win-acme",
-                    assetName => assetName.EndsWith(".x64.trimmed.zip", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    IsWinAcmeX64Package,
+                    cancellationToken, versionCheckOnly);
 
             case "composer":
                 return await ResolveChecksumTextAsync(
@@ -1594,7 +1607,7 @@ public sealed class ComponentBootstrapper(
                     client,
                     "stalwartlabs/stalwart",
                     assetName => assetName.Equals("stalwart-x86_64-pc-windows-msvc.zip", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    cancellationToken, versionCheckOnly);
 
             case "stalwart-cli":
                 return await ResolveLatestGitHubAssetAsync(
@@ -1602,7 +1615,7 @@ public sealed class ComponentBootstrapper(
                     client,
                     "stalwartlabs/cli",
                     assetName => assetName.Equals("stalwart-cli-x86_64-pc-windows-msvc.zip", StringComparison.OrdinalIgnoreCase),
-                    cancellationToken);
+                    cancellationToken, versionCheckOnly);
         }
 
         if (!component.Id.StartsWith("php-", StringComparison.OrdinalIgnoreCase))
@@ -1715,12 +1728,17 @@ public sealed class ComponentBootstrapper(
         }
     }
 
+    internal static bool IsWinAcmeX64Package(string name) =>
+        Regex.IsMatch(name, @"\Awin-acme\.v[0-9]+(?:\.[0-9]+){2,3}\.x64\.(?:pluggable|trimmed)\.zip\z",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private async Task<ComponentManifestItemDto?> ResolveLatestGitHubAssetAsync(
         ComponentManifestItemDto component,
         HttpClient client,
         string repository,
         Func<string, bool> assetPredicate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool versionCheckOnly = false)
     {
         try
         {
@@ -1772,7 +1790,7 @@ public sealed class ComponentBootstrapper(
                 var sha256 = asset.TryGetProperty("digest", out var digestElement)
                     ? ParseSha256(digestElement.GetString())
                     : null;
-                if (string.IsNullOrWhiteSpace(sha256))
+                if (string.IsNullOrWhiteSpace(sha256) && !versionCheckOnly)
                 {
                     logger.LogWarning(
                         "GitHub release asset for {ComponentId} does not publish a SHA256 digest. Keeping the pinned manifest package.",
@@ -1790,7 +1808,8 @@ public sealed class ComponentBootstrapper(
                     component,
                     version: tagName.TrimStart('v'),
                     downloadUrl: downloadUrl,
-                    sha256: sha256);
+                    // Version metadata is independent of package integrity. Installation still requires a digest.
+                    sha256: sha256 ?? string.Empty);
             }
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -2269,6 +2288,26 @@ public sealed class ComponentBootstrapper(
         return null;
     }
 
+    internal static string? ParseMailEnableVersion(string releaseNotes, string currentVersion)
+    {
+        var major = VersionSeries(currentVersion, 1);
+        var versions = Regex.Matches(releaseNotes, @"(?m)^(\d+\.\d+)\s+\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4}\s*$")
+            .Select(m => m.Groups[1].Value).Where(v => VersionSeries(v, 1) == major).Distinct().ToArray();
+        return versions.OrderByDescending(v => Version.Parse(v)).FirstOrDefault();
+    }
+
+    private async Task<ComponentManifestItemDto?> ResolveLatestMailEnableAsync(
+        ComponentManifestItemDto component, HttpClient client, CancellationToken cancellationToken)
+    {
+        var notes = await client.GetStringAsync("https://www.mailenable.com/Standard-ReleaseNotes.txt", cancellationToken);
+        var version = ParseMailEnableVersion(notes, component.Version);
+        if (version is null) return null;
+        if (Version.Parse(version) <= Version.Parse(component.Version)) return component;
+        // Versioned vendor HTTPS URL. Installer execution still requires Authenticode validation.
+        return CopyComponent(component, version: version,
+            downloadUrl: $"https://www.mailenable.com/standard{version.Replace(".", "")}.exe", sha256: string.Empty);
+    }
+
     // nginx: indirme sayfasındaki sürümlerden AYNI DALDAKİ (ör. 1.31.x) en yenisi alınır.
     private async Task<ComponentManifestItemDto?> ResolveLatestNginxAsync(
         ComponentManifestItemDto component,
@@ -2556,7 +2595,7 @@ public sealed class ComponentBootstrapper(
     /// MoveFile'da "Access denied" verebilir; bu yüzden hedefi temizleyip taşımayı
     /// kısa beklemelerle birkaç kez dener.
     /// </summary>
-    private static async Task FinalizeDownloadAsync(
+    internal static async Task FinalizeDownloadAsync(
         string temporaryPath,
         string destinationPath,
         CancellationToken cancellationToken)
@@ -2580,11 +2619,10 @@ public sealed class ComponentBootstrapper(
                 File.Move(temporaryPath, destinationPath, overwrite: true);
                 return;
             }
-            catch (Exception exception) when (
-                (exception is UnauthorizedAccessException or IOException) &&
-                attempt < 6)
+            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt), cancellationToken);
+                if (attempt < 6)
+                    await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt), cancellationToken);
             }
         }
 
@@ -2635,7 +2673,7 @@ public sealed class ComponentBootstrapper(
             try
             {
                 Directory.CreateDirectory(path);
-                var escaped = path.Replace("'", "''");
+                var escaped = PowerShellQuoting.Escape(path);
                 await ProcessRunner.RunPowerShellAsync(
                     $"Add-MpPreference -ExclusionPath '{escaped}' -ErrorAction SilentlyContinue",
                     cancellationToken);
@@ -2676,11 +2714,20 @@ public sealed class ComponentBootstrapper(
     }
 
     private static void EnsureIntegrityMetadata(ComponentManifestItemDto component)
+        => EnsureIntegrityMetadataForTests(component);
+
+    /// <summary>
+    /// Indirmeden ONCE kapali-basarisiz kapisi. Izinli ama checksum'siz host (bkz.
+    /// <see cref="TrustedNoChecksumHosts"/>) artik tek basina yetmez: son kapi
+    /// <see cref="VerifyPackageIntegrityAsync"/> zaten SHA256'siz zip/phar'i reddeder, ama bunu
+    /// yuzlerce MB indirdikten SONRA yapiyordu. Izinli ozet-siz yol yalniz Authenticode ile
+    /// dogrulanan msi/installer'dir. Bilinen surumler manifestteki SHA256'ya sabitlidir.
+    /// </summary>
+    internal static void EnsureIntegrityMetadataForTests(ComponentManifestItemDto component)
     {
         var normalizedType = component.Type.Trim().ToLowerInvariant();
         if (!string.IsNullOrWhiteSpace(component.Sha256) ||
-            normalizedType is "msi" or "installer" ||
-            IsTrustedNoChecksumHost(component.DownloadUrl))
+            normalizedType is "msi" or "installer")
         {
             return;
         }
@@ -2740,7 +2787,7 @@ public sealed class ComponentBootstrapper(
         string filePath,
         CancellationToken cancellationToken)
     {
-        var escapedPath = filePath.Replace("'", "''", StringComparison.Ordinal);
+        var escapedPath = PowerShellQuoting.Escape(filePath);
         var script =
             $"$signature = Get-AuthenticodeSignature -LiteralPath '{escapedPath}'\r\n" +
             "[Console]::Out.Write($signature.Status.ToString())\r\n" +
@@ -4083,7 +4130,7 @@ public sealed class ComponentBootstrapper(
         var serviceName = string.IsNullOrWhiteSpace(component.ServiceName) ? "docker" : component.ServiceName;
         var dockerd = FindExecutable(installDirectory, "dockerd.exe");
         var binDirectory = Path.GetDirectoryName(dockerd) ?? installDirectory;
-        var binLiteral = binDirectory.Replace("'", "''");
+        var binLiteral = PowerShellQuoting.Escape(binDirectory);
 
         await TryRemoveServiceAsync(serviceName, cancellationToken);
 
@@ -4916,7 +4963,8 @@ public sealed class ComponentBootstrapper(
 
     private static void SetPhpIniExtension(List<string> lines, string extension)
     {
-        var index = lines.FindIndex(line =>
+        var globalEnd = AdaPanel.Infrastructure.Php.PhpIniSiteIsolation.GlobalInsertIndex(lines);
+        var index = lines.FindIndex(0, globalEnd, line =>
         {
             var normalized = line.Trim().TrimStart(';').TrimStart().Replace(" ", string.Empty);
             if (!normalized.StartsWith("extension=", StringComparison.OrdinalIgnoreCase))
@@ -4937,7 +4985,7 @@ public sealed class ComponentBootstrapper(
         {
             // GENEL bölüme: site [PATH=] bloklarından SONRA eklenen bir extension yalnız o siteye
             // yüklenirdi (öteki bütün siteler eklentisiz kalırdı).
-            lines.Insert(AdaPanel.Infrastructure.Php.PhpIniSiteIsolation.GlobalInsertIndex(lines), directive);
+            lines.Insert(globalEnd, directive);
         }
     }
 
@@ -5050,41 +5098,37 @@ public sealed class ComponentBootstrapper(
     /// </summary>
     /// <summary>
     /// İki mail sunucusunun (Stalwart birincil, MailEnable yedek) aynı anda çalışıp port
-    /// çakışması yaratmasını engeller. Biri kurulurken diğerini durdurup devre dışı bırakır.
-    /// Best-effort: ilgili sunucu yoksa sessizce geçer.
+    /// çakışması yaratmasını engeller. Çalışan veya otomatik başlatılan diğer hizmet varsa kurulumu reddeder.
+    /// Existing mail services are never stopped or disabled by this check.
     /// </summary>
     private async Task ResolveMailServerConflictAsync(string componentId, CancellationToken cancellationToken)
     {
         var id = (componentId ?? string.Empty).Trim().ToLowerInvariant();
-
-        if (id is "stalwart-mail")
+        if (id is not ("stalwart-mail" or "mailenable-standard")) return;
+        // Installation is not a migration. Never kill the other mail engine before a
+        // download/upgrade: failure here used to leave working mail permanently disabled.
+        var otherProcess = id == "stalwart-mail" ? "MESMTPC" : "stalwart";
+        var processes = System.Diagnostics.Process.GetProcessesByName(otherProcess);
+        try
         {
-            // MailEnable yedeğe: tüm MailEnable Windows servislerini durdur + devre dışı bırak.
-            await ProcessRunner.RunAsync(
-                "powershell.exe",
-                "-NoProfile -NonInteractive -Command \"Get-Service -DisplayName 'MailEnable*' -ErrorAction SilentlyContinue | " +
-                "ForEach-Object { Stop-Service $_ -Force -ErrorAction SilentlyContinue; Set-Service $_ -StartupType Disabled -ErrorAction SilentlyContinue }\"",
-                cancellationToken: cancellationToken,
-                timeout: TimeSpan.FromSeconds(45));
+            if (processes.Length > 0)
+                throw new AppException("mail.provider_migration_required", 409, 409);
         }
-        else if (id is "mailenable-standard")
-        {
-            // Stalwart yedeğe: zamanlanmış görevini durdur+devre dışı bırak, sürecini sonlandır.
-            await ProcessRunner.RunAsync("schtasks.exe", "/End /TN \"AdaStalwart\"", cancellationToken: cancellationToken);
-            await ProcessRunner.RunAsync("schtasks.exe", "/Change /TN \"AdaStalwart\" /DISABLE", cancellationToken: cancellationToken);
-            foreach (var process in System.Diagnostics.Process.GetProcessesByName("stalwart"))
-            {
-                try
-                {
-                    process.Kill(entireProcessTree: true);
-                    process.WaitForExit(5000);
-                }
-                catch
-                {
-                    // best-effort
-                }
-            }
-        }
+        finally { foreach (var process in processes) process.Dispose(); }
+        var result = await ProcessRunner.RunPowerShellAsync(id == "stalwart-mail" ? """
+            $ErrorActionPreference = 'Stop'
+            $services = @(Get-CimInstance Win32_Service -Filter "Name LIKE 'ME%'" | Where-Object { $_.DisplayName -like 'MailEnable*' })
+            if ($services | Where-Object { $_.State -eq 'Running' -or $_.StartMode -eq 'Auto' }) { exit 2 }
+            exit 0
+            """ : """
+            $ErrorActionPreference = 'Stop'
+            $services = @(Get-CimInstance Win32_Service | Where-Object { $_.Name -eq 'AdaStalwart' -or $_.PathName -match '(?i)stalwart\.exe' })
+            if ($services | Where-Object { $_.State -eq 'Running' -or $_.StartMode -eq 'Auto' }) { exit 2 }
+            $task = Get-ScheduledTask -TaskName 'AdaStalwart' -ErrorAction SilentlyContinue
+            if ($task -and $task.State -ne 'Disabled') { exit 2 }
+            exit 0
+            """, cancellationToken);
+        if (!result.Success) throw new AppException("mail.provider_migration_required", 409, 409);
     }
 
     internal async Task StopManagedRuntimeAsync(string serviceName, string installDirectory, CancellationToken cancellationToken)
@@ -5095,7 +5139,7 @@ public sealed class ComponentBootstrapper(
             // failure must abort the update, not fall through to killing the process.
             var stopped = await ProcessRunner.RunPowerShellAsync($$"""
                 $ErrorActionPreference = 'Stop'
-                $service = Get-Service -Name '{{serviceName.Replace("'", "''")}}' -ErrorAction SilentlyContinue
+                $service = Get-Service -Name '{{PowerShellQuoting.Escape(serviceName)}}' -ErrorAction SilentlyContinue
                 if ($null -ne $service -and $service.Status -ne 'Stopped') {
                     $service.Stop()
                     $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(30))

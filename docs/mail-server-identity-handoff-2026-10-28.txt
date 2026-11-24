@@ -1,0 +1,53 @@
+Posta sunucusu adı — devam notu (2026-10-28)
+
+Kullanıcının SON talimatı: Bu sohbet yayınlamayacak; kullanıcı diğer botla devam edecek.
+Yayın, sürüm artırımı, commit/push ve canlı ayar değişikliği yapılmadı.
+Ana proje: D:\Yaptığım Uygulamalar\AdaPanel
+İzole geliştirme kopyası: D:\Yaptığım Uygulamalar\AdaPanel-mail-identity
+Taban: 754e521, mevcut sürüm 0.8.134. Diğer botun SSO/FTP değişiklikleri korunuyor.
+Onaylanan kaynaklar ana projeye kopyalandı; değişiklikler henüz commit edilmedi.
+
+İstenen canlı tercih (henüz uygulanmadı):
+  Yönetilen alan adı: adapanel.host
+  Posta sunucusu adı: mail.adapanel.host
+  Sertifika bildirim adresi: info@adapanel.host
+Genel ürüne bu alan adı varsayılan olarak kodlanmadı.
+Salt okunur kontrolde mail.adapanel.host A kaydı 84.51.22.239 idi;
+canlı SMTP karşılaması hâlâ mail.videotools.com.tr idi.
+Kullanıcı panelde PTR sağlayıcı talimatı istemedi: böyle bir metin gösterilmiyor.
+
+Uygulanan kod:
+- Genel E-posta ekranında yalnız yöneticiye görünen Posta sunucusu adı kartı.
+- GET/POST /api/v1/mail/server-identity; POST: domain, hostName, contactEmail.
+- Stalwart üzerinde genel A kaydı, güvenilir TLS sertifikası, native ayar readback
+  ve gerçek SMTP karşılaması kontrol ediliyor; başarılıysa kalıcı tercih kaydediliyor.
+- config/mail-server-identity.json otomatik onarımın PTR/başka site seçiminin önünde.
+- TLS/DNS hazırlığı başarısızsa aktif kimlik değişmiyor; aktivasyon başarısızsa
+  eski native ad/sertifika ayarı geri alınarak kontrol ediliyor.
+- Başka alanların SNI sertifikaları ve mevcut Webmail/SSO korunuyor.
+- MailEnable için desteklenmiyor sonucu; native değişiklik yapılmıyor.
+- Harici DNS yönetilemiyorsa uygulanmış gibi gösterilmiyor.
+- Önceki istekten gelen E-posta/Veritabanları menü sayaçları da kaynakta mevcut.
+
+Kontroller:
+- Backend MailServerIdentityTests + MailCertificateLifecycleTests: 64/64 geçti.
+- DomainInspectionTests, SmtpGreetingProbeTests, MailCertificateIntegrationTests,
+  WebmailSso filtresiyle ek mevcut regresyonlar: 95/95 geçti.
+- Frontend ilgili 6 dosya: 64/64 geçti; vue-tsc ve Vite build geçti.
+- Bağımsız rues-denetci: ONAY; 64 backend, 53 frontend testini ve typecheck'i tekrar doğruladı.
+- Frontend applied doğrulamasını kaldırma mutasyonu 2 testi kırdı; değişiklik geri alındı.
+- Kart 390 ve 1280 pikselde görsel olarak kontrol edildi.
+- Test edilmiş frontend derlemesinin 156 dosyası ana projenin frontend/dist ve
+  src/AdaPanel.Api/wwwroot dizinlerine kopyalandı ve SHA256 ile doğrulandı.
+  Eski, artık index tarafından kullanılmayan çıktılar silinmedi; sonraki normal
+  paketleme akışı kendi temiz çıktı dizinini üretmeli.
+- Gerçek DNS yazımı, sertifika üretimi, sunucu kimliği değişimi ve yeniden başlatma
+  canlıda denenmedi; kullanıcının yayınlamama talimatı nedeniyle uygulanmadı.
+- İngilizce arayüzde adım etiketleri İngilizce; backend ayrıntı mesajları halen Türkçe.
+
+Devam ederken:
+Kullanıcının yeni yayın talimatını bu sohbetin eski talimatından varsaymayın.
+Yayın yetkisi verildiğinde normal sürüm/paketleme kontrollerini çalıştırın, güncellemeyi
+kurun ve panelde yukarıdaki tercihi kaydedip yanıtı/SMTP adını doğrulayın.
+Bu kaynak kodu kendiliğinden canlı sunucuyu mail.adapanel.host olarak değiştirmez.
+Alakasız website/SEO dosyalarını ve kullanıcının diğer bekleyen editlerini koruyun.

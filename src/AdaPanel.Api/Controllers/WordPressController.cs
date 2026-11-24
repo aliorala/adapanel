@@ -1,4 +1,4 @@
-using AdaPanel.Api.Security;
+﻿using AdaPanel.Api.Security;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Sites;
@@ -185,6 +185,11 @@ public sealed class WordPressController(
             }
         }
 
+        // M3: klon, kaynak sitenin tam bir kopyasını diske yazar; sahibin tavanına sığmıyorsa BAŞLAMAZ.
+        await DiskQuotaGate.EnsureForCopyAsync(HttpContext, siteName, cancellationToken);
+        // M4: klon YENI bir site VE yeni bir veritabani acar; lisans kapisindan gecmeli.
+        await LicenseGate.EnsureCanCreateAsync(HttpContext, Core.Dtos.Licensing.LicensedResource.Site, cancellationToken);
+        await LicenseGate.EnsureCanCreateAsync(HttpContext, Core.Dtos.Licensing.LicensedResource.Database, cancellationToken);
         var result = await wordPressToolkitService.CloneAsync(siteName, request, cancellationToken);
 
         // Klonu kaynağın kapsamına ata → müşteri/bayi yeni siteyi görür.
@@ -215,8 +220,9 @@ public sealed class WordPressController(
         // yazar. İki durum aynı anda olabilir ve kullanıcıya önce ağır olan söylenir.
         return Ok(ApiResponse<WordPressCloneResultDto>.Ok(
             result,
-            !result.ConfigRewritten ? "wp.clone_config_not_written"
+            !result.ConfigRewritten || !result.DatabaseIsolated ? "wp.clone_config_not_written"
             : !result.UrlRewritten ? "wp.clone_url_not_replaced"
+            : !result.SiteStarted ? "wp.clone_not_started"
             : "wp.clone_done"));
     }
 

@@ -20,6 +20,8 @@ export type NotificationSettings = {
   toEmail: string;
   useSsl: boolean;
   webhookUrl: string;
+  /** Webhook imza anahtarı, okumada MASKELİ (yalnız son 4 karakter); tam değer yalnız döndürme anında görünür. */
+  webhookSecret?: string;
 };
 
 function measuredSettings(envelope: ApiEnvelope<NotificationSettings>): NotificationSettings {
@@ -44,6 +46,17 @@ export async function saveNotificationSettings(payload: Omit<NotificationSetting
     fromEmail: payload.fromEmail, toEmail: payload.toEmail, useSsl: payload.useSsl, webhookUrl: payload.webhookUrl
   });
   return measuredSettings(response.data);
+}
+
+export type WebhookSecretRotation = { webhookSecret: string; masked: string };
+
+/** Webhook imza anahtarını yeniden üretir. Yeni TAM değer yalnız bu yanıtta gelir. */
+export async function rotateWebhookSecret(): Promise<WebhookSecretRotation> {
+  const response = await apiClient.post<ApiEnvelope<WebhookSecretRotation>>("/notify/webhook-secret/rotate", {});
+  const value = response.data?.data;
+  if (response.data?.success !== true || !value || typeof value.webhookSecret !== "string" || !value.webhookSecret || typeof value.masked !== "string")
+    throw new UserFacingError("panel.notifications.resultUnconfirmed");
+  return value;
 }
 
 export async function sendNotificationTest(channel: string, message: string, expectedSettingsRevision: string) {

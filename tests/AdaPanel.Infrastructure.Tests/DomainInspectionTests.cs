@@ -1,4 +1,5 @@
 using System.Reflection;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Firewall;
 using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Core.Dtos.Sites;
@@ -13,6 +14,29 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class DomainInspectionTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Technical_IIS_name_uses_bound_mail_domain_and_keeps_dns_site_key(bool repair)
+    {
+        var fixture = new Fixture { SiteName = "web-adapanel.host", BoundDomain = "adapanel.host", MissingMailRecord = true };
+        var result = repair ? await fixture.Service.RefreshAsync(fixture.SiteName) : await fixture.Service.InspectAsync(fixture.SiteName);
+        Assert.All(fixture.MailDomains, domain => Assert.Equal("adapanel.host", domain));
+        Assert.NotEmpty(fixture.MailDomains);
+        Assert.All(fixture.DnsSites, name => Assert.Equal("web-adapanel.host", name));
+        Assert.Equal(1, result.AppliedMailRecords);
+        Assert.DoesNotContain(result.Findings, finding => finding.Key == "repair.mail_domain_missing");
+    }
+
+    [Fact]
+    public async Task Mail_records_cannot_be_written_to_an_unrelated_zone()
+    {
+        var fixture = new Fixture { SiteName = "web-adapanel.host", BoundDomain = "adapanel.host", ZoneDomain = "other.test", MissingMailRecord = true };
+        var result = await fixture.Service.RefreshAsync(fixture.SiteName);
+        Assert.True(fixture.MissingMailRecord);
+        Assert.Contains("mail.invalid_domain", result.Error);
+    }
+
     [Fact]
     public async Task Unreadable_smtp_greeting_is_visible_and_is_retried_without_a_repair_action()
     {
@@ -143,10 +167,22 @@ public sealed class DomainInspectionTests
     [Fact]
     public async Task Shared_failed_mail_read_still_produces_the_missing_mail_finding()
     {
-        var fixture = new Fixture { MailUnavailable = true };
+        var fixture = new Fixture { MailMissing = true };
         var result = await fixture.Service.InspectAsync("example.test");
         Assert.Equal(1, fixture.MailReads);
         Assert.Contains(result.Findings, finding => finding.Key == "repair.mail_domain_missing");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Mail_measurement_failure_is_not_reported_as_a_missing_domain(bool accessDenied)
+    {
+        var fixture = new Fixture { MailUnavailable = true, MailAccessDenied = accessDenied };
+        var result = await fixture.Service.InspectAsync("example.test");
+        Assert.Equal(1, fixture.MailReads);
+        Assert.DoesNotContain(result.Findings, finding => finding.Key == "repair.mail_domain_missing");
+        Assert.Contains(result.Findings, finding => finding.Key == "repair.inspection_failed" && finding.NeedsConfirmation);
     }
 
     [Fact]
@@ -199,12 +235,16 @@ public sealed class DomainInspectionTests
     private sealed class Fixture
     {
         public int MailReads, PublishedReads, ZoneReads, Inspections, BulkReads;
-        public bool Published = true, MissingMailRecord, MailUnavailable, FailDefaults;
+        public bool Published = true, MissingMailRecord, MailUnavailable, MailMissing, MailAccessDenied, FailDefaults;
         public string SiteName = "example.test", SiteState = "Started";
+        public string? BoundDomain, ZoneDomain;
+        public List<string> MailDomains { get; } = [];
+        public List<string> DnsSites { get; } = [];
         public Func<Task>? BeforeInspection;
         public bool FirewallUnavailable, FirewallThrows, SiteUnavailable, HostnameUnavailable;
         public DomainRefreshService Service { get; }
-        private SiteDto Site => new() { Id = 1, Name = SiteName, State = SiteState };
+        private SiteDto Site => new() { Id = 1, Name = SiteName, State = SiteState,
+            Bindings = BoundDomain is null ? [] : [new() { HostName = BoundDomain, Protocol = "https", Port = 443 }] };
         public Fixture(bool bulk = false)
         {
             var sites = Stub<IIisSiteService>((method, _) => method.Name switch
@@ -217,14 +257,14 @@ public sealed class DomainInspectionTests
             {
                 "RepairDefaultsAsync" => Defaults((bool)args![1]!),
                 "GetPublishedRecordKeysAsync" => PublishedKeys(),
-                "GetZoneAsync" => Zone(),
+                "GetZoneAsync" => Zone((string)args![0]!),
                 "EnsureZonePublishedAsync" => Task.CompletedTask,
-                "UpsertRecordsAsync" or "EnsureMissingRecordsAsync" => ApplyRecords(),
+                "UpsertRecordsAsync" or "EnsureMissingRecordsAsync" => ApplyRecords((string)args![0]!),
                 _ => throw new InvalidOperationException(method.Name)
             });
-            var mail = Stub<IMailService>((method, _) => method.Name switch
+            var mail = Stub<IMailService>((method, args) => method.Name switch
             {
-                "GetDnsRecordsAsync" => MailRecords(),
+                "GetDnsRecordsAsync" => MailRecords((string)args![0]!),
                 "EnsureServerHostnameAsync" => HostnameUnavailable
                     ? Task.FromException<bool>(new IOException("SMTP greeting could not be measured")) : Task.FromResult(false),
                 "SyncCertificateAsync" => Task.FromResult<MailCertificateDto?>(null),
@@ -265,11 +305,14 @@ public sealed class DomainInspectionTests
             }
             return [];
         }
-        private Task<MailDnsDto> MailRecords()
+        private Task<MailDnsDto> MailRecords(string domain)
         {
             MailReads++;
-            return MailUnavailable ? Task.FromException<MailDnsDto>(new IOException("mail unavailable")) :
-                Task.FromResult(new MailDnsDto { Domain = SiteName,
+            MailDomains.Add(domain);
+            if (MailMissing) return Task.FromException<MailDnsDto>(new AppException("mail.operation_failed", 404, 404));
+            return MailUnavailable ? Task.FromException<MailDnsDto>(MailAccessDenied
+                ? new AppException("mail.operation_failed", 403, 403) : new IOException("mail unavailable")) :
+                Task.FromResult(new MailDnsDto { Domain = BoundDomain ?? SiteName,
                     Records = [new() { Type = "MX", Host = "@", Value = "mail.example.test" }] });
         }
         private Task<IReadOnlyCollection<string>?> PublishedKeys()
@@ -277,15 +320,17 @@ public sealed class DomainInspectionTests
             PublishedReads++;
             return Task.FromResult<IReadOnlyCollection<string>?>(!Published ? null : MissingMailRecord ? [] : ["MX|@"]);
         }
-        private Task<SiteDnsZoneDto> Zone()
+        private Task<SiteDnsZoneDto> Zone(string siteName)
         {
             ZoneReads++;
-            return Task.FromResult(new SiteDnsZoneDto { ZoneName = SiteName, IsWindowsDnsAvailable = Published,
+            DnsSites.Add(siteName);
+            return Task.FromResult(new SiteDnsZoneDto { ZoneName = ZoneDomain ?? BoundDomain ?? SiteName, IsWindowsDnsAvailable = Published,
                 IsWindowsZonePresent = Published,
                 Records = MissingMailRecord ? [] : [new() { Type = "MX", Host = "@", Value = "mail.example.test" }] });
         }
-        private Task<SiteDnsZoneDto> ApplyRecords()
+        private Task<SiteDnsZoneDto> ApplyRecords(string siteName)
         {
+            DnsSites.Add(siteName);
             MissingMailRecord = false;
             return Task.FromResult(new SiteDnsZoneDto());
         }

@@ -8,6 +8,9 @@ public sealed class DockerContainerDto
     public string State { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
     public string Ports { get; set; } = string.Empty;
+
+    /// <summary>İlişkili site (etiket adapanel.site); yoksa boş.</summary>
+    public string Site { get; set; } = string.Empty;
 }
 
 public sealed class DockerImageDto

@@ -61,8 +61,8 @@ internal static class ComponentWebPublication
             }
             if (File.Exists(link)) throw new IOException("A file blocks the Roundcube asset directory: " + link);
             var result = await ProcessRunner.RunPowerShellAsync(
-                "$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path '" + link.Replace("'", "''") +
-                "' -Target '" + target.Replace("'", "''") + "' | Out-Null", cancellationToken);
+                "$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path '" + PowerShellQuoting.Escape(link) +
+                "' -Target '" + PowerShellQuoting.Escape(target) + "' | Out-Null", cancellationToken);
             if (result.ExitCode != 0 || !Directory.Exists(link))
                 throw new IOException("Could not restore Roundcube asset directory: " + link);
         }

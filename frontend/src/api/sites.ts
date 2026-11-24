@@ -16,6 +16,7 @@ export type SiteBinding = {
 };
 
 export type SiteRecord = {
+  phpErrorLogging?: import("./php").PhpErrorLogging;
   id: number;
   name: string;
   state: string;

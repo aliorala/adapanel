@@ -20,6 +20,135 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class MailCertificateLifecycleTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EmptyRegistryPreservesPreviouslyTrustedNativePrimaryWhenAnotherDomainIsAdded(bool webSync)
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        File.Delete(f.StatePath);
+        f.NativeHost = Fixture.OldHost;
+        const string added = "mail.new.example.test";
+        if (webSync)
+        {
+            f.InstallStoreCertificate(added);
+            await f.First.SyncWebCertificateAsync(added, cancellationToken: f.Token);
+        }
+        else await f.First.IssueCertificateAsync(Request(added), f.Token);
+        var saved = await MailCertificateRegistry.ReadAsync(f.Store, f.Token);
+        Assert.Equal(Fixture.OldHost, saved.PrimaryHostName);
+        Assert.Equal(added, MailCertificateRegistry.Field(Assert.Single(saved.Records), "hostName"));
+        Assert.Equal(Fixture.OldHost, f.NativeHost);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FirstTrustedCertificateCanInitializePrimaryOnColdInstallWithoutSavedPeer(bool nativeSelfSigned)
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        File.Delete(f.StatePath);
+        f.NativeHost = nativeSelfSigned ? "mail.bootstrap.test" : "localhost";
+        f.UnavailableTlsHosts.Add(f.NativeHost);
+        const string added = "mail.new.example.test";
+        await f.First.IssueCertificateAsync(Request(added), f.Token);
+        Assert.Equal(added, (await MailCertificateRegistry.ReadAsync(f.Store, f.Token)).PrimaryHostName);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SavedManagedRoundcubePeerIsPreservedAndUnverifiedPeerFailsClosed(bool unavailable)
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        File.Delete(f.StatePath);
+        f.NativeHost = "mail.another-native-name.test";
+        var root = f.Store.EnsureDirectory("roundcube");
+        Directory.CreateDirectory(Path.Combine(root, "config"));
+        var config = "<?php\n// Managed by AdaPanel\n$config['imap_conn_options'] = ['ssl' => ['peer_name' => '" + Fixture.OldHost + "']];\n";
+        var configPath = Path.Combine(root, "config", "config.inc.php");
+        await File.WriteAllTextAsync(configPath, config);
+        await f.Store.WriteAsync("config/webmail.json", new { entryRoot = Path.Combine(root, "public_html") });
+        if (unavailable) f.UnavailableTlsHosts.Add(Fixture.OldHost);
+        const string added = "mail.new.example.test";
+        if (unavailable)
+        {
+            await Assert.ThrowsAsync<AppException>(() => f.First.IssueCertificateAsync(Request(added), f.Token));
+            Assert.DoesNotContain(f.Commands, c => c.Stage == "write");
+            Assert.False(File.Exists(f.StatePath));
+        }
+        else
+        {
+            await f.First.IssueCertificateAsync(Request(added), f.Token);
+            Assert.Equal(Fixture.OldHost, (await MailCertificateRegistry.ReadAsync(f.Store, f.Token)).PrimaryHostName);
+        }
+        Assert.Equal(config, await File.ReadAllTextAsync(configPath));
+    }
+    [Fact]
+    public async Task AddingAnotherHostPreservesLegacyRenewalAndSynchronizesBothHosts()
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        await f.First.IssueCertificateAsync(Request("mail.new.example.test"), f.Token);
+        var saved = await MailCertificateRegistry.ReadAsync(f.Store, f.Token);
+        Assert.Equal(Fixture.OldHost, saved.PrimaryHostName);
+        Assert.Equal(2, saved.Records.Count);
+        Assert.Contains(saved.Records, r => MailCertificateRegistry.Field(r, "pemDirectory") == f.InitialPemDirectory);
+        var secondDirectory = MailCertificateRegistry.Field(saved.Records.Single(r =>
+            MailCertificateRegistry.Field(r, "hostName") == "mail.new.example.test"), "pemDirectory");
+        f.WritePem(Fixture.OldHost, f.InitialPemDirectory);
+        f.WritePem("mail.new.example.test", secondDirectory);
+        f.Commands.Clear();
+        Assert.NotNull(await f.Second.SyncCertificateAsync(f.Token));
+        var after = await MailCertificateRegistry.ReadAsync(f.Store, f.Token);
+        Assert.Equal(2, after.Records.Count);
+        Assert.Equal(Fixture.OldHost, after.PrimaryHostName);
+        foreach (var entry in after.Records)
+            Assert.Equal(f.PemHash(MailCertificateRegistry.Field(entry, "pemDirectory")), MailCertificateRegistry.Field(entry, "contentHash"));
+        Assert.Equal(2, f.Commands.Count(command => command.Stage == "write"));
+    }
+
+    [Fact]
+    public async Task BrokenFirstHostStillAllowsAnotherHostsRenewalAndIsReportedAsFailure()
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        await f.First.IssueCertificateAsync(Request("mail.new.example.test"), f.Token);
+        var before = await MailCertificateRegistry.ReadAsync(f.Store, f.Token);
+        var original = before.Records.Single(r => MailCertificateRegistry.Field(r, "hostName") == Fixture.OldHost).ToJsonString();
+        var nextDirectory = MailCertificateRegistry.Field(before.Records.Single(r =>
+            MailCertificateRegistry.Field(r, "hostName") == "mail.new.example.test"), "pemDirectory");
+        await File.WriteAllTextAsync(Directory.GetFiles(f.InitialPemDirectory, "*-key.pem").Single(), "incomplete", f.Token);
+        f.WritePem("mail.new.example.test", nextDirectory);
+        f.Commands.Clear();
+        await Assert.ThrowsAsync<AppException>(() => f.Second.SyncCertificateAsync(f.Token));
+        var after = await MailCertificateRegistry.ReadAsync(f.Store, f.Token);
+        Assert.Equal(original, after.Records.Single(r => MailCertificateRegistry.Field(r, "hostName") == Fixture.OldHost).ToJsonString());
+        Assert.Equal(f.PemHash(nextDirectory), MailCertificateRegistry.Field(after.Records.Single(r =>
+            MailCertificateRegistry.Field(r, "hostName") == "mail.new.example.test"), "contentHash"));
+        Assert.Single(f.Commands.Where(command => command.Stage == "write"));
+    }
+
+    [Fact]
+    public async Task SelectedDomainStatusInspectsItsHostInsteadOfTheLastRecordedOtherDomain()
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        await f.First.IssueCertificateAsync(new IssueMailCertificateRequest
+            { Domain = "second.test", HostName = "mail.second.test" }, f.Token);
+        var selected = await f.First.GetCertificateStatusForDomainAsync("example.test", f.Token);
+        Assert.Equal(Fixture.OldHost, selected.HostName);
+        Assert.Equal("example.test", selected.Domain);
+        var missing = await f.First.GetCertificateStatusForDomainAsync("untracked.test", f.Token);
+        Assert.Equal("mail.untracked.test", missing.HostName);
+        Assert.Equal("untracked.test", missing.Domain);
+        Assert.Empty(missing.Source);
+        Assert.Equal("missing", missing.ConfigurationStatus);
+    }
+
+    [Theory]
     [InlineData("query")]
     [InlineData("write")]
     [InlineData("reload")]
@@ -438,6 +567,9 @@ public sealed class MailCertificateLifecycleTests
         private string? pausedOwner, pausedStage, writtenHash;
         private bool readback;
         private readonly Dictionary<string, object> certificates = [];
+        internal readonly Dictionary<string, MailCertificateMaterial> StoreMaterials = [];
+        internal readonly HashSet<string> UnavailableTlsHosts = new(StringComparer.OrdinalIgnoreCase);
+        internal string NativeHost = "other.test";
         internal string? LoadedHash, FailedStage;
         internal string? AttemptDirectory;
         internal bool IssuerFails, RejectMaterial;
@@ -479,12 +611,12 @@ public sealed class MailCertificateLifecycleTests
             return new MailService(store, protector, null!, null!, null!, db, runtime, NullLogger<MailService>.Instance)
             {
                 CertificateCommandRunner = (cli, command, json, env, token) => Execute(owner, cli, command, json, env, token),
-                StoreCertificateLookup = _ => null,
+                StoreCertificateLookup = host => StoreMaterials.GetValueOrDefault(host),
                 ValidateCertificateMaterial = (_, pem, _) =>
                 { if (RejectMaterial) throw new AppException("mail.certificate_invalid", 409, 409); return pem; }, // Trust itself is tested separately.
                 CertificateIssuer = (_, host, _, _, directory, _) =>
                 { AttemptDirectory = directory; WritePem(host, directory); return Task.FromResult(!IssuerFails); },
-                TlsProbe = (_, port, _, _) => Task.FromResult(new MailTlsEndpointDto { Port = port, Status = "ok" })
+                TlsProbe = (host, port, _, _) => Task.FromResult(new MailTlsEndpointDto { Port = port, Status = UnavailableTlsHosts.Contains(host) ? "fail" : "ok" })
             };
         }
 
@@ -508,6 +640,16 @@ public sealed class MailCertificateLifecycleTests
             File.WriteAllText(Path.Combine(directory, $"{host}-key.pem"), key.ExportPkcs8PrivateKeyPem());
         }
 
+        internal void InstallStoreCertificate(string host)
+        {
+            var directory = Store.EnsureDirectory("fixture-store-" + host);
+            WritePem(host, directory);
+            var cert = File.ReadAllText(Directory.GetFiles(directory, "*-crt.pem").Single());
+            var key = File.ReadAllText(Directory.GetFiles(directory, "*-key.pem").Single());
+            using var leaf = X509Certificate2.CreateFromPem(cert, key);
+            StoreMaterials[host] = new(cert, key, leaf.Thumbprint);
+        }
+
         internal void Pause(string owner, string stage) { pausedOwner = owner; pausedStage = stage; }
 
         internal async Task CompleteInOrder(Task first, Task second)
@@ -529,7 +671,7 @@ public sealed class MailCertificateLifecycleTests
             Assert.Equal(Path.Combine(cliDirectory, "stalwart-cli.exe"), cli);
             Assert.Equal("fixture-password", env["STALWART_PASSWORD"]);
             if (command == "get SystemSettings --json")
-                return new CommandResult { ExitCode = 0, StandardOutput = "{\"defaultHostname\":\"other.test\",\"defaultCertificateId\":\"other-cert\"}" };
+                return new CommandResult { ExitCode = 0, StandardOutput = JsonSerializer.Serialize(new { defaultHostname = NativeHost, defaultCertificateId = "other-cert" }) };
             if (command == "query Certificate --json" && readback)
             {
                 readback = false;

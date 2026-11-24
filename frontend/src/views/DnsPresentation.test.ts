@@ -73,7 +73,16 @@ it('keeps reseller record controls while hiding administrator-only server action
   state.activeTab = 'settings'; html = await render(state); expect(button(html, en['panel.dns.switchToSecondary'])).toBe('');
   expect(button(html, en['panel.dns.saveZone'])).not.toBe('');
 });
-it('explains the unavailable DNS workspace without querying it for a customer', async () => {
-  const html = await render(await mount('Customer')); expect(html).toContain(en['panel.dns.accessHint']);
+it('explains the unavailable DNS workspace without querying it for a role without DNS access', async () => {
+  const html = await render(await mount('Operator')); expect(html).toContain(en['panel.dns.accessHint']);
   expect(html).not.toContain('192.0.2.10'); expect(reads).toBe(0);
+});
+it('shows a customer the records and import/export but hides the server-level DNS cards', async () => {
+  const state = await mount('Customer'); let html = await render(state);
+  expect(html).toContain(en['panel.dns.importZone']); expect(html).toContain(en['panel.dns.exportZone']);
+  expect(button(html, en['panel.dns.addRecordAction'])).not.toBe('');
+  expect(html).not.toContain(en['panel.dns.restoreDefaults']); expect(button(html, en['panel.dns.installWindows'])).toBe('');
+  state.activeTab = 'settings'; html = await render(state);
+  expect(html).not.toContain(en['panel.dns.zoneTypeTitle']); expect(html).not.toContain(en['panel.dns.dnssecTitle']);
+  expect(button(html, en['panel.dns.saveZone'])).not.toBe('');
 });

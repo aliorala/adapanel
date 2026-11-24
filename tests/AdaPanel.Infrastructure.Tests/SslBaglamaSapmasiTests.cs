@@ -135,7 +135,7 @@ public sealed class SslBaglamaSapmasiTests
 
         var rapor = await alan.Danisman().GetReportAsync();
 
-        var madde = Assert.Single(rapor.Items, item => item.Id == "ssl-binding-drift:adapanel.host");
+        var madde = Assert.Single(rapor.Items, item => item.Id.StartsWith("ssl-binding-drift:") && item.SslRepair != null && item.SslRepair.HostName == "adapanel.host");
         Assert.Equal("critical", madde.Severity);
         Assert.Equal("advisor.ssl.bindingDrift", madde.TitleKey);
 
@@ -196,7 +196,7 @@ public sealed class SslBaglamaSapmasiTests
         var rapor = await alan.Danisman().GetReportAsync();
 
         Assert.Single(rapor.Items, item => item.Id == "ssl-expired:eski.example");
-        Assert.Single(rapor.Items, item => item.Id == "ssl-binding-drift:eski.example");
+        Assert.Single(rapor.Items, item => item.Id.StartsWith("ssl-binding-drift:") && item.SslRepair != null && item.SslRepair.HostName == "eski.example");
     }
 
     /// <summary>

@@ -183,7 +183,7 @@ public sealed class DiskQuotaService(IIisSiteService iisSiteService) : IDiskQuot
     private static long GetLong(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.TryGetInt64(out var parsed) ? parsed : 0;
 
-    private static string EscapePowerShellLiteral(string value) => value.Replace("'", "''");
+    private static string EscapePowerShellLiteral(string value) => PowerShellQuoting.Escape(value);
 
     /// <inheritdoc />
     public async Task<SiteDiskQuotaDto> InstallFsrmAsync(string siteName, CancellationToken cancellationToken = default)

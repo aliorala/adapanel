@@ -6,10 +6,13 @@ import * as automation from "../api/automation";
 import * as backup from "../api/backup";
 import { apiClient, invalidateSessionRequests } from "../api/client";
 import type { BackupSchedulePlan } from "../api/schedule";
+import * as networkTrust from "../api/backupNetworkTrust";
+const trustSession = vi.hoisted(() => ({ isServerOwner: false, isImpersonating: false }));
+vi.mock("../api/backupNetworkTrust", async (original) => ({ ...await original<typeof import("../api/backupNetworkTrust")>(), getBackupNetworkTrust: vi.fn(), setBackupNetworkTrust: vi.fn() }));
 
 vi.mock("../api/automation", () => ({ getAutomation: vi.fn(), runAutomationBackup: vi.fn(), runAutomationSsl: vi.fn(), updateAutomation: vi.fn(), testRemoteBackup: vi.fn() }));
 vi.mock("../api/backup", () => ({ getBackupRunningJobs: vi.fn() }));
-vi.mock("../stores/auth", () => ({ extractApiMessage: (error: Error) => error.message }));
+vi.mock("../stores/auth", () => ({ extractApiMessage: (error: Error) => error.message, useAuthStore: () => ({ session: trustSession }) }));
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key, locale: { value: "en" } }) }));
 
 type State = {
@@ -17,6 +20,8 @@ type State = {
   loading: boolean; settingsLoaded: boolean; busy: boolean; backupRunning: boolean;
   notice: string; noticeError: boolean; remotePassword: string; testingRemote: boolean;
   remoteTestResult: automation.BackupRemoteTestResult | null;
+  networkTrust: networkTrust.BackupNetworkTrust | null; networkTrustError: boolean; trustBusy: boolean;
+  changeNetworkTrust(event: Event): Promise<void>; loadNetworkTrust(): Promise<void>;
   refresh(): Promise<void>; save(): Promise<void>; runBackupNow(): Promise<void>; runSslNow(): Promise<void>; testRemote(): Promise<void>;
 };
 let app: App | undefined;
@@ -41,6 +46,10 @@ async function mount() {
   return state;
 }
 beforeEach(() => {
+  trustSession.isServerOwner = false;
+  trustSession.isImpersonating = false;
+  vi.mocked(networkTrust.getBackupNetworkTrust).mockImplementation(async target => ({ target, allowed: false }));
+  vi.mocked(networkTrust.setBackupNetworkTrust).mockImplementation(async (target, allowed) => ({ target, allowed }));
   invalidateSessionRequests();
   vi.mocked(automation.getAutomation).mockResolvedValue(status());
   vi.mocked(backup.getBackupRunningJobs).mockResolvedValue(jobs());
@@ -48,6 +57,50 @@ beforeEach(() => {
   vi.mocked(automation.runAutomationBackup).mockResolvedValue(status());
   vi.mocked(automation.runAutomationSsl).mockResolvedValue(status());
   vi.mocked(automation.testRemoteBackup).mockResolvedValue({ success: true, message: "backup.remote_ok", details: "" });
+});
+
+it("never requests network permissions for nonowners or impersonating owners", async () => {
+  await mount();
+  expect(networkTrust.getBackupNetworkTrust).not.toHaveBeenCalled();
+  unmount(); trustSession.isServerOwner = true; trustSession.isImpersonating = true;
+  await mount();
+  expect(networkTrust.getBackupNetworkTrust).not.toHaveBeenCalled();
+});
+
+it("discards a trust response for an obsolete FTP endpoint", async () => {
+  trustSession.isServerOwner = true;
+  const state = await mount();
+  const old = deferred<networkTrust.BackupNetworkTrust>();
+  vi.mocked(networkTrust.getBackupNetworkTrust).mockReturnValueOnce(old.promise);
+  state.form.backupRemoteUrl = "ftp://old.example/";
+  state.form.backupRemoteUrl = "ftp://new.example/";
+  await flush();
+  old.resolve({ target: "ftp://old.example:21/", allowed: true }); await flush();
+  expect(state.networkTrust).toEqual({ target: "ftp://new.example:21/", allowed: false });
+});
+
+it("shows a permission read failure and retries without inferring allowance", async () => {
+  trustSession.isServerOwner = true;
+  vi.mocked(networkTrust.getBackupNetworkTrust).mockRejectedValueOnce(new Error("network failed"));
+  const state = await mount();
+  expect(state.networkTrust).toBeNull(); expect(state.networkTrustError).toBe(true);
+  await state.loadNetworkTrust();
+  expect(state.networkTrustError).toBe(false); expect(state.networkTrust?.allowed).toBe(false);
+});
+
+it("invalidates measurement when trust changes and ignores a write for an edited target", async () => {
+  trustSession.isServerOwner = true;
+  const state = await mount();
+  await state.testRemote(); expect(state.remoteTestResult?.success).toBe(true);
+  const pending = deferred<networkTrust.BackupNetworkTrust>();
+  vi.mocked(networkTrust.setBackupNetworkTrust).mockReturnValueOnce(pending.promise);
+  const saving = state.changeNetworkTrust({ target: { checked: true } } as unknown as Event);
+  expect(state.remoteTestResult).toBeNull(); expect(state.trustBusy).toBe(true);
+  await state.testRemote(); expect(automation.testRemoteBackup).toHaveBeenCalledOnce();
+  state.form.backupRemoteUrl = "ftp://different.example/"; await flush();
+  pending.resolve({ target: "ftp://a.example.test:21/", allowed: true }); await saving;
+  expect(state.networkTrust).toEqual({ target: "ftp://different.example:21/", allowed: false });
+  expect(state.trustBusy).toBe(false);
 });
 afterEach(() => { unmount(); apiClient.defaults.adapter = originalAdapter; invalidateSessionRequests(); vi.resetAllMocks(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 

@@ -7,18 +7,12 @@ using Xunit;
 namespace AdaPanel.Infrastructure.Tests;
 
 /// <summary>
-/// Budamanin YEDEKLER ALINAMAZKEN ne yaptigi.
-/// <para>
-/// Mevcut <c>BackupRetentionTests</c> yalnizca saklama matematigini olcuyordu; asil tehlike ise
-/// ETKILESIMDEDIR: gecelik is her kaynagi ayri try/catch ile yedekler, hepsi patlasa bile kosulsuz
-/// budamaya gecer. Yalnizca tarihe bakan bir budama, MariaDB 14 gun kapali kaldiginda geri
-/// yuklenecek TEK bir yedek birakmadan hepsini siler ve kimseye haber gitmez.
-/// </para>
+/// Explicit age expiry and the separate protections used by count-only pruning.
 /// </summary>
 public sealed class BackupPruneProtectionTests
 {
     [Fact]
-    public async Task Prune_WhenSourceHasNoRecentBackup_KeepsItsExpiredBackups()
+    public async Task Prune_WhenSourceHasNoRecentBackup_StillExpiresItsOldBackups()
     {
         using var alan = new BudamaAlani();
 
@@ -29,10 +23,12 @@ public sealed class BackupPruneProtectionTests
         var servis = alan.ServisKur(eski, dahaEski);
         var silinen = await servis.PruneAsync(retentionDays: 14);
 
-        Assert.Equal(0, silinen.Removed);
-        Assert.True(File.Exists(eski.Path));
-        Assert.True(File.Exists(dahaEski.Path));
-        Assert.Equal(2, (await servis.GetBackupsAsync()).Count);
+        Assert.Equal(2, silinen.Removed);
+        Assert.Equal(0, silinen.RetainedExpired);
+        Assert.Empty(silinen.RetentionNotes);
+        Assert.False(File.Exists(eski.Path));
+        Assert.False(File.Exists(dahaEski.Path));
+        Assert.Empty(await servis.GetBackupsAsync());
     }
 
     [Fact]
@@ -46,14 +42,15 @@ public sealed class BackupPruneProtectionTests
         var servis = alan.ServisKur(eski, taze);
         var silinen = await servis.PruneAsync(retentionDays: 14);
 
-        // Koruma saklama politikasini IPTAL ETMEZ; yalnizca yeni yedek yokken devreye girer.
+        // An explicit age limit applies regardless of whether a replacement exists.
         Assert.Equal(1, silinen.Removed);
+        Assert.Equal(0, silinen.RetainedExpired);
         Assert.False(File.Exists(eski.Path));
         Assert.True(File.Exists(taze.Path));
     }
 
     [Fact]
-    public async Task Prune_ProtectionIsPerSource_OneHealthySiteDoesNotAuthorizeAnother()
+    public async Task Prune_AgeExpiryIsIndependentForEverySource()
     {
         using var alan = new BudamaAlani();
 
@@ -65,13 +62,14 @@ public sealed class BackupPruneProtectionTests
         var servis = alan.ServisKur(saglikliEski, saglikliTaze, bozukEski);
         var silinen = await servis.PruneAsync(retentionDays: 14);
 
-        Assert.Equal(1, silinen.Removed);
+        Assert.Equal(2, silinen.Removed);
         Assert.False(File.Exists(saglikliEski.Path));
-        Assert.True(File.Exists(bozukEski.Path));
+        Assert.False(File.Exists(bozukEski.Path));
+        Assert.True(File.Exists(saglikliTaze.Path));
     }
 
     [Fact]
-    public async Task Prune_ProtectionSeparatesTypes_SiteBackupDoesNotCoverDatabase()
+    public async Task Prune_AgeExpiryRemovesAnExpiredDatabaseIndependentlyOfRecentSite()
     {
         using var alan = new BudamaAlani();
 
@@ -82,12 +80,13 @@ public sealed class BackupPruneProtectionTests
         var servis = alan.ServisKur(siteTaze, dbEski);
         var silinen = await servis.PruneAsync(retentionDays: 14);
 
-        Assert.Equal(0, silinen.Removed);
-        Assert.True(File.Exists(dbEski.Path));
+        Assert.Equal(1, silinen.Removed);
+        Assert.False(File.Exists(dbEski.Path));
+        Assert.True(File.Exists(siteTaze.Path));
     }
 
     [Fact]
-    public async Task Prune_RecentRecordWithMissingFile_DoesNotAuthorizePruning()
+    public async Task Prune_RecentRecordWithMissingFile_DoesNotOverrideAgeExpiry()
     {
         using var alan = new BudamaAlani();
 
@@ -101,8 +100,8 @@ public sealed class BackupPruneProtectionTests
         var servis = alan.ServisKur(eski, taze);
         var silinen = await servis.PruneAsync(retentionDays: 14);
 
-        Assert.Equal(0, silinen.Removed);
-        Assert.True(File.Exists(eski.Path));
+        Assert.Equal(1, silinen.Removed);
+        Assert.False(File.Exists(eski.Path));
     }
 
     [Fact]

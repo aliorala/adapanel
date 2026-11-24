@@ -2,6 +2,13 @@ namespace AdaPanel.Core.Dtos.Sites;
 
 public sealed class SiteDto
 {
+    public AdaPanel.Core.Dtos.Php.PhpErrorLoggingDto? PhpErrorLogging { get; set; }
+
+    /// <summary>
+    /// Site oluşturulurken hazırlanamayan varsayılan adımlar (dns, ftp, ssl, security...). Boş = hepsi hazır.
+    /// Yalnız oluşturma yanıtında doldurulur; adımlar isteğe bağlıdır, bu yüzden oluşturmayı başarısız KILMAZ ama sessiz de kalmaz.
+    /// </summary>
+    public string[] DefaultsFailedFeatures { get; set; } = [];
     public long Id { get; init; }
 
     public string Name { get; init; } = string.Empty;

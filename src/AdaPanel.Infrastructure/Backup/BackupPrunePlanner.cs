@@ -3,11 +3,16 @@ using AdaPanel.Core.Dtos.Backup;
 namespace AdaPanel.Infrastructure.Backup;
 
 /// <summary>
-/// Chooses whole restore points for pruning. A source's last usable point is retained
-/// until a newer retained point can replace it; chains are never deleted in pieces.
+/// Chooses whole restore points for pruning. An explicit age limit expires an entire
+/// old point; count-only pruning requires a usable replacement. Chains stay intact.
 /// </summary>
 internal static class BackupPrunePlanner
 {
+    internal sealed record RetentionProtection(BackupRecordDto Record, string Reason);
+    internal sealed record PruneAnalysis(
+        IReadOnlyList<BackupRecordDto> Selected,
+        IReadOnlyList<RetentionProtection> RetainedExpired);
+
     private sealed record RestorePoint(
         string SourceKey,
         DateTime NewestUtc,
@@ -16,11 +21,19 @@ internal static class BackupPrunePlanner
         bool HasAvailableRecord);
 
     /// <param name="records">Records already narrowed to the caller's scope.</param>
-    /// <param name="cutoffUtc">Points older than this may expire; MinValue disables age pruning.</param>
-    /// <param name="keepCount">Minimum newest points to keep per source; zero disables count pruning.</param>
+    /// <param name="cutoffUtc">Entire points older than this expire; MinValue disables age pruning.</param>
+    /// <param name="keepCount">Minimum newest points for count pruning; never overrides explicit age expiry.</param>
     /// <param name="kullanilabilir">Whether the record has a usable local or remote archive.</param>
     /// <param name="canReplace">Optional content/coverage policy, given the old point and its retained replacement.</param>
     public static IReadOnlyList<BackupRecordDto> Select(
+        IReadOnlyCollection<BackupRecordDto> records,
+        DateTime cutoffUtc,
+        int keepCount,
+        Func<BackupRecordDto, bool> kullanilabilir,
+        Func<IReadOnlyCollection<BackupRecordDto>, IReadOnlyCollection<BackupRecordDto>, bool>? canReplace = null)
+        => Analyze(records, cutoffUtc, keepCount, kullanilabilir, canReplace).Selected;
+
+    public static PruneAnalysis Analyze(
         IReadOnlyCollection<BackupRecordDto> records,
         DateTime cutoffUtc,
         int keepCount,
@@ -48,13 +61,18 @@ internal static class BackupPrunePlanner
             var position = 0;
             foreach (var point in source.OrderByDescending(point => point.NewestUtc))
             {
-                // The minimum count also protects against age pruning. A later pass must
-                // not silently remove points that this guarantee has already protected.
                 var countProtected = keepCount > 0 && position < keepCount;
                 position++;
                 var countExceeded = keepCount > 0 && !countProtected;
-                var expired = point.NewestUtc < cutoffUtc;
-                if (countProtected || (!countExceeded && !expired))
+                // Age is the user's explicit upper bound, including legacy/last copies.
+                // NewestUtc is measured across the whole point, so an active incremental
+                // link keeps its old base; fully expired chains are selected as a unit.
+                if (point.NewestUtc < cutoffUtc)
+                {
+                    selected.AddRange(point.Records);
+                    continue;
+                }
+                if (countProtected || !countExceeded)
                 {
                     retained.Add(point);
                     continue;
@@ -62,20 +80,19 @@ internal static class BackupPrunePlanner
 
                 var replaced = retained.Any(replacement => replacement.Usable &&
                     replacement.NewestUtc > point.NewestUtc &&
-                    (countExceeded || replacement.NewestUtc >= cutoffUtc) &&
                     (canReplace?.Invoke(point.Records, replacement.Records) ?? true));
 
                 // When nothing in an old point can be used, count pruning can discard its
                 // stale metadata after retaining N newer points. A partly usable chain
                 // still requires a replacement so its recoverable prefix is not lost.
-                if (replaced || (countExceeded && !point.HasAvailableRecord))
+                if (replaced || !point.HasAvailableRecord)
                     selected.AddRange(point.Records);
                 else
                     retained.Add(point);
             }
         }
 
-        return selected;
+        return new PruneAnalysis(selected, []);
     }
 
     public static string SourceKey(BackupRecordDto record) => BackupSourceIdentity.Key(record);

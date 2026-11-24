@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.RunningJobs;
 using AdaPanel.Core.Interfaces;
@@ -18,6 +19,11 @@ namespace AdaPanel.Infrastructure.RunningJobs;
 public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJobService> logger) : IRunningJobService
 {
     private const string StatePath = "config/running-jobs.json";
+    // Only failed cleanups remain here. Service instances share recovery evidence,
+    // isolated by the full data path. Entries disappear after a successful atomic write.
+    private static readonly ConcurrentDictionary<CompletedJob, byte> PendingCleanup = new();
+    private readonly string stateFile = fileStore.ResolvePath(StatePath).ToLowerInvariant();
+    private sealed record CompletedJob(string StateFile, string Slot, string JobId, DateTime StartedAtUtc);
 
     /// <summary>
     /// Tür başına "zaten sürüyor" mesaj anahtarı.
@@ -40,6 +46,7 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
         IReadOnlySet<string>? allowedSubjectUserIds,
         CancellationToken cancellationToken = default)
     {
+        await RetryCompletedAsync(cancellationToken);
         var istenen = kinds.Select(Normalize).ToHashSet(StringComparer.Ordinal);
         var dosya = await fileStore.ReadAsync(StatePath, new RunningJobsFile(), cancellationToken);
 
@@ -96,9 +103,11 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
         Guid? subjectUserId,
         CancellationToken cancellationToken = default)
     {
+        await RetryCompletedAsync(cancellationToken);
         var tur = Normalize(kind);
         var yuva = YuvaAnahtari(tur, subjectUserId);
         var baslangic = DateTime.UtcNow;
+        var jobId = Guid.NewGuid().ToString("N");
 
         // KONTROL + YAZMA AYNI KİLİDİN ALTINDA. UpdateAsync dosya başına kilit tutar; "yer boş mu"
         // sorusunu ayrı bir okumayla sorsaydık iki eşzamanlı istek ikisi de boş görüp ikisi de
@@ -121,6 +130,7 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
 
                 dosya.Running[yuva] = new RunningJobState
                 {
+                    JobId = jobId,
                     Kind = tur,
                     Title = title,
                     StartedAtUtc = baslangic,
@@ -137,7 +147,7 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
             },
             cancellationToken);
 
-        return new JobScope(this, yuva, baslangic);
+        return new JobScope(this, new CompletedJob(stateFile, yuva, jobId, baslangic));
     }
 
     /// <summary>
@@ -185,25 +195,40 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
     /// <summary>
     /// İş bitti: kaydı boşaltır.
     /// <para>
-    /// <b>BAŞLANGIÇ ANI KARŞILAŞTIRILIYOR:</b> yuvada başka bir işin kaydı duruyorsa (kuramsal
+    /// <b>İŞ KİMLİĞİ VE BAŞLANGIÇ ANI KARŞILAŞTIRILIYOR:</b> yuvada başka bir işin kaydı duruyorsa (kuramsal
     /// olarak 409 bunu engeller, ama savunma ucuz) onu silmek, GERÇEKTEN süren bir işi ekrandan
     /// yok etmek olurdu. Yalnız kendi yazdığımız kayıt kaldırılır.
     /// </para>
     /// </summary>
-    private Task EndAsync(string yuva, DateTime startedAtUtc) =>
+    private Task EndAsync(CompletedJob completed) =>
         fileStore.UpdateAsync(
             StatePath,
             new RunningJobsFile(),
-            dosya =>
-            {
-                if (dosya.Running.TryGetValue(yuva, out var mevcut) && mevcut.StartedAtUtc == startedAtUtc)
-                {
-                    dosya.Running.Remove(yuva);
-                }
-
-                return dosya;
-            },
+            dosya => RemoveCompleted(dosya, completed),
             CancellationToken.None);
+
+    private static RunningJobsFile RemoveCompleted(RunningJobsFile file, CompletedJob completed)
+    {
+        if (file.Running.TryGetValue(completed.Slot, out var current) &&
+            current.JobId == completed.JobId && current.StartedAtUtc == completed.StartedAtUtc &&
+            IsOwnedByCurrentProcess(current))
+            file.Running.Remove(completed.Slot);
+        return file;
+    }
+
+    private async Task RetryCompletedAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var pending = PendingCleanup.Keys.Where(item => item.StateFile == stateFile).ToArray();
+        if (pending.Length == 0) return;
+        await fileStore.UpdateAsync(StatePath, new RunningJobsFile(), file =>
+        {
+            foreach (var completed in pending) RemoveCompleted(file, completed);
+            return file;
+        }, cancellationToken);
+        // Never forget completion if publication failed or was cancelled. A later request retries.
+        foreach (var completed in pending) PendingCleanup.TryRemove(completed, out _);
+    }
 
     /// <summary>
     /// Sahibi artık yaşamayan kayıtları "sürüyor"dan "kesildi"ye taşır.
@@ -311,7 +336,7 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
     private void TemizlemeHatasiniKaydet(string yuva, Exception exception) =>
         logger.LogWarning(
             exception,
-            "Çalışan-iş kaydı temizlenemedi ({Yuva}); panel yeniden başladığında bayat kayıt olarak temizlenecek.",
+            "Çalışan-iş kaydı temizlenemedi ({Yuva}); sonraki durum veya başlatma isteğinde tekrar denenecek.",
             yuva);
 
     /// <summary>
@@ -322,21 +347,23 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
     /// "sürüyor" şeridi gösterir.
     /// </para>
     /// </summary>
-    private sealed class JobScope(RunningJobService owner, string yuva, DateTime startedAtUtc) : IAsyncDisposable
+    private sealed class JobScope(RunningJobService owner, CompletedJob completed) : IAsyncDisposable
     {
+        private int disposed;
         public async ValueTask DisposeAsync()
         {
+            if (Interlocked.Exchange(ref disposed, 1) != 0) return;
             try
             {
-                await owner.EndAsync(yuva, startedAtUtc);
+                await owner.EndAsync(completed);
             }
             catch (Exception exception)
             {
                 // TEMİZLİK HATASI İŞİN SONUCUNU EZMEZ. Buradan istisna fırlatmak, başarıyla biten
-                // bir yedeği kullanıcıya "başarısız" göstermek olurdu. Kayıt diskte kalırsa panel
-                // yeniden başladığında sahiplik kontrolü onu zaten "kesildi" sayıp temizleyecek —
-                // yani arıza kendini onarır; sessiz kalmaması için loglanır.
-                owner.TemizlemeHatasiniKaydet(yuva, exception);
+                // bir yedeği kullanıcıya "başarısız" göstermek olurdu. Bittiğini bellekte sakla;
+                // geçici dosya hatası kalkınca başka servis örneği de güvenle temizleyebilir.
+                PendingCleanup.TryAdd(completed, 0);
+                owner.TemizlemeHatasiniKaydet(completed.Slot, exception);
             }
         }
     }

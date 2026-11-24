@@ -106,8 +106,8 @@ public static class ResellerQuotaGuard
             return; // tavan tanımlı değil → mevcut davranış (sınırsız) korunur
         }
 
-        var digerSiteler = 0;
-        var digerDisk = 0;
+        long digerSiteler = 0;
+        long digerDisk = 0;
         foreach (var musteriId in await scopes.GetOwnedUserIdsAsync(resellerId, cancellationToken))
         {
             if (musteriId == targetCustomerId)

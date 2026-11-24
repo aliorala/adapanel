@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using Xunit;
 
 namespace AdaPanel.Infrastructure.Tests;
@@ -84,6 +84,7 @@ public sealed class AuditCoverageTests
         // Gövdesi olan bir sorgu GET ile ifade edilemediği için POST seçilmiştir. Salt okunur bir
         // aramayı her çağrıda kayda yazmak, kaydı gürültüye boğup asıl değişiklikleri görünmez
         // kılardı — denetim kaydının değeri seyrekliğindedir.
+        ["FtpController.cs#SetQuotaAsync"] = "Hesap basi FTP kotasi: gercek bir mekanizma yok, uc yetki/sahiplik denetiminden sonra 409 ftp.quota_unsupported doner ve HICBIR ŞEY yazmaz/degistirmez.",
         ["FilesController.cs#SearchAsync"] = "Dosya arama: yalnız okur, hiçbir şey değiştirmez.",
         ["BackupController.cs#DownloadItemsAsync"] = "Seçili arşiv içeriğini geçici ZIP akışıyla indirir; kaynak arşivi, yedek envanterini ve site dosyalarını değiştirmez. Akış tamamlanınca geçici dosya silinir. Davranış testi: ScopedBackupExtractionAccessTests.",
         ["FilesController.cs#CalculateSizeAsync"] = "Klasör boyutu: yalnız meta veriden boyut toplar, dosya içeriğine bile dokunmaz; arayüzde klasör başına tıklanan bir düğme olduğu için her çağrıyı yazmak kaydı gürültüye boğardı.",
@@ -91,6 +92,7 @@ public sealed class AuditCoverageTests
         ["MigrationController.cs#DiscoverCpanelAsync"] = "cPanel/WHM keşfi: uzak sunucudan hesap listesi okur, bu sunucuda hiçbir şey değişmez.",
         ["MigrationController.cs#ValidateAsync"] = "Göç ön-kontrolü: 'bağlanır mı' der, göçü BAŞLATMAZ.",
         ["SoftwareController.cs#CheckForUpdatesAsync"] = "Güncelleme yoklaması: upstream sürümleri okur, hiçbir bileşene dokunmaz.",
+        ["SslRepairController.cs#PlanAsync"] = "SSL onarım önizlemesi yalnız mevcut IIS bağlamasını ve sertifikaları okur, kısa ömürlü korumalı plan belirteci üretir; IIS/sertifika deposu veya kalıcı kayda yazmaz. Davranış testi: SslBindingRepairTests.Preview_is_read_only_and_exposes_both_certificates_for_explicit_selection.",
         ["MailAutodiscoverController.cs#OutlookPostAsync"] = "Outlook autodiscover: istemciye ayar XML'i döner (protokol gereği POST), sunucuda hiçbir şey değişmez.",
         ["NginxController.cs#TestAsync"] = "nginx -t: yapılandırmayı doğrular, uygulamaz.",
         ["AuthController.cs#BeginTwoFactorSetupAsync"] = "2FA kurulumunu BAŞLATIR (QR/gizli üretir); etkinleştirme ayrı uçtadır ve o kayıt yazar.",
@@ -168,6 +170,15 @@ public sealed class AuditCoverageTests
     /// </remarks>
     private static readonly IReadOnlyDictionary<string, string> KiraciyaAitOlmayanlar = new Dictionary<string, string>(StringComparer.Ordinal)
     {
+        ["FullMigrationController.cs#\"migration.full.discover\"#\"migration:source\""] = "Kaynak sunucuya yalnız yönetici bağlantısı; hedefte henüz bir kiracı kaynağı yok. Kimlik bilgileri kayda yazılmaz.",
+        ["FullMigrationController.cs#\"migration.full.acquire\"#\"migration:source\""] = "Yöneticiye ait özel kaynak alma işi birden çok kaynak aboneliğini kapsar; hedef kiracı kaynağı henüz yaratılmaz.",
+        ["FullMigrationController.cs#\"migration.full.acquire.cancel\"#$\"migration-acquisition:{id:D}\""] = "Özel kaynak alma işinin sahibi yönetici; iptal hedef kiracı verilerini değiştirmez.",
+        ["FullMigrationController.cs#\"migration.full.plan\"#\"migration:plan\""] = "Özel ön kontrol planı mevcut bir kiracı kaynağına yazmaz; sadece taze hedefler kabul edilir.",
+        ["FullMigrationController.cs#\"migration.full.start\"#$\"migration-plan:{request.PlanId:D}\""] = "Yöneticiye ait çok bileşenli göç planının başlatılması; mevcut kiracı kaynakları fresh-only sınırında reddedilir.",
+        ["FullMigrationController.cs#\"migration.full.cancel\"#$\"migration-operation:{id:D}\""] = "Yöneticiye ait çok bileşenli göç işi durdurulur; tamamlanan kaynaklar silinmez ve kiracı ataması bu işlemde yapılmaz.",
+        ["FullMigrationController.cs#\"migration.full.credentials.read\"#$\"migration-operation:{id:D}\""] = "Göç işini başlatan yöneticinin yeni üretilmiş kimlik bilgilerini okuması; değerler kayda yazılmaz, mevcut kiracı parolaları okunmaz.",
+        ["MigrationSourceController.cs#\"migration.source.export\"#\"migration:source-export\""] = "Kaynak sunucunun yöneticisine ait birden çok site/veritabanı seçebilen salt okunur dışa aktarma işi; kaynak nesneler değişmez, içerik ve sırlar kayda yazılmaz.",
+        ["InstallationReportingController.cs#\"installation.reporting.changed\"#\"panel\""] = "Kurulum bildirimi izni panel genelidir; yalnız yönetici değiştirir ve belirli bir aboneliğe ait değildir.",
         // --- AKTÖR ZATEN KONUNUN KENDİSİ ---
         //
         // Kullanıcının kendi hesabına yaptığı işlemler. Kayıt <c>UserId</c> üzerinden zaten o
@@ -192,10 +203,19 @@ public sealed class AuditCoverageTests
         ["AutomationController.cs#\"automation.ssl.run\"#\"automation\""] = "Sunucudaki HER sertifikayı yenilemeye çalışan tur.",
         ["AutomationController.cs#\"automation.backup.remote_tested\"#$\"backup-target:{request.TargetType}\""] = "Uzak yedek HEDEFİ panel genelinde tanımlıdır; bir aboneliğe ait değil.",
         ["BackupController.cs#\"backup.encryption_changed\"#\"backup\""] = "Şifreleme ayarı panel genelidir; bundan sonraki HER aboneliğin yedeğine uygulanır.",
+        ["BackupNetworkTrustController.cs#\"backup.network_trust.changed\"#\"backup\""] = "FTP hedefi iç ağ izni sunucu genelidir; yalnız gerçek sunucu sahibi değiştirebilir, kimliğe bürünmüş yönetici değiştiremez. Bir kiracıya ait kaynak değildir.",
+        ["BackupNetworkTrustController.cs#\"backup.network_trust.denied\"#\"backup\""] = "Sunucu geneli FTP hedefi iznine yetkisiz veya kimliğe bürünmüş erişim denemesidir; tek kiracıya ait işlem değildir.",
         ["BillingController.cs#action#\"billing\""] = "Bu sarmalayıcının İKİ çağıranı ölçüldü ve ikisi de panel genelidir: entegrasyon anahtarı (açılınca BÜTÜN abonelikler dışa aktarılır olur) ve toplu kullanım raporu (tanım gereği her aboneliği kapsar). Hesap hedefli tek kayıt (billing.terminate_checked) konusunu AYRICA yazar.",
         ["CronController.cs#action#\"cron:server\""] = "Makine PATH'ine Python eklemek sunucu genelidir (yalnız yönetici çağırabilir); bütün kiracıların görevlerini aynı anda etkiler. Göreve ait kayıtlar ayrı sarmalayıcıdan yazılır ve sahibini görev adından ölçer.",
         ["BackupController.cs#\"backup.verified\"#\"backup\""] = "Doğrulama sunucudaki bütün yedekleri tarar.",
         ["CacheController.cs#$\"cache.{motor}.{eylem}\"#$\"cache:{motor}\""] = "Redis/Memcached sunucu geneli tek örnektir; bütün siteler aynı hizmeti paylaşır.",
+        ["FirewallController.cs#\"firewall.ipblock.added\"#$\"firewall:{entry.RuleName}\""] = "Güvenlik duvarı IP engeli SUNUCU AĞINA uygulanır (yalnız yönetici); bir kiracının kaynağı değildir, kural bütün siteleri etkiler.",
+        ["FirewallController.cs#\"firewall.ipblock.refused\"#\"firewall:ip-block\""] = "Yöneticinin kendini/paneli engelleme girişimi reddedildi; sunucu ağı düzeyinde, kiracıyla ilgisi yok.",
+        ["FirewallController.cs#\"firewall.ipblock.removed\"#$\"firewall:{entry.RuleName}\""] = "Sunucu ağı güvenlik duvarı kuralı kaldırıldı (yalnız yönetici); kiracıya ait kaynak değil.",
+        ["NotificationsController.cs#\"notifications.webhook_secret.rotated\"#\"notifications\""] = "Webhook imza anahtarı panel geneli tek ayardır (yalnız yönetici); hiçbir aboneliğe ait değil, anahtar kayda yazılmaz.",
+        ["SslCsrController.cs#\"ssl.csr.created\"#$\"ssl-csr:{csr.Id}\""] = "CSR üretimi yalnız yönetici; henüz hiçbir siteye BAĞLI değil (ana makine adı serbest, sahip ölçülemez). Siteye bağlanma anı ssl.csr.imported'dır ve sahibi ölçerek yazar.",
+        ["SslCsrController.cs#\"ssl.csr.downloaded\"#$\"ssl-csr:{csr.Id}\""] = "Bekleyen CSR'nin indirilmesi; CSR bir siteye bağlı değil, sunucudaki yönetici deposuna aittir (özel anahtar yanıta girmez).",
+        ["SslCsrController.cs#\"ssl.csr.deleted\"#$\"ssl-csr:{id}\""] = "Bekleyen CSR ve korunan anahtarı sunucu deposundan silinir; hiçbir siteye bağlanmamış, kiracı kaynağı değil.",
         ["ClusterController.cs#action#\"cluster\""] = "Küme düğümleri sunucu/kurulum düzeyindedir, aboneliğe ait değil.",
         ["DatabasesController.cs#action#target"] = "Bu sarmalayıcı MOTOR ve veritabanı KULLANICISI hedefli kayıtlar içindir (kimlik kaydı, sertleştirme, uzak erişim); veritabanı hedefli olanlar WriteDatabaseAuditAsync ile sahibine bağlanır.",
         ["DiskQuotaController.cs#\"quota.fsrm.installed\"#\"server\""] = "FSRM bir WINDOWS ROLÜDÜR; kurulum sunucu genelidir, tetikleyen site yalnız bağlamdır.",
@@ -206,11 +226,14 @@ public sealed class AuditCoverageTests
         ["DockerController.cs#\"docker.container.run\"#$\"docker-image:{request.Image}\""] = "Yeni konteyner; hiçbir aboneliğe bağlanmamıştır.",
         ["DockerController.cs#\"docker.image.pulled\"#$\"docker-image:{request.Image}\""] = "İmajlar sunucu genelinde paylaşılır.",
         ["DockerController.cs#\"docker.image.removed\"#$\"docker-image:{id}\""] = "İmajlar sunucu genelinde paylaşılır.",
+        ["DockerController.cs#\"docker.container.limits.updated\"#$\"docker-container:{id}\""] = "Konteyner sahipliği panelde kayıtlı değil (etiket yalnız site ADINI taşır, abonelik sahibini değil); ölçülemeyen konu boş bırakılır. Uç yalnız sunucu sahibine açıktır.",
         ["ErrorReportsController.cs#action#\"error-reports\""] = "Hata raporları panelin kendi tanılama verisidir; aboneliğe ait değil.",
         ["FirewallController.cs#\"firewall.rule.allowed\"#$\"firewall:{rule.DisplayName}\""] = "Windows Güvenlik Duvarı kuralları sunucu genelidir; bir portu açmak bütün kiracıları etkiler.",
         ["FirewallController.cs#\"firewall.rule.blocked\"#$\"firewall:{rule.DisplayName}\""] = "Güvenlik duvarı kuralı sunucu geneli.",
         ["FirewallController.cs#\"firewall.rule.removed\"#$\"firewall:{ruleName}\""] = "Güvenlik duvarı kuralı sunucu geneli.",
         ["FtpController.cs#\"ftp.server.ensured\"#\"ftp-server\""] = "FTP sunucusunun KURULUMU server-level bir işlemdir.",
+        ["FtpController.cs#\"ftp.certificate.applied\"#\"ftp-server\""] = "Yalnız yöneticinin değiştirebildiği ortak FTPS dinleyicisi sertifikası sunucu genelidir; belirli bir kiracının sertifikasını veya FTP hesabını değiştirmez.",
+        ["PanelSettingsController.cs#\"panel.settings.updated\"#\"dns-address-sync\""] = "Genel sunucu IP geçişini yeniden denemek tüm yönetilen DNS bölgelerini kapsar; tek bir kiracıya ait değildir ve yöneticiyle sınırlıdır.",
         ["FtpController.cs#\"ftp.tls.updated\"#\"ftp-server\""] = "FTPS zorunluluğu bütün kiracıların bağlantılarını aynı anda etkiler.",
         ["HtaccessController.cs#\"htaccess.server_mode.changed\"#\"htaccess:server\""] = "Sunucu geneli .htaccess anahtarı (module.switch) TEK dosyadır ve kapı etkin modu iki anahtarın en düşüğü olarak hesaplar: bu düğme sunucudaki HER siteyi aynı anda açar/kapatır. Konusu bir kiracıya bağlansaydı, komşularını da kapsayan bir işlem o kiracının görünümüne düşerdi. Site başına kip değişikliği (htaccess.mode.changed) konusunu AYRICA yazar ve sahibine bağlanır.",
         ["HtaccessController.cs#\"htaccess.module.registered\"#\"htaccess:server\""] = "Modül kaydı applicationHost.config'e yazılır: sunucudaki yönetilen kod çalıştıran HER uygulama havuzunu bir kez geri döndürür ve modülü her siteye yükletir. Tek bir aboneliğin kaynağı değildir; konusu bir kiracıya bağlansaydı, komşularını da kapsayan bir işlem o kiracının denetim görünümüne düşerdi. Kaynak, sunucu geneli anahtarla (htaccess.server_mode.changed) BİLEREK aynı: 'bu sunucuda .htaccess'e kim dokundu' sorusu tek yerden aranabilsin.",
@@ -225,7 +248,7 @@ public sealed class AuditCoverageTests
         ["MailController.cs#\"mail.certificate.issued\"#string.IsNullOrWhiteSpace(request.HostName) ? request.Domain : request.HostName"] = "POSTA SUNUCUSUNUN kendi TLS sertifikası; her kiracının istemcisi bu sertifikayı görür.",
         ["MailController.cs#\"mail.spam.updated\"#\"mail-server\""] = "Spam filtresi sunucu genelidir (itibar/kara liste riski ortaktır).",
         ["MailController.cs#\"mail.queue.message_deleted\"#id"] = "Kuyruk kimliğinden alan adına gidilemez: silinen ileti kuyruktan da kalkar, sahibi ÖLÇÜLEMEZ — tahmin edilmez.",
-        ["MailController.cs#\"mail.relay.updated\"#request.Enabled ? $\"{request.Host}:{request.Port}\" : \"mail-server\""] = "Röle, sunucunun TÜM giden postasının teslim yolunu belirler.",
+        ["MailController.cs#request.RecoverOnly ? \"mail.relay.recovered\" : \"mail.relay.updated\"#request.RecoverOnly ? \"mail-server\" : request.Enabled ? $\"{request.Host}:{request.Port}\" : \"mail-server\""] = "Röle güncellemesi ve yarım kalan işlemin kurtarılması sunucunun TÜM giden postasının teslim yolunu belirler; yalnız yönetici çağırabilir, tek bir kiracıya ait değildir.",
         ["MigrationController.cs#\"migration.discover.trust_exception\"#$\"host:{host}\""] = "Konu, kimliği DOĞRULANAMAYAN bir KAYNAK SUNUCUDUR (Plesk/WHM) ve o sunucu bu panelin değildir: hiçbir aboneliğe ait olamaz, üstelik keşif anında bu sunucuda henüz hiçbir site/abonelik oluşmamıştır. Uç zaten admin-only. Kayıt, yöneticinin doğrulanmamış bir uca API anahtarı göndermeyi bilerek onayladığını yazar; göçün KENDİSİ (migration.site) konusunu AYRICA yazar ve hedef sitenin sahibine bağlanır.",
         ["NotificationsController.cs#\"notifications.settings.updated\"#\"notifications\""] = "Panelin bildirim kanalı (SMTP/webhook) sunucu genelidir.",
         ["NotificationsController.cs#\"notifications.test_sent\"#\"notifications\""] = "Panel bildirim kanalının sınanması.",
@@ -233,6 +256,7 @@ public sealed class AuditCoverageTests
         ["PanelSettingsController.cs#\"panel.settings.updated\"#\"panel\""] = "Panel genel ayarları.",
         ["PhpController.cs#\"php.redis.enabled\"#\"php\""] = "PHP eklentisi FastCGI düzeyinde, bütün siteler için etkinleşir.",
         ["PhpController.cs#\"php.install.completed\"#\"php\""] = "PHP çalışma zamanı kurulumu sunucu genelidir; siteye ATAMA ayrı uçtadır ve sahibine bağlanır.",
+        ["PhpController.cs#\"php.version.removed\"#\"php\""] = "PHP sürümünü kaldırma sunucu geneldir ve yalnız yönetici içindir; kullanan site varsa REDDEDİLİR, yani hiçbir kiracının sitesi etkilenmez.",
         ["PhpController.cs#\"php.global.settings.updated\"#\"php\""] = "GENEL php.ini; panelin kendi araçları dahil bütün PHP'yi etkiler.",
         ["SecurityController.cs#\"security.bruteforce_settings_changed\"#\"security:bruteforce\""] = "Kaba-kuvvet koruması PANEL GİRİŞİNİ korur; bir aboneliğin kaynağı değil.",
         ["SecurityController.cs#\"security.bruteforce_unbanned\"#$\"security:bruteforce:{request.IpAddress}\""] = "Yasak bir IP'ye aittir, bir aboneliğe değil; IP'den kiracı türetmek tahmindir.",
@@ -242,6 +266,7 @@ public sealed class AuditCoverageTests
         ["SitesController.cs#\"sites.import.completed\"#\"sites\""] = "İçe aktarılan siteler tanım gereği HENÜZ hiçbir aboneliğe atanmamıştır; atama ayrı bir işlemdir.",
         ["SslController.cs#\"ssl.renew_all\"#\"ssl:*\""] = "Tek çağrıda sunucudaki HER sitenin sertifikası yenilenir; tek konusu yok.",
         ["SubscriptionsController.cs#\"subscription.enforced\"#\"subscriptions\""] = "Bütün abonelikleri gezen tur; tek tek değişiklikler SubscriptionEnforcementService'te kendi sahibine yazılır.",
+        ["DockerController.cs#\"docker.denied\"#\"docker\""] = "Sunucu sahibi OLMAYAN bir yöneticinin Docker denemesi; panel/sunucu düzeyinde, aboneliğe ait değil.",
         ["TerminalController.cs#\"terminal.command.denied\"#\"terminal\""] = "Sunucu sahibi OLMAYAN bir yöneticinin SYSTEM kabuğu denemesi; panel/sunucu düzeyinde, aboneliğe ait değil.",
         ["TerminalController.cs#\"terminal.command.executed\"#\"terminal\""] = "Sunucuda SYSTEM yetkisiyle komut; panel/sunucu düzeyinde, aboneliğe ait değil.",
         ["UpdateController.cs#\"update.package.downloaded\"#\"panel\""] = "PANELİN KENDİ ikilisi; hiçbir aboneliğe ait değil.",

@@ -105,6 +105,42 @@ public sealed class SelfUpdatePreparedIdentityTests
     }
 
     [Fact]
+    public async Task OlderReleaseThanInstalledIsRejectedBeforeAnyDownload()
+    {
+        using var fixture = new Fixture();
+        await fixture.PrepareAsync();
+        var before = await File.ReadAllTextAsync(fixture.PendingPath);
+        fixture.Failure = "downgrade";
+
+        var error = await Assert.ThrowsAsync<AppException>(() => fixture.Service.ApplyUpdateAsync(new ApplyUpdateRequest()));
+
+        Assert.Equal("update.downgrade_rejected", error.MessageKey);
+        Assert.Equal(before, await File.ReadAllTextAsync(fixture.PendingPath));
+        Assert.Empty(Directory.GetFiles(Path.Combine(fixture.Root, "updates"), "AdaPanelUpdate-*.exe"));
+    }
+
+    [Fact]
+    public async Task PackageWhoseOwnVersionDisagreesWithTheReleaseIsRejected()
+    {
+        using var fixture = new Fixture();
+        await fixture.PrepareAsync();
+        fixture.Failure = "pkgversion";
+
+        var error = await Assert.ThrowsAsync<AppException>(() => fixture.Service.ApplyUpdateAsync(new ApplyUpdateRequest()));
+
+        Assert.Equal("update.package_invalid", error.MessageKey);
+    }
+
+    [Fact]
+    public async Task PackageWithMatchingOwnVersionWithTrailingZeroIsAccepted()
+    {
+        using var ok = new Fixture();
+        await ok.PrepareAsync();
+        ok.Failure = "pkgversionok"; // "99.0.2.0" == "99.0.2"
+        Assert.True((await ok.Service.ApplyUpdateAsync(new ApplyUpdateRequest())).IsPackageReady);
+    }
+
+    [Fact]
     public async Task SuccessfulDownloadPublishesItsOwnPreparedIdentity()
     {
         using var fixture = new Fixture();
@@ -114,6 +150,58 @@ public sealed class SelfUpdatePreparedIdentityTests
         Assert.Equal(Fixture.Hash(Fixture.NewPackage), result.PreparedPackageSha256);
         Assert.Equal(Fixture.NewPackage, await File.ReadAllBytesAsync(result.PackagePath));
         Assert.True(result.IsPackageReady);
+    }
+
+    [Theory]
+    [InlineData("connect", "update.download_failed", 502)]
+    [InlineData("stream", "update.download_failed", 502)]
+    [InlineData("timeout", "update.download_timeout", 504)]
+    public async Task DownloadTransportFailureReturnsActionableErrorAndPreservesPreparedPackage(
+        string failure, string key, int httpStatus)
+    {
+        using var fixture = new Fixture();
+        await fixture.PrepareAsync();
+        var before = await File.ReadAllTextAsync(fixture.PendingPath);
+        fixture.Failure = failure;
+
+        var error = await Assert.ThrowsAsync<AppException>(() => fixture.Service.ApplyUpdateAsync(new ApplyUpdateRequest()));
+
+        Assert.Equal(key, error.MessageKey);
+        Assert.Equal(httpStatus, error.HttpStatusCode);
+        Assert.Empty(error.Details);
+        Assert.Null(error.InnerException);
+        Assert.Equal(before, await File.ReadAllTextAsync(fixture.PendingPath));
+        Assert.Equal(Fixture.OldPackage, await File.ReadAllBytesAsync(fixture.PreparedPath));
+        Assert.Empty(Directory.GetFiles(Path.Combine(fixture.Root, "updates"), "AdaPanelUpdate-*.exe"));
+        Assert.Empty(fixture.Launcher.Packages);
+    }
+
+    [Fact]
+    public async Task CancellationDuringPartialDownloadRemainsCancellationAndCleansCandidate()
+    {
+        using var fixture = new Fixture();
+        await fixture.PrepareAsync();
+        var before = await File.ReadAllTextAsync(fixture.PendingPath);
+        using var requestCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var content = new PausedContent(requestCancellation.Token);
+        fixture.FirstDownloadContent = content;
+        var download = fixture.Service.ApplyUpdateAsync(new ApplyUpdateRequest(), requestCancellation.Token);
+        try
+        {
+            await content.Entered.Task.WaitAsync(requestCancellation.Token);
+            Assert.Single(Directory.GetFiles(Path.Combine(fixture.Root, "updates"), "AdaPanelUpdate-*.exe"));
+            requestCancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download);
+            Assert.Equal(before, await File.ReadAllTextAsync(fixture.PendingPath));
+            Assert.Equal(Fixture.OldPackage, await File.ReadAllBytesAsync(fixture.PreparedPath));
+            Assert.Empty(Directory.GetFiles(Path.Combine(fixture.Root, "updates"), "AdaPanelUpdate-*.exe"));
+            Assert.Empty(fixture.Launcher.Packages);
+        }
+        finally
+        {
+            content.Release.TrySetResult();
+            await Record.ExceptionAsync(() => download);
+        }
     }
 
     [Fact]
@@ -383,7 +471,8 @@ public sealed class SelfUpdatePreparedIdentityTests
                     if (BeforeIdentity is not null) await BeforeIdentity(token);
                     return Failure == "identity" && !File.ReadAllBytes(path).SequenceEqual(OldPackage)
                     ? new UpdatePackageIdentity("foreign", "foreign", "NotSigned", string.Empty)
-                    : new UpdatePackageIdentity("AdaPanel", "AdaPanel", "NotSigned", string.Empty);
+                    : new UpdatePackageIdentity("AdaPanel", "AdaPanel", "NotSigned", string.Empty,
+                        Failure == "pkgversion" ? "0.0.1.0" : Failure == "pkgversionok" ? "99.0.2.0" : string.Empty);
                 });
         }
         internal InstallUpdateRequest Confirmation() => new()
@@ -430,12 +519,17 @@ public sealed class SelfUpdatePreparedIdentityTests
                     {
                         Content = new StringContent(JsonSerializer.Serialize(new
                         {
-                            tag_name = "v99.0.2", body = "release",
+                            tag_name = fixture.Failure == "downgrade" ? "v0.0.1" : "v99.0.2", body = "release",
                             assets = new[] { new { name = "AdaPanelSetup.exe",
                                 browser_download_url = "https://github.com/aliorala/adapanel/releases/download/v99.0.2/AdaPanelSetup.exe",
                                 digest = "sha256:" + Hash(NewPackage) } }
                         }))
                     });
+                if (fixture.Failure == "connect")
+                    throw new HttpRequestException("fixture private upstream diagnostic",
+                        new System.Net.Sockets.SocketException(10060));
+                if (fixture.Failure == "timeout")
+                    throw new TaskCanceledException("fixture private timeout diagnostic");
                 HttpContent content = Interlocked.Exchange(ref fixture.FirstDownloadContent, null) ?? (fixture.Failure switch
                 {
                     "checksum" => new ByteArrayContent([(byte)'M', (byte)'Z', 99]),

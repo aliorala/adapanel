@@ -31,13 +31,74 @@ public sealed class MailController(
     /// Tüm posta rolleri erişebilir; kurulum idempotenttir.
     /// </summary>
     [HttpPost("webmail/open")]
-    public async Task<ActionResult<ApiResponse<WebmailOpenDto>>> OpenWebmailAsync(CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<WebmailOpenDto>>> OpenWebmailAsync(
+        [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] WebmailOpenRequest? request,
+        CancellationToken cancellationToken)
     {
         // "Aç" masum görünür ama gerekirse Roundcube'u KURAR/yapılandırır — yani sunucuda durum
         // değiştirir. Bu yüzden kayda geçer.
-        var result = await webmailService.OpenAsync(Request.Host.Host, cancellationToken);
-        await auditService.AuditAsync(HttpContext, "mail.webmail.opened", "webmail", "Webmail was opened (installed/configured if needed).");
+        request ??= new();
+        WebmailOpenDto result;
+        if (string.IsNullOrWhiteSpace(request.Domain) && string.IsNullOrWhiteSpace(request.Address))
+        {
+            // G14: alan adsız çağrı SUNUCU GENELİ webmail kurulumunu (indirme, IIS sitesi, güvenlik
+            // duvarı portu) tetikleyebilir. Müşteri/bayi bu dalı kullanamaz; kendi alan adıyla açar.
+            if (!User.IsInRole("Administrator"))
+                throw new AdaPanel.Core.Common.AppException("auth.forbidden", 403, 403);
+            result = await webmailService.OpenAsync(Request.Host.Host, cancellationToken);
+        }
+        else
+        {
+            var domain = WebmailRequestValidation.Domain(request.Domain);
+            request.Domain = domain;
+            await CustomerAccess.EnsureSectionAsync(customerScopes, User, "mail", cancellationToken);
+            await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, domain, cancellationToken);
+            if (PanelAuthentication.IsTokenAuthenticated(User))
+            {
+                // Store only the validated API token's digest so consumption can detect revocation.
+                var rawToken = PanelAuthentication.ExtractToken(Request) ?? throw new AdaPanel.Core.Common.AppException("auth.unauthorized", 401, 401);
+                var identity = new System.Security.Claims.ClaimsIdentity(User.Identity as System.Security.Claims.ClaimsIdentity);
+                identity.AddClaim(new("adapanel_webmail_token_hash", Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(rawToken)))));
+                HttpContext.User = new System.Security.Claims.ClaimsPrincipal(identity);
+            }
+            var db = HttpContext.RequestServices.GetRequiredService<AdaPanel.Data.Persistence.AdaPanelDbContext>();
+            var sessions = HttpContext.RequestServices.GetRequiredService<AdaPanel.Infrastructure.Security.SessionRevocationStore>();
+            var actor = await WebmailActorAuthority.CaptureAsync(db, customerScopes, sessions, User, domain, cancellationToken);
+            string? accountId = null;
+            if (!string.IsNullOrWhiteSpace(request.Address))
+            {
+                HttpContext.RequestServices.GetRequiredService<WebmailSsoTickets>().Reserve(User);
+                request.Address = request.Address.Trim().ToLowerInvariant();
+                accountId = await HttpContext.RequestServices.GetRequiredService<WebmailSsoService>()
+                    .ResolveAsync(domain, request.Address, cancellationToken);
+            }
+            result = await webmailService.OpenAsync(Request.Host.Host, request, cancellationToken);
+            if (accountId is not null)
+            {
+                await HttpContext.RequestServices.GetRequiredService<WebmailSsoDeployment>().PrepareAsync(cancellationToken);
+                if (await WebmailActorAuthority.CaptureAsync(db, customerScopes, sessions, User, domain, cancellationToken) != actor)
+                    throw new AdaPanel.Core.Common.AppException("auth.unauthorized", 401, 401);
+                var origin = Request.Scheme + "://" + Request.Host.ToUriComponent();
+                var host = "webmail." + domain;
+                if (result.Url != "https://" + host + "/")
+                    throw new AdaPanel.Core.Common.AppException("mail.webmail_sso_unavailable", 503, 503);
+                result.HandoffToken = HttpContext.RequestServices.GetRequiredService<WebmailSsoTickets>()
+                    .Issue(User, actor, domain, request.Address!, accountId, host, origin, rateAlreadyChecked: true);
+            }
+        }
+        Response.Headers.CacheControl = "no-store";
+        await AuditWebmailOpenedAsync(request, cancellationToken);
         return Ok(ApiResponse<WebmailOpenDto>.Ok(result));
+    }
+
+    internal async Task AuditWebmailOpenedAsync(WebmailOpenRequest request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Domain))
+            await auditService.AuditAsync(HttpContext, "mail.webmail.opened", "webmail", "Webmail was opened (installed/configured if needed).");
+        else
+            await auditService.AuditAsync(HttpContext, "mail.webmail.opened", request.Address ?? request.Domain,
+                "Domain webmail was opened (installed/configured if needed).",
+                await AlanAdiSahibiAsync(request.Domain, cancellationToken));
     }
 
     /// <summary>
@@ -96,6 +157,7 @@ public sealed class MailController(
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, request.DomainName, cancellationToken);
+        await LicenseGate.EnsureCanCreateAsync(HttpContext, Core.Dtos.Licensing.LicensedResource.Mailbox, cancellationToken);
         var workspace = await mailService.CreateDomainAsync(request, cancellationToken);
 
         // profesyonel paneller gibi: domain panelde site olarak yönetiliyorsa MX/SPF/DKIM/DMARC kayıtları
@@ -117,14 +179,22 @@ public sealed class MailController(
                 exception.Message);
         }
 
+        // DNS yazimini asil olcen burasidir (servisteki ilk deneme ile bu ikinci deneme ayni
+        // bolgeyi hedefler): bu yuzden DNS uyarisi ONUN sonucuna gore belirlenir.
+        var warnings = MergeCreateWarnings(workspace.Warnings, dnsApplied);
+
+        workspace.Warnings = warnings;
+
         await auditService.AuditAsync(
             HttpContext,
             "mail.domain.created",
             request.DomainName,
-            $"Mail domain created (DNS records auto-applied: {dnsApplied}).",
+            $"Mail domain created (DNS records auto-applied: {dnsApplied}; warnings: {(warnings.Count == 0 ? "none" : string.Join(",", warnings))}).",
             await AlanAdiSahibiAsync(request.DomainName, cancellationToken));
 
-        return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, dnsApplied ? "mail.domain_created_dns" : "mail.domain_created"));
+        return Ok(ApiResponse<MailWorkspaceDto>.Ok(
+            workspace,
+            warnings.Count > 0 ? "mail.domain.completed_with_warnings" : "mail.domain_created_dns"));
     }
 
     [HttpDelete("domains/{domainName}")]
@@ -139,12 +209,16 @@ public sealed class MailController(
         // Domaine ait DNS kayıtlarını domain silinmeden ÖNCE çöz (silindikten sonra
         // GetDnsRecordsAsync DKIM anahtarını bulamaz). Kaldırma domain silindikten sonra yapılır.
         Core.Dtos.Mail.MailDnsDto? mailDns = null;
+        var leftovers = new List<string>();
         try
         {
             mailDns = await mailService.GetDnsRecordsAsync(domainName, cancellationToken);
         }
         catch (Exception exception)
         {
+            // Hangi kayitlari sileceginiz bilinmiyor: kayitlar KALACAK -> durustce bildir.
+            // Panelin yonettigi bolge yoksa (dis DNS) bizim eklediğimiz kayit da yoktur.
+            if (!IsNoManagedZone(exception)) leftovers.Add("dns_records_unread");
             logger.LogInformation("Mail DNS kayıtları silme öncesi okunamadı ({Domain}): {Reason}", domainName, exception.Message);
         }
 
@@ -162,6 +236,13 @@ public sealed class MailController(
             catch (Exception exception)
             {
                 logger.LogInformation("Mail DNS kayıtları kaldırılamadı ({Domain}): {Reason}", domainName, exception.Message);
+
+                // Panelin yonettigi bir bolge YOKSA (dis DNS) kaldirilacak bizim kaydimiz da yoktur;
+                // diger tum hatalarda kayitlar bolgede KALDI.
+                if (!IsNoManagedZone(exception))
+                {
+                    leftovers.Add("dns_records_not_removed");
+                }
             }
         }
 
@@ -173,22 +254,47 @@ public sealed class MailController(
             HttpContext,
             "mail.domain.deleted",
             domainName,
-            "Mail domain and its mailboxes were deleted.",
+            leftovers.Count == 0
+                ? "Mail domain and its mailboxes were deleted."
+                : $"Mail domain and its mailboxes were deleted; leftovers: {string.Join(",", leftovers)}.",
             await AlanAdiSahibiAsync(domainName, cancellationToken));
 
-        return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.domain_deleted"));
+        leftovers = MergeDeleteLeftovers(workspace.Warnings, leftovers);
+        workspace.Warnings = leftovers;
+        return Ok(ApiResponse<MailWorkspaceDto>.Ok(
+            workspace,
+            leftovers.Count > 0 ? "mail.domain.delete_completed_with_leftovers" : "mail.domain_deleted"));
     }
+
+    /// <summary>Servis uyarilari + controller'in olctugu DNS sonucu (ikinci deneme servisinkini gecersiz kilar).</summary>
+    internal static List<string> MergeCreateWarnings(IEnumerable<string> serviceWarnings, bool dnsApplied)
+    {
+        var warnings = serviceWarnings.Where(w => w != MailDomainWarnings.DnsNotPublished).ToList();
+        if (!dnsApplied) warnings.Insert(0, MailDomainWarnings.DnsNotPublished);
+        return warnings;
+    }
+
+    /// <summary>Servisin temizlik uyarilari + controller'in DNS artiklari, tekrarsiz.</summary>
+    internal static List<string> MergeDeleteLeftovers(IEnumerable<string> serviceWarnings, IEnumerable<string> dnsLeftovers)
+        => dnsLeftovers.Concat(serviceWarnings).Distinct().ToList();
+
+    /// <summary>Alan adinin panelde yonetilen bir DNS bolgesi yok mu (dis DNS): silinecek kayit da yoktur.</summary>
+    internal static bool IsNoManagedZone(Exception exception)
+        => exception is AdaPanel.Core.Common.AppException { MessageKey: "mail.dns_zone_missing" }
+            or AdaPanel.Core.Common.AppException { MessageKey: "mail.invalid_domain", HttpStatusCode: 400 };
 
     private async Task RemoveDnsRecordsAsync(string domain, Core.Dtos.Mail.MailDnsDto mailDns, IDnsService dnsService, CancellationToken cancellationToken)
     {
-        var zone = await dnsService.GetZoneAsync(domain, cancellationToken);
+        var site = MailService.ResolveManagedIdentitySite(await iisSiteService.GetSitesAsync(cancellationToken), domain);
+        var zone = await dnsService.GetZoneAsync(site.Name, cancellationToken);
+        MailDnsPublication.EnsureDomainZone(zone, domain);
         foreach (var record in zone.Records)
         {
             var matchesMailRecord = mailDns.Records.Any(mail => MailDnsPublication.MatchesRecord(mail, record));
 
             if (matchesMailRecord && !string.IsNullOrWhiteSpace(record.Id))
             {
-                await dnsService.DeleteRecordAsync(domain, record.Id, cancellationToken);
+                await dnsService.DeleteRecordAsync(site.Name, record.Id, cancellationToken);
             }
         }
     }
@@ -198,6 +304,7 @@ public sealed class MailController(
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, request.Domain, cancellationToken);
         await EnsureAddressDomainAsync(request.Address, request.Domain, cancellationToken);
+        await LicenseGate.EnsureCanCreateAsync(HttpContext, Core.Dtos.Licensing.LicensedResource.Mailbox, cancellationToken);
         await EnsureMailboxQuotaAsync(cancellationToken);
         var workspace = await mailService.CreateAccountAsync(request, cancellationToken);
 
@@ -217,13 +324,16 @@ public sealed class MailController(
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(address), cancellationToken);
         var workspace = await mailService.DeleteAccountAsync(address, cancellationToken);
+        await AdminLockStore.ClearAsync(HttpContext.RequestServices.GetRequiredService<AdaPanel.Infrastructure.Support.JsonFileStore>(), "mail", address, cancellationToken);
         await auditService.AuditAsync(
             HttpContext,
             "mail.account.deleted",
             address,
             "Mailbox and its messages were deleted.",
             await AdresSahibiAsync(address, null, cancellationToken));
-        return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.account_deleted"));
+        return Ok(ApiResponse<MailWorkspaceDto>.Ok(
+            workspace,
+            workspace.Warnings.Count > 0 ? "mail.account.delete_completed_with_leftovers" : "mail.account_deleted"));
     }
 
     [HttpPost("accounts/password")]
@@ -302,6 +412,100 @@ public sealed class MailController(
             "Mail alias was removed.",
             await AdresSahibiAsync(address, null, cancellationToken));
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.alias_deleted"));
+    }
+
+    /// <summary>Posta kutusunu askıya alır/yeniden açar (posta SİLİNMEZ). MailEnable'da kanıtlı yöntem yoktur: 409 mail.not_supported.</summary>
+    [HttpPost("accounts/active")]
+    public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> SetAccountActiveAsync([FromBody] SetMailAccountActiveRequest request, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(request.Address), cancellationToken);
+        var locks = HttpContext.RequestServices.GetRequiredService<AdaPanel.Infrastructure.Support.JsonFileStore>();
+        // Yöneticinin askıya aldığı kutuyu müşteri yeniden açamaz.
+        if (request.Active) await AdminLockStore.EnsureCanEnableAsync(locks, User, "mail", request.Address, cancellationToken);
+        var workspace = await NotSupportedAs409(() => mailService.SetAccountActiveAsync(request, cancellationToken));
+        if (!request.Active) await AdminLockStore.RecordDisableAsync(locks, User, "mail", request.Address, cancellationToken);
+        await auditService.AuditAsync(
+            HttpContext,
+            request.Active ? "mail.account.reactivated" : "mail.account.suspended",
+            request.Address,
+            request.Active ? "Mailbox login/receive/send was re-enabled." : "Mailbox login/receive/send was disabled; messages are kept.",
+            await AdresSahibiAsync(request.Address, null, cancellationToken));
+        return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, request.Active ? "mail.account_reactivated" : "mail.account_suspended"));
+    }
+
+    [HttpPut("aliases")]
+    public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> UpdateAliasAsync([FromBody] UpdateMailAliasRequest request, CancellationToken cancellationToken)
+    {
+        var domain = ExtractDomain(request.Address);
+        await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, domain, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(request.Target))
+        {
+            await EnsureAddressDomainAsync(request.Target, domain, cancellationToken);
+        }
+
+        var workspace = await NotSupportedAs409(() => mailService.UpdateAliasAsync(request, cancellationToken));
+
+        // HEDEF değişimi sessiz posta yönlendirmedir (alias oluşturma ile aynı risk): hedef de yazılır.
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.alias.updated",
+            request.Address,
+            $"Alias updated: target={(string.IsNullOrWhiteSpace(request.Target) ? "(unchanged)" : request.Target)}; active={(request.Active?.ToString() ?? "(unchanged)")}.",
+            await AdresSahibiAsync(request.Address, null, cancellationToken));
+        return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.alias_updated"));
+    }
+
+    [HttpGet("accounts/forward")]
+    public async Task<ActionResult<ApiResponse<MailForwardDto>>> GetForwardAsync([FromQuery] string address, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(address), cancellationToken);
+        return Ok(ApiResponse<MailForwardDto>.Ok(await NotSupportedAs409(() => mailService.GetForwardAsync(address, cancellationToken))));
+    }
+
+    [HttpPut("accounts/forward")]
+    public async Task<ActionResult<ApiResponse<MailForwardDto>>> SetForwardAsync([FromBody] SetMailForwardRequest request, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(request.Address), cancellationToken);
+        var dto = await NotSupportedAs409(() => mailService.SetForwardAsync(request, cancellationToken));
+
+        // Yönlendirme = gelen postanın kopyasının başka bir adrese gitmesi; hedef adres kayda girer.
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.forward.updated",
+            request.Address,
+            request.Enabled
+                ? $"Mailbox forwards to '{request.Target}' (keepCopy={request.KeepCopy})."
+                : "Mailbox forwarding was removed.",
+            await AdresSahibiAsync(request.Address, null, cancellationToken));
+        return Ok(ApiResponse<MailForwardDto>.Ok(dto, request.Enabled ? "mail.forward_saved" : "mail.forward_removed"));
+    }
+
+    /// <summary>DKIM anahtar rotasyonu: yeni selector → DNS → geçiş; hata olursa eski anahtar aktif kalır.</summary>
+    [HttpPost("dkim/rotate")]
+    public async Task<ActionResult<ApiResponse<MailDkimRotationDto>>> RotateDkimAsync([FromBody] RotateMailDkimRequest request, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, request.Domain, cancellationToken);
+        var dto = await NotSupportedAs409(() => mailService.RotateDkimAsync(request, cancellationToken));
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.dkim.rotated",
+            request.Domain,
+            $"DKIM key rotated: {dto.OldSelector} -> {dto.NewSelector}; old key removed after {dto.RetireAfterUtc:u}.",
+            await AlanAdiSahibiAsync(request.Domain, cancellationToken));
+        return Ok(ApiResponse<MailDkimRotationDto>.Ok(dto, "mail.dkim_rotated"));
+    }
+
+    /// <summary>Posta sunucusu özelliği desteklemiyorsa (varsayılan arayüz gövdesi) açık 409 döner; 500 değil.</summary>
+    private static async Task<T> NotSupportedAs409<T>(Func<Task<T>> action)
+    {
+        try
+        {
+            return await action();
+        }
+        catch (NotSupportedException)
+        {
+            throw new AdaPanel.Core.Common.AppException("mail.not_supported", 409, 409);
+        }
     }
 
     [HttpPost("lists")]
@@ -699,7 +903,7 @@ public sealed class MailController(
         }
     }
 
-    /// <summary>Mail DNS kayıtlarını aynı adlı sitenin panel DNS bölgesine yazar.</summary>
+    /// <summary>Mail DNS kayıtlarını alan adını barındıran sitenin panel DNS bölgesine yazar.</summary>
     /// <remarks>
     /// <para>
     /// <b>İKİ ÖLÇÜLEN HATA burada kapandı.</b>
@@ -727,7 +931,9 @@ public sealed class MailController(
         Core.Dtos.Sites.SiteDnsZoneDto? zone = null;
         if (requests.Count > 0)
         {
-            zone = await dnsService.UpsertRecordsAsync(dns.Domain, requests, cancellationToken);
+            var site = MailService.ResolveManagedIdentitySite(await iisSiteService.GetSitesAsync(cancellationToken), dns.Domain);
+            MailDnsPublication.EnsureDomainZone(await dnsService.GetZoneAsync(site.Name, cancellationToken), dns.Domain);
+            zone = await dnsService.UpsertRecordsAsync(site.Name, requests, cancellationToken);
         }
 
         var result = MailDnsPublication.Evaluate(zone, requests.Count);
@@ -742,9 +948,12 @@ public sealed class MailController(
 
     [HttpGet("certificate")]
     [Authorize(Roles = "Administrator")]
-    public async Task<ActionResult<ApiResponse<MailCertificateDto>>> GetCertificateAsync(CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<MailCertificateDto>>> GetCertificateAsync(CancellationToken cancellationToken,
+        [FromQuery] string? domain = null)
     {
-        var status = await mailService.GetCertificateStatusAsync(cancellationToken);
+        var status = string.IsNullOrWhiteSpace(domain)
+            ? await mailService.GetCertificateStatusAsync(cancellationToken)
+            : await mailService.GetCertificateStatusForDomainAsync(domain, cancellationToken);
         return Ok(ApiResponse<MailCertificateDto>.Ok(status));
     }
 
@@ -834,7 +1043,7 @@ public sealed class MailController(
             throw new Core.Common.AppException("mail.queue_message_not_found", 404, 404);
         }
 
-        await auditService.AuditAsync(HttpContext, "mail.queue.message_deleted", id, "Queued message was deleted before delivery.");
+        await auditService.AuditAsync(HttpContext, "mail.queue.message_deleted", id, "Message was removed from the delivery queue. This does not recall any copy already delivered.");
         return Ok(ApiResponse<bool>.Ok(true, "mail.queue_message_deleted"));
     }
 
@@ -865,13 +1074,14 @@ public sealed class MailController(
         // Yazılan şey OLGUDUR: giden postanın nereye teslim edildiği ve kimlik doğrulaması olup olmadığı.
         await auditService.AuditAsync(
             HttpContext,
-            "mail.relay.updated",
-            request.Enabled ? $"{request.Host}:{request.Port}" : "mail-server",
-            request.Enabled
+            request.RecoverOnly ? "mail.relay.recovered" : "mail.relay.updated",
+            request.RecoverOnly ? "mail-server" : request.Enabled ? $"{request.Host}:{request.Port}" : "mail-server",
+            request.RecoverOnly ? "Pending outbound mail relay transaction recovery completed; no new relay configuration applied."
+                : request.Enabled
                 ? $"Outbound mail relayed through '{request.Host}:{request.Port}' (implicit TLS: {request.ImplicitTls}, authenticated: {!string.IsNullOrWhiteSpace(request.Username)})."
                 : "Outbound mail relay was removed; delivery returned to direct MX routing.");
 
-        return Ok(ApiResponse<MailRelayDto>.Ok(relay, request.Enabled ? "mail.relay_saved" : "mail.relay_removed"));
+        return Ok(ApiResponse<MailRelayDto>.Ok(relay, request.RecoverOnly ? "mail.relay_recovered" : request.Enabled ? "mail.relay_saved" : "mail.relay_removed"));
     }
 
     /// <summary>

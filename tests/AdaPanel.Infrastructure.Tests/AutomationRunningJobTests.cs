@@ -154,6 +154,23 @@ public sealed class AutomationRunningJobTests
         Assert.Empty((await fixture.Jobs.GetStatusAsync([RunningJobKinds.Backup], null)).Running);
     }
 
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData(-7, true)]
+    [InlineData(-1, true)]
+    [InlineData(null, false)]
+    public async Task Ssl_next_run_matches_due_decision(int? lastRunHours, bool enabled)
+    {
+        using var f = new Fixture();
+        DateTime? last = lastRunHours.HasValue ? DateTime.UtcNow.AddHours(lastRunHours.Value) : null;
+        await f.ConfigureSsl(last, enabled);
+        var before = DateTime.UtcNow;
+        var status = await f.Service.GetStatusAsync();
+        if (!enabled) Assert.Null(status.NextSslRunUtc);
+        else if (lastRunHours == -1) Assert.Equal(last!.Value.AddHours(6), status.NextSslRunUtc);
+        else Assert.InRange(status.NextSslRunUtc!.Value, before, DateTime.UtcNow);
+    }
+
     private sealed class Fixture : IDisposable
     {
         private readonly string root = Path.Combine(Path.GetTempPath(), "adapanel-automation-jobs-" + Guid.NewGuid().ToString("N"));
@@ -179,6 +196,10 @@ public sealed class AutomationRunningJobTests
         {
             autoBackupEnabled = true, backupSites = false, backupPanelConfig = true,
             autoSslRenewEnabled = false, updateCheckEnabled = false
+        });
+        public Task ConfigureSsl(DateTime? last, bool enabled) => store.WriteAsync("config/automation.json", new
+        {
+            autoSslRenewEnabled = enabled, sslRenewIntervalHours = 6, lastSslRunUtc = last
         });
         public AdaPanel.Infrastructure.Subscriptions.SubscriptionBackupScheduleService Subscription(int quota)
         {

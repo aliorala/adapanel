@@ -96,7 +96,7 @@ public sealed class PostgresBackupArtifactIdentityTests
         stream.Position = 0;
         using var reopened = new ZipArchive(stream, ZipArchiveMode.Read);
         var warnings = new List<BackupRestoreWarningDto>();
-        await InvokeTask(fixture.Service, "ImportDatabasesFromArchiveAsync", reopened, "databases/", warnings, CancellationToken.None);
+        await InvokeTask(fixture.Service, "ImportDatabasesFromArchiveAsync", reopened, "databases/", warnings, false, CancellationToken.None);
         Assert.Empty(warnings);
         Assert.Equal([("postgresql", "foo", "-- foo export 1"), ("postgresql", "Foo", "-- Foo export 2")], fixture.Imports);
     }

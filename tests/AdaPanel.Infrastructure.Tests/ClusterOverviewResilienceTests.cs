@@ -206,7 +206,7 @@ public sealed class ClusterOverviewResilienceTests : IDisposable
         var dosyaDeposu = new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = veriKoku }));
         var depo = new ClusterNodeStore(dosyaDeposu, new SahteKoruyucu(), NullLogger<ClusterNodeStore>.Instance);
         var istemci = new SahteIstemci();
-        var servis = new ClusterService(depo, istemci, NullLogger<ClusterService>.Instance)
+        var servis = new ClusterService(depo, istemci, new FakeCertificateProber(), NullLogger<ClusterService>.Instance)
         {
             // Testte gercek DNS'e cikilmaz: adres denetimi kendi dosyasinda olculuyor.
             Resolver = (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Parse("93.184.216.34") })
@@ -215,7 +215,7 @@ public sealed class ClusterOverviewResilienceTests : IDisposable
         foreach (var (etiket, acik) in dugumler)
         {
             await servis.RegisterAsync(new RegisterClusterNodeRequest
-            {
+            { CertificateFingerprint = FakeCertificateProber.Fingerprint,
                 Label = etiket,
                 Address = $"https://{etiket}.ornek.test",
                 ApiToken = "adap_" + etiket,

@@ -133,11 +133,17 @@ public sealed class NotificationService(
         if (BeforeSettingsWrite is not null) await BeforeSettingsWrite(cancellationToken);
         var updated = await fileStore.UpdateAsync(SettingsPath, new NotificationSettingsDto(), current =>
         {
-            // A blank password means keep the latest stored secret. Reading it under the
-            // publication lock prevents another request's password rotation being undone.
-            settings.SmtpPassword = protectedPassword ?? current.SmtpPassword ?? string.Empty;
+            // A secret belongs to the validated transport identity, including TLS mode.
+            // Compare the latest stored identity under the publication lock as well as the secret.
+            var sameIdentity = string.Equals(settings.SmtpHost, current.SmtpHost?.Trim(), StringComparison.OrdinalIgnoreCase)
+                && settings.SmtpPort == current.SmtpPort && settings.UseSsl == current.UseSsl
+                && string.Equals(settings.SmtpUserName, current.SmtpUserName?.Trim(), StringComparison.Ordinal);
+            settings.SmtpPassword = protectedPassword ?? (sameIdentity ? current.SmtpPassword ?? string.Empty : string.Empty);
             settings.HasSmtpPassword = !string.IsNullOrWhiteSpace(settings.SmtpPassword);
             settings.SettingsRevision = SettingsRevision.New();
+            settings.WebhookSecret = string.IsNullOrWhiteSpace(current.WebhookSecret)
+                ? secretProtector.Protect(NewWebhookSecret())
+                : current.WebhookSecret;
             return settings;
         }, cancellationToken);
         return ToClientSettings(updated);
@@ -189,6 +195,54 @@ public sealed class NotificationService(
         await SendWebhookAsync(settings, eventName, body, cancellationToken);
     }
 
+    public async Task<string> RotateWebhookSecretAsync(CancellationToken cancellationToken = default)
+    {
+        var fresh = NewWebhookSecret();
+        var protectedSecret = secretProtector.Protect(fresh);
+        // Yalnız anahtar değişir; revizyon ve diğer alanlar (SMTP, adres) aynen kalır.
+        await fileStore.UpdateAsync(SettingsPath, new NotificationSettingsDto(), current =>
+        {
+            current.WebhookSecret = protectedSecret;
+            // Revizyon yenilenir: açık bir ekran eski durumla "kaydet/test" yapıp yenilemeyi görmezden gelmesin.
+            current.SettingsRevision = SettingsRevision.New();
+            return current;
+        }, cancellationToken);
+        return fresh;
+    }
+
+    internal static string NewWebhookSecret() =>
+        Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+
+    /// <summary>Webhook yeniden deneme beklemeleri (ilk deneme hariç 2 yeniden deneme).</summary>
+    internal IReadOnlyList<TimeSpan> WebhookRetryDelays { get; init; } = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(6)];
+
+    /// <summary>İmza: HMAC-SHA256(secret, "{timestamp}.{payload}") küçük harf hex.</summary>
+    internal static string SignWebhook(string secret, long unixSeconds, string payload)
+    {
+        using var hmac = new System.Security.Cryptography.HMACSHA256(Encoding.UTF8.GetBytes(secret));
+        var mac = hmac.ComputeHash(Encoding.UTF8.GetBytes($"{unixSeconds}.{payload}"));
+        return Convert.ToHexString(mac).ToLowerInvariant();
+    }
+
+    private async Task<string> EnsureWebhookSecretAsync(NotificationSettingsDto settings, CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(settings.WebhookSecret))
+        {
+            return GetPlaintextPassword(settings.WebhookSecret);
+        }
+
+        // Eski kurulum: anahtar yok. Üret ve kalıcı yap (revizyonu değiştirmeden; başka alanlara dokunma).
+        var generated = NewWebhookSecret();
+        var protectedSecret = secretProtector.Protect(generated);
+        var stored = await fileStore.UpdateAsync(SettingsPath, new NotificationSettingsDto(), current =>
+        {
+            if (string.IsNullOrWhiteSpace(current.WebhookSecret)) current.WebhookSecret = protectedSecret;
+            return current;
+        }, cancellationToken);
+        settings.WebhookSecret = stored.WebhookSecret;
+        return GetPlaintextPassword(stored.WebhookSecret);
+    }
+
     private async Task SendWebhookAsync(NotificationSettingsDto settings, string eventName, string body, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(settings.WebhookUrl))
@@ -196,37 +250,62 @@ public sealed class NotificationService(
             throw new AppException("notifications.webhook_not_configured", 400, 400);
         }
 
+        var secret = await EnsureWebhookSecretAsync(settings, cancellationToken);
+        var payload = JsonSerializer.Serialize(new
+        {
+            eventName,
+            body,
+            sentAtUtc = DateTime.UtcNow
+        });
+
         // DENETLENEN İSTEMCİ: adres kaydetme anında denetlendi ama gönderme anında yönlendirme ya da
         // değişmiş bir DNS kaydı hedefi başka yere taşıyabilir. Bu istemcide her bağlantı ayrı denetlenir.
         var client = httpClientFactory.CreateClient(OutboundConnectGuard.GuardedClientName);
 
-        HttpResponseMessage response;
-        try
+        // İlk deneme + 2 yeniden deneme. Yeniden deneme YALNIZ geçici hatalarda (ağ hatası, zaman
+        // aşımı, 408/429/5xx); 4xx (yanlış adres/yetki) ve engellenen hedef tekrar denenmez.
+        for (var attempt = 0; ; attempt++)
         {
-            response = await client.PostAsync(
-                settings.WebhookUrl,
-                new StringContent(JsonSerializer.Serialize(new
+            var retriable = false;
+            AppException? failure = null;
+            try
+            {
+                var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                using var request = new HttpRequestMessage(HttpMethod.Post, settings.WebhookUrl)
                 {
-                    eventName,
-                    body,
-                    sentAtUtc = DateTime.UtcNow
-                }), Encoding.UTF8, "application/json"),
-                cancellationToken);
-        }
-        // ZİNCİR TARANIR, tür yakalanmaz: .NET geri çağrıdan atılan istisnayı kendi
-        // HttpRequestException'ının içine sarar (ölçüldü — bkz. OutboundBlockedException.Cikar).
-        catch (Exception exception) when (OutboundBlockedException.Cikar(exception) is { } blocked)
-        {
-            // "Ağ hatası" demek yanıltıcı olurdu: kullanıcı adresini düzeltemez, çünkü adres
-            // kaydedilirken TEMİZDİ. Kapının kendi hata kodu, açık kapı ipucunu da taşıyor.
-            throw new AppException("notifications.webhook_forbidden", 403, 403, blocked.BlockedTarget);
-        }
+                    Content = new StringContent(payload, Encoding.UTF8, "application/json")
+                };
+                request.Headers.TryAddWithoutValidation(
+                    "X-AdaPanel-Signature",
+                    $"t={timestamp},v1={SignWebhook(secret, timestamp, payload)}");
+                using var response = await client.SendAsync(request, cancellationToken);
+                if (response.IsSuccessStatusCode) return;
 
-        using var atilacakYanit = response;
+                var code = (int)response.StatusCode;
+                retriable = code is 408 or 429 or >= 500;
+                failure = new AppException("notifications.webhook_failed", code, code);
+            }
+            // ZİNCİR TARANIR, tür yakalanmaz: .NET geri çağrıdan atılan istisnayı kendi
+            // HttpRequestException'ının içine sarar (ölçüldü — bkz. OutboundBlockedException.Cikar).
+            catch (Exception exception) when (OutboundBlockedException.Cikar(exception) is { } blocked)
+            {
+                // "Ağ hatası" demek yanıltıcı olurdu: kullanıcı adresini düzeltemez, çünkü adres
+                // kaydedilirken TEMİZDİ. Kapının kendi hata kodu, açık kapı ipucunu da taşıyor.
+                throw new AppException("notifications.webhook_forbidden", 403, 403, blocked.BlockedTarget);
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested &&
+                                              exception is HttpRequestException or TaskCanceledException or TimeoutException)
+            {
+                retriable = true;
+                failure = new AppException("notifications.webhook_failed", 502, 502);
+            }
 
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new AppException("notifications.webhook_failed", (int)response.StatusCode, (int)response.StatusCode);
+            if (!retriable || attempt >= WebhookRetryDelays.Count)
+            {
+                throw failure!;
+            }
+
+            await Task.Delay(WebhookRetryDelays[attempt], cancellationToken);
         }
     }
 
@@ -269,7 +348,7 @@ public sealed class NotificationService(
         return fileStore.ReadAsync(SettingsPath, new NotificationSettingsDto(), cancellationToken);
     }
 
-    private static NotificationSettingsDto ToClientSettings(NotificationSettingsDto settings)
+    private NotificationSettingsDto ToClientSettings(NotificationSettingsDto settings)
     {
         return new NotificationSettingsDto
         {
@@ -282,7 +361,8 @@ public sealed class NotificationService(
             FromEmail = settings.FromEmail,
             ToEmail = settings.ToEmail,
             UseSsl = settings.UseSsl,
-            WebhookUrl = settings.WebhookUrl
+            WebhookUrl = settings.WebhookUrl,
+            WebhookSecret = string.IsNullOrWhiteSpace(settings.WebhookSecret) ? string.Empty : GetPlaintextPassword(settings.WebhookSecret)
         };
     }
 

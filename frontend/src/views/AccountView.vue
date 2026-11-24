@@ -45,6 +45,7 @@
           <h4><span class="step-number">2</span>{{ t('panel.account.setupVerifyTitle') }}</h4>
           <p class="meta">{{ t('panel.account.setupVerifyHint') }}</p>
           <label class="stacked-field verification-field"><span class="field-label">{{ t('panel.account.verificationCode') }}</span><input v-model="twoFactorVerificationCode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" /></label>
+          <label class="stacked-field"><span class="field-label">{{ t('panel.account.currentPasswordRequired') }}</span><PasswordField v-model="twoFactorPassword" autocomplete="current-password" /></label>
           <div class="row-actions">
             <button type="submit" class="compact" :disabled="!canConfirmTwoFactor">{{ t(pendingOperation === 'confirm' ? 'panel.common.saving' : 'panel.account.confirm2fa') }}</button>
             <button type="button" class="secondary compact" :disabled="busy" @click="cancelSetup">{{ t('panel.common.cancel') }}</button>
@@ -53,6 +54,7 @@
       </div>
 
       <div v-else-if="accountConfirmed" class="two-factor-actions">
+        <label class="stacked-field"><span class="field-label">{{ t('panel.account.currentPasswordRequired') }}</span><PasswordField v-model="twoFactorPassword" autocomplete="current-password" /></label>
         <button v-if="!authStore.session?.user?.isTwoFactorEnabled" class="compact" :disabled="!canStartTwoFactor" @click="startTwoFactor">
           {{ t(pendingOperation === 'begin' ? 'panel.common.loading' : 'panel.account.start2fa') }}
         </button>
@@ -163,12 +165,13 @@ const pendingOperation = ref<"" | "begin" | "confirm" | "regenerate" | "disable"
 const confirming = ref(false), loadingAccount = ref(false), accountConfirmed = ref(false), accountError = ref("");
 const busy = computed(() => !!pendingOperation.value || confirming.value || loadingAccount.value);
 const ready = () => current() && accountConfirmed.value && !busy.value;
-const canStartTwoFactor = computed(() => ready() && !authStore.session?.user?.isTwoFactorEnabled && !setup.value);
-const canConfirmTwoFactor = computed(() => ready() && !!setup.value && !authStore.session?.user?.isTwoFactorEnabled && !!twoFactorVerificationCode.value.trim());
-const canRegenerateRecovery = computed(() => ready() && authStore.session?.user?.isTwoFactorEnabled === true);
+const canStartTwoFactor = computed(() => ready() && !!twoFactorPassword.value && !authStore.session?.user?.isTwoFactorEnabled && !setup.value);
+const canConfirmTwoFactor = computed(() => ready() && !!setup.value && !authStore.session?.user?.isTwoFactorEnabled && !!twoFactorVerificationCode.value.trim() && !!twoFactorPassword.value);
+const canRegenerateRecovery = computed(() => ready() && !!twoFactorPassword.value && authStore.session?.user?.isTwoFactorEnabled === true);
 const canDisableTwoFactor = computed(() => ready() && authStore.session?.user?.isTwoFactorEnabled === true && !!disableTwoFactorPassword.value);
 const canChangePassword = computed(ready);
 const twoFactorVerificationCode = ref("");
+const twoFactorPassword = ref("");
 const disableTwoFactorPassword = ref("");
 const recoveryCodes = ref<string[]>([]);
 const currentPassword = ref("");
@@ -182,7 +185,7 @@ function clearSetup() {
   ownedSetup = null; setup.value = null; twoFactorVerificationCode.value = "";
 }
 function clearSecrets() {
-  clearSetup(); recoveryCodes.value = []; disableTwoFactorPassword.value = "";
+  clearSetup(); recoveryCodes.value = []; disableTwoFactorPassword.value = ""; twoFactorPassword.value = "";
   currentPassword.value = ""; newPassword.value = ""; confirmPassword.value = "";
 }
 watch(() => [authStore.session, authStore.session?.user?.id, authStore.session?.user?.role, authStore.session?.isAuthenticated], () => {
@@ -214,7 +217,7 @@ async function startTwoFactor() {
   if (!current() || !canStartTwoFactor.value) return;
   pendingOperation.value = "begin";
   try {
-    const result = await authStore.beginTwoFactorSetup(current);
+    const result = await authStore.beginTwoFactorSetup(twoFactorPassword.value, current);
     if (!current()) return;
     setup.value = result; ownedSetup = toRaw(result); notify(t("panel.account.started"), false);
   } catch (error) { mutationFailed(error); }
@@ -225,7 +228,7 @@ async function confirmTwoFactor() {
   const code = twoFactorVerificationCode.value.trim(), revision = codeRevision;
   pendingOperation.value = "confirm";
   try {
-    const codes = await authStore.confirmTwoFactorSetup(code, current);
+    const codes = await authStore.confirmTwoFactorSetup(code, twoFactorPassword.value, current);
     if (!current()) return;
     ownedSetup = null; setup.value = null; recoveryCodes.value = codes;
     if (revision === codeRevision) twoFactorVerificationCode.value = "";
@@ -241,7 +244,7 @@ async function regenerateRecoveryCodes() {
     if (!accepted || !current() || !accountConfirmed.value || authStore.session?.user?.isTwoFactorEnabled !== true) return;
     confirming.value = false;
     recoveryCodes.value = [];
-    const codes = await authStore.regenerateRecoveryCodes(current);
+    const codes = await authStore.regenerateRecoveryCodes(twoFactorPassword.value, current);
     if (current()) { recoveryCodes.value = codes; notify(t("panel.account.recoveryRegenerated"), false); }
   } catch (error) { mutationFailed(error); }
   finally { if (current()) { confirming.value = false; pendingOperation.value = ""; } }
