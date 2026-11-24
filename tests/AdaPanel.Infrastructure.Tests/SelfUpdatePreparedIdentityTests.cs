@@ -11,6 +11,7 @@ using AdaPanel.Infrastructure.SelfUpdate;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace AdaPanel.Infrastructure.Tests;
@@ -360,7 +361,7 @@ public sealed class SelfUpdatePreparedIdentityTests
         using var fixture = new Fixture();
         await fixture.PrepareAsync();
         var audit = new RecordingAuditService();
-        var controller = new UpdateController(fixture.Service, audit)
+        var controller = new UpdateController(fixture.Service, fixture.Coordinator, audit)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };
@@ -379,7 +380,7 @@ public sealed class SelfUpdatePreparedIdentityTests
         using var fixture = new Fixture();
         await fixture.PrepareAsync();
         var audit = new RecordingAuditService();
-        var controller = new UpdateController(fixture.Service, audit)
+        var controller = new UpdateController(fixture.Service, fixture.Coordinator, audit)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };
@@ -451,6 +452,11 @@ public sealed class SelfUpdatePreparedIdentityTests
         internal static readonly byte[] NewPackage = [(byte)'M', (byte)'Z', 5, 6, 7, 8];
         internal readonly string Root = Path.Combine(Path.GetTempPath(), "adapanel-prepared-identity-" + Guid.NewGuid().ToString("N"));
         internal string PreparedPath => Path.Combine(Root, "updates", "AdaPanelSetup.exe");
+        internal UpdateDownloadCoordinator Coordinator => new(
+            new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = Root })),
+            new Microsoft.Extensions.DependencyInjection.ServiceCollection().BuildServiceProvider()
+                .GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<UpdateDownloadCoordinator>.Instance);
         internal string PendingPath => Path.Combine(Root, "updates", "pending-update.json");
         internal readonly Launcher Launcher = new();
         internal ISelfUpdateService Service { get; }

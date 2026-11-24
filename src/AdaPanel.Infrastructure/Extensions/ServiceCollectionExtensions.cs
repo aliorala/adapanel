@@ -173,6 +173,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAppStoreService, AppStore.AppStoreService>();
         services.AddScoped<IWordPressToolkitService, AppStore.WordPressToolkitService>();
         services.AddScoped<ISelfUpdateService, SelfUpdate.SelfUpdateService>();
+        // Paket indirme HTTP isteğinin dışında, tek iş olarak çalışır (bkz. UpdateDownloadCoordinator).
+        services.AddSingleton<SelfUpdate.UpdateDownloadCoordinator>();
+        services.AddHostedService(provider => provider.GetRequiredService<SelfUpdate.UpdateDownloadCoordinator>());
         services.AddSingleton<IUpdateInstallerLauncher, SelfUpdate.WindowsUpdateInstallerLauncher>();
         services.AddScoped<ITerminalService, Terminal.TerminalService>();
         // SUNUCU SAHİBİ: terminal (SYSTEM kabuğu) yetkisi ROLE değil bu niteliğe bağlıdır.

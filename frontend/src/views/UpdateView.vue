@@ -16,7 +16,7 @@
     </div>
 
     <UpdateStatusCard :status="status" :confirmed="statusConfirmed" :checking="refreshing"
-      :phase="busy === 'download' ? 'downloading' : installPhase" />
+      :phase="busy === 'download' || downloadRunning ? 'downloading' : installPhase" />
 
     <template v-if="status">
       <section v-if="installPhase" :class="['install-progress', `is-${installPhase}`]" aria-labelledby="install-watch-title">
@@ -41,18 +41,23 @@
 
       <UpdateAttemptCard v-if="status.lastAttempt?.isFinished && !installPhase" :attempt="status.lastAttempt" :confirmed="statusConfirmed" />
 
-      <section v-if="!status.isInstallScheduled && !monitoring && (status.isUpdateAvailable || status.isPackageReady || busy)" class="update-next-step">
+      <section v-if="!status.isInstallScheduled && !monitoring && (status.isUpdateAvailable || status.isPackageReady || busy || downloadRunning)" class="update-next-step">
         <div class="next-step-heading">
           <h3>{{ t("panel.update.nextStep") }}</h3>
           <p class="meta">{{ t("panel.update.safeApplyHint") }}</p>
         </div>
         <div class="update-actions">
           <button :class="{ secondary: status.isPackageReady }" :disabled="!canDownload" @click="downloadUpdate">
-            {{ busy === "download" ? t("panel.update.downloading") : t("panel.update.download") }}
+            {{ busy === "download" || downloadRunning ? t("panel.update.downloading") : t("panel.update.download") }}
           </button>
           <button :class="{ secondary: !status.isPackageReady }" :disabled="!canInstall" @click="installUpdate">
             {{ busy === "install" ? t("panel.update.scheduling") : t("panel.update.install") }}
           </button>
+        </div>
+        <div v-if="downloadRunning" class="download-progress" role="status" data-testid="update-download-progress">
+          <progress v-if="downloadPercent !== null && download?.state === 'downloading'" :value="downloadPercent" max="100" />
+          <p class="meta">{{ downloadLabel }}</p>
+          <p class="meta">{{ t("panel.update.downloadBackground") }}</p>
         </div>
       </section>
 
@@ -103,6 +108,7 @@ import {
   installPreparedUpdate,
   setUpdateGithubRepo,
   type UpdateAttempt,
+  type UpdateDownload,
   type UpdateStatus,
 } from "../api/update";
 import { useConfirm } from "../components/ConfirmDialog.vue";
@@ -128,9 +134,18 @@ const current = () => !disposed && getSessionEpoch() === mountedEpoch && auth.se
 const validHash = (hash?: string) => typeof hash === "string" && /^[a-f\d]{64}$/i.test(hash);
 const preparedIdentity = (value: UpdateStatus | null) => !!value?.preparedVersion?.trim() && validHash(value.preparedPackageSha256);
 const prepared = (value: UpdateStatus | null) => !!value?.isPackageReady && preparedIdentity(value);
-const canDownload = computed(() => statusConfirmed.value && !!status.value && !status.value.isCheckFailed && status.value.isUpdateAvailable &&
+const download = computed(() => status.value?.download ?? null);
+const downloadRunning = computed(() => download.value?.state === "downloading" || download.value?.state === "verifying");
+const downloadPercent = computed(() => download.value?.percent ?? null);
+const downloadLabel = computed(() => download.value?.state === "verifying"
+  ? t("panel.update.verifying")
+  : downloadPercent.value === null ? t("panel.update.downloading") : t("panel.update.downloadingPercent", { percent: downloadPercent.value }));
+const canDownload = computed(() => statusConfirmed.value && !!status.value && !downloadRunning.value && !status.value.isCheckFailed && status.value.isUpdateAvailable &&
   !!status.value.downloadUrl && validHash(status.value.packageSha256) && !status.value.isInstallScheduled && !busy.value && !refreshing.value && !monitoring.value);
-const canInstall = computed(() => statusConfirmed.value && prepared(status.value) && !status.value?.isInstallScheduled && !busy.value && !refreshing.value && !monitoring.value);
+// Kurulum indirme SÜRERKEN kapalıdır (sunucu da 409 döner). Başarısız bir indirmeden sonra geçerli,
+// hazır bir paket varsa açık kalır: kurulum isteği paket kimliğini sunucuda yeniden doğrular.
+const downloadAllowsInstall = computed(() => !downloadRunning.value);
+const canInstall = computed(() => statusConfirmed.value && prepared(status.value) && downloadAllowsInstall.value && !status.value?.isInstallScheduled && !busy.value && !refreshing.value && !monitoring.value);
 const notice = ref("");
 const noticeError = ref(false);
 
@@ -214,6 +229,8 @@ async function refresh(force = true) {
     notice.value = "";
     if (next.isInstallScheduled) {
       startPostInstallWatch(next.preparedVersion?.trim() ?? "", next.currentVersion, next.lastAttempt, next);
+    } else {
+      followDownload(next);
     }
   } catch (error) {
     if (current() && revision === statusRevision) { statusConfirmed.value = false; showNotice(resolveApiMessage(error), true); }
@@ -230,6 +247,12 @@ async function downloadUpdate() {
     const result = await applyUpdate(submitted.downloadUrl, submitted.packageSha256);
     if (!current() || revision !== statusRevision) return;
     status.value = result;
+    // Sunucu indirmeyi arka planda başlattı (ya da sürmekte olanı bildirdi): yoklayarak izle.
+    if (result.download && result.download.state !== "idle" && !(result.download.state === "ready" && prepared(result))) {
+      statusConfirmed.value = true;
+      if (!followDownload(result)) showNotice(t("panel.update.resultUnconfirmed"), true);
+      return;
+    }
     const verified = prepared(result) && sameVersion(result.preparedVersion!, submitted.latestVersion) &&
       result.preparedPackageSha256!.toLowerCase() === submitted.packageSha256.toLowerCase();
     statusConfirmed.value = verified;
@@ -239,6 +262,90 @@ async function downloadUpdate() {
   } finally {
     if (current() && revision === statusRevision) busy.value = "";
   }
+}
+
+/**
+ * Sunucudaki indirme durumuna göre ekranı bağlar. Dönüş: durum işlendi mi.
+ * downloading/verifying -> yoklama başlar; failed -> çevrilmiş hata gösterilir (sessiz başarısızlık yok).
+ */
+function followDownload(next: UpdateStatus) {
+  const state = next.download?.state;
+  if (state === "downloading" || state === "verifying") {
+    showNotice(t("panel.update.downloadBackground"), false);
+    startDownloadPoll();
+    return true;
+  }
+  if (state === "failed") {
+    stopDownloadPoll();
+    announceFailure(next.download!);
+    return true;
+  }
+  if (state === "ready") {
+    stopDownloadPoll();
+    return true;
+  }
+  return false;
+}
+
+// Kalıcı "failed" durumu her sayfa açılışında yeniden bildirilmesin: gösterilen hata tarayıcıda
+// (anahtar + zaman damgası) olarak hatırlanır; yeni bir başarısızlık yeni damga taşır.
+const FAILURE_SEEN_KEY = `adapanel.update.failureSeen.${actor ?? "anonymous"}`;
+const failureId = (value: UpdateDownload) => `${value.errorKey}|${value.updatedAtUtc ?? ""}`;
+function failureSeen(value: UpdateDownload) {
+  try { return window.localStorage?.getItem(FAILURE_SEEN_KEY) === failureId(value); } catch { return false; }
+}
+function announceFailure(value: UpdateDownload) {
+  if (failureSeen(value)) return;
+  showNotice(translate(value.errorKey || "update.download_failed"), true);
+  try { window.localStorage?.setItem(FAILURE_SEEN_KEY, failureId(value)); } catch { /* depolama kapalı: her açılışta gösterilir */ }
+}
+
+let downloadPollHandle: number | null = null;
+let downloadPollGeneration = 0;
+const DOWNLOAD_POLL_MS = 2000;
+// Geçici ağ hatasında yoklama artan aralıklarla (4, 8, 16 sn) en çok 3 kez yeniden denenir; sonra durur ve hata gösterilir.
+const DOWNLOAD_POLL_RETRIES = 3;
+
+function stopDownloadPoll() {
+  downloadPollGeneration++;
+  if (downloadPollHandle !== null) { window.clearTimeout(downloadPollHandle); downloadPollHandle = null; }
+}
+
+function startDownloadPoll() {
+  stopDownloadPoll();
+  const generation = downloadPollGeneration;
+  let failures = 0;
+  const tick = async () => {
+    downloadPollHandle = null;
+    if (!current() || generation !== downloadPollGeneration) return;
+    try {
+      const next = await checkForUpdate();
+      if (!current() || generation !== downloadPollGeneration) return;
+      status.value = next;
+      statusConfirmed.value = true;
+      failures = 0;
+      const state = next.download?.state;
+      if (state === "downloading" || state === "verifying") {
+        downloadPollHandle = window.setTimeout(tick, DOWNLOAD_POLL_MS);
+        return;
+      }
+      stopDownloadPoll();
+      if (state === "ready" && prepared(next)) showNotice(t("panel.update.staged"), false);
+      else if (state === "failed") announceFailure(next.download!);
+      else showNotice(t("panel.update.resultUnconfirmed"), true);
+    } catch (error) {
+      if (!current() || generation !== downloadPollGeneration) return;
+      if (failures < DOWNLOAD_POLL_RETRIES) {
+        failures++;
+        downloadPollHandle = window.setTimeout(tick, DOWNLOAD_POLL_MS * 2 ** failures);
+        return;
+      }
+      stopDownloadPoll();
+      statusConfirmed.value = false;
+      showNotice(resolveApiMessage(error), true);
+    }
+  };
+  downloadPollHandle = window.setTimeout(tick, DOWNLOAD_POLL_MS);
 }
 
 async function installUpdate() {
@@ -455,7 +562,7 @@ function formatElapsed(seconds: number) {
     : t("panel.update.elapsedSeconds", { seconds: rest });
 }
 
-onBeforeUnmount(() => { disposed = true; statusRevision++; stopPostInstallWatch(); });
+onBeforeUnmount(() => { disposed = true; statusRevision++; stopDownloadPoll(); stopPostInstallWatch(); });
 
 /**
  * Arka uç bu alana İKİ farklı şey koyar: ya bir çeviri ANAHTARI ("update.package_staged"),
@@ -490,6 +597,9 @@ function showNotice(message: string, isError: boolean) {
 </script>
 
 <style scoped>
+.download-progress { display: grid; gap: var(--sp-8, 8px); margin-top: var(--sp-12, 12px); }
+.download-progress progress { width: 100%; }
+
 /* 16px -> --sp-12: `.panel` kendi izgara araligini 12px veriyor (base.css). Bu ekran 16px
    yazdigi icin ust baslik ile ilk kutu arasi 12, kutular arasi 16 oluyordu -- ayni sayfada iki
    ritim. Ayrica 16 ve 12, olcegin iki komsu adimi; farki gorunur ama gerekcesi yoktu. */

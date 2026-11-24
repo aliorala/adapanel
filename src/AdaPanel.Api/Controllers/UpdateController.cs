@@ -3,6 +3,7 @@ using AdaPanel.Core.Dtos.Update;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
+using AdaPanel.Infrastructure.SelfUpdate;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -22,6 +23,7 @@ namespace AdaPanel.Api.Controllers;
 // işlemlerini göstermek olurdu.
 public sealed class UpdateController(
     ISelfUpdateService selfUpdateService,
+    UpdateDownloadCoordinator downloadCoordinator,
     IAuditService auditService) : ControllerBase
 {
     /// <param name="force">
@@ -36,6 +38,8 @@ public sealed class UpdateController(
         [FromQuery] bool force = false)
     {
         var status = await selfUpdateService.CheckForUpdateAsync(force, cancellationToken);
+        // İndirme durumu kalıcıdır: sayfa yenilense ya da başka sekmeden açılsa da aynı gerçek okunur.
+        status.Download = await downloadCoordinator.GetAsync(cancellationToken);
         return Ok(ApiResponse<UpdateStatusDto>.Ok(status));
     }
 
@@ -56,18 +60,28 @@ public sealed class UpdateController(
     /// </para>
     /// </param>
     [HttpPost("apply")]
+    // İndirme (88 MB, dakikalar) artık bu isteğin İÇİNDE yapılmaz: istek iptal olunca (sayfa
+    // yenilenince) indirme sessizce yarıda kalıyordu. İş arka planda başlar, istek hemen 202 döner;
+    // ilerleme GET check ucundaki `download` alanından okunur. Sürerken gelen ikinci istek yeni
+    // indirme başlatmaz, mevcut işin durumunu döndürür.
     public async Task<ActionResult<ApiResponse<UpdateStatusDto>>> ApplyAsync([FromBody] ApplyUpdateRequest request, CancellationToken cancellationToken)
     {
-        var status = await selfUpdateService.ApplyUpdateAsync(request, cancellationToken);
+        var (download, started) = await downloadCoordinator.StartDownloadAsync(
+            request, cancellationToken,
+            new DownloadActor(HttpAuditExtensions.ResolveUserId(User), HttpContext.Connection.RemoteIpAddress?.ToString()));
 
-        await auditService.AuditAsync(
-            HttpContext,
-            "update.package.downloaded",
-            "panel",
-            $"Update package prepared: current={status.CurrentVersion}, prepared={status.PreparedVersion}, "
-            + $"package ready={status.IsPackageReady}, sha256={status.PreparedPackageSha256}.");
+        if (started)
+        {
+            await auditService.AuditAsync(
+                HttpContext,
+                "update.package.download_started",
+                "panel",
+                "Update package download started in the background.");
+        }
 
-        return Ok(ApiResponse<UpdateStatusDto>.Ok(status, "update.downloaded"));
+        var status = await selfUpdateService.CheckForUpdateAsync(false, cancellationToken);
+        status.Download = download;
+        return StatusCode(StatusCodes.Status202Accepted, ApiResponse<UpdateStatusDto>.Ok(status, "update.download_started"));
     }
 
     [HttpPost("install")]
@@ -76,7 +90,12 @@ public sealed class UpdateController(
         if (request is null || string.IsNullOrWhiteSpace(request.ExpectedVersion) ||
             request.ExpectedPackageSha256?.Length != 64 || request.ExpectedPackageSha256.Any(character => !Uri.IsHexDigit(character)))
             throw new AppException("update.package_changed", 409, 409);
+        // Sunucu tarafı kapı: ön yüz eski kalmış (ikinci sekme) olsa da, indirme sürerken önceki
+        // paket kurdurulamaz.
+        if ((await downloadCoordinator.GetAsync(cancellationToken)).IsRunning)
+            throw new AppException("update.download_in_progress", 409, 409);
         var status = await selfUpdateService.InstallPreparedUpdateAsync(request, cancellationToken);
+        status.Download = await downloadCoordinator.GetAsync(cancellationToken);
 
         // KAYIT KURULUMDAN ÖNCE DEĞİL, ZAMANLAMADAN SONRA ama panel DURMADAN önce yazılır: kurulum
         // paneli yeniden başlatır, yani bu satır yazılamazsa işlemin hiçbir izi kalmaz.
@@ -84,7 +103,7 @@ public sealed class UpdateController(
             HttpContext,
             "update.install.scheduled",
             "panel",
-            $"Panel update installation scheduled: {status.CurrentVersion} → {status.PreparedVersion}.");
+            $"Panel update installation scheduled: {status.CurrentVersion} → {status.PreparedVersion}, sha256={status.PreparedPackageSha256}.");
 
         return Ok(ApiResponse<UpdateStatusDto>.Ok(status, "update.install_scheduled"));
     }

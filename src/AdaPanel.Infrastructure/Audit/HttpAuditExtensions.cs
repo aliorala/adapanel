@@ -68,7 +68,7 @@ public static class HttpAuditExtensions
     }
 
     /// <summary>Kimlik çözülemezse null ("system") — çözülemedi diye kaydı hiç yazmamak daha kötü olurdu.</summary>
-    private static Guid? ResolveUserId(ClaimsPrincipal? principal)
+    public static Guid? ResolveUserId(ClaimsPrincipal? principal)
     {
         var value = principal?.FindFirstValue(ClaimTypes.NameIdentifier);
         return Guid.TryParse(value, out var userId) ? userId : null;

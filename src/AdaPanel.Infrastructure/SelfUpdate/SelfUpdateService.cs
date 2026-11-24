@@ -680,7 +680,13 @@ public sealed class SelfUpdateService : ISelfUpdateService
         return string.Empty;
     }
 
-    public async Task<UpdateStatusDto> ApplyUpdateAsync(ApplyUpdateRequest request, CancellationToken cancellationToken = default)
+    public Task<UpdateStatusDto> ApplyUpdateAsync(ApplyUpdateRequest request, CancellationToken cancellationToken = default) =>
+        ApplyUpdateAsync(request, null, cancellationToken);
+
+    public async Task<UpdateStatusDto> ApplyUpdateAsync(
+        ApplyUpdateRequest request,
+        Func<UpdateDownloadProgress, Task>? report,
+        CancellationToken cancellationToken = default)
     {
         // İndirme başlıyor: indirme linki ve SHA256 GÜNCEL olmalı, bayat manifestten indirme yapılmaz.
         var status = await CheckForUpdateAsync(forceRefresh: true, cancellationToken);
@@ -742,6 +748,9 @@ public sealed class SelfUpdateService : ISelfUpdateService
         var published = false;
         try
         {
+        // Yarim dosyanin yolu, dosya YARATILMADAN once bildirilir: panel bu noktadan sonra olurse
+        // yeniden acilista temizlenecek dosyanin adi diskte kayitli olur.
+        if (report is not null) await report(new UpdateDownloadProgress(UpdateDownloadDto.Downloading, 0, destination));
         var client = httpClientFactory.CreateClient();
         client.Timeout = Timeout.InfiniteTimeSpan;
         // Translate transport failures only while transferring the package. Caller
@@ -764,7 +773,22 @@ public sealed class SelfUpdateService : ISelfUpdateService
             }
 
             await using var stream = File.Create(destination);
-            await response.Content.CopyToAsync(stream, cancellationToken);
+            var total = response.Content.Headers.ContentLength;
+            await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
+            var buffer = new byte[81920];
+            long copied = 0;
+            var lastPercent = 0;
+            int read;
+            while ((read = await source.ReadAsync(buffer, cancellationToken)) > 0)
+            {
+                await stream.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                copied += read;
+                if (report is null || total is not > 0) continue;
+                var percent = (int)Math.Min(99, copied * 100 / total.Value);
+                if (percent == lastPercent) continue;
+                lastPercent = percent;
+                await report(new UpdateDownloadProgress(UpdateDownloadDto.Downloading, percent));
+            }
         }
         catch (HttpRequestException)
         {
@@ -776,6 +800,7 @@ public sealed class SelfUpdateService : ISelfUpdateService
             throw new AppException("update.download_timeout", 504, 504);
         }
 
+        if (report is not null) await report(new UpdateDownloadProgress(UpdateDownloadDto.Verifying, null));
         // Keep the verified bytes stable while the native identity reader and
         // pending-record publication await. Read sharing still permits native probes.
         await using var packageRead = new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.Read,
