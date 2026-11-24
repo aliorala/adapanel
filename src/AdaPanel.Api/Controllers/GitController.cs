@@ -56,10 +56,10 @@ public sealed class GitController(
             "git.deployment.configured",
             $"site:{siteName}",
             $"Git deployment configured: repository '{request.RepositoryUrl}', branch '{request.Branch}', "
-            + $"webhook token rotated: {jetonYenilendi}.",
+            + $"webhook token rotated: {jetonYenilendi}, HTTPS access token removed because the host changed: {deployment.HttpsTokenRemoved}.",
             await SiteSahibiAsync(siteName, cancellationToken));
 
-        return Ok(ApiResponse<GitDeploymentDto>.Ok(deployment, "git.configured"));
+        return Ok(ApiResponse<GitDeploymentDto>.Ok(deployment, deployment.HttpsTokenRemoved ? "git.configured_token_removed" : "git.configured"));
     }
 
     /// <summary>

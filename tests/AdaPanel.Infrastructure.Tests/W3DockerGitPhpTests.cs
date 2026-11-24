@@ -26,6 +26,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -189,9 +190,9 @@ public sealed class W3DockerGitPhpTests : IDisposable
         public string? KeyPathSeenDuringRun { get; set; }
     }
 
-    private GitFixture Git(bool withProtector = true)
+    private GitFixture Git(bool withProtector = true, string dataPrefix = "data")
     {
-        var dataRoot = Path.Combine(root, "data" + Guid.NewGuid().ToString("N")[..6]);
+        var dataRoot = Path.Combine(root, dataPrefix + Guid.NewGuid().ToString("N")[..6]);
         var sitePath = Path.Combine(root, "site" + Guid.NewGuid().ToString("N")[..6]);
         Directory.CreateDirectory(dataRoot);
         Directory.CreateDirectory(sitePath);
@@ -616,6 +617,118 @@ public sealed class W3DockerGitPhpTests : IDisposable
             var override_ = method.GetCustomAttribute<AuthorizeAttribute>();
             Assert.True(override_ is null || override_.Roles == "Administrator", name);
         }
+    }
+
+    // ---- Denetçi DÜZELT turu ----
+
+    [Fact]
+    public async Task ChangingTheRepositoryHostRemovesTheStoredTokenAndNothingIsSentToTheNewHost()
+    {
+        var f = Git();
+        await Configure(f, "https://a.test/me/app.git");
+        await f.Service.SetHttpsTokenAsync("site", new SetGitHttpsTokenRequest { Username = "u", Token = "tok-host-bound" });
+
+        var same = await Configure(f, "https://a.test/other.git");
+        Assert.True(same.HasHttpsToken);
+        Assert.False(same.HttpsTokenRemoved);
+
+        var changed = await Configure(f, "https://b.test/me/app.git");
+        Assert.True(changed.HttpsTokenRemoved);
+        Assert.False(changed.HasHttpsToken);
+        Assert.DoesNotContain("PROT:", ConfigText(f));
+
+        await f.Service.DeployAsync("site");
+        Assert.DoesNotContain("GIT_CONFIG_VALUE_0", f.LastEnvironment.Keys);
+    }
+
+    [Fact]
+    public async Task ATokenBoundToOneHostIsBlockedWhenTheStoredAddressIsEditedOnDisk()
+    {
+        var f = Git();
+        await Configure(f, "https://a.test/me/app.git");
+        await f.Service.SetHttpsTokenAsync("site", new SetGitHttpsTokenRequest { Username = "u", Token = "tok-host-bound" });
+        var path = f.Store.ResolvePath(GitDeploymentService.ConfigPath("site"));
+        File.WriteAllText(path, File.ReadAllText(path).Replace("https://a.test", "https://evil.test"));
+
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.DeployAsync("site"));
+
+        Assert.Equal("git.token_redirect_blocked", error.MessageKey);
+        Assert.DoesNotContain(f.Commands, c => c.StartsWith("fetch "));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFailedStatusMeasurementStopsDeployAndRollbackBeforeResetHard(bool rollback)
+    {
+        var f = Git();
+        await Configure(f, "https://repository.test/app.git");
+        MarkRepository(f);
+        f.Respond = args => args == "rev-parse HEAD" ? Ok(ShaOld) : Ok(args.StartsWith("rev-parse ") ? "short" : "");
+        var first = await f.Service.DeployAsync("site");
+        var id = first.Deployment.RecentDeployments.Single().Id;
+        f.Commands.Clear();
+        f.Respond = args => args.StartsWith("status --porcelain") ? new CommandResult { ExitCode = 128, StandardError = "timeout" }
+            : args == "rev-parse HEAD" ? Ok(ShaOld) : Ok();
+
+        var error = await Assert.ThrowsAsync<AppException>(() => rollback ? f.Service.RollbackAsync("site", id) : f.Service.DeployAsync("site"));
+
+        Assert.Equal("git.preserve_failed", error.MessageKey);
+        Assert.DoesNotContain(f.Commands, c => c.StartsWith("reset --hard"));
+    }
+
+    [Fact]
+    public async Task AnUnsafeKeyPathIsRejectedBeforeAnyKeyIsWrittenAndNothingStaysOnDisk()
+    {
+        var f = Git(dataPrefix: "it's-");
+        await Configure(f, "git@example.test:me/app.git");
+        await f.Service.GenerateDeployKeyAsync("site");
+
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.DeployAsync("site"));
+
+        Assert.Equal("git.unsafe_key_path", error.MessageKey);
+        var run = Path.Combine(f.Store.ResolvePath("git-keys"), "run");
+        Assert.True(!Directory.Exists(run) || Directory.GetFiles(run).Length == 0, "no plaintext key may remain under git-keys/run");
+    }
+
+    [Fact]
+    public async Task TheKeyFileIsGoneBeforePostDeployCommandsRun()
+    {
+        var f = Git();
+        await Configure(f, "git@example.test:me/app.git");
+        await f.Service.GenerateDeployKeyAsync("site");
+        await f.Service.SetPostDeployAsync("site", new SetGitPostDeployRequest { Commands = ["npm-ci"] });
+        bool? keyExistedDuringPost = null;
+        f.Post = (_, _) => { keyExistedDuringPost = File.Exists(f.KeyPathSeenDuringRun!); return Task.FromResult(Ok("done")); };
+
+        var result = await f.Service.DeployAsync("site");
+
+        Assert.True(result.Success);
+        Assert.False(keyExistedDuringPost);
+    }
+
+    [Fact]
+    public async Task DockerRunLabelsTheContainerWithTheCanonicalSiteName()
+    {
+        var captured = new List<string>();
+        var docker = Fake<IDockerService>((method, args) =>
+        {
+            if (method.Name != "RunContainerAsync") throw new NotSupportedException(method.Name);
+            captured.Add(((RunContainerRequest)args[0]!).SiteName);
+            return Task.FromResult(new DockerWorkspaceDto());
+        });
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddSingleton(Fake<IIisSiteService>((method, _) => method.Name == "GetSiteAsync"
+                ? Task.FromResult(new SiteDto { Name = "App.Test" }) : throw new NotSupportedException(method.Name)))
+            .BuildServiceProvider();
+        var http = Context("Administrator");
+        http.RequestServices = services;
+        var controller = new DockerController(docker, new Owner(true), new RecordingAuditService())
+        { ControllerContext = new ControllerContext { HttpContext = http } };
+
+        await controller.RunAsync(new RunContainerRequest { Image = "nginx", SiteName = "app.test" }, CancellationToken.None);
+
+        Assert.Equal(["App.Test"], captured);
     }
 
     // ================= PHP =================

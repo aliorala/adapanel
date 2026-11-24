@@ -50,6 +50,9 @@ public sealed class GitDeploymentDto
     /// <summary>HTTPS jetonu kayıtlı mı (jetonun kendisi ASLA dönmez).</summary>
     public bool HasHttpsToken { get; set; }
 
+    /// <summary>Bu yapılandırma çağrısında depo konağı değiştiği için kayıtlı jeton SİLİNDİ.</summary>
+    public bool HttpsTokenRemoved { get; set; }
+
     public string HttpsUsername { get; set; } = string.Empty;
 
     /// <summary>Seçili derleme sonrası komut kimlikleri (sıralı).</summary>

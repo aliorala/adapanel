@@ -113,6 +113,15 @@ public sealed partial class GitDeploymentService(
             var path = await ResolveSitePathAsync(siteName, cancellationToken);
             var record = await LoadAsync(siteName, cancellationToken);
             record.RepositoryUrl = request.RepositoryUrl.Trim();
+            // Adres BAŞKA konağa çevrildiyse kayıtlı jeton silinir: eski konağa verilmiş sır yenisine gitmesin.
+            var tokenRemoved = false;
+            if (!string.IsNullOrEmpty(record.HttpsTokenProtected) && (record.HttpsTokenHost.Length == 0 || HostKey(record.RepositoryUrl) != record.HttpsTokenHost))
+            {
+                record.HttpsTokenProtected = string.Empty;
+                record.HttpsUsername = string.Empty;
+                record.HttpsTokenHost = string.Empty;
+                tokenRemoved = true;
+            }
             record.Branch = NormalizeBranch(request.Branch);
             if (request.RegenerateSecret || string.IsNullOrWhiteSpace(record.WebhookSecret))
             {
@@ -120,7 +129,9 @@ public sealed partial class GitDeploymentService(
             }
 
             await SaveAsync(siteName, record, cancellationToken);
-            return ToDto(siteName, path, record);
+            var configured = ToDto(siteName, path, record);
+            configured.HttpsTokenRemoved = tokenRemoved;
+            return configured;
         }, cancellationToken);
     }
 
@@ -222,6 +233,8 @@ public sealed partial class GitDeploymentService(
             }
         }
 
+        // Anahtar dosyası fetch/reset biter bitmez silinir; derleme sonrası komutlar boyunca diskte KALMAZ.
+        auth.Dispose();
         var commit = await GetCurrentCommitAsync(path, gitDir, cancellationToken);
         var success = result.Success;
         var outputText = CombineOutput(result);
@@ -841,6 +854,7 @@ public sealed partial class GitDeploymentService(
         public DateTime? DeployKeyCreatedUtc { get; set; }
         public string HttpsUsername { get; set; } = string.Empty;
         public string HttpsTokenProtected { get; set; } = string.Empty;
+        public string HttpsTokenHost { get; set; } = string.Empty;
         public List<string> PostDeployCommands { get; set; } = [];
         public int PostDeployTimeoutSeconds { get; set; } = 600;
         public List<GitDeployHistoryEntry> History { get; set; } = [];

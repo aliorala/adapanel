@@ -191,11 +191,14 @@ public sealed partial class AppRuntimeService
         var document = XDocument.Load(webConfigPath, LoadOptions.PreserveWhitespace);
         var systemWebServer = document.Element("configuration")?.Element("system.webServer");
         if (systemWebServer is null) return false;
-        var changed = false;
         var handlers = systemWebServer.Element("handlers");
-        foreach (var handler in (handlers?.Elements("add") ?? []).Where(element =>
-                     string.Equals((string?)element.Attribute("name"), HandlerName, StringComparison.OrdinalIgnoreCase) ||
-                     string.Equals((string?)element.Attribute("modules"), "httpPlatformHandler", StringComparison.OrdinalIgnoreCase)).ToArray())
+        // YALNIZ panelin kendi handler adı: kullanıcının elle eklediği (başka adlı) handler'a dokunulmaz.
+        var owned = (handlers?.Elements("add") ?? []).Where(element =>
+            string.Equals((string?)element.Attribute("name"), HandlerName, StringComparison.OrdinalIgnoreCase)).ToArray();
+        // Panel girdisi yoksa httpPlatform da kullanıcıya aittir; silinmez (kalıntı olarak bildirilir).
+        if (owned.Length == 0) return false;
+        var changed = false;
+        foreach (var handler in owned)
         {
             handler.Remove();
             changed = true;

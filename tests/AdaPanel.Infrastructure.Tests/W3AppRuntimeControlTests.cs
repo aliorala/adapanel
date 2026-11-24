@@ -117,6 +117,31 @@ public sealed class W3AppRuntimeControlTests : IDisposable
     }
 
     [Fact]
+    public async Task RemoveLeavesHandlersTheUserAddedByHandAlone()
+    {
+        const string config = "<configuration><system.webServer><handlers>" +
+            "<add name=\"AdaPanel.HttpPlatform\" path=\"*\" verb=\"*\" modules=\"httpPlatformHandler\" resourceType=\"Unspecified\" />" +
+            "<add name=\"UserCgi\" path=\"*.cgi\" verb=\"*\" modules=\"CgiModule\" />" +
+            "<add name=\"UserPlatform\" path=\"api/*\" verb=\"*\" modules=\"httpPlatformHandler\" />" +
+            "</handlers><httpPlatform processPath=\"C:\\runtime\\node.exe\" arguments=\"&quot;server.js&quot;\" /></system.webServer></configuration>";
+        var result = await Service(config).RemoveAppAsync(siteName, deleteLogs: false, NoGate);
+        var names = XDocument.Load(WebConfig).Descendants("add").Select(e => (string?)e.Attribute("name")).ToArray();
+        Assert.Equal(["UserCgi", "UserPlatform"], names);
+        Assert.Contains("web.config", result.Removed);
+    }
+
+    [Fact]
+    public async Task RemoveDoesNotTouchAHandWrittenSetupWithoutThePanelHandlerAndSaysSo()
+    {
+        const string config = "<configuration><system.webServer><handlers>" +
+            "<add name=\"UserPlatform\" path=\"*\" verb=\"*\" modules=\"httpPlatformHandler\" />" +
+            "</handlers><httpPlatform processPath=\"C:\\runtime\\node.exe\" arguments=\"&quot;server.js&quot;\" /></system.webServer></configuration>";
+        var result = await Service(config).RemoveAppAsync(siteName, deleteLogs: false, NoGate);
+        Assert.NotNull(XDocument.Load(WebConfig).Descendants("httpPlatform").FirstOrDefault());
+        Assert.Contains(result.Leftovers, line => line.StartsWith("web.config:", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task RemoveReportsALeftoverWhenTheProcessCannotBeRecycled()
     {
         var service = Service();

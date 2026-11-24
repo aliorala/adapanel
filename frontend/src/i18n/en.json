@@ -6847,5 +6847,6 @@
   "php.version.removed_partial": "The PHP version was removed, but some leftovers could not be cleaned up (files may be locked). See Logs for details.",
   "php.version_in_use": "Some sites use this PHP version; move them to another version first. The sites are listed in the details.",
   "php.usage_unverified": "The PHP version of some sites could not be read, so whether it is in use could not be verified; nothing was removed.",
-  "git.token_redirect_blocked": "The redirect resolved by the panel leads to a different host; the token was not sent there. Check the repository address."
+  "git.token_redirect_blocked": "The redirect resolved by the panel leads to a different host; the token was not sent there. Check the repository address.",
+  "git.configured_token_removed": "The Git setting was saved. The stored HTTPS token was REMOVED because the repository host changed; enter the token again for the new host."
 }

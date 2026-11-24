@@ -154,7 +154,9 @@ public sealed class DockerController(
         if (!string.IsNullOrWhiteSpace(request.SiteName))
         {
             var sites = HttpContext.RequestServices.GetRequiredService<IIisSiteService>();
-            await sites.GetSiteAsync(request.SiteName.Trim(), cancellationToken);
+            var site = await sites.GetSiteAsync(request.SiteName.Trim(), cancellationToken);
+            // Etikete KANONİK ad yazılır: harf farkı silme sırasında konteyneri sessizce bırakmasın.
+            request.SiteName = site.Name;
         }
         var workspace = await dockerService.RunContainerAsync(request, cancellationToken);
 

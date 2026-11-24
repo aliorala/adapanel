@@ -272,6 +272,8 @@ public sealed partial class GitDeploymentService
             if (!record.RepositoryUrl.Trim().StartsWith("https://", StringComparison.OrdinalIgnoreCase))
                 throw new AppException("git.token_requires_https", 409, 409);
             record.HttpsUsername = username;
+            // Jetonun KONAĞI saklanır: çalışma anında yalnız bu konağa gider (adres sonradan değişse bile).
+            record.HttpsTokenHost = HostKey(record.RepositoryUrl);
             record.HttpsTokenProtected = protector.Protect(token);
             await SaveAsync(siteName, record, cancellationToken);
             return ToDto(siteName, path, record);
@@ -285,6 +287,7 @@ public sealed partial class GitDeploymentService
             var path = await ResolveSitePathAsync(siteName, cancellationToken);
             var record = await LoadAsync(siteName, cancellationToken);
             record.HttpsUsername = string.Empty;
+            record.HttpsTokenHost = string.Empty;
             record.HttpsTokenProtected = string.Empty;
             await SaveAsync(siteName, record, cancellationToken);
             return ToDto(siteName, path, record);
@@ -303,7 +306,9 @@ public sealed partial class GitDeploymentService
 
         public void Dispose()
         {
-            if (KeyPath is not null) WipeFile(KeyPath);
+            var path = KeyPath;
+            KeyPath = null;
+            if (path is not null) WipeFile(path);
         }
     }
 
@@ -319,7 +324,9 @@ public sealed partial class GitDeploymentService
             if (!isHttps) throw new AppException("git.token_requires_https", 409, 409);
             // Jeton YALNIZ yapılandırılan depo konağına gider: panelin çözdüğü yönlendirme başka bir konağa
             // çıkarsa (ör. ele geçirilmiş/yanlış adres) jeton oraya SIZDIRILMAZ.
-            if (!SameRepositoryHost(record.RepositoryUrl, url)) throw new AppException("git.token_redirect_blocked", 409, 409);
+            // Kayıtlı konak ile hem yapılandırılan adres hem etkin (yönlendirmeden sonraki) adres eşleşmeli; konak kaydı yoksa KAPALI.
+            if (record.HttpsTokenHost.Length == 0 || HostKey(record.RepositoryUrl) != record.HttpsTokenHost || HostKey(url) != record.HttpsTokenHost)
+                throw new AppException("git.token_redirect_blocked", 409, 409);
             var token = RequireProtector().Unprotect(record.HttpsTokenProtected);
             var username = string.IsNullOrWhiteSpace(record.HttpsUsername) ? "x-access-token" : record.HttpsUsername;
             var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{token}"));
@@ -337,15 +344,22 @@ public sealed partial class GitDeploymentService
             if (!privateKey.EndsWith('\n')) privateKey += "\n";
             var directory = fileStore.EnsureDirectory("git-keys/run");
             var keyPath = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".key");
-            using (var stream = SecureTempFile.Create(keyPath))
+            var knownHosts = Path.Combine(fileStore.EnsureDirectory("git-keys"), "known_hosts");
+            // Yol denetimi YAZMADAN ÖNCE: reddedilen yolda diske düz metin anahtar hiç inmez.
+            if (keyPath.Contains('\'') || knownHosts.Contains('\'')) throw new AppException("git.unsafe_key_path", 500, 500);
+            try
             {
+                context.KeyPath = keyPath; // yazma yarıda kesilse bile silme bu yolu bilir
+                using var stream = SecureTempFile.Create(keyPath);
                 var bytes = new UTF8Encoding(false).GetBytes(privateKey);
                 stream.Write(bytes, 0, bytes.Length);
                 stream.Flush(true);
             }
-            context.KeyPath = keyPath;
-            var knownHosts = Path.Combine(fileStore.EnsureDirectory("git-keys"), "known_hosts");
-            if (keyPath.Contains('\'') || knownHosts.Contains('\'')) throw new AppException("git.unsafe_key_path", 500, 500);
+            catch
+            {
+                context.Dispose();
+                throw;
+            }
             // Panelin kendi known_hosts dosyası: ilk görülen anahtar kabul edilir (accept-new), SONRA değişirse reddedilir.
             context.Environment["GIT_SSH_COMMAND"] =
                 $"ssh -i '{keyPath.Replace('\\', '/')}' -o IdentitiesOnly=yes -o BatchMode=yes " +
@@ -356,6 +370,9 @@ public sealed partial class GitDeploymentService
         EnvironmentObserver?.Invoke(context.Environment);
         return context;
     }
+
+    internal static string HostKey(string url) =>
+        Uri.TryCreate((url ?? string.Empty).Trim(), UriKind.Absolute, out var u) ? (u.Host.ToLowerInvariant() + ":" + u.Port) : string.Empty;
 
     internal static bool SameRepositoryHost(string configured, string effective) =>
         Uri.TryCreate(configured.Trim(), UriKind.Absolute, out var a) && Uri.TryCreate(effective.Trim(), UriKind.Absolute, out var b) &&
@@ -519,9 +536,8 @@ public sealed partial class GitDeploymentService
         var status = await ExecuteGitAsync("status --porcelain --untracked-files=no", path, cancellationToken, gitDir);
         if (!status.Success)
         {
-            // Durum ölçülemedi: ezilecek şeyin olup olmadığı BİLİNMİYOR. Kayıt bunu söyler; fetch zaten bozuk depoda düşer.
-            entry.LocalChanges.Add("?: local changes could not be measured");
-            return;
+            // Durum ölçülemedi: ezilecek şeyin olup olmadığı BİLİNMİYOR → KAPALI başarısız, reset --hard çalışmaz.
+            throw new AppException("git.preserve_failed", 409, 409, "Local changes could not be measured before reset.");
         }
 
         var lines = status.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
