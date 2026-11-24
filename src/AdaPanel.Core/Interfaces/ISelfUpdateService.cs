@@ -23,6 +23,13 @@ public interface ISelfUpdateService
 
     Task<UpdateStatusDto> ApplyUpdateAsync(ApplyUpdateRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>Arka plan indirme için: ara durumları (yüzde, doğrulama, yarım dosya yolu) bildirir.</summary>
+    Task<UpdateStatusDto> ApplyUpdateAsync(
+        ApplyUpdateRequest request,
+        Func<UpdateDownloadProgress, Task>? report,
+        CancellationToken cancellationToken = default) =>
+        ApplyUpdateAsync(request, cancellationToken);
+
     Task<UpdateStatusDto> InstallPreparedUpdateAsync(CancellationToken cancellationToken = default);
 
     Task<UpdateStatusDto> InstallPreparedUpdateAsync(InstallUpdateRequest request, CancellationToken cancellationToken = default) =>

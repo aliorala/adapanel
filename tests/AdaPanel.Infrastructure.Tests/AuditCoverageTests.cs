@@ -269,7 +269,7 @@ public sealed class AuditCoverageTests
         ["DockerController.cs#\"docker.denied\"#\"docker\""] = "Sunucu sahibi OLMAYAN bir yöneticinin Docker denemesi; panel/sunucu düzeyinde, aboneliğe ait değil.",
         ["TerminalController.cs#\"terminal.command.denied\"#\"terminal\""] = "Sunucu sahibi OLMAYAN bir yöneticinin SYSTEM kabuğu denemesi; panel/sunucu düzeyinde, aboneliğe ait değil.",
         ["TerminalController.cs#\"terminal.command.executed\"#\"terminal\""] = "Sunucuda SYSTEM yetkisiyle komut; panel/sunucu düzeyinde, aboneliğe ait değil.",
-        ["UpdateController.cs#\"update.package.downloaded\"#\"panel\""] = "PANELİN KENDİ ikilisi; hiçbir aboneliğe ait değil.",
+        ["UpdateController.cs#\"update.package.download_started\"#\"panel\""] = "PANELİN KENDİ ikilisi; hiçbir aboneliğe ait değil.",
         ["UpdateController.cs#\"update.install.scheduled\"#\"panel\""] = "Panelin kendi kurulumu.",
         ["UpdateController.cs#\"update.source.changed\"#\"panel\""] = "Panelin güncelleme kaynağı.",
         ["WebDbController.cs#\"webdb.deployed\"#$\"webdb:{deployment.Provider}\""] = "phpMyAdmin/Adminer panelin kendi sitesine kurulur; oturum AÇMA ayrı kayıttır ve veritabanının sahibine bağlanır.",

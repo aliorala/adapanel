@@ -53,5 +53,8 @@ public sealed class UpdateStatusDto
     /// <summary>GitHub deposu (owner/repo). Panel en son sürümü GitHub Releases'ten otomatik görür. Boş = ayarlanmamış.</summary>
     public string GithubRepo { get; set; } = string.Empty;
 
+    /// <summary>Arka plan indirmenin kalıcı durumu. Kontrol uçları doldurur; null = bilinmiyor.</summary>
+    public UpdateDownloadDto? Download { get; set; }
+
     public DateTime CheckedAtUtc { get; set; }
 }
