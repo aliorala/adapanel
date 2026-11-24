@@ -213,6 +213,18 @@ public sealed class FtpCustomerAccessTests
     }
 
     [Fact]
+    public async Task AnAccountDisabledByAnAdministratorCannotBeReEnabledByTheCustomer()
+    {
+        using var f = await Fixture.Create();
+        await f.Controller.SetEnabledAsync("a_ftp", new SetFtpUserEnabledRequest { Enabled = false }, f.Token);
+        await AdaPanel.Api.Security.AdminLockStore.MarkAsync(f.Store, "ftp", "a_ftp", f.Token); // yonetici kapatti
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Controller.SetEnabledAsync("a_ftp", new SetFtpUserEnabledRequest { Enabled = true }, f.Token));
+        Assert.Equal(403, error.HttpStatusCode);
+        Assert.Equal("ftp.locked_by_admin", error.MessageKey);
+        Assert.False((await f.Service.GetFtpUsersAsync(f.Token)).Single(user => user.UserName == "a_ftp").IsEnabled);
+    }
+
+    [Fact]
     public async Task AnUnverifiedEnabledStateIsAnErrorNotASuccess()
     {
         using var f = await Fixture.Create();
@@ -421,7 +433,7 @@ public sealed class FtpCustomerAccessTests
                 Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = root }))
             { NativeCommand = Command, NativeScript = Script, NativeAccountStatus = (name, _) => Task.FromResult(name is "a_ftp" or "b_ftp" ? 0u : 2221u) };
             var audit = new AuditService(Db, Scopes, Store);
-            services = new ServiceCollection().AddSingleton(Db).AddSingleton(new SessionRevocationStore(Store)).AddSingleton<IConcurrencyLock, ConcurrencyLock>()
+            services = new ServiceCollection().AddSingleton(Db).AddSingleton(Store).AddSingleton(new SessionRevocationStore(Store)).AddSingleton<IConcurrencyLock, ConcurrencyLock>()
                 .AddSingleton<IFtpService>(Service).AddSingleton<ICustomerScopeService>(Scopes).AddSingleton<IIisSiteService>(sites)
                 .AddSingleton<IAuditService>(audit).BuildServiceProvider();
             Controller = ActivatorUtilities.CreateInstance<FtpController>(services);

@@ -6849,5 +6849,8 @@
   "panel.mail.dkimRotate": "Rotate DKIM key",
   "panel.mail.dkimRotateConfirm": "A new DKIM key will be generated, published to DNS and signing will switch to it. If anything fails the old key stays active. Continue?",
   "panel.mail.dkimRotated": "DKIM key rotated: {old} -> {new}. The old key is removed after {when}.",
-  "panel.mail.refreshFailed": "The action completed but the list could not be refreshed: {message}"
+  "panel.mail.refreshFailed": "The action completed but the list could not be refreshed: {message}",
+  "dns.zone_saved_restricted_ignored": "Zone saved; name servers and zone-transfer IPs can only be changed by an administrator/reseller, so changes to those fields were ignored.",
+  "mail.locked_by_admin": "This mailbox was suspended by an administrator; only an administrator can re-enable it.",
+  "ftp.locked_by_admin": "This FTP account was disabled by an administrator; only an administrator can re-enable it."
 }

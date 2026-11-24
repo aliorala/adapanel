@@ -320,6 +320,7 @@ public sealed class FtpController(
         await ftpService.DeleteFtpUserAsync(userName,
             (current, token) => ApproveAccountAsync(actor, expected, current, token), cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
+        await AdminLockStore.ClearAsync(HttpContext.RequestServices.GetRequiredService<AdaPanel.Infrastructure.Support.JsonFileStore>(), "ftp", userName, cancellationToken);
         await auditService.AuditAsync(HttpContext, "ftp.user.deleted", userName, "FTP account was removed.", sahip);
         return Ok(ApiResponse<object>.Ok(new { userName }, "ftp.user_deleted"));
     }
@@ -376,9 +377,13 @@ public sealed class FtpController(
         using var actorLease = await DatabaseLifecycle.EnterSubscriptionAsync(actor.UserId, cancellationToken);
         var expected = await CaptureAccountAsync(actor, userName, cancellationToken);
         var owner = await FtpKullanicisininSahibiAsync(userName, cancellationToken);
+        var locks = HttpContext.RequestServices.GetRequiredService<AdaPanel.Infrastructure.Support.JsonFileStore>();
+        // Yöneticinin kapattığı hesabı müşteri/bayi yeniden açamaz.
+        if (enabled) await AdminLockStore.EnsureCanEnableAsync(locks, actor.Principal, "ftp", userName, cancellationToken);
         await ftpService.SetFtpUserEnabledAsync(userName, enabled,
             (current, token) => ApproveAccountAsync(actor, expected, current, token), cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
+        if (!enabled) await AdminLockStore.RecordDisableAsync(locks, actor.Principal, "ftp", userName, cancellationToken);
         await auditService.AuditAsync(HttpContext, enabled ? "ftp.user.enabled" : "ftp.user.disabled", userName,
             enabled ? "FTP account was enabled (verified from the local account)." : "FTP account was disabled (verified from the local account).", owner);
         return Ok(ApiResponse<object>.Ok(new { userName, enabled }, enabled ? "ftp.user_enabled" : "ftp.user_disabled"));

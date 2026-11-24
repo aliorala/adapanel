@@ -137,29 +137,29 @@ public sealed partial class MailService
         }
         else
         {
-            // Önce YENİ hesaba ekle (Stalwart çift adresi reddederse hiçbir şey değişmemiş olur), sonra eskiden çıkar.
-            var newDetail = await GetObjectAsync(cli, "account", newOwnerId, env, cancellationToken)
-                ?? throw new AppException("mail.operation_failed", 500, 500);
-            var newEntries = ExportAliasEntries(newDetail);
-            newEntries.Add($"\"{NextNumericKey(newDetail)}\":{entryJson}");
-            await UpdateAliasMapAsync(cli, env, newOwnerId, newEntries, cancellationToken);
+            // Stalwart adres tekilliğini zorlayabilir: yeni hesaba EKLEMEK için adres önce eskiden ÇIKMALI.
+            // Sıra: eskiden çıkar -> yeniye ekle -> eklenemezse eski hesaptaki orijinal haritayı GERİ YAZ (alias kaybolmaz).
+            var oldOriginal = ExportAliasEntries(ownerDetail.Value);
+            var oldWithout = ExportAliasEntries(ownerDetail.Value, skipName: localPart, skipDomainId: domainId).Entries;
+            await UpdateAliasMapAsync(cli, env, ownerId, oldWithout, cancellationToken); // başarısızsa hiçbir şey değişmedi
 
-            var oldEntries = ExportAliasEntries(ownerDetail.Value, skipName: localPart, skipDomainId: domainId).Entries;
             try
             {
-                await UpdateAliasMapAsync(cli, env, ownerId, oldEntries, cancellationToken);
+                var newDetail = await GetObjectAsync(cli, "account", newOwnerId, env, cancellationToken)
+                    ?? throw new AppException("mail.operation_failed", 500, 500);
+                var newEntries = ExportAliasEntries(newDetail);
+                newEntries.Add($"\"{NextNumericKey(newDetail)}\":{entryJson}");
+                await UpdateAliasMapAsync(cli, env, newOwnerId, newEntries, cancellationToken);
             }
             catch
             {
-                // Geri al: yeni hesaptaki kopyayı kaldır ki alias iki yerde birden durmasın.
                 try
                 {
-                    await UpdateAliasMapAsync(cli, env, newOwnerId,
-                        ExportAliasEntries(newDetail), cancellationToken);
+                    await UpdateAliasMapAsync(cli, env, ownerId, oldOriginal, CancellationToken.None);
                 }
                 catch (Exception rollback)
                 {
-                    logger.LogError(rollback, "Alias taşıma geri alınamadı: {Alias}", normalized);
+                    logger.LogError(rollback, "Alias taşıma geri alınamadı, alias kaybolmuş olabilir: {Alias}", normalized);
                 }
 
                 throw;
@@ -359,8 +359,12 @@ public sealed partial class MailService
         string? newId = null;
         try
         {
-            newId = await FindDkimIdAsync(cli, env, domainId, newSelector, cancellationToken)
-                ?? throw new AppException("mail.dkim_rotation_unverified", 502, 502, newSelector);
+            newId = await FindDkimIdAsync(cli, env, domainId, newSelector, cancellationToken);
+            if (newId is null)
+            {
+                // Kimlik okunamadı ama anahtar oluşmuş olabilir: seçiciye göre bulunup silinemezse en azından raporla.
+                throw new AppException("mail.dkim_rotation_unverified", 502, 502, newSelector);
+            }
             var created = await GetObjectAsync(cli, "DkimSignature", newId, env, cancellationToken);
             var publicKey = created is null ? string.Empty : GetField(created.Value, "publicKey");
             if (string.IsNullOrWhiteSpace(publicKey))
@@ -448,6 +452,13 @@ public sealed partial class MailService
     {
         try
         {
+            if (string.IsNullOrWhiteSpace(newId))
+            {
+                // Kimlik okunamamış olabilir ama anahtar oluşmuştur: seçiciyle yeniden ara ve temizle.
+                var domainId = await FindIdAsync("domain", "name", domain, CancellationToken.None);
+                if (domainId is not null) newId = await FindDkimIdAsync(cli, env, domainId, newSelector, CancellationToken.None);
+            }
+
             if (!string.IsNullOrWhiteSpace(newId))
             {
                 await RunCliAsync(cli, $"delete DkimSignature --ids {Arg(newId)}", env, CancellationToken.None);
@@ -467,6 +478,7 @@ public sealed partial class MailService
         {
             var site = ResolveManagedIdentitySite(await iisSiteService.GetSitesAsync(cancellationToken), domain);
             var zone = await dnsService.GetZoneAsync(site.Name, cancellationToken);
+            MailDnsPublication.EnsureDomainZone(zone, domain); // başka bölgedeki kaydı asla silme
             var host = $"{selector}._domainkey";
             var match = zone.Records.FirstOrDefault(item =>
                 string.Equals(item.Type, "TXT", StringComparison.OrdinalIgnoreCase)

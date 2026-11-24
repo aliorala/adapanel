@@ -169,6 +169,47 @@ public sealed class MailLifecycleTests
     }
 
     [Fact]
+    public async Task Alias_tasima_yeni_hesap_yazamazsa_ESKI_hesaba_geri_yazilir_alias_kaybolmaz()
+    {
+        using var f = new Fixture();
+        f.AddAccount("acc-2", "bob@example.test");
+        f.Account["aliases"] = new JsonObject { ["0"] = new JsonObject { ["name"] = "info", ["domainId"] = "domain-id", ["enabled"] = true } };
+        f.FailAliasWriteFor = "acc-2";
+
+        await Assert.ThrowsAsync<AppException>(() => f.Service.UpdateAliasAsync(new() { Address = "info@example.test", Target = "bob@example.test" }));
+
+        Assert.Single(f.Account["aliases"]!.AsObject());
+        Assert.Equal("info", f.Account["aliases"]!["0"]!["name"]!.GetValue<string>());
+        Assert.Empty(f.Accounts["acc-2"]["aliases"]!.AsObject());
+    }
+
+    [Fact]
+    public async Task DKIM_eski_kayit_temizligi_BASKA_bolgedeki_kaydi_silmez()
+    {
+        using var f = new Fixture();
+        var result = await f.Service.RotateDkimAsync(new() { Domain = "example.test" });
+        await f.Store.WriteAsync(MailService.DkimRotationStorePath, new List<MailService.DkimRotationEntry>
+        {
+            new() { Domain = "example.test", OldSelector = "selector", NewSelector = result.NewSelector, RetireAfterUtc = DateTime.UtcNow.AddMinutes(-1) }
+        });
+        f.ZoneName = "baska.test"; // site artik baska bir bolgeye bagli
+
+        Assert.Equal(0, await f.Service.FinalizeDkimRotationsAsync());
+        Assert.Empty(f.DeletedDnsHosts);
+        var kalan = await f.Store.ReadAsync(MailService.DkimRotationStorePath, new List<MailService.DkimRotationEntry>());
+        Assert.Single(kalan); // yeniden denenecek
+    }
+
+    [Fact]
+    public async Task DKIM_kimlik_okunamazsa_olusan_bekleyen_anahtar_secici_ile_bulunup_temizlenir()
+    {
+        using var f = new Fixture { HideNewKeyFromQuery = true };
+        await Assert.ThrowsAsync<AppException>(() => f.Service.RotateDkimAsync(new() { Domain = "example.test" }));
+        Assert.Equal("active", f.Dkim["dkim-old"]["stage"]!.GetValue<string>());
+        Assert.Single(f.Dkim);
+    }
+
+    [Fact]
     public void MailEnable_icin_yeni_islemler_VARSAYILAN_olarak_desteklenmiyor_der()
     {
         var type = typeof(IMailService);
@@ -186,6 +227,10 @@ public sealed class MailLifecycleTests
         private readonly BulutAlani area = new();
         private readonly AdaPanelDbContext db = new(new DbContextOptionsBuilder<AdaPanelDbContext>().UseSqlite("Data Source=:memory:").Options);
         internal bool IgnoreUpdates, DnsAvailable = true, FailActivate, NoPublicKey;
+        internal string ZoneName = "example.test";
+        internal string? FailAliasWriteFor;
+        internal bool HideNewKeyFromQuery;
+        private bool hiddenServed;
         internal readonly Dictionary<string, JsonObject> Accounts = [];
         internal readonly Dictionary<string, JsonObject> Scripts = [];
         internal readonly Dictionary<string, JsonObject> Dkim = [];
@@ -227,7 +272,7 @@ public sealed class MailLifecycleTests
                 switch (method)
                 {
                     case "GetZoneAsync":
-                        return Task.FromResult(new SiteDnsZoneDto { SiteName = "web-example.test", ZoneName = "example.test", Records = zoneRecords.ToArray() });
+                        return Task.FromResult(new SiteDnsZoneDto { SiteName = "web-example.test", ZoneName = ZoneName, Records = zoneRecords.ToArray() });
                     case "UpsertRecordsAsync":
                         PublishedRecords = ((IEnumerable<UpsertDnsRecordRequest>)args![1]!).ToArray();
                         foreach (var request in PublishedRecords)
@@ -269,7 +314,17 @@ public sealed class MailLifecycleTests
                 case "query account --json": return R(Good(Ok(Accounts.Values.Select(a => new { id = a["id"]!.GetValue<string>(), emailAddress = a["emailAddress"]!.GetValue<string>(), type = "User" }).ToArray())
                     .Replace("\"type\"", "\"@type\"")));
                 case "query SieveUserScript --json": return R(Good(Scripts.Count == 0 ? "[]" : "[" + string.Join(",", Scripts.Values.Select(s => s.ToJsonString())) + "]"));
-                case "query DkimSignature --json": return R(Good("[" + string.Join(",", Dkim.Values.Select(s => s.ToJsonString())) + "]"));
+                case "query DkimSignature --json":
+                {
+                    var visible = Dkim.Values.AsEnumerable();
+                    if (HideNewKeyFromQuery && !hiddenServed && Dkim.ContainsKey("dkim-new"))
+                    {
+                        hiddenServed = true; // ilk sorguda yeni anahtar henuz gorunmez (okuma gecikmesi)
+                        visible = visible.Where(item => item["id"]!.GetValue<string>() != "dkim-new");
+                    }
+
+                    return R(Good("[" + string.Join(",", visible.Select(item => item.ToJsonString())) + "]"));
+                }
             }
 
             var get = Regex.Match(command, @"^get (\w+) (\S+) --json$");
@@ -299,7 +354,19 @@ public sealed class MailLifecycleTests
                 {
                     var arg = update.Groups[3].Value.Trim('"').Replace("\\\"", "\"");
                     var split = arg.IndexOf('=');
-                    account[arg[..split]] = JsonNode.Parse(arg[(split + 1)..]);
+                    var accountId = update.Groups[1].Value;
+                    if (FailAliasWriteFor == accountId) return R(bad);
+                    var written = JsonNode.Parse(arg[(split + 1)..]);
+                    if (arg[..split] == "aliases")
+                    {
+                        // Stalwart adres tekilligini zorlar: ayni alias adi iki hesapta birden bulunamaz.
+                        foreach (var other in Accounts.Where(item => item.Key != accountId))
+                            foreach (var entry in written!.AsObject())
+                                if (other.Value["aliases"]!.AsObject().Any(o => o.Value!["name"]!.GetValue<string>() == entry.Value!["name"]!.GetValue<string>()))
+                                    return R(bad);
+                    }
+
+                    account[arg[..split]] = written;
                 }
 
                 return R(Good("{}"));

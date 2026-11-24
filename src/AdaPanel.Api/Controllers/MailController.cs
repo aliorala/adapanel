@@ -324,6 +324,7 @@ public sealed class MailController(
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(address), cancellationToken);
         var workspace = await mailService.DeleteAccountAsync(address, cancellationToken);
+        await AdminLockStore.ClearAsync(HttpContext.RequestServices.GetRequiredService<AdaPanel.Infrastructure.Support.JsonFileStore>(), "mail", address, cancellationToken);
         await auditService.AuditAsync(
             HttpContext,
             "mail.account.deleted",
@@ -418,7 +419,11 @@ public sealed class MailController(
     public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> SetAccountActiveAsync([FromBody] SetMailAccountActiveRequest request, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(request.Address), cancellationToken);
+        var locks = HttpContext.RequestServices.GetRequiredService<AdaPanel.Infrastructure.Support.JsonFileStore>();
+        // Yöneticinin askıya aldığı kutuyu müşteri yeniden açamaz.
+        if (request.Active) await AdminLockStore.EnsureCanEnableAsync(locks, User, "mail", request.Address, cancellationToken);
         var workspace = await NotSupportedAs409(() => mailService.SetAccountActiveAsync(request, cancellationToken));
+        if (!request.Active) await AdminLockStore.RecordDisableAsync(locks, User, "mail", request.Address, cancellationToken);
         await auditService.AuditAsync(
             HttpContext,
             request.Active ? "mail.account.reactivated" : "mail.account.suspended",

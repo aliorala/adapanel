@@ -248,6 +248,40 @@ public sealed class DnsCustomerAccessTests : IDisposable
         Assert.Throws<McpProtocolException>(() => McpCapability.RequireDnsRole(Kullanici(Guid.NewGuid(), "Operator")));
     }
 
+    // --- Ürün kararı: NameServers / ZoneTransferIps yalnız Admin ve Reseller ---
+
+    private async Task<(Microsoft.AspNetCore.Mvc.ActionResult<AdaPanel.Core.Dtos.Common.ApiResponse<SiteDnsZoneDto>> Sonuc, IzleyenDns Dns)> BolgeKaydet(string rol, Guid kimlik, string site)
+    {
+        var (d, dns, _) = Kur(Kullanici(kimlik, rol));
+        var siteler = new PlanLimitsW2bTests.DurumluSiteler(Path.Combine(dataRoot, "s"));
+        var posta = MailServerIdentityTests.IdentityProxy.Make<IMailService>((metot, _) =>
+            metot == "GetWorkspaceAsync" ? Task.FromResult(new AdaPanel.Core.Dtos.Mail.MailWorkspaceDto()) : throw new InvalidOperationException(metot));
+        var istek = new UpdateDnsZoneRequest { ZoneName = "ornek.com", NameServers = ["ns.saldirgan.test"], ZoneTransferIps = ["203.0.113.66"] };
+        var sonuc = await d.UpdateZoneAsync(site, istek, siteler, posta, Microsoft.Extensions.Logging.Abstractions.NullLogger<DnsController>.Instance, CancellationToken.None);
+        return (sonuc, dns);
+    }
+
+    [Fact]
+    public async Task Musteri_NameServers_ve_ZoneTransferIps_gonderirse_YOK_SAYILIR_ve_uyari_mesaji_doner()
+    {
+        var (sonuc, dns) = await BolgeKaydet("Customer", MusteriA, "siteA");
+
+        var yazilan = Assert.Single(dns.GuncellenenBolgeler);
+        Assert.Equal(["ns1.ornek.com"], yazilan.NameServers);   // mevcut deger korundu
+        Assert.Empty(yazilan.ZoneTransferIps);
+        var ok = Assert.IsType<Microsoft.AspNetCore.Mvc.OkObjectResult>(sonuc.Result);
+        Assert.Equal("dns.zone_saved_restricted_ignored", ((AdaPanel.Core.Dtos.Common.ApiResponse<SiteDnsZoneDto>)ok.Value!).Message);
+    }
+
+    [Fact]
+    public async Task Bayi_ve_yonetici_bu_alanlari_degistirebilir()
+    {
+        var (sonuc, dns) = await BolgeKaydet("Administrator", Guid.NewGuid(), "siteA");
+        Assert.Equal(["ns.saldirgan.test"], Assert.Single(dns.GuncellenenBolgeler).NameServers);
+        var ok = Assert.IsType<Microsoft.AspNetCore.Mvc.OkObjectResult>(sonuc.Result);
+        Assert.Equal("dns.zone_saved", ((AdaPanel.Core.Dtos.Common.ApiResponse<SiteDnsZoneDto>)ok.Value!).Message);
+    }
+
     // --- duzenek ---
 
     /// <summary>Okunan ve yazılan her şeyi kaydeder; paylaşımlı bölge üyeliğini onay geri çağrısına verir.</summary>
@@ -257,6 +291,14 @@ public sealed class DnsCustomerAccessTests : IDisposable
         public List<UpsertDnsRecordRequest> Yazilanlar { get; } = [];
         public List<string> Silinenler { get; } = [];
         public string[] PaylasimUyeleri { get; set; } = [];
+        public List<UpdateDnsZoneRequest> GuncellenenBolgeler { get; } = [];
+
+        public Task<SiteDnsZoneDto> UpdateZoneAsync(string siteName, UpdateDnsZoneRequest request,
+            Func<IReadOnlyList<string>, CancellationToken, Task> approval, CancellationToken cancellationToken)
+        {
+            GuncellenenBolgeler.Add(request);
+            return Task.FromResult(new SiteDnsZoneDto { SiteName = siteName, ZoneName = request.ZoneName, NameServers = request.NameServers, ZoneTransferIps = request.ZoneTransferIps });
+        }
 
         private static SiteDnsZoneDto Bolge(string site) => new()
         {

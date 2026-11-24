@@ -6849,5 +6849,8 @@
   "panel.mail.dkimRotate": "DKIM anahtarını yenile",
   "panel.mail.dkimRotateConfirm": "Yeni bir DKIM anahtarı üretilip DNS'e yazılacak ve imzalama ona geçecek. Hata olursa eski anahtar etkin kalır. Devam edilsin mi?",
   "panel.mail.dkimRotated": "DKIM anahtarı yenilendi: {old} -> {new}. Eski anahtar {when} tarihinden sonra kaldırılır.",
-  "panel.mail.refreshFailed": "İşlem tamamlandı ancak liste yenilenemedi: {message}"
+  "panel.mail.refreshFailed": "İşlem tamamlandı ancak liste yenilenemedi: {message}",
+  "dns.zone_saved_restricted_ignored": "Bölge kaydedildi; ad sunucuları ve bölge aktarım IP'leri yalnız yönetici/bayi tarafından değiştirilebildiği için bu alanlardaki değişiklikler yok sayıldı.",
+  "mail.locked_by_admin": "Bu posta kutusu yönetici tarafından askıya alındı; yalnız yönetici yeniden açabilir.",
+  "ftp.locked_by_admin": "Bu FTP hesabı yönetici tarafından kapatıldı; yalnız yönetici yeniden açabilir."
 }

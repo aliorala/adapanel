@@ -1,4 +1,4 @@
-﻿using AdaPanel.Api.Security;
+using AdaPanel.Api.Security;
 using System.Security.Claims;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
@@ -54,6 +54,18 @@ public sealed class DnsController(
         };
         await CustomerAccess.EnsureSiteAsync(customerScopes, principal, siteName, cancellationToken);
 
+        // ÜRÜN KARARI: ad sunucuları ve bölge aktarım IP'leri yalnız Admin/Reseller değiştirir. Müşterinin
+        // gönderdiği bu alanlar YOK SAYILIR (mevcut değerler korunur) ve yanıtta uyarı mesajı döner.
+        var restrictedIgnored = false;
+        if (principal.IsInRole("Customer"))
+        {
+            var current = await dnsService.GetZoneAsync(siteName, cancellationToken);
+            restrictedIgnored = !SameSet(request.NameServers, current.NameServers)
+                || !SameSet(request.ZoneTransferIps, current.ZoneTransferIps);
+            request.NameServers = [.. current.NameServers];
+            request.ZoneTransferIps = [.. current.ZoneTransferIps];
+        }
+
         // GÜVENLİK (çapraz-kiracı): site kapsamı doğrulanıyordu ama BÖLGE ADI serbestti
         // (DnsService: state.ZoneName = request.ZoneName). Kendi sitesinin bölge adını
         // "kurban.com" yapan bir kiracı, kurbanın alan adının DNS kayıtlarını yönetir hâle
@@ -86,7 +98,7 @@ public sealed class DnsController(
             $"transferAllowed={FormatList(zone.ZoneTransferIps)}",
             await SiteSahibiAsync(siteName, cancellationToken));
 
-        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, "dns.zone_saved"));
+        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, restrictedIgnored ? "dns.zone_saved_restricted_ignored" : "dns.zone_saved"));
     }
 
     /// <summary>
@@ -348,6 +360,10 @@ public sealed class DnsController(
         => AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken);
 
     /// <summary>Denetim kaydı için IP/ad listesi; boş liste "yok" olarak yazılır ki satır anlamsız kalmasın.</summary>
+    private static bool SameSet(IEnumerable<string>? left, IEnumerable<string>? right) =>
+        new HashSet<string>((left ?? []).Select(item => item.Trim()), StringComparer.OrdinalIgnoreCase)
+            .SetEquals((right ?? []).Select(item => item.Trim()));
+
     private static string FormatList(string[] values)
         => values.Length == 0 ? "(yok)" : string.Join(", ", values);
 }
