@@ -526,7 +526,7 @@ public sealed class PanelRateLimitTests
     {
         var hizmetler = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
         hizmetler.AddLogging();
-        hizmetler.AddDataProtection().UseEphemeralDataProtectionProvider();
+        Microsoft.AspNetCore.DataProtection.DataProtectionBuilderExtensions.UseEphemeralDataProtectionProvider(hizmetler.AddDataProtection());
         hizmetler.AddAuthentication().AddCookie(
             Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme,
             secenek => secenek.Cookie.Name = CerezAdi);
