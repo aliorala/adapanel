@@ -52,6 +52,9 @@ public sealed class LicenseIntegrityTests : IDisposable
         Assert.Null(read.LastVerifiedAtUtc);
         Assert.Equal("state_integrity_failed", read.LastError);
         Assert.NotEmpty(read.ProtectedKey);
+        // MaxSubscriptions=0 "sinirsiz" demek; oynanmis kayit sinirsiz BIRAKILMAZ.
+        Assert.Equal(1, read.MaxSubscriptions);
+        Assert.Null(read.LastAttemptAtUtc);
     }
 
     [Fact]
@@ -65,6 +68,66 @@ public sealed class LicenseIntegrityTests : IDisposable
         var read = await NewStore().ReadAsync(default);
 
         Assert.Equal(string.Empty, read.LastVerdict);
+    }
+
+    private string KeyPath => Path.Combine(root, "config", "license", "seal.key");
+
+    private async Task<LicenseStateStore> LegacyFileAsync()
+    {
+        var store = NewStore();
+        await store.UpdateAsync(r => { r.ProtectedKey = store.ProtectKey("K-1"); r.LastVerdict = "valid"; r.MaxSubscriptions = 5; return r; }, default);
+        File.Delete(KeyPath);
+        File.WriteAllText(StatePath, System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(StatePath), @"""seal"":\s*""[^""]*""", "\"seal\": \"\""));
+        LicenseStateStore.ResetProcessStateForTests();
+        return NewStore();
+    }
+
+    [Fact]
+    public async Task LegacyUnsealedFileIsSealedAtFirstReadAndKeepsItsVerdictOnEveryLaterRead()
+    {
+        var store = await LegacyFileAsync();
+
+        var first = await store.ReadAsync(default);
+        Assert.Equal("valid", first.LastVerdict);
+        Assert.DoesNotContain("\"seal\": \"\"", File.ReadAllText(StatePath));
+
+        var second = await store.ReadAsync(default);
+        Assert.Equal("valid", second.LastVerdict);
+        Assert.Equal(5, second.MaxSubscriptions);
+
+        LicenseStateStore.ResetProcessStateForTests(); // surec yeniden baslatma
+        var afterRestart = await NewStore().ReadAsync(default);
+        Assert.Equal("valid", afterRestart.LastVerdict);
+        Assert.Equal(5, afterRestart.MaxSubscriptions);
+    }
+
+    [Fact]
+    public async Task ConcurrentFirstAccessCreatesExactlyOneKey()
+    {
+        var anahtarlar = await Task.WhenAll(Enumerable.Range(0, 24).Select(_ => Task.Run(() => NewStore().GetSealKey())));
+
+        Assert.All(anahtarlar, k => Assert.NotNull(k));
+        Assert.Single(anahtarlar.Select(k => Convert.ToBase64String(k!)).Distinct());
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(KeyPath)!, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task TransientKeyReadFailureNeitherRegeneratesTheKeyNorResetsTheVerdict()
+    {
+        var store = NewStore();
+        await store.UpdateAsync(r => { r.ProtectedKey = store.ProtectKey("K-1"); r.LastVerdict = "valid"; r.MaxSubscriptions = 5; return r; }, default);
+        var before = File.ReadAllText(KeyPath);
+
+        using (new FileStream(KeyPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            var read = await NewStore().ReadAsync(default);
+            Assert.Equal("valid", read.LastVerdict);
+            Assert.Equal(5, read.MaxSubscriptions);
+            Assert.Null(NewStore().GetSealKey());
+        }
+
+        Assert.Equal(before, File.ReadAllText(KeyPath));
+        Assert.Equal("valid", (await NewStore().ReadAsync(default)).LastVerdict);
     }
 
     // --- yanit imzasi ---

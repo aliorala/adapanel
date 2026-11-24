@@ -120,6 +120,27 @@ public sealed class SelfUpdatePreparedIdentityTests
     }
 
     [Fact]
+    public async Task PackageWhoseOwnVersionDisagreesWithTheReleaseIsRejected()
+    {
+        using var fixture = new Fixture();
+        await fixture.PrepareAsync();
+        fixture.Failure = "pkgversion";
+
+        var error = await Assert.ThrowsAsync<AppException>(() => fixture.Service.ApplyUpdateAsync(new ApplyUpdateRequest()));
+
+        Assert.Equal("update.package_invalid", error.MessageKey);
+    }
+
+    [Fact]
+    public async Task PackageWithMatchingOwnVersionWithTrailingZeroIsAccepted()
+    {
+        using var ok = new Fixture();
+        await ok.PrepareAsync();
+        ok.Failure = "pkgversionok"; // "99.0.2.0" == "99.0.2"
+        Assert.True((await ok.Service.ApplyUpdateAsync(new ApplyUpdateRequest())).IsPackageReady);
+    }
+
+    [Fact]
     public async Task SuccessfulDownloadPublishesItsOwnPreparedIdentity()
     {
         using var fixture = new Fixture();
@@ -450,7 +471,8 @@ public sealed class SelfUpdatePreparedIdentityTests
                     if (BeforeIdentity is not null) await BeforeIdentity(token);
                     return Failure == "identity" && !File.ReadAllBytes(path).SequenceEqual(OldPackage)
                     ? new UpdatePackageIdentity("foreign", "foreign", "NotSigned", string.Empty)
-                    : new UpdatePackageIdentity("AdaPanel", "AdaPanel", "NotSigned", string.Empty);
+                    : new UpdatePackageIdentity("AdaPanel", "AdaPanel", "NotSigned", string.Empty,
+                        Failure == "pkgversion" ? "0.0.1.0" : Failure == "pkgversionok" ? "99.0.2.0" : string.Empty);
                 });
         }
         internal InstallUpdateRequest Confirmation() => new()

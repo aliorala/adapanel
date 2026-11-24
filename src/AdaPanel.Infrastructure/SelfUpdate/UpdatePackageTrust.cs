@@ -254,9 +254,13 @@ internal static class UpdatePackageTrust
     /// burada kullanilmaz: cozulemeyen surum, eski bir paketi "guncelleme" diye gecirirdi).
     /// </summary>
     /// <remarks>
-    /// Neden: GitHub yayin kaydi ya da <c>config/update-manifest.json</c> onbellegi eski ama gecerli
-    /// imzali/ozetli bir paketi gosterirse panel, bilinen aciklari olan eski surumu SYSTEM olarak
-    /// kurardi. Ozet ve yayinci denetimi bunu yakalamaz; eski paket de "dogru" pakettir.
+    /// Kontrol iki yerde yapilir: (1) yayin meta verisindeki surum (GitHub etiketi / manifest) ve
+    /// (2) indirilen paketin KENDI surum kaynagi (<see cref="PaketSurumuKusuru"/>); (2) yalniz
+    /// okunabildiginde uygulanir. Paket bir Inno Setup kurulum exe'sidir: icindeki
+    /// <c>AdaPanel.Api.exe</c> LZMA ile sikistirilmistir ve kurulumdan ONCE okunamaz; okunan deger
+    /// kurulum exe'sinin <c>VersionInfoVersion</c> alanidir (derleme sirasinda uygulama surumuyle
+    /// ayni degerden gelir). Kurulumdan sonraki dogrulama <c>WindowsUpdateInstallerLauncher</c>
+    /// icinde servis exe'sinin ProductVersion'ina bakar.
     /// Acik bir "geri al" akisi bu depoda YOKTUR; eklenirse bu kontrolu ancak yoneticinin acik
     /// onayiyla (ayri uc, ayri denetim kaydi) atlayabilir.
     /// </remarks>
@@ -269,12 +273,41 @@ internal static class UpdatePackageTrust
             return $"Surum cozulemedi: kurulu='{kurulu}', hedef='{hedef}'.";
         }
 
-        return yeni > mevcut ? null : $"Hedef surum kurulu surumden yeni degil: kurulu={mevcut}, hedef={yeni}.";
+        return DahaYeni(mevcut.Value, yeni.Value)
+            ? null
+            : $"Hedef surum kurulu surumden yeni degil: kurulu={kurulu}, hedef={hedef}.";
     }
 
-    private static Version? SurumuCozumle(string? deger)
+    /// <summary>
+    /// Paketin kendi surum kaynagi beklenen surumle uyusuyor mu? Paket surumu okunamiyorsa
+    /// (bos/cozulemez) <c>null</c> doner: canli guncelleme zinciri bu yuzden kirilmaz. Okunabiliyorsa
+    /// cekirdek surum (4 bilesen, sondaki .0 normalize) ayni olmak zorundadir.
+    /// </summary>
+    internal static string? PaketSurumuKusuru(string? paketSurumu, string? beklenenSurum)
     {
-        var cekirdek = (deger ?? string.Empty).Split('-', '+')[0].Trim().TrimStart('v', 'V');
+        var paket = SurumuCozumle(paketSurumu);
+        var beklenen = SurumuCozumle(beklenenSurum);
+        if (paket is null || beklenen is null)
+        {
+            return null;
+        }
+
+        return paket.Value.Core == beklenen.Value.Core
+            ? null
+            : $"Paketin kendi surumu '{paketSurumu}', beklenen '{beklenenSurum}'.";
+    }
+
+    /// <summary>
+    /// TEK SURUM AYRISTIRICISI (<c>SelfUpdateService.IsNewerVersion</c> da bunu kullanir). "v" onegi,
+    /// "-onsurum" ve "+derleme" ekleri kabul edilir; 4 bilesene normalize edilir ("0.8.155.0" ==
+    /// "0.8.155"). Cozulemezse <c>null</c>.
+    /// </summary>
+    internal static (Version Core, bool PreRelease)? SurumuCozumle(string? deger)
+    {
+        var metin = (deger ?? string.Empty).Trim().TrimStart('v', 'V');
+        var yapi = metin.Split('+')[0];
+        var onSurum = yapi.Contains('-');
+        var cekirdek = yapi.Split('-')[0].Trim();
         if (cekirdek.Length == 0)
         {
             return null;
@@ -285,6 +318,22 @@ internal static class UpdatePackageTrust
             cekirdek += ".0";
         }
 
-        return Version.TryParse(cekirdek, out var cozum) ? cozum : null;
+        if (!Version.TryParse(cekirdek, out var cozum))
+        {
+            return null;
+        }
+
+        return (new Version(cozum.Major, cozum.Minor, Math.Max(cozum.Build, 0), Math.Max(cozum.Revision, 0)), onSurum);
+    }
+
+    /// <summary>Hedef, kurulu surumden kesin yeni mi? Ayni cekirdekte onsurumden kararliya gecis yeni sayilir.</summary>
+    internal static bool DahaYeni((Version Core, bool PreRelease) kurulu, (Version Core, bool PreRelease) hedef)
+    {
+        if (hedef.Core != kurulu.Core)
+        {
+            return hedef.Core > kurulu.Core;
+        }
+
+        return kurulu.PreRelease && !hedef.PreRelease;
     }
 }
