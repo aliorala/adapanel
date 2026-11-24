@@ -53,6 +53,17 @@
             @click="showRecordForm = !showRecordForm">
             {{ showRecordForm ? t("panel.common.cancel") : t("panel.dns.addRecordAction") }}
           </button>
+          <!-- BIND bölge dosyası: dışa aktarım salt okur; içe aktarım iki aşamalı (önizle → uygula). -->
+          <button v-if="activeTab === 'records'" class="secondary compact" :disabled="!canReload || exporting" @click="exportZone">
+            {{ exporting ? t("panel.common.loading") : t("panel.dns.exportZone") }}
+          </button>
+          <button
+            v-if="activeTab === 'records' && !isSecondary"
+            class="secondary compact"
+            v-bind="writeGate(!canWriteRecords)"
+            @click="toggleImport">
+            {{ showImport ? t("panel.common.cancel") : t("panel.dns.importZone") }}
+          </button>
           <!-- "Varsayılana sıfırla" panelin YÖNETTİĞİ kayıtları geri alır; ekleme düğmesiyle
                aynı kümede durmaz. Ayraç bir CSS numarası değil GERÇEK bir küme: satır
                kaydığında çizgi de düğmeyle birlikte gider (bkz. .reset-group). -->
@@ -69,6 +80,97 @@
 
         <!-- `record-form` sınıfı KALDIRILDI: hiçbir yerde tanımlı değildi, yani yazılmış ama
              hiçbir şey yapmıyordu. Formun görünümünü zaten `.form-surface` (base.css) veriyor. -->
+        <!-- İÇE AKTARMA: 1) metni yapıştır/dosya seç → 2) ÖNİZLE (hiçbir şey yazılmaz) → 3) onayla → UYGULA.
+             Önizleme metni değişirse geçersiz olur: yalnız önizlenen metin uygulanır (özet eşleşmesi). -->
+        <div v-if="!isSecondary && showImport" class="form-surface dns-import" data-test="dns-import">
+          <div class="section-head">
+            <div>
+              <h4>{{ t("panel.dns.importTitle") }}</h4>
+              <p class="meta">{{ t("panel.dns.importHint") }}</p>
+            </div>
+          </div>
+          <label class="stacked-field" for="dns-import-text">
+            <span class="field-label">{{ t("panel.dns.importText") }}</span>
+            <textarea id="dns-import-text" v-model="importText" rows="8" spellcheck="false" :placeholder="importPlaceholder"></textarea>
+          </label>
+          <div class="row-actions">
+            <label class="secondary compact file-pick">
+              {{ t("panel.dns.importFile") }}
+              <input type="file" accept=".zone,.txt,.db,text/plain" class="visually-hidden" @change="pickImportFile" />
+            </label>
+            <button type="button" class="compact" :disabled="!canWriteRecords || !importText.trim() || importBusy" @click="previewImport">
+              {{ importBusy && !importPreview ? t("panel.common.loading") : t("panel.dns.importPreviewAction") }}
+            </button>
+          </div>
+
+          <template v-if="importPreview">
+            <div class="row-actions import-summary" role="status">
+              <span class="status-pill ok">{{ t("panel.dns.importAdd", { count: importPreview.addCount }) }}</span>
+              <span class="status-pill">{{ t("panel.dns.importChange", { count: importPreview.changeCount }) }}</span>
+              <span class="status-pill">{{ t("panel.dns.importUnchanged", { count: importPreview.unchangedCount }) }}</span>
+              <span v-if="importPreview.managedConflictCount" class="status-pill warn">{{ t("panel.dns.importConflicts", { count: importPreview.managedConflictCount }) }}</span>
+            </div>
+
+            <div v-if="importPreview.errors.length" class="notice page-notice error" role="alert">
+              <strong>{{ t("panel.dns.importErrorsTitle") }}</strong>
+              <ul class="import-issues">
+                <li v-for="(issue, index) in importPreview.errors" :key="`e${index}`">{{ importIssueText(issue) }}</li>
+              </ul>
+            </div>
+            <div v-if="importPreview.ignored.length" class="dns-info" role="status">
+              <strong>{{ t("panel.dns.importIgnoredTitle") }}</strong>
+              <ul class="import-issues">
+                <li v-for="(issue, index) in importPreview.ignored" :key="`i${index}`">{{ importIssueText(issue) }}</li>
+              </ul>
+            </div>
+
+            <div v-if="importPreview.items.length" class="data-table import-table">
+              <div class="data-row table-head import-row">
+                <span>{{ t("panel.dns.importActionCol") }}</span>
+                <span>{{ t("panel.dns.type") }}</span>
+                <span>{{ t("panel.dns.host") }}</span>
+                <span>{{ t("panel.dns.value") }}</span>
+              </div>
+              <div v-for="(item, index) in importPreview.items" :key="index" class="data-row import-row">
+                <strong class="type-tag">{{ t(`panel.dns.importAction.${item.action}`) }}</strong>
+                <span>{{ item.type }}</span>
+                <div class="cell-main">
+                  <strong>{{ displayHost(item.host) }}</strong>
+                  <small v-if="item.conflictsWithManaged" class="import-conflict">{{ t("panel.dns.importConflictTag") }}</small>
+                  <small v-else-if="item.isMailRelated">{{ t("panel.dns.importMailTag") }}</small>
+                </div>
+                <span class="record-value">
+                  {{ item.priority !== null && (item.type === 'MX' || item.type === 'SRV') ? `${item.priority} ` : "" }}{{ item.value }}
+                  <small v-if="item.action === 'change' && item.existingValue !== null && item.existingValue !== item.value" class="meta"> ← {{ item.existingValue }}</small>
+                </span>
+              </div>
+            </div>
+
+            <label v-if="importPreview.managedConflictCount" class="import-confirm">
+              <input v-model="importConfirmOverwrite" type="checkbox" />
+              <span>{{ t("panel.dns.importConfirmOverwrite", { count: importPreview.managedConflictCount }) }}</span>
+            </label>
+            <p v-if="importPreview.managedConflictCount && !importConfirmOverwrite" class="field-hint">{{ t("panel.dns.importSkipHint") }}</p>
+
+            <div class="row-actions">
+              <button type="button" class="compact" v-bind="writeGate(!canApplyImport)" @click="applyImport">
+                {{ importBusy ? t("panel.dns.importApplying") : t("panel.dns.importApply") }}
+              </button>
+            </div>
+          </template>
+
+          <!-- Uygulama sonucu: kısmi başarı AÇIKÇA yazılır (yazılan / atlanan / başarısız / denenmeyen). -->
+          <div v-if="importResult" :class="['notice', 'page-notice', { error: importResult.isPartial }]" :role="importResult.isPartial ? 'alert' : 'status'" data-test="dns-import-result">
+            <strong>{{ t(importResult.isPartial ? "panel.dns.importResultPartial" : "panel.dns.importResultApplied") }}</strong>
+            <p>{{ t("panel.dns.importResultCounts", { added: importResult.added, changed: importResult.changed, unchanged: importResult.unchanged }) }}</p>
+            <ul class="import-issues">
+              <li v-for="(item, index) in importResult.skippedManaged" :key="`s${index}`">{{ t("panel.dns.importSkippedManaged", { type: item.type, host: displayHost(item.host) }) }}</li>
+              <li v-for="(failure, index) in importResult.failed" :key="`f${index}`">{{ t("panel.dns.importFailedLine", { type: failure.type, host: displayHost(failure.host), error: t(failure.error) }) }}</li>
+              <li v-if="importResult.notAttempted">{{ t("panel.dns.importNotAttempted", { count: importResult.notAttempted }) }}</li>
+            </ul>
+          </div>
+        </div>
+
         <form v-if="!isSecondary && (showRecordForm || editingId)" class="form-surface" @submit.prevent="saveRecord">
           <div class="record-main">
             <label class="stacked-field type-field">
@@ -272,7 +374,7 @@
 
       <!-- BÖLGE TÜRÜ: birincil (master) ↔ ikincil (slave). Plesk'in "Switch to Secondary" /
            "Switch to Primary" düğmelerinin karşılığı; ikincilde master IP listesi girilir. -->
-      <div v-if="zone && activeTab === 'settings'" class="form-surface zone-mode-card">
+      <div v-if="zone && activeTab === 'settings' && !isCustomer" class="form-surface zone-mode-card">
         <div class="section-head">
           <div>
             <h4>{{ t("panel.dns.zoneTypeTitle") }}</h4>
@@ -326,7 +428,7 @@
         </form>
       </div>
 
-      <div v-if="zone && !isSecondary" class="form-surface dnssec-card">
+      <div v-if="zone && !isSecondary && !isCustomer" class="form-surface dnssec-card">
         <div class="section-head">
           <div>
             <h4>{{ t("panel.dns.dnssecTitle") }}</h4>
@@ -365,7 +467,7 @@
 import { computed, onBeforeUnmount, reactive, ref, watch, type Ref } from "vue";
 import { getSessionEpoch } from "../api/client";
 import { useI18n } from "vue-i18n";
-import { deleteDnsRecord, getDnsZone, installWindowsDns as installWindowsDnsApi, resetDnsDefaults, setDnsZoneMode, setDnssec, transferDnsZoneNow, updateDnsZone, upsertDnsRecord, type DnsRecord, type DnsZone } from "../api/dns";
+import { applyDnsImport, deleteDnsRecord, exportDnsZone, getDnsZone, installWindowsDns as installWindowsDnsApi, previewDnsImport, resetDnsDefaults, setDnsZoneMode, setDnssec, transferDnsZoneNow, updateDnsZone, upsertDnsRecord, type DnsImportIssue, type DnsImportPreview, type DnsImportResult, type DnsRecord, type DnsZone } from "../api/dns";
 import { useConfirm, type ConfirmOptions } from "../components/ConfirmDialog.vue";
 import FieldHint from "../components/FieldHint.vue";
 import TablePager from "../components/TablePager.vue";
@@ -402,6 +504,15 @@ const modeBusy = ref(false);
 const editingId = ref("");
 const activeTab = ref<"records" | "settings">("records");
 const showRecordForm = ref(false);
+// BIND içe/dışa aktarma durumu.
+const showImport = ref(false);
+const importText = ref("");
+const importPreview = ref<DnsImportPreview | null>(null);
+const importResult = ref<DnsImportResult | null>(null);
+const importConfirmOverwrite = ref(false);
+const importBusy = ref(false);
+const exporting = ref(false);
+const MAX_IMPORT_CHARS = 262144;
 const recordTypes = ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA", "TLSA", "PTR"];
 // Tek "değer" kutusu yerine ayrı alanlarla girilen tipler (API yine tek string bekler).
 const multiPartTypes = ["SRV", "CAA", "TLSA"];
@@ -437,13 +548,19 @@ const visibleRecordIds = computed(() => recordPager.items.value.map((record) => 
 const actionBusy = computed(() => mutationToken.value !== null || bulk.busy.value);
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const viewEpoch = getSessionEpoch();
+// Customer (A6): kendi sitesinin DNS'ini yönetir; sahiplik sunucuda doğrulanır. Sunucu düzeyi
+// işler (kip, DNSSEC, Windows DNS kurulumu, varsayılanlar) yalnız yöneticide görünür.
+const isCustomer = computed(() => authStore.session?.user?.role === "Customer");
 const canReadZone = computed(() => authStore.session?.isAuthenticated === true &&
-  (isAdmin.value || authStore.session?.user?.role === "Reseller"));
+  (isAdmin.value || authStore.session?.user?.role === "Reseller" || isCustomer.value));
 const canReload = computed(() => canReadZone.value && !!siteName.value && !busy.value && !actionBusy.value);
 const canWriteZone = computed(() => canReadZone.value && zoneConfirmed.value && !!siteName.value && !locked.value && !busy.value && !actionBusy.value);
 const hasConfigurationConflict = computed(() => zone.value?.modeConfigurationConflict === true || zone.value?.transferConfigurationConflict === true || zone.value?.statusMessage === "dns.shared_configuration_conflict");
 const canWriteRecords = computed(() => canWriteZone.value && !isSecondary.value && !hasConfigurationConflict.value);
 const canManageDnsServer = computed(() => canWriteZone.value && isAdmin.value);
+const canApplyImport = computed(() => canWriteRecords.value && !importBusy.value && importPreview.value?.canApply === true &&
+  importPreview.value.items.some(item => item.action !== "unchanged"));
+const importPlaceholder = computed(() => `$ORIGIN ${zoneNameOrExample.value}.\n$TTL 3600\n@ IN A 203.0.113.10`);
 const canInstallWindowsDns = computed(() => canManageDnsServer.value && zone.value?.isWindowsDnsAvailable === false);
 
 const zoneStatus = computed(() => zoneConfirmed.value && zone.value ? t(zone.value.statusMessage) :
@@ -502,6 +619,8 @@ watch([siteName, () => authStore.session, actorKey], () => {
   zoneForm.zoneName = "";
   savedZoneDraft = zoneDraft(); savedMasterDraft = "";
   selection.clear(); resetRecordForm();
+  showImport.value = false; importText.value = ""; importPreview.value = null; importResult.value = null;
+  importConfirmOverwrite.value = false; importBusy.value = false; exporting.value = false;
   mutationToken.value = null;
   modeBusy.value = false; dnssecBusy.value = false; installingWindowsDns.value = false;
   void load(true);
@@ -775,6 +894,120 @@ function resetRecordForm() {
   showRecordForm.value = false;
 }
 
+// --- BIND bölge dosyası: dışa / içe aktarma -------------------------------------------------
+
+function toggleImport() {
+  showImport.value = !showImport.value;
+  if (!showImport.value) clearImport();
+}
+
+function clearImport() {
+  importText.value = ""; importPreview.value = null; importResult.value = null; importConfirmOverwrite.value = false;
+}
+
+// Metin değişirse önizleme GEÇERSİZ: yalnız önizlenen metin uygulanır.
+watch(importText, () => { importPreview.value = null; importResult.value = null; importConfirmOverwrite.value = false; });
+
+async function pickImportFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  if (file.size > MAX_IMPORT_CHARS * 4) { showNotice(t("panel.dns.importTooLarge"), true); return; }
+  try {
+    const text = await file.text();
+    if (text.length > MAX_IMPORT_CHARS) { showNotice(t("panel.dns.importTooLarge"), true); return; }
+    importText.value = text;
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
+}
+
+function importIssueText(issue: DnsImportIssue) {
+  const key = issue.code, translated = t(key);
+  const message = translated === key ? key : translated;
+  return [issue.line > 0 ? t("panel.dns.importLine", { line: issue.line }) : "", message, issue.detail].filter(Boolean).join(" · ");
+}
+
+async function exportZone() {
+  const context = zoneContext();
+  if (!context.site || !canReadZone.value || exporting.value) return;
+  exporting.value = true;
+  try {
+    const file = await exportDnsZone(context.site);
+    if (!context.current()) return;
+    const url = URL.createObjectURL(new Blob([file.zoneText], { type: "text/plain;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url; link.download = file.fileName || `${context.site}.zone`;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showNotice(t("panel.dns.exportDone"), false);
+  } catch (error) {
+    // Sessiz yutulmaz: indirme başarısızsa kullanıcı bunu görür.
+    if (context.current()) showNotice(resolveApiMessage(error), true);
+  } finally {
+    if (!disposed) exporting.value = false;
+  }
+}
+
+async function previewImport() {
+  const context = zoneContext();
+  if (!context.site || !canWriteRecords.value || importBusy.value) return;
+  if (importText.value.length > MAX_IMPORT_CHARS) { showNotice(t("panel.dns.importTooLarge"), true); return; }
+  const text = importText.value;
+  importBusy.value = true; importResult.value = null; importPreview.value = null;
+  try {
+    const result = await previewDnsImport(context.site, text);
+    // Önizleme beklenirken metin ya da bölge değiştiyse sonuç uygulanmaz.
+    if (!context.current() || importText.value !== text) return;
+    importPreview.value = result; importConfirmOverwrite.value = false;
+  } catch (error) {
+    if (context.current()) showNotice(resolveApiMessage(error), true);
+  } finally {
+    if (!disposed) importBusy.value = false;
+  }
+}
+
+async function applyImport() {
+  const preview = importPreview.value;
+  if (!preview || !canApplyImport.value) return;
+  const context = zoneContext();
+  const token = Symbol("dns-import"), draft = captureDrafts(), text = importText.value;
+  mutationToken.value = token; importBusy.value = true;
+  try {
+    if (!await confirm({
+      title: t("panel.dns.importConfirmTitle"),
+      message: t("panel.dns.importConfirmMessage", { zone: zone.value?.zoneName || context.site }),
+      impact: [
+        t("panel.dns.importAdd", { count: preview.addCount }),
+        t("panel.dns.importChange", { count: preview.changeCount }),
+        ...(importConfirmOverwrite.value ? [t("panel.dns.importConflicts", { count: preview.managedConflictCount })] : [])
+      ],
+      confirmLabel: t("panel.dns.importApply")
+    })) return;
+    if (!context.current() || locked.value || importText.value !== text) return;
+    notice.value = "";
+    const result = await applyDnsImport(context.site, {
+      zoneText: text, confirmOverwriteManaged: importConfirmOverwrite.value, previewHash: preview.previewHash
+    });
+    if (!context.current()) return;
+    importResult.value = result; importPreview.value = null;
+    if (result.zone) applyZone(result.zone, draft);
+    else { zoneConfirmed.value = false; void load(); }
+    showNotice(t(result.isPartial ? "dns.import_partial" : "dns.import_applied"), result.isPartial);
+  } catch (error) {
+    // Hata kısmi yazım bırakmış olabilir (ağ kopması, yayın hatası): bölge DOĞRULANMAMIŞ sayılır ve yenilenir.
+    if (context.current()) {
+      zoneConfirmed.value = false;
+      loadError.value = t("panel.dns.resultUnconfirmed");
+      showNotice(resolveApiMessage(error), true);
+    }
+  } finally {
+    if (mutationToken.value === token) mutationToken.value = null;
+    if (!disposed) importBusy.value = false;
+  }
+}
+
 async function restoreDefaults() {
   if (!canWriteRecords.value) return;
 
@@ -965,6 +1198,21 @@ function showNotice(message: string, isError: boolean) {
    şablonda eklendi (base.css, iki temada da ölçülü). `.ds-box` yalnız onun tek uymayan
    ölçüsünü düzeltir — `min-height: 260px`, iki satırlık bir DS kaydının altında 250px boşluk
    bırakırdı. */
+.import-issues { margin: var(--sp-6) 0 0; padding-inline-start: var(--sp-20); overflow-wrap: anywhere; }
+.import-table { max-height: 320px; overflow: auto; }
+.import-row { grid-template-columns: minmax(70px, 0.6fr) minmax(48px, 0.4fr) minmax(90px, 1fr) minmax(140px, 2.4fr); }
+.import-row .cell-main { min-width: 0; }
+.import-row small { white-space: normal; overflow-wrap: anywhere; }
+.import-conflict { color: var(--warn-1); font-weight: 600; }
+.import-confirm { display: flex; align-items: flex-start; gap: var(--sp-8); }
+.file-pick { cursor: pointer; display: inline-flex; align-items: center; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 640px) {
+  .import-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-6) var(--sp-12); }
+  .import-row.table-head { display: none; }
+  .import-row > :nth-child(4) { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
+}
+
 .dnssec-ds {
   display: grid;
   gap: var(--sp-6);

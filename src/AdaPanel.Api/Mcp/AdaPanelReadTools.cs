@@ -111,9 +111,11 @@ public sealed class AdaPanelReadTools(
         ClaimsPrincipal user,
         CancellationToken cancellationToken)
     {
-        // ROL PARİTESİ: REST ikizi (DnsController) yalnız yönetici ve bayiye açık; müşteri anahtarı
-        // bu bilgiye MCP üzerinden de ulaşamamalı.
+        // ROL PARİTESİ: REST ikizi (DnsController) yönetici, bayi ve müşteriye açık; müşteri yalnız
+        // KENDİ sitesini görür (EnsureSiteAsync) ve alt-kullanıcı "sites" bölüm iznine tabidir
+        // (REST'te RequireSubUserSection("sites")).
         McpCapability.RequireDnsRole(user);
+        await McpCapability.EnsureReadAllowedAsync(customerScopes, user, "sites", cancellationToken);
         await CustomerAccess.EnsureSiteAsync(customerScopes, user, siteName, cancellationToken);
         return await dnsService.GetZoneAsync(siteName, cancellationToken);
     }

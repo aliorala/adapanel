@@ -113,6 +113,90 @@ function measuredZone(envelope: ApiEnvelope<DnsZone>, siteName: string): DnsZone
   return row;
 }
 
+// --- BIND bölge dosyası: dışa aktar / iki aşamalı içe aktar (önizle → uygula) ---
+
+export type DnsImportIssue = { line: number; code: string; detail: string };
+export type DnsImportItem = {
+  action: "add" | "change" | "unchanged";
+  type: string;
+  host: string;
+  value: string;
+  ttl: number;
+  priority: number | null;
+  existingId: string | null;
+  existingValue: string | null;
+  existingTtl: number | null;
+  isMailRelated: boolean;
+  conflictsWithManaged: boolean;
+};
+export type DnsImportPreview = {
+  zoneName: string;
+  previewHash: string;
+  items: DnsImportItem[];
+  addCount: number;
+  changeCount: number;
+  unchangedCount: number;
+  managedConflictCount: number;
+  ignored: DnsImportIssue[];
+  errors: DnsImportIssue[];
+  isSecondary: boolean;
+  canApply: boolean;
+};
+export type DnsImportResult = {
+  zoneName: string;
+  added: number;
+  changed: number;
+  unchanged: number;
+  skippedManaged: DnsImportItem[];
+  failed: { type: string; host: string; error: string }[];
+  notAttempted: number;
+  isPartial: boolean;
+  zone: DnsZone | null;
+};
+export type DnsExport = { zoneName: string; fileName: string; zoneText: string };
+
+export async function exportDnsZone(siteName: string) {
+  const response = await apiClient.get<ApiEnvelope<DnsExport>>(`/sites/${encodeURIComponent(siteName)}/dns/export`);
+  const row = response.data?.data;
+  if (response.data?.success !== true || !row || typeof row.zoneText !== "string" || typeof row.fileName !== "string" || !row.zoneText.trim()) {
+    throw new UserFacingError("panel.dns.resultUnconfirmed");
+  }
+  return row;
+}
+
+export async function previewDnsImport(siteName: string, zoneText: string) {
+  const response = await apiClient.post<ApiEnvelope<DnsImportPreview>>(`/sites/${encodeURIComponent(siteName)}/dns/import/preview`, { zoneText });
+  return measuredImportPreview(response.data);
+}
+
+export async function applyDnsImport(siteName: string, payload: { zoneText: string; confirmOverwriteManaged: boolean; previewHash: string }) {
+  const response = await apiClient.post<ApiEnvelope<DnsImportResult>>(`/sites/${encodeURIComponent(siteName)}/dns/import/apply`, payload);
+  return measuredImportResult(response.data, siteName);
+}
+
+function measuredImportPreview(envelope: ApiEnvelope<DnsImportPreview>): DnsImportPreview {
+  const row = envelope?.data;
+  if (envelope?.success !== true || !row || typeof row.previewHash !== "string" || !row.previewHash || typeof row.zoneName !== "string" ||
+      typeof row.canApply !== "boolean" || !Array.isArray(row.items) || !Array.isArray(row.errors) || !Array.isArray(row.ignored) ||
+      [row.addCount, row.changeCount, row.unchangedCount, row.managedConflictCount].some(value => !Number.isSafeInteger(value)) ||
+      row.items.some(item => !item || !["add", "change", "unchanged"].includes(item.action) || [item.type, item.host, item.value].some(value => typeof value !== "string") ||
+        typeof item.conflictsWithManaged !== "boolean")) {
+    throw new UserFacingError("panel.dns.resultUnconfirmed");
+  }
+  return row;
+}
+
+function measuredImportResult(envelope: ApiEnvelope<DnsImportResult>, siteName: string): DnsImportResult {
+  const row = envelope?.data;
+  if (envelope?.success !== true || !row || typeof row.isPartial !== "boolean" || !Array.isArray(row.skippedManaged) || !Array.isArray(row.failed) ||
+      [row.added, row.changed, row.unchanged, row.notAttempted].some(value => !Number.isSafeInteger(value))) {
+    throw new UserFacingError("panel.dns.resultUnconfirmed");
+  }
+  // Bölge yazıldıysa dönen bölge de ölçülür; ölçülemezse uygulanmaz, ekran "doğrulanamadı" der.
+  if (row.zone) measuredZone({ ...envelope, data: row.zone } as ApiEnvelope<DnsZone>, siteName);
+  return row;
+}
+
 // DNS sunucusunun dışarıya yanıt verebilirliği: servis "Running" olsa bile genel IP'ye bind
 // olmamış olabilir (reboot yarış durumu) — o zaman hiçbir alan adı dışarıdan çözülmez.
 export type DnsServerHealth = {
