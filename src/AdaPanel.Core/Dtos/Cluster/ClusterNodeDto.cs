@@ -26,11 +26,13 @@ public sealed class ClusterNodeDto
     /// <summary>Kapalı düğüm yoklanmaz ve yeni site yerleşiminde ADAY DEĞİLDİR.</summary>
     public bool Enabled { get; init; } = true;
 
-    /// <summary>
-    /// TLS sertifikası doğrulanıyor mu. Varsayılan <c>true</c>; kapatmak, merkezin yönetici
-    /// belirtecini araya girene teslim etmeyi göze almaktır.
-    /// </summary>
-    public bool VerifyTlsCertificate { get; init; } = true;
+    /// <summary>Onaylanmış sertifikanın parmak izi (<c>SHA256:AA:BB…</c>); onay yoksa boş.</summary>
+    public string CertificateFingerprint { get; init; } = string.Empty;
+
+    /// <summary><c>pinned</c> / <c>reapproval_required</c> / <c>not_applicable</c> (http).</summary>
+    public string CertificateState { get; init; } = "not_applicable";
+
+    public DateTime? CertificateApprovedAtUtc { get; init; }
 
     /// <summary>Kayıtlı bir belirteç var mı. Değerin KENDİSİ hiçbir yanıtta dönmez.</summary>
     public bool HasToken { get; init; }
@@ -66,9 +68,11 @@ public sealed class RegisterClusterNodeRequest
     public bool Enabled { get; init; } = true;
 
     /// <summary>
-    /// Varsayılan AÇIK. Kapatma isteği ayrıca denetim kaydına düşer (bkz. ClusterController).
+    /// https düğüm için ZORUNLU: yöneticinin <c>certificate-probe</c> ile gördüğü ve onayladığı
+    /// parmak izi. Sunucu kayıtta sertifikayı yeniden okur; farklıysa kayıt reddedilir.
     /// </summary>
-    public bool VerifyTlsCertificate { get; init; } = true;
+    [StringLength(200)]
+    public string CertificateFingerprint { get; init; } = string.Empty;
 }
 
 /// <summary>Var olan düğümün güncellenmesi.</summary>
@@ -91,5 +95,48 @@ public sealed class UpdateClusterNodeRequest
 
     public bool Enabled { get; init; } = true;
 
-    public bool VerifyTlsCertificate { get; init; } = true;
+    /// <summary>
+    /// Adres değiştiyse yeni sertifikanın onaylı parmak izi. Boşsa ve adres aynıysa mevcut onay
+    /// korunur; adres değiştiyse onay SİLİNİR (eski sunucunun parmak izi yeni adrese taşınmaz).
+    /// </summary>
+    [StringLength(200)]
+    public string CertificateFingerprint { get; init; } = string.Empty;
+}
+
+/// <summary>Adresin sunduğu sertifikayı (belirteç GÖNDERMEDEN) okuma isteği.</summary>
+public sealed class ProbeClusterCertificateRequest
+{
+    [Required]
+    [StringLength(255, MinimumLength = 8)]
+    public string Address { get; init; } = string.Empty;
+}
+
+/// <summary>Var olan düğümün sertifikasını (yeniden) onaylama isteği.</summary>
+public sealed class ApproveClusterCertificateRequest
+{
+    [Required]
+    [StringLength(200, MinimumLength = 8)]
+    public string Fingerprint { get; init; } = string.Empty;
+}
+
+/// <summary>Uzak adresin sunduğu sertifika. Yönetici parmak izini başka bir kanaldan teyit eder.</summary>
+public sealed class ClusterCertificateProbeDto
+{
+    public string Address { get; init; } = string.Empty;
+
+    /// <summary>false: adres http, sabitlenecek sertifika yok.</summary>
+    public bool Https { get; init; }
+
+    public string Fingerprint { get; init; } = string.Empty;
+
+    public string Subject { get; init; } = string.Empty;
+
+    public string Issuer { get; init; } = string.Empty;
+
+    public DateTime? NotBeforeUtc { get; init; }
+
+    public DateTime? NotAfterUtc { get; init; }
+
+    /// <summary>Sertifika sistemin güvendiği bir zincirle ve adla doğrulandı mı (bilgi amaçlı).</summary>
+    public bool ChainTrusted { get; init; }
 }

@@ -14,7 +14,7 @@ internal static class BackupExpiredFtpDayCleanup
         NetworkCredential credential, DateTime expiredThroughLocalDate, IReadOnlyCollection<Uri> protectedArchiveUris,
         Func<CancellationToken, Task>? beforeMutation, CancellationToken ct)
     {
-        if (!configuredRoot.IsAbsoluteUri || configuredRoot.Scheme != "ftp"
+        if (!configuredRoot.IsAbsoluteUri || !BackupFtpScheme.Is(configuredRoot)
             || configuredRoot.UserInfo.Length != 0 || configuredRoot.Query.Length != 0 || configuredRoot.Fragment.Length != 0)
             throw new ArgumentException("A credential-free FTP directory root is required.", nameof(configuredRoot));
         var root = new Uri(configuredRoot.AbsoluteUri.TrimEnd('/') + "/");

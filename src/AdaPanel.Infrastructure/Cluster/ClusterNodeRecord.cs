@@ -28,7 +28,18 @@ public sealed class ClusterNodeRecord
 
     public bool Enabled { get; set; } = true;
 
-    public bool VerifyTlsCertificate { get; set; } = true;
+    /// <summary>
+    /// Yöneticinin onayladığı düğüm sertifikasının SHA-256 parmak izi (<c>SHA256:AA:BB…</c>).
+    /// Boşsa düğüm "yeniden onay gerek" durumundadır ve https düğüme HİÇ bağlanılmaz (G18).
+    /// </summary>
+    /// <remarks>
+    /// Eski kayıtlardaki <c>verifyTlsCertificate</c> alanı artık OKUNMAZ: "doğrulamayı kapat"
+    /// seçeneği kaldırıldı; o alanı <c>false</c> taşıyan kayıtlar da parmak izi olmadığı için
+    /// onay isteyen duruma düşer (sessizce güvenilmez).
+    /// </remarks>
+    public string CertificateFingerprint { get; set; } = string.Empty;
+
+    public DateTime? CertificateApprovedAtUtc { get; set; }
 
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
@@ -43,12 +54,33 @@ public sealed class ClusterNodeRecord
         Label = Label,
         Address = Address,
         Enabled = Enabled,
-        VerifyTlsCertificate = VerifyTlsCertificate,
+        CertificateFingerprint = CertificateFingerprint,
+        CertificateState = ClusterCertificateStates.For(Address, CertificateFingerprint),
+        CertificateApprovedAtUtc = CertificateApprovedAtUtc,
         HasToken = !string.IsNullOrWhiteSpace(TokenProtected),
         CreatedAtUtc = CreatedAtUtc,
         LastSeenAtUtc = LastSeenAtUtc,
         LastError = LastError
     };
+}
+
+/// <summary>Düğümün sertifika durumu (arayüz ve yoklama bunu okur).</summary>
+public static class ClusterCertificateStates
+{
+    public const string Pinned = "pinned";
+
+    public const string ReapprovalRequired = "reapproval_required";
+
+    /// <summary>Adres http: TLS yok, sabitlenecek sertifika da yok.</summary>
+    public const string NotApplicable = "not_applicable";
+
+    public static bool IsHttps(string? address) =>
+        !string.IsNullOrWhiteSpace(address) && address.TrimStart().StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+    public static string For(string? address, string? fingerprint) =>
+        !IsHttps(address)
+            ? NotApplicable
+            : string.IsNullOrWhiteSpace(fingerprint) ? ReapprovalRequired : Pinned;
 }
 
 /// <summary>Dosyanın kök nesnesi. Düz dizi yerine sarmalayıcı: şema ileride alan kazanabilsin.</summary>

@@ -344,5 +344,9 @@
   "backup.test_restore_warning": "Test geri yükleme uyarıyla bitti.",
   "backup.test_restore_busy": "Başka bir test geri yükleme çalışıyor. Bitince tekrar deneyin.",
   "firewall.ipblock_range_too_wide": "Bu aralık çok geniş. İzin verilen en küçük önek IPv4 için /8, IPv6 için /32.",
-  "ssl.certificate_not_found": "Bu site ve alan adı için sertifika kaydı bulunamadı."
+  "ssl.certificate_not_found": "Bu site ve alan adı için sertifika kaydı bulunamadı.",
+  "cluster.certificate_approval_required": "Bu sunucunun sertifikası onaylanmamış: önce sertifikayı okuyup parmak izini onaylayın. Onay olmadan bağlanılmaz.",
+  "cluster.certificate_mismatch": "Sunucunun sertifikası onaylı parmak iziyle uyuşmuyor. Sertifika yenilenmediyse biri araya girmiş olabilir; yenilendiyse yeniden onaylayın.",
+  "cluster.certificate_unreadable": "Sunucunun sertifikası okunamadı (TLS yok ya da el sıkışma başarısız).",
+  "cluster.certificate_approved": "Sertifika onaylandı."
 }

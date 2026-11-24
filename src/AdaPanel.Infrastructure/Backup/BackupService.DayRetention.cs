@@ -27,7 +27,7 @@ public sealed partial class BackupService
         // A directory boundary is mandatory; historical per-file URIs are not permission
         // to infer a parent and recursively delete it. Other stores keep record-based pruning.
         if (remote is null || !Uri.TryCreate(remote.RemoteUrl, UriKind.Absolute, out var root)
-            || root.Scheme != "ftp") return;
+            || !BackupFtpScheme.Is(root)) return;
         await EnsureRemoteTargetAllowedAsync(new BackupTarget("ftp", root, "", "", ""), ct);
         var protectedUris = remaining.Select(record =>
                 Uri.TryCreate(record.RemoteUri, UriKind.Absolute, out var uri) ? uri : null)

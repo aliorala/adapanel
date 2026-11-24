@@ -20,7 +20,11 @@ export type ClusterNode = {
   /** Normalize edilmiş kök adres: `https://sunucu.ornek.test:8888` */
   address: string;
   enabled: boolean;
-  verifyTlsCertificate: boolean;
+  /** Onaylı sertifikanın SHA-256 parmak izi (`SHA256:AA:BB…`); onay yoksa boş. */
+  certificateFingerprint: string;
+  /** `pinned` | `reapproval_required` | `not_applicable` (http). */
+  certificateState: "pinned" | "reapproval_required" | "not_applicable";
+  certificateApprovedAtUtc: string | null;
   hasToken: boolean;
   createdAtUtc: string;
   /** Düğümden en son BAŞARIYLA yanıt alındığı an; hiç alınmadıysa null. */
@@ -98,8 +102,34 @@ export type SaveClusterNodePayload = {
   /** Düzenlemede BOŞ bırakılırsa mevcut anahtar korunur. */
   apiToken: string;
   enabled: boolean;
-  verifyTlsCertificate: boolean;
+  /** https için ZORUNLU (kayıtta); düzenlemede adres değişmediyse boş bırakılabilir. */
+  certificateFingerprint: string;
 };
+
+/** Adresin sunduğu sertifika. Yönetici parmak izini başka bir kanaldan teyit edip onaylar. */
+export type ClusterCertificateProbe = {
+  address: string;
+  https: boolean;
+  fingerprint: string;
+  subject: string;
+  issuer: string;
+  notBeforeUtc: string | null;
+  notAfterUtc: string | null;
+  chainTrusted: boolean;
+};
+
+export async function probeClusterCertificate(address: string) {
+  const response = await apiClient.post<ApiEnvelope<ClusterCertificateProbe>>("/cluster/certificate-probe", { address });
+  return response.data.data;
+}
+
+export async function approveClusterCertificate(nodeId: string, fingerprint: string) {
+  const response = await apiClient.post<ApiEnvelope<ClusterNode>>(
+    `/cluster/nodes/${encodeURIComponent(nodeId)}/approve-certificate`,
+    { fingerprint }
+  );
+  return response.data.data;
+}
 
 export async function getClusterNodes() {
   const response = await apiClient.get<ApiEnvelope<ClusterNode[]>>("/cluster/nodes");

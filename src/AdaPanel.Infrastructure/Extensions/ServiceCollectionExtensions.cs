@@ -280,6 +280,7 @@ public static class ServiceCollectionExtensions
         // tüketici onu tutsaydı captive dependency olurdu.
         services.AddSingleton<Cluster.ClusterHttpClientFactory>();
         services.AddScoped<Cluster.ClusterNodeStore>();
+        services.AddSingleton<Cluster.IClusterCertificateProber>(sp => sp.GetRequiredService<Cluster.ClusterHttpClientFactory>());
         services.AddScoped<Cluster.IClusterNodeClient, Cluster.ClusterNodeClient>();
         services.AddScoped<Cluster.IClusterService, Cluster.ClusterService>();
 

@@ -112,8 +112,8 @@ public sealed class ClusterController(
 
     /// <summary>Yeni düğüm kaydı.</summary>
     /// <remarks>
-    /// TLS doğrulaması KAPATILDIYSA denetim kaydına ayrıca yazılır: bu, bir gün "araya girme"
-    /// olayı incelendiğinde ilk sorulacak sorunun cevabıdır.
+    /// Onaylanan sertifika parmak izi denetim kaydına yazılır: bu, bir gün "araya girme"
+    /// olayı incelendiğinde ilk sorulacak sorunun cevabıdır. https düğümde parmak izi ZORUNLUDUR.
     /// </remarks>
     [HttpPost("nodes")]
     public async Task<ActionResult<ApiResponse<ClusterNodeDto>>> RegisterAsync(
@@ -125,10 +125,45 @@ public sealed class ClusterController(
         // Denetim kaydına BELİRTEÇ yazılmaz; yalnız kim/neyi/hangi adresle kaydetti.
         await WriteAuditAsync(
             "cluster.node.registered",
-            $"Node '{node.Label}' registered at {node.Address}. tlsVerify={node.VerifyTlsCertificate}, enabled={node.Enabled}",
+            $"Node '{node.Label}' registered at {node.Address}. certState={node.CertificateState}, fingerprint={node.CertificateFingerprint}, enabled={node.Enabled}",
             cancellationToken);
 
         return Ok(ApiResponse<ClusterNodeDto>.Ok(node, "cluster.node_registered"));
+    }
+
+    /// <summary>
+    /// Adresin sunduğu sertifikayı (parmak izi, konu, geçerlilik) okur — yönetici belirteci
+    /// GÖNDERİLMEZ. Yönetici parmak izini sunucunun sahibinden başka bir kanaldan teyit edip
+    /// kayıt/yeniden onay isteğinde geri gönderir (ilk bağlantıda göster, yönetici onaylasın).
+    /// </summary>
+    [HttpPost("certificate-probe")]
+    public async Task<ActionResult<ApiResponse<ClusterCertificateProbeDto>>> ProbeCertificateAsync(
+        [FromBody] ProbeClusterCertificateRequest request,
+        CancellationToken cancellationToken)
+    {
+        var probe = await clusterService.ProbeCertificateAsync(request.Address, cancellationToken);
+        await WriteAuditAsync(
+            "cluster.certificate.probed",
+            $"Certificate read for {probe.Address}. https={probe.Https}, fingerprint={probe.Fingerprint}",
+            cancellationToken);
+
+        return Ok(ApiResponse<ClusterCertificateProbeDto>.Ok(probe));
+    }
+
+    /// <summary>Sertifikayı onaylar ya da (yenilendiyse/uyuşmuyorsa) yeniden onaylar.</summary>
+    [HttpPost("nodes/{nodeId:guid}/approve-certificate")]
+    public async Task<ActionResult<ApiResponse<ClusterNodeDto>>> ApproveCertificateAsync(
+        Guid nodeId,
+        [FromBody] ApproveClusterCertificateRequest request,
+        CancellationToken cancellationToken)
+    {
+        var node = await clusterService.ApproveCertificateAsync(nodeId, request.Fingerprint, cancellationToken);
+        await WriteAuditAsync(
+            "cluster.certificate.approved",
+            $"Certificate approved for node '{node.Label}' ({nodeId}) at {node.Address}. fingerprint={node.CertificateFingerprint}",
+            cancellationToken);
+
+        return Ok(ApiResponse<ClusterNodeDto>.Ok(node, "cluster.certificate_approved"));
     }
 
     [HttpPut("nodes/{nodeId:guid}")]
@@ -141,7 +176,7 @@ public sealed class ClusterController(
 
         await WriteAuditAsync(
             "cluster.node.updated",
-            $"Node '{node.Label}' updated at {node.Address}. tlsVerify={node.VerifyTlsCertificate}, enabled={node.Enabled}",
+            $"Node '{node.Label}' updated at {node.Address}. certState={node.CertificateState}, fingerprint={node.CertificateFingerprint}, enabled={node.Enabled}",
             cancellationToken);
 
         return Ok(ApiResponse<ClusterNodeDto>.Ok(node, "cluster.node_updated"));

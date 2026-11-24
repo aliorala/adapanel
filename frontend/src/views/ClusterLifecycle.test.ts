@@ -9,7 +9,7 @@ vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock("../components/ConfirmDialog.vue", () => ({ useConfirm: () => ({ confirm: mocks.confirm }) }));
 vi.mock("../api/cluster", () => ({ getClusterOverview: vi.fn(), registerClusterNode: vi.fn(), updateClusterNode: vi.fn(), removeClusterNode: vi.fn(), probeClusterNode: vi.fn(), getClusterNodeLink: vi.fn(), createClusterSite: vi.fn() }));
 type State = { overview: api.ClusterOverview | null; notice: string; noticeError: boolean; form: api.SaveClusterNodePayload; editingId: string; siteForm: { name: string; nodeId: string }; refresh(): Promise<unknown>; save(): Promise<void>; remove(row: api.ClusterNodeStatus): Promise<void>; createSite(): Promise<void>; open(row: api.ClusterNodeStatus): Promise<void>; edit(row: api.ClusterNodeStatus): void };
-const node = (id = "node-a"): api.ClusterNode => ({ id, label: id, address: `https://${id}.test`, enabled: true, verifyTlsCertificate: true, hasToken: true, createdAtUtc: "fixture", lastSeenAtUtc: null, lastError: "" });
+const node = (id = "node-a"): api.ClusterNode => ({ id, label: id, address: `https://${id}.test`, enabled: true, certificateFingerprint: "SHA256:AA", certificateState: "pinned", certificateApprovedAtUtc: null, hasToken: true, createdAtUtc: "fixture", lastSeenAtUtc: null, lastError: "" });
 const row = (id = "node-a"): api.ClusterNodeStatus => ({ node: node(id), reachable: true, statusKey: "", detail: "", durationMs: 1, info: null });
 const overview = (id = "node-a"): api.ClusterOverview => ({ nodes: [row(id)], totalSites: 1, reachableCount: 1, unreachableCount: 0, generatedAtUtc: "fixture" });
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (error: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
@@ -22,7 +22,7 @@ async function mount(role = "Administrator") {
  app = renderer.createApp({ ...ClusterView, render: () => h("section") } as Component).use(pinia); app.provide(ssrContextKey, {});
  const state = (app.mount({}).$ as unknown as { setupState: State }).setupState; await flush(); return { state, auth };
 }
-function prepareSave(state: State) { Object.assign(state.form, { label: "fixture", address: "https://fixture.test", apiToken: "fixture", enabled: true, verifyTlsCertificate: true }); }
+function prepareSave(state: State) { Object.assign(state.form, { label: "fixture", address: "https://fixture.test", apiToken: "fixture", enabled: true, certificateFingerprint: "SHA256:AA" }); }
 beforeEach(() => {
  vi.mocked(api.getClusterOverview).mockResolvedValue(overview()); vi.mocked(api.registerClusterNode).mockResolvedValue(node()); vi.mocked(api.updateClusterNode).mockResolvedValue(node()); vi.mocked(api.removeClusterNode).mockResolvedValue(); mocks.confirm.mockResolvedValue(true);
  vi.mocked(api.createClusterSite).mockResolvedValue({ nodeId: "node-a", nodeLabel: "node-a", siteName: "fixture.test", placementWasAutomatic: true, remoteMessage: "" });

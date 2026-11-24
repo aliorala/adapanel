@@ -127,7 +127,7 @@ public sealed class ClusterNodeSecretTests : IDisposable
 
         var hata = await Assert.ThrowsAsync<AppException>(
             () => servis.RegisterAsync(new RegisterClusterNodeRequest
-            {
+            { CertificateFingerprint = FakeCertificateProber.Fingerprint,
                 Label = "Frankfurt",
                 Address = "https://dugum.ornek.test",
                 ApiToken = "   "
@@ -148,7 +148,7 @@ public sealed class ClusterNodeSecretTests : IDisposable
 
         var hata = await Assert.ThrowsAsync<AppException>(
             () => servis.RegisterAsync(new RegisterClusterNodeRequest
-            {
+            { CertificateFingerprint = FakeCertificateProber.Fingerprint,
                 Label = "Baska-Etiket",
                 Address = "https://DUGUM.ornek.test/",
                 ApiToken = "adap_baska"
@@ -158,27 +158,35 @@ public sealed class ClusterNodeSecretTests : IDisposable
     }
 
     /// <summary>
-    /// TLS DOGRULAMASI VARSAYILAN OLARAK ACIK. Istek nesnesinin varsayilani kapali olsaydi,
-    /// alani hic gondermeyen bir istemci sessizce dogrulamasiz bir dugum kaydederdi.
+    /// G18: https dugum ONAYLI PARMAK IZI olmadan KAYDEDILEMEZ; "dogrulamayi kapat" secenegi
+    /// yoktur. Istek nesnesinde de, kayitta da boyle bir alan kalmadi.
     /// </summary>
     [Fact]
-    public async Task TLS_dogrulamasi_VARSAYILAN_ACIK()
+    public async Task https_dugum_parmak_izi_olmadan_KAYDEDILEMEZ()
     {
-        Assert.True(new RegisterClusterNodeRequest().VerifyTlsCertificate);
-        Assert.True(new UpdateClusterNodeRequest().VerifyTlsCertificate);
-        Assert.True(new ClusterNodeDto().VerifyTlsCertificate);
+        Assert.Null(typeof(RegisterClusterNodeRequest).GetProperty("VerifyTlsCertificate"));
+        Assert.Null(typeof(UpdateClusterNodeRequest).GetProperty("VerifyTlsCertificate"));
+        Assert.Null(typeof(ClusterNodeDto).GetProperty("VerifyTlsCertificate"));
 
         var (servis, depo) = Duzenek();
-        // Istek TLS alanini HIC belirtmiyor.
-        var dugum = await servis.RegisterAsync(new RegisterClusterNodeRequest
+        var hata = await Assert.ThrowsAsync<AppException>(() => servis.RegisterAsync(new RegisterClusterNodeRequest
         {
             Label = "Frankfurt",
             Address = "https://dugum.ornek.test",
             ApiToken = Belirtec
-        });
+        }));
+        Assert.Equal(ClusterMessages.CertificateApprovalRequired, hata.MessageKey);
+        Assert.Empty(await depo.GetAllAsync());
 
-        Assert.True(dugum.VerifyTlsCertificate);
-        Assert.True((await depo.GetAsync(dugum.Id))!.VerifyTlsCertificate);
+        var dugum = await servis.RegisterAsync(new RegisterClusterNodeRequest
+        {
+            Label = "Frankfurt",
+            Address = "https://dugum.ornek.test",
+            ApiToken = Belirtec,
+            CertificateFingerprint = FakeCertificateProber.Fingerprint
+        });
+        Assert.Equal(ClusterCertificateStates.Pinned, dugum.CertificateState);
+        Assert.Equal(FakeCertificateProber.Fingerprint, (await depo.GetAsync(dugum.Id))!.CertificateFingerprint);
     }
 
     [Fact]
@@ -188,7 +196,7 @@ public sealed class ClusterNodeSecretTests : IDisposable
 
         var hata = await Assert.ThrowsAsync<AppException>(
             () => servis.RegisterAsync(new RegisterClusterNodeRequest
-            {
+            { CertificateFingerprint = FakeCertificateProber.Fingerprint,
                 Label = "x",
                 Address = "https://dugum.ornek.test",
                 ApiToken = Belirtec
@@ -210,7 +218,7 @@ public sealed class ClusterNodeSecretTests : IDisposable
 
         var hata = await Assert.ThrowsAsync<AppException>(
             () => servis.RegisterAsync(new RegisterClusterNodeRequest
-            {
+            { CertificateFingerprint = FakeCertificateProber.Fingerprint,
                 Label = "Tuzak",
                 Address = adres,
                 ApiToken = Belirtec
@@ -228,14 +236,14 @@ public sealed class ClusterNodeSecretTests : IDisposable
     {
         var dosyaDeposu = new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = veriKoku }));
         var depo = new ClusterNodeStore(dosyaDeposu, new SahteKoruyucu(), NullLogger<ClusterNodeStore>.Instance);
-        var servis = new ClusterService(depo, new BosIstemci(), NullLogger<ClusterService>.Instance)
+        var servis = new ClusterService(depo, new BosIstemci(), new FakeCertificateProber(), NullLogger<ClusterService>.Instance)
         {
             Resolver = (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Parse("10.0.0.5") })
         };
 
         var hata = await Assert.ThrowsAsync<AppException>(
             () => servis.RegisterAsync(new RegisterClusterNodeRequest
-            {
+            { CertificateFingerprint = FakeCertificateProber.Fingerprint,
                 Label = "Gizli-Tuzak",
                 Address = "https://masum-gorunumlu.ornek.com",
                 ApiToken = Belirtec
@@ -250,7 +258,7 @@ public sealed class ClusterNodeSecretTests : IDisposable
     {
         var dosyaDeposu = new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = veriKoku }));
         var depo = new ClusterNodeStore(dosyaDeposu, new SahteKoruyucu(), NullLogger<ClusterNodeStore>.Instance);
-        var servis = new ClusterService(depo, new BosIstemci(), NullLogger<ClusterService>.Instance)
+        var servis = new ClusterService(depo, new BosIstemci(), new FakeCertificateProber(), NullLogger<ClusterService>.Instance)
         {
             Resolver = (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Parse("93.184.216.34") })
         };
@@ -260,7 +268,7 @@ public sealed class ClusterNodeSecretTests : IDisposable
 
     private static Task<ClusterNodeDto> KaydetAsync(ClusterService servis) =>
         servis.RegisterAsync(new RegisterClusterNodeRequest
-        {
+        { CertificateFingerprint = FakeCertificateProber.Fingerprint,
             Label = "Frankfurt",
             Address = "https://dugum.ornek.test",
             ApiToken = Belirtec
