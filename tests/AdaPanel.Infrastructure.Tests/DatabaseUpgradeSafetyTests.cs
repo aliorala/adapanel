@@ -316,7 +316,7 @@ public sealed class DatabaseUpgradeSafetyTests : IDisposable
     {
         await using var db = NewContext();
         await DatabaseUpgrader.UpgradeAsync(db, root, NullLogger.Instance);
-        await db.Database.ExecuteSqlRawAsync("INSERT INTO panel_settings (Key, Value) VALUES ('k','v');");
+        await db.Database.ExecuteSqlRawAsync("INSERT INTO panel_settings (Key, Value, UpdatedAtUtc) VALUES ('k','v','2026-01-01');");
 
         var original = DatabaseUpgrader.CopyFile;
         try
