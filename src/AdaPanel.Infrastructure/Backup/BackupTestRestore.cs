@@ -19,6 +19,19 @@ internal static class BackupTestRestore
     /// <summary>Gecici klasore yazilacak toplam bayt tavani; asildiginda kalan girdiler diske yazilmadan okunur.</summary>
     internal const long DefaultExtractCapBytes = 2L * 1024 * 1024 * 1024;
 
+    /// <summary>Onceki (cokmus/iptal) calismalardan kalan restore-test/test-* klasorlerini siler. Silinen sayiyi doner.</summary>
+    internal static int CleanupStale(string workRoot)
+    {
+        var removed = 0;
+        if (!Directory.Exists(workRoot)) return 0;
+        foreach (var directory in Directory.GetDirectories(workRoot, "test-*"))
+        {
+            try { Directory.Delete(directory, recursive: true); removed++; }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { /* sonraki turda tekrar denenir */ }
+        }
+        return removed;
+    }
+
     internal static async Task<BackupTestRestoreResultDto> RunAsync(
         BackupRecordDto record, string archivePath, string workRoot, long extractCapBytes, CancellationToken cancellationToken)
     {
@@ -43,7 +56,17 @@ internal static class BackupTestRestore
             }
 
             if (result.Outcome != "not_tested")
+            {
                 result.Outcome = result.FileFailures == 0 && result.DatabaseDumpFailures == 0 ? "passed" : "failed";
+                // Kayit veritabani iceriyorsa ama dokum bulunamadi/denetlenemediyse "passed" DENMEZ:
+                // dosyalar saglam olsa da veritabani tarafi olculmedi.
+                var expected = record.IncludedDatabases?.Count ?? 0;
+                if (result.Outcome == "passed" && (result.DatabaseDumpsUnchecked > 0 || result.DatabaseDumpsChecked < expected))
+                {
+                    result.Outcome = "warning";
+                    result.Issues.Add($"database=not_verified; expected={expected}; checked={result.DatabaseDumpsChecked}; unchecked={result.DatabaseDumpsUnchecked}");
+                }
+            }
         }
         catch (InvalidDataException error)
         {

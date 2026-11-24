@@ -208,6 +208,9 @@ public sealed class IpBlockService(
             throw new AppException("firewall.ipblock_target_invalid", 400, 400);
         // Hepsini engelle (/0) bir engel listesi girdisi degildir.
         if (prefix == 0) throw new AppException("firewall.ipblock_target_invalid", 400, 400);
+        // Cok genis aralik (IPv4 /8'den, IPv6 /32'den genis) toplu yanlis engel riskidir: reddedilir.
+        if (prefix < (address.AddressFamily == AddressFamily.InterNetwork ? 8 : 32))
+            throw new AppException("firewall.ipblock_range_too_wide", 400, 400);
         return new IpNetwork(address, prefix);
     }
 

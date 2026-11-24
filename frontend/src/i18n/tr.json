@@ -6958,5 +6958,11 @@
   "backup.test_restore.unsupported_format": "Bu dosya türü test geri yüklenemez.",
   "backup.test_restore_passed": "Test geri yükleme geçti.",
   "backup.test_restore_failed": "Test geri yükleme başarısız.",
-  "backup.test_restore_not_tested": "Yedek test edilemedi."
+  "backup.test_restore_not_tested": "Yedek test edilemedi.",
+  "panel.backup.testRestore.outcome_warning": "Uyarıyla geçti",
+  "panel.backup.testRestore.notice_warning": "{name}: dosyalar sağlam ama veritabanı kısmı tam doğrulanamadı; ayrıntılar aşağıda.",
+  "backup.test_restore_warning": "Test geri yükleme uyarıyla bitti.",
+  "backup.test_restore_busy": "Başka bir test geri yükleme çalışıyor. Bitince tekrar deneyin.",
+  "firewall.ipblock_range_too_wide": "Bu aralık çok geniş. İzin verilen en küçük önek IPv4 için /8, IPv6 için /32.",
+  "ssl.certificate_not_found": "Bu site ve alan adı için sertifika kaydı bulunamadı."
 }

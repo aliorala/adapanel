@@ -5,6 +5,9 @@ namespace AdaPanel.Infrastructure.Backup;
 
 public sealed partial class BackupService
 {
+    // Ayni anda YALNIZ BIR test geri yukleme (disk ve G/C korumasi); mesgulse 409.
+    private static readonly SemaphoreSlim TestRestoreGate = new(1, 1);
+
     /// <summary>
     /// Yalitilmis TEST geri yukleme: arsivi veri kokunun altindaki gecici <c>restore-test</c> klasorune
     /// acip dogrular ve klasoru siler. Canli site, IIS, veritabani ve posta'ya DOKUNMAZ (hicbir
@@ -27,9 +30,16 @@ public sealed partial class BackupService
             };
         }
 
-        using var content = await OpenContentAsync(record, encryptionPassword, cancellationToken);
-        var workRoot = fileStore.EnsureDirectory("restore-test");
-        return await BackupTestRestore.RunAsync(record, content.FilePath, workRoot,
-            BackupTestRestore.DefaultExtractCapBytes, cancellationToken);
+        if (!await TestRestoreGate.WaitAsync(0, cancellationToken))
+            throw new AppException("backup.test_restore_busy", 409, 409);
+        try
+        {
+            using var content = await OpenContentAsync(record, encryptionPassword, cancellationToken);
+            var workRoot = fileStore.EnsureDirectory("restore-test");
+            BackupTestRestore.CleanupStale(workRoot);
+            return await BackupTestRestore.RunAsync(record, content.FilePath, workRoot,
+                BackupTestRestore.DefaultExtractCapBytes, cancellationToken);
+        }
+        finally { TestRestoreGate.Release(); }
     }
 }

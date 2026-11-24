@@ -113,6 +113,49 @@ public sealed class SslRenewalControlTests : IDisposable
     }
 
     [Fact]
+    public async Task PausingASharedRenewalIsRefusedButResumeStillWorks()
+    {
+        await Seed(Rec("a.com", "ren-1"), Rec("www.a.com", "ren-1", paused: true));
+        var error = await Assert.ThrowsAsync<AppException>(() => Create().SetRenewalStateAsync("a.com", "a.com", 443, "pause"));
+        Assert.Equal("ssl.renewal_shared", error.MessageKey);
+        Assert.DoesNotContain(await Read(), record => record.HostName == "a.com" && record.RenewalPaused);
+
+        var resumed = await Create().SetRenewalStateAsync("a.com", "www.a.com", 443, "resume");
+        Assert.False(resumed.RenewalPaused);
+    }
+
+    [Fact]
+    public async Task CancelRunsUnderTheIisGate()
+    {
+        await Seed(Rec("a.com", "ren-1"));
+        var gate = new RecordingGate();
+        var service = new WinAcmeSslService(db, null!, null!, area.DosyaDeposu, null!, NullLogger<WinAcmeSslService>.Instance,
+            bindingReader: _ => Task.FromResult<IReadOnlyCollection<IisHttpsBinding>?>([]), concurrencyLock: gate)
+        {
+            RenewalCommand = (_, arguments, _) => { commands.Add(arguments + "|gate=" + gate.Held); return Task.FromResult(new CommandResult { ExitCode = 0 }); },
+            RenewalRecordsAsync = (_, _, _) => Task.FromResult<IReadOnlyList<System.Text.Json.JsonElement>>([])
+        };
+
+        await service.SetRenewalStateAsync("a.com", "a.com", 443, "cancel");
+
+        Assert.Contains(commands, command => command.Contains("--cancel", StringComparison.Ordinal) && command.EndsWith("|gate=True", StringComparison.Ordinal));
+    }
+
+    private sealed class RecordingGate : AdaPanel.Core.Interfaces.IConcurrencyLock
+    {
+        internal bool Held;
+        public Task RunExclusiveAsync(Func<Task> action, CancellationToken token = default) => RunExclusiveAsync(AdaPanel.Core.Interfaces.ConcurrencyKeys.Iis, action, token);
+        public Task<T> RunExclusiveAsync<T>(Func<Task<T>> action, CancellationToken token = default) => RunExclusiveAsync(AdaPanel.Core.Interfaces.ConcurrencyKeys.Iis, action, token);
+        public Task RunExclusiveAsync(string key, Func<Task> action, CancellationToken token = default) => RunExclusiveAsync(key, async () => { await action(); return true; }, token);
+        public async Task<T> RunExclusiveAsync<T>(string key, Func<Task<T>> action, CancellationToken token = default)
+        {
+            Assert.Equal(AdaPanel.Core.Interfaces.ConcurrencyKeys.Iis, key);
+            Held = true;
+            try { return await action(); } finally { Held = false; }
+        }
+    }
+
+    [Fact]
     public async Task ARecordWithoutAManagedRenewalCannotBeControlled()
     {
         await Seed(Rec("a.com", null));
