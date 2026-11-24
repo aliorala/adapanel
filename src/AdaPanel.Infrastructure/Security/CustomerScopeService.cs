@@ -186,6 +186,7 @@ public sealed class CustomerScopeService(
         && entry.ExpiresAtUtc is null
         && entry.SuspendedAtUtc is null
         && string.IsNullOrEmpty(entry.SuspendReason)
+        && string.IsNullOrEmpty(entry.InactiveSource)
         && entry.SubUserSections is null;
 
     public async Task SetExtraLimitsAsync(Guid userId, int maxDatabases, int maxMailboxes, int maxScheduledTasks, CancellationToken cancellationToken = default)
@@ -506,6 +507,9 @@ public sealed class CustomerScopeService(
         /// <summary>Askı sebebi (sabit anahtar: "traffic" | "expired" | "manual").</summary>
         public string? SuspendReason { get; set; }
 
+        /// <summary>Kullanıcıyı pasife alan taraf: "reseller" | "admin" (askıdan ayrı; bkz. ICustomerScopeService).</summary>
+        public string? InactiveSource { get; set; }
+
         public int MaxFtpUsers { get; set; }
 
         public int MaxTrafficGbPerMonth { get; set; }
@@ -786,6 +790,17 @@ public sealed class CustomerScopeService(
 
             entry.SuspendReason = string.IsNullOrWhiteSpace(reason) ? "manual" : reason.Trim();
         }, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<string?> GetInactiveSourceAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        var state = await LoadAsync(cancellationToken);
+        return state.TryGetValue(userId.ToString("N"), out var entry) ? entry.InactiveSource : null;
+    }
+
+    /// <inheritdoc />
+    public Task SetInactiveSourceAsync(Guid userId, string? source, CancellationToken cancellationToken = default)
+        => DuzenleAsync(userId, entry => entry.InactiveSource = string.IsNullOrWhiteSpace(source) ? null : source.Trim(), cancellationToken);
 
     /// <inheritdoc />
     public Task ResumeAsync(Guid userId, CancellationToken cancellationToken = default)

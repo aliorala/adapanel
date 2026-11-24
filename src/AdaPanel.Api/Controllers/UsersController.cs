@@ -12,6 +12,21 @@ namespace AdaPanel.Api.Controllers;
 [Route("api/v1/users")]
 public sealed class UsersController(IUserManagementService userManagementService) : ControllerBase
 {
+    /// <summary>
+    /// KİŞİSEL ANAHTAR YÖNETİCİ ROLÜ VEREMEZ (denetim G5). Terminal yeteneği kapalı bir yönetici
+    /// anahtarı buradan YENİ bir yönetici yaratıp o yöneticinin çerez oturumuyla (AllowTerminal
+    /// kısıtı olmadan) ilerleyebilirdi. WHMCS gibi entegrasyonlar yalnız müşteri/bayi yönetir; bu
+    /// yüzden uç anahtara tümden kapatılmadı, yalnız Administrator rolü atamak çerez oturumuna bağlandı.
+    /// </summary>
+    private void EnsureTokenCannotGrantAdministrator(string? role)
+    {
+        if (AdaPanel.Api.Security.PanelAuthentication.IsTokenAuthenticated(User) &&
+            string.Equals(role?.Trim(), "Administrator", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new AdaPanel.Core.Common.AppException("auth.forbidden", 403, 403, "apitoken.cannot_grant_administrator");
+        }
+    }
+
     [HttpGet]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<UserSummaryDto>>>> GetUsersAsync(CancellationToken cancellationToken)
     {
@@ -25,6 +40,7 @@ public sealed class UsersController(IUserManagementService userManagementService
         [FromBody] CreateUserRequest request,
         CancellationToken cancellationToken)
     {
+        EnsureTokenCannotGrantAdministrator(request.Role);
         var user = await userManagementService.CreateUserAsync(
             request,
             User.GetRequiredUserId(),
@@ -118,6 +134,7 @@ public sealed class UsersController(IUserManagementService userManagementService
         [FromBody] UpdateUserRequest request,
         CancellationToken cancellationToken)
     {
+        EnsureTokenCannotGrantAdministrator(request.Role);
         var user = await userManagementService.UpdateUserAsync(
             userId,
             request,

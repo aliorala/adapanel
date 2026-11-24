@@ -255,20 +255,20 @@ export const useAuthStore = defineStore("auth", {
         return result;
       } finally { request.release(); }
     },
-    async beginTwoFactorSetup(canPublish: () => boolean = () => true) {
+    async beginTwoFactorSetup(password: string, canPublish: () => boolean = () => true) {
       const request = accountRequest(this, canPublish);
       try {
-        const response = await apiClient.post<ApiEnvelope<TwoFactorSetup>>("/auth/2fa/begin", {});
+        const response = await apiClient.post<ApiEnvelope<TwoFactorSetup>>("/auth/2fa/begin", { password });
         request.assertCurrent();
         const result = accountPayload(response); requireAccountResult(validSetup(result));
         this.twoFactorSetup = { ...result };
         return this.twoFactorSetup;
       } finally { request.release(); }
     },
-    async confirmTwoFactorSetup(code: string, canPublish: () => boolean = () => true) {
+    async confirmTwoFactorSetup(code: string, password: string, canPublish: () => boolean = () => true) {
       const request = accountRequest(this, canPublish);
       try {
-        const response = await apiClient.post<ApiEnvelope<{ user: CurrentUser; recoveryCodes: string[] }>>("/auth/2fa/confirm", { code });
+        const response = await apiClient.post<ApiEnvelope<{ user: CurrentUser; recoveryCodes: string[] }>>("/auth/2fa/confirm", { code, password });
         request.assertCurrent();
         const result = accountPayload(response);
         requireAccountResult(validAccountUser(result.user, request.actor, true) && validRecoveryCodes(result.recoveryCodes));
@@ -277,10 +277,10 @@ export const useAuthStore = defineStore("auth", {
         return [...result.recoveryCodes];
       } finally { request.release(); }
     },
-    async regenerateRecoveryCodes(canPublish: () => boolean = () => true) {
+    async regenerateRecoveryCodes(password: string, canPublish: () => boolean = () => true) {
       const request = accountRequest(this, canPublish);
       try {
-        const response = await apiClient.post<ApiEnvelope<{ codes: string[] }>>("/auth/2fa/recovery-codes", {});
+        const response = await apiClient.post<ApiEnvelope<{ codes: string[] }>>("/auth/2fa/recovery-codes", { password });
         request.assertCurrent();
         const result = accountPayload(response); requireAccountResult(validRecoveryCodes(result.codes));
         return [...result.codes];

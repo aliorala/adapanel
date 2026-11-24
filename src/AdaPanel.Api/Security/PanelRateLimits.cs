@@ -236,12 +236,26 @@ public static class PanelRateLimits
             return "session:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(cookie)))[..16];
         }
 
-        return "ip:" + (context.Connection.RemoteIpAddress?.ToString() ?? "unknown");
+        return "ip:" + SourceKey(context.Connection.RemoteIpAddress);
     }
 
     /// <summary>IP tabanlı politikaların ortak bölümleme anahtarı.</summary>
     public static string IpPartitionKey(HttpContext context) =>
-        context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        SourceKey(context.Connection.RemoteIpAddress);
+
+    /// <summary>
+    /// Kaynak anahtarı: IPv4 olduğu gibi; IPv6 ise /64 ÖNEKİ tek kaynak sayılır (bir aboneye
+    /// verilen /64'te 2^64 adres vardır; adres başına bölümleme sınırı sonsuz kovaya çevirirdi).
+    /// IPv4-eşlemeli IPv6 adresi IPv4'e indirilir.
+    /// </summary>
+    public static string SourceKey(System.Net.IPAddress? address)
+    {
+        if (address is null) return "unknown";
+        if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+        if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetworkV6) return address.ToString();
+        var bytes = address.GetAddressBytes();
+        return Convert.ToHexString(bytes, 0, 8).ToLowerInvariant() + "::/64";
+    }
 
     /// <summary>
     /// KÜRESEL sınırlayıcının bölümleme kararı — saf fonksiyon.

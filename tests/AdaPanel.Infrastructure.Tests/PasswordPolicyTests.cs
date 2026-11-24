@@ -153,7 +153,7 @@ public sealed class PasswordPolicyTests
                 new ResellerSiteAssignmentTests.KullanilmayanZamanlayici(),
                 new ResellerSiteAssignmentTests.KullanilmayanCascade(),
                 new ThrowingApiTokenService(),
-                new SahipsizSunucuSahibiServisi());
+                new SahipsizSunucuSahibiServisi(), null!);
 
             return new Duzenek(baglanti, dbContext, servis, musteri.Id);
         }

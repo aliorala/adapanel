@@ -137,33 +137,8 @@ public sealed class ImpersonationDelegationLifecycleTests
         Assert.Equal(1, fixture.Authentication.Issued);
     }
 
-    [Theory]
-    [InlineData("confirm")]
-    [InlineData("disable")]
-    public async Task FactorCookieRenewalPreservesItsOriginalDelegation(string operation)
-    {
-        await using var fixture = await Fixture.Create(operation);
-        var result = Assert.IsType<OkObjectResult>(await fixture.RenewFactor(operation));
-        Assert.Equal(2, fixture.Authentication.Issued);
-        Assert.Equal(fixture.CustomerId.ToString(), fixture.Authentication.Principal!.FindFirstValue(ClaimTypes.NameIdentifier));
-        Assert.Equal(fixture.AdminId.ToString(), fixture.Authentication.Principal!.FindFirstValue("impersonator_id"));
-        Assert.DoesNotContain("impersonator", JsonSerializer.Serialize(result.Value), StringComparison.OrdinalIgnoreCase);
-
-        await fixture.Change(fixture.AdminId, "logout");
-        Assert.False(await fixture.Validate(true));
-    }
-
-    [Theory]
-    [InlineData("confirm")]
-    [InlineData("disable")]
-    public async Task FactorCookieRenewalCannotEscapeAnAdministratorRevokedAfterFactorCommit(string operation)
-    {
-        await using var fixture = await Fixture.Create(operation);
-        fixture.Authentication.BeforeSigningIn = () => fixture.Change(fixture.AdminId, "logout");
-        var error = await Assert.ThrowsAsync<AdaPanel.Core.Common.AppException>(() => fixture.RenewFactor(operation));
-        Assert.Equal(401, error.HttpStatusCode);
-        Assert.Equal(1, fixture.Authentication.Issued);
-    }
+    // Faktör (2FA) çerez yenileme testleri KALDIRILDI: kimliğe bürünme oturumunda 2FA kurma/kapatma/kod yenileme
+    // artık hepsi 403 (G12; bkz. AuthTwoFactorLifecycleTests.TwoFactorChangesAreRejectedWhileImpersonating).
 
     private sealed class Fixture : IAsyncDisposable
     {
@@ -302,7 +277,7 @@ public sealed class ImpersonationDelegationLifecycleTests
             await using var services = Services(db);
             var controller = Controller(db, services, Authentication.Principal!);
             return operation == "confirm"
-                ? (await controller.ConfirmTwoFactorSetupAsync(new VerifyTwoFactorRequest { Code = "123456" }, default)).Result!
+                ? (await controller.ConfirmTwoFactorSetupAsync(new VerifyTwoFactorRequest { Code = "123456", Password = Password }, default)).Result!
                 : (await controller.DisableTwoFactorAsync(new DisableTwoFactorRequest { Password = Password }, default)).Result!;
         }
 

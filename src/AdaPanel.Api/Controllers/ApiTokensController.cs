@@ -46,6 +46,14 @@ public sealed class ApiTokensController(
         [FromBody] CreateApiTokenRequest request,
         CancellationToken cancellationToken)
     {
+        // G25: kimliğe bürünme oturumunda anahtar ÜRETİLEMEZ — yönetici, müşterinin adına sızdırılabilir
+        // kalıcı bir kimlik bilgisi bırakabilirdi (oturum bitse de anahtar yaşar).
+        if (!string.IsNullOrWhiteSpace(User.FindFirst("impersonator_id")?.Value) ||
+            !string.IsNullOrWhiteSpace(User.FindFirst("impersonator_name")?.Value))
+        {
+            throw new AdaPanel.Core.Common.AppException("auth.forbidden", 403, 403, "apitoken.not_while_impersonating");
+        }
+
         // Sunucuda komut çalıştırma yetkisi YALNIZ yöneticiye verilebilir. Bu, paneli değil
         // sunucuyu vermek demektir; müşteri/bayi anahtarında istense bile sessizce kapatılır.
         if (request.AllowTerminal && !User.IsInRole("Administrator"))

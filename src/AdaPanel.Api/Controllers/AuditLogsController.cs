@@ -1,4 +1,5 @@
 using AdaPanel.Api.Extensions;
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Audit;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Enums;
@@ -25,6 +26,11 @@ namespace AdaPanel.Api.Controllers;
 /// çözülür. Böylece yeni bir okuma ucu eklendiğinde kapsamı uygulamayı "unutmak" mümkün olmaz.
 /// </para>
 /// </remarks>
+// G24: denetim kaydı hesabın TÜM bölümlerinin geçmişidir; bölüm kısıtlı bir ek kullanıcı (sub-user) o
+// bölümlerin dışındaki eylemleri de görürdü. "audit" bir bölüm adı DEĞİL (bölüm listesi: sites, files,
+// mail, database, backup, tasks), bu yüzden bölümleri kısıtlanmış ek kullanıcı reddedilir; kısıtsız
+// (tüm bölümler) ek kullanıcı ve ana müşteri/bayi/yönetici etkilenmez.
+[RequireSubUserSection("audit")]
 [ApiController]
 [Authorize]
 [Route("api/v1/audit-logs")]
