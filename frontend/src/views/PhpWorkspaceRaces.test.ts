@@ -78,3 +78,20 @@ it("does not apply a read result after the screen unmounts", async () => {
   const state = await mount(); app!.unmount(); app = undefined;
   pending.resolve(settings("a.test")); await flush(); expect(state.settingsLoaded).toBe(false);
 });
+
+it("shows a yellow warning, not 'saved', when the site pool could not be recycled", async () => {
+  const state = await mount();
+  vi.mocked(updateSitePhpSettings).mockResolvedValueOnce({ ...settings("a.test"), poolRecycleFailed: true });
+  await state.saveSettings(); await flush();
+  expect(state.notice).toContain("php.pool_recycle_failed");
+  expect(state.notice).not.toContain("panel.php.settingsSaved");
+  expect(state.noticeError).toBe(false);
+  expect((state as unknown as { noticeWarning: boolean }).noticeWarning).toBe(true);
+});
+it("still announces a normal save when the pool recycled", async () => {
+  const state = await mount();
+  vi.mocked(updateSitePhpSettings).mockResolvedValueOnce(settings("a.test"));
+  await state.saveSettings(); await flush();
+  expect(state.notice).toContain("panel.php.settingsSaved");
+  expect(state.notice).not.toContain("php.pool_recycle_failed");
+});
