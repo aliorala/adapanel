@@ -84,6 +84,7 @@ public sealed class AuditCoverageTests
         // Gövdesi olan bir sorgu GET ile ifade edilemediği için POST seçilmiştir. Salt okunur bir
         // aramayı her çağrıda kayda yazmak, kaydı gürültüye boğup asıl değişiklikleri görünmez
         // kılardı — denetim kaydının değeri seyrekliğindedir.
+        ["FtpController.cs#SetQuotaAsync"] = "Hesap basi FTP kotasi: gercek bir mekanizma yok, uc yetki/sahiplik denetiminden sonra 409 ftp.quota_unsupported doner ve HICBIR ŞEY yazmaz/degistirmez.",
         ["FilesController.cs#SearchAsync"] = "Dosya arama: yalnız okur, hiçbir şey değiştirmez.",
         ["BackupController.cs#DownloadItemsAsync"] = "Seçili arşiv içeriğini geçici ZIP akışıyla indirir; kaynak arşivi, yedek envanterini ve site dosyalarını değiştirmez. Akış tamamlanınca geçici dosya silinir. Davranış testi: ScopedBackupExtractionAccessTests.",
         ["FilesController.cs#CalculateSizeAsync"] = "Klasör boyutu: yalnız meta veriden boyut toplar, dosya içeriğine bile dokunmaz; arayüzde klasör başına tıklanan bir düğme olduğu için her çağrıyı yazmak kaydı gürültüye boğardı.",
