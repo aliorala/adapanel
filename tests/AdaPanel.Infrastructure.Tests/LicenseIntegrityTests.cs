@@ -104,11 +104,23 @@ public sealed class LicenseIntegrityTests : IDisposable
     [Fact]
     public async Task ConcurrentFirstAccessCreatesExactlyOneKey()
     {
-        var anahtarlar = await Task.WhenAll(Enumerable.Range(0, 24).Select(_ => Task.Run(() => NewStore().GetSealKey())));
+        // Birden cok tur: yaris nadir tetiklenir; her turda taze veri koku + eszamanli baslangic.
+        for (var tur = 0; tur < 25; tur++)
+        {
+            var turKoku = Path.Combine(root, "tur" + tur);
+            var barrier = new Barrier(16);
+            var anahtarlar = await Task.WhenAll(Enumerable.Range(0, 16).Select(_ => Task.Factory.StartNew(() =>
+            {
+                var fileStore = new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = turKoku }));
+                var store = new LicenseStateStore(fileStore, new Reversible());
+                barrier.SignalAndWait();
+                return store.GetSealKey();
+            }, TaskCreationOptions.LongRunning)));
 
-        Assert.All(anahtarlar, k => Assert.NotNull(k));
-        Assert.Single(anahtarlar.Select(k => Convert.ToBase64String(k!)).Distinct());
-        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(KeyPath)!, "*.tmp"));
+            Assert.All(anahtarlar, k => Assert.NotNull(k));
+            Assert.Single(anahtarlar.Select(k => Convert.ToBase64String(k!)).Distinct());
+            Assert.Empty(Directory.GetFiles(Path.Combine(turKoku, "config", "license"), "*.tmp"));
+        }
     }
 
     [Fact]
