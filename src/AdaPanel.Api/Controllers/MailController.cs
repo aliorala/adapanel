@@ -1,4 +1,4 @@
-﻿using AdaPanel.Api.Extensions;
+using AdaPanel.Api.Extensions;
 using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Mail;
@@ -411,6 +411,96 @@ public sealed class MailController(
             "Mail alias was removed.",
             await AdresSahibiAsync(address, null, cancellationToken));
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.alias_deleted"));
+    }
+
+    /// <summary>Posta kutusunu askıya alır/yeniden açar (posta SİLİNMEZ). MailEnable'da kanıtlı yöntem yoktur: 409 mail.not_supported.</summary>
+    [HttpPost("accounts/active")]
+    public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> SetAccountActiveAsync([FromBody] SetMailAccountActiveRequest request, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(request.Address), cancellationToken);
+        var workspace = await NotSupportedAs409(() => mailService.SetAccountActiveAsync(request, cancellationToken));
+        await auditService.AuditAsync(
+            HttpContext,
+            request.Active ? "mail.account.reactivated" : "mail.account.suspended",
+            request.Address,
+            request.Active ? "Mailbox login/receive/send was re-enabled." : "Mailbox login/receive/send was disabled; messages are kept.",
+            await AdresSahibiAsync(request.Address, null, cancellationToken));
+        return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, request.Active ? "mail.account_reactivated" : "mail.account_suspended"));
+    }
+
+    [HttpPut("aliases")]
+    public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> UpdateAliasAsync([FromBody] UpdateMailAliasRequest request, CancellationToken cancellationToken)
+    {
+        var domain = ExtractDomain(request.Address);
+        await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, domain, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(request.Target))
+        {
+            await EnsureAddressDomainAsync(request.Target, domain, cancellationToken);
+        }
+
+        var workspace = await NotSupportedAs409(() => mailService.UpdateAliasAsync(request, cancellationToken));
+
+        // HEDEF değişimi sessiz posta yönlendirmedir (alias oluşturma ile aynı risk): hedef de yazılır.
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.alias.updated",
+            request.Address,
+            $"Alias updated: target={(string.IsNullOrWhiteSpace(request.Target) ? "(unchanged)" : request.Target)}; active={(request.Active?.ToString() ?? "(unchanged)")}.",
+            await AdresSahibiAsync(request.Address, null, cancellationToken));
+        return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.alias_updated"));
+    }
+
+    [HttpGet("accounts/forward")]
+    public async Task<ActionResult<ApiResponse<MailForwardDto>>> GetForwardAsync([FromQuery] string address, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(address), cancellationToken);
+        return Ok(ApiResponse<MailForwardDto>.Ok(await NotSupportedAs409(() => mailService.GetForwardAsync(address, cancellationToken))));
+    }
+
+    [HttpPut("accounts/forward")]
+    public async Task<ActionResult<ApiResponse<MailForwardDto>>> SetForwardAsync([FromBody] SetMailForwardRequest request, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(request.Address), cancellationToken);
+        var dto = await NotSupportedAs409(() => mailService.SetForwardAsync(request, cancellationToken));
+
+        // Yönlendirme = gelen postanın kopyasının başka bir adrese gitmesi; hedef adres kayda girer.
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.forward.updated",
+            request.Address,
+            request.Enabled
+                ? $"Mailbox forwards to '{request.Target}' (keepCopy={request.KeepCopy})."
+                : "Mailbox forwarding was removed.",
+            await AdresSahibiAsync(request.Address, null, cancellationToken));
+        return Ok(ApiResponse<MailForwardDto>.Ok(dto, request.Enabled ? "mail.forward_saved" : "mail.forward_removed"));
+    }
+
+    /// <summary>DKIM anahtar rotasyonu: yeni selector → DNS → geçiş; hata olursa eski anahtar aktif kalır.</summary>
+    [HttpPost("dkim/rotate")]
+    public async Task<ActionResult<ApiResponse<MailDkimRotationDto>>> RotateDkimAsync([FromBody] RotateMailDkimRequest request, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, request.Domain, cancellationToken);
+        var dto = await NotSupportedAs409(() => mailService.RotateDkimAsync(request, cancellationToken));
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.dkim.rotated",
+            request.Domain,
+            $"DKIM key rotated: {dto.OldSelector} -> {dto.NewSelector}; old key removed after {dto.RetireAfterUtc:u}.",
+            await AlanAdiSahibiAsync(request.Domain, cancellationToken));
+        return Ok(ApiResponse<MailDkimRotationDto>.Ok(dto, "mail.dkim_rotated"));
+    }
+
+    /// <summary>Posta sunucusu özelliği desteklemiyorsa (varsayılan arayüz gövdesi) açık 409 döner; 500 değil.</summary>
+    private static async Task<T> NotSupportedAs409<T>(Func<Task<T>> action)
+    {
+        try
+        {
+            return await action();
+        }
+        catch (NotSupportedException)
+        {
+            throw new AdaPanel.Core.Common.AppException("mail.not_supported", 409, 409);
+        }
     }
 
     [HttpPost("lists")]
