@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using System.Reflection;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Licensing;
@@ -15,7 +16,8 @@ public sealed class LicenseService(
     LicenseStateStore store,
     IMachineFingerprintProvider fingerprintProvider,
     ILicenseVerificationClient verificationClient,
-    TimeProvider? timeProvider = null) : ILicenseService
+    TimeProvider? timeProvider = null,
+    Microsoft.Extensions.Logging.ILogger<LicenseService>? logger = null) : ILicenseService
 {
     /// <summary>
     /// Sunucuya ulaşılamadığında yeniden deneme aralığı. Doğrulama aralığından (saatler) çok daha
@@ -294,7 +296,10 @@ public sealed class LicenseService(
             },
             cancellationToken);
 
-        var updated = await store.UpdateAsync(existing =>
+        LicenseRecord updated;
+        try
+        {
+        updated = await store.UpdateAsync(existing =>
         {
             existing.LastAttemptAtUtc = attemptedAt;
 
@@ -330,6 +335,15 @@ public sealed class LicenseService(
             existing.LastError = outcome.Response.Message ?? string.Empty;
             return existing;
         }, cancellationToken);
+        }
+        catch (IOException exception)
+        {
+            // Mühür anahtarı okunamadı (geçici G/Ç): kayıt MÜHÜRLENEMEDİ ve dosyaya yazılmadı. VerifyAsync
+            // istisna atmaz sözleşmesi gereği önceki karar OLDUĞU GİBİ korunur, uyarı günlüğe yazılır.
+            logger?.LogWarning(exception, "Lisans doğrulama sonucu kaydedilemedi (mühür anahtarı okunamadı); önceki karar korunuyor.");
+            record.IsConfigured = IsConfigured;
+            return (record, false);
+        }
 
         updated.IsConfigured = IsConfigured;
         return (updated, string.Equals(outcome.Response?.Status?.Trim(), LicenseVerdicts.Invalid, StringComparison.OrdinalIgnoreCase));

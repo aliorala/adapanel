@@ -258,7 +258,10 @@ public sealed class ClusterService(
 
             return probe;
         }
-        catch (HttpRequestException exception) when (exception.Message == ClusterMessages.AddressForbidden)
+        // Zincir taranır: .NET geri çağrıdan atılan istisnayı kendi HttpRequestException'ına sarar; metin
+        // eşitliği sarılmış hâli kaçırır ve rebinding 403 yerine 502 dönerdi.
+        catch (Exception exception) when (Support.OutboundBlockedException.Cikar(exception) is not null
+                                          || FindAddressForbidden(exception))
         {
             throw new AppException(ClusterMessages.AddressForbidden, 403, 403);
         }
@@ -267,6 +270,19 @@ public sealed class ClusterService(
         {
             throw new AppException(ClusterMessages.CertificateUnreadable, 502, 502, exception.GetType().Name);
         }
+    }
+
+    private static bool FindAddressForbidden(Exception? exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is HttpRequestException && current.Message == ClusterMessages.AddressForbidden)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public async Task RemoveAsync(Guid id, CancellationToken cancellationToken = default)

@@ -126,6 +126,24 @@ public sealed class BackupFtpHardeningTests
         Assert.False(BackupFtpScheme.IsSecure(new Uri("ftp://h/x")));
     }
 
+    [Fact]
+    public async Task Kurtarma_komutu_ftps_adresini_ACIK_hatayla_reddeder()
+    {
+        var kok = Path.Combine(Path.GetTempPath(), "adapanel-bakim-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(kok, "config"));
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(kok, "config", "automation.json"),
+                "{\"backupTargetType\":\"ftp\",\"backupRemoteUrl\":\"ftps://nas.example.test/yedek\",\"backupRetentionDays\":7}");
+            var hata = await Assert.ThrowsAsync<InvalidOperationException>(() => BackupFtpFolderMaintenance.RunAsync(kok, CancellationToken.None));
+            Assert.Contains("FTPS", hata.Message);
+        }
+        finally
+        {
+            Directory.Delete(kok, true);
+        }
+    }
+
     // ------------------------------------------------------------------ FTPS yapılandırması
 
     [Fact]
