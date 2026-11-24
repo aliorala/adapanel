@@ -275,7 +275,7 @@ public sealed class NotificationLifecycleTests
     {
         using var f = new Fixture(); await f.Seed(); f.Http.Status = (HttpStatusCode)status;
         var error = await Assert.ThrowsAsync<AppException>(() => f.Service().SendWebhookAsync("event", "body"));
-        Assert.Equal("notifications.webhook_failed", error.MessageKey); Assert.Equal(1, f.Http.Requests);
+        Assert.Equal("notifications.webhook_failed", error.MessageKey); Assert.Equal(status >= 500 ? 3 : 1, f.Http.Requests);
     }
 
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -299,7 +299,7 @@ public sealed class NotificationLifecycleTests
             Func<IPAddress[], int, CancellationToken, ValueTask<Stream>>? connector = null) => new(
             Store, Http, new Protector(), Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = root, AllowInternalOutboundTargets = allowInternal }),
             resolver ?? ((_, _) => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") })))
-            { SmtpClientFactory = Smtp.Create, BeforeSettingsWrite = beforeWrite, BeforeTestDispatch = beforeDispatch, SmtpConnector = connector ?? Connect };
+            { WebhookRetryDelays = [TimeSpan.Zero, TimeSpan.Zero], SmtpClientFactory = Smtp.Create, BeforeSettingsWrite = beforeWrite, BeforeTestDispatch = beforeDispatch, SmtpConnector = connector ?? Connect };
         internal ValueTask<Stream> Connect(IPAddress[] addresses, int port, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested(); ConnectorCalls++; CheckedAddresses = addresses; ConnectorPort = port; ConnectorToken = ct;

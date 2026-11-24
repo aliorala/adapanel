@@ -48,7 +48,7 @@ public sealed class AutomationService(
     ILogger<AutomationService> logger,
     ISiteDatabaseLinkService? siteDatabaseLinks = null,
     ICustomerScopeService? customerScopes = null,
-    AlertDeliveryFailureStore? alertFailures = null) : IAutomationService
+    IAlertDeliveryFailureStore? alertFailures = null) : IAutomationService
 {
     private const string StatePath = "config/automation.json";
     private const string AlertCooldownPath = "config/automation-alerts.json";
@@ -1356,7 +1356,7 @@ public sealed class AutomationService(
     /// </summary>
     private async Task<Dictionary<string, AlertDeliveryFailure>> SafeReadFailuresAsync(CancellationToken cancellationToken)
     {
-        try { return await alertFailures!.ReadAsync(cancellationToken); }
+        try { return await alertFailures!.ReadAsync(cancellationToken) ?? new Dictionary<string, AlertDeliveryFailure>(); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "Uyari teslim hatasi kayitlari okunamadi.");

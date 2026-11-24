@@ -13,12 +13,19 @@ public sealed class AlertDeliveryFailure
     public string Detail { get; set; } = string.Empty;
 }
 
+public interface IAlertDeliveryFailureStore
+{
+    Task<Dictionary<string, AlertDeliveryFailure>> ReadAsync(CancellationToken cancellationToken = default);
+    Task RecordFailureAsync(string key, string detail, DateTime nowUtc, CancellationToken cancellationToken = default);
+    Task ClearAsync(IReadOnlyCollection<string> keys, CancellationToken cancellationToken = default);
+}
+
 /// <summary>
 /// Hem e-posta hem webhook başarısız olduğunda uyarının her dakika sessizce yeniden denenmesi yerine
 /// üstel geri çekilme (5 dk, 10 dk, 20 dk ... en çok 6 saat) uygular ve başarısızlığı kalıcı kaydeder.
 /// Kayıt, Dikkat rozetinde "uyarı teslim edilemiyor" maddesi olarak görünür.
 /// </summary>
-public sealed class AlertDeliveryFailureStore(JsonFileStore fileStore)
+public sealed class AlertDeliveryFailureStore(JsonFileStore fileStore) : IAlertDeliveryFailureStore
 {
     internal const string Path = "state/alert-delivery-failures.json";
     internal static readonly TimeSpan BaseDelay = TimeSpan.FromMinutes(5);

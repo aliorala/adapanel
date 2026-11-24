@@ -24,7 +24,7 @@ public sealed class AttentionService(
     IDomainRefreshService domainRefreshService,
     IHealthService healthService,
     ILogger<AttentionService>? logger = null,
-    Automation.AlertDeliveryFailureStore? alertFailures = null) : IAttentionService
+    Automation.IAlertDeliveryFailureStore? alertFailures = null) : IAttentionService
 {
     public async Task<AttentionSummaryDto> GetSummaryAsync(CancellationToken cancellationToken = default)
     {
@@ -197,7 +197,7 @@ public sealed class AttentionService(
         {
             try
             {
-                var undelivered = (await alertFailures.ReadAsync(cancellationToken)).Values
+                var undelivered = ((await alertFailures.ReadAsync(cancellationToken)) ?? []).Values
                     .OrderByDescending(item => item.LastAttemptUtc).ToList();
                 if (undelivered.Count > 0)
                 {
