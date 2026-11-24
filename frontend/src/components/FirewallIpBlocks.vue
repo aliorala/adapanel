@@ -32,13 +32,13 @@
     </div>
 
     <div v-if="entries.length" class="data-table">
-      <div class="data-row table-head">
+      <div class="data-row ip-row table-head">
         <span>{{ t("panel.firewall.ipBlocks.target") }}</span>
         <span>{{ t("panel.firewall.ipBlocks.state") }}</span>
         <span>{{ t("panel.firewall.ipBlocks.expires") }}</span>
         <span>{{ t("panel.ssl.bindingActions") }}</span>
       </div>
-      <div v-for="entry in entries" :key="entry.id" class="data-row">
+      <div v-for="entry in entries" :key="entry.id" class="data-row ip-row">
         <span class="cell-main"><strong>{{ entry.target }}</strong><small>{{ entry.reason || entry.createdBy }}</small></span>
         <span>
           <span v-if="entry.ruleState === 'applied'" class="status-pill ok">{{ t("panel.firewall.ipBlocks.applied") }}</span>
@@ -131,3 +131,13 @@ async function remove(entry: IpBlockEntry) {
   }
 }
 </script>
+
+<style scoped>
+.ip-row { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(150px, auto); min-width: 0; }
+.ip-blocks .data-table { overflow-x: visible; }
+@media (max-width: 900px) {
+  .ip-row.table-head { display: none; }
+  .ip-row { grid-template-columns: minmax(0, 1fr); }
+  .ip-row .row-actions button { width: 100%; }
+}
+</style>

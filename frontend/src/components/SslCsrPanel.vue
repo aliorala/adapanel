@@ -32,13 +32,13 @@
     </div>
 
     <div class="data-table" v-if="items.length">
-      <div class="data-row table-head">
+      <div class="data-row csr-row table-head">
         <span>{{ t("panel.ssl.hostName") }}</span>
         <span>{{ t("panel.ssl.csr.status") }}</span>
         <span>{{ t("panel.ssl.csr.createdAt") }}</span>
         <span>{{ t("panel.ssl.bindingActions") }}</span>
       </div>
-      <div v-for="item in items" :key="item.id" class="data-row">
+      <div v-for="item in items" :key="item.id" class="data-row csr-row">
         <span class="cell-main"><strong>{{ item.hostName }}</strong><small>{{ item.subject }}</small></span>
         <span><span :class="['status-pill', item.status === 'imported' ? 'ok' : 'warn']">{{ t(`panel.ssl.csr.status_${item.status}`) }}</span></span>
         <span class="cell-muted">{{ formatDateTime(item.createdAtUtc, "-") }}</span>
@@ -188,4 +188,11 @@ async function remove(item: SslCsr) {
 .csr-created { display: grid; gap: var(--sp-8); }
 .csr-created textarea { width: 100%; font-family: var(--font-mono, monospace); font-size: 0.8rem; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.csr-row { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.6fr); min-width: 0; }
+.csr-panel .data-table { overflow-x: visible; }
+@media (max-width: 900px) {
+  .csr-row.table-head { display: none; }
+  .csr-row { grid-template-columns: minmax(0, 1fr); }
+  .csr-row .row-actions button { width: 100%; white-space: normal; }
+}
 </style>
