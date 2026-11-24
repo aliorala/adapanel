@@ -185,6 +185,8 @@ public sealed class WordPressController(
             }
         }
 
+        // M3: klon, kaynak sitenin tam bir kopyasını diske yazar; sahibin tavanına sığmıyorsa BAŞLAMAZ.
+        await DiskQuotaGate.EnsureForCopyAsync(HttpContext, siteName, cancellationToken);
         var result = await wordPressToolkitService.CloneAsync(siteName, request, cancellationToken);
 
         // Klonu kaynağın kapsamına ata → müşteri/bayi yeni siteyi görür.

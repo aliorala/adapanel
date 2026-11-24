@@ -45,6 +45,14 @@ public interface IFtpService
 
     Task DeleteFtpUserAsync(string userName, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Panelin yönettiği FTP hesabını AÇAR/KAPATIR (M2: abonelik askısı). Windows hesabının
+    /// Enabled bayrağı değiştirilir ve GERİ OKUNUR; doğrulanamazsa istisna fırlatır (sessiz başarı yok).
+    /// Varsayılan gövde "desteklenmiyor" der — çağıran bunu kapatılamadı olarak gösterir.
+    /// </summary>
+    Task SetFtpUserEnabledAsync(string userName, bool enabled, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("FTP account enable/disable is not supported by this implementation.");
+
     Task DeleteFtpUserAsync(string userName,
         Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) => throw new NotSupportedException();
 

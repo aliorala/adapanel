@@ -279,6 +279,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Cluster.IClusterService, Cluster.ClusterService>();
 
         // Abonelik iş modeli: kotayı DOLDURANDA uygulayan taraf (askıya alma) arka planda koşar.
+        services.AddScoped<Subscriptions.SubscriptionResourceSuspender>();
+        services.AddScoped<IPanelWriteQuotaGuard, Files.PanelWriteQuotaGuard>();
         services.AddScoped<ISubscriptionEnforcementService, Subscriptions.SubscriptionEnforcementService>();
         // Bayi tavanı (bayinin KENDİ dağıtım sınırı). CustomerScopeService bunu okur; kayıt burada
         // olmak zorunda çünkü kapsam servisi de burada kaydediliyor (grafik aynı kapsayıcıda çözülür).

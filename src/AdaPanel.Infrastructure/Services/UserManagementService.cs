@@ -32,7 +32,8 @@ public sealed class UserManagementService(
     IApiTokenService apiTokenService,
     IServerOwnerService serverOwnerService,
     IResellerQuotaService resellerQuotas,
-    ILicenseService? licenseService = null) : IUserManagementService
+    ILicenseService? licenseService = null,
+    SubscriptionResourceSuspender? resourceSuspender = null) : IUserManagementService
 {
     /// <summary>
     /// Kullanıcı satırı + denetim kaydı TEK İŞLEMDE (G4 bakiyesi).
@@ -471,7 +472,7 @@ public sealed class UserManagementService(
         // Aktiflik değiştiyse (askıya al / sürdür) müşterinin atanan sitelerini durdur/başlat.
         // ALT-KULLANICI: PAYLAŞILAN siteleri DURDURMA (yalnız o login IsActive=false ile engellenir) → boş kapsam geç.
         var suspensionScope = existingParent is not null ? new CustomerScope([], 0, 0, 0, 0, 0) : scope;
-        await ApplySuspensionStateAsync(user, suspensionScope, wasActive, actorUserId, ipAddress, cancellationToken);
+        await ApplySuspensionStateAsync(user, suspensionScope, wasActive, actorUserId, ipAddress, existingParent is not null, cancellationToken);
 
         // Pasifin KAYNAĞI askıdan ayrı alanda tutulur (bkz. yukarıdaki atomik blok): bayi PUT ile pasife
         // alırsa "reseller", yönetici alırsa "admin". /subscriptions/suspend bu alanı ASLA yazmaz.
@@ -568,14 +569,43 @@ public sealed class UserManagementService(
         bool wasActive,
         Guid actorUserId,
         string? ipAddress,
+        bool subUser,
         CancellationToken cancellationToken)
     {
-        if (user.Role != UserRole.Customer || wasActive == user.IsActive || scope.Sites.Count == 0)
+        // Alt-kullanıcı paylaşılan kaynakları ETKİLEMEZ. Ortak askı mantığı (M2) varsa site sayısı 0 olsa
+        // da çalışır (FTP/cron/posta durumu da kaydedilir); yoksa eski davranış: sitesiz müşteri atlanır.
+        if (user.Role != UserRole.Customer || wasActive == user.IsActive || subUser ||
+            (resourceSuspender is null && scope.Sites.Count == 0))
         {
             return;
         }
 
         var suspended = !user.IsActive;
+
+        if (resourceSuspender is not null)
+        {
+            // TEK MANTIK (SubscriptionResourceSuspender): otomatik zorlama ile AYNI karar — önceki hal
+            // kaydedilir, açılışta yalnız askıdan önce açık olanlar açılır, başarısızlar yeniden denenir.
+            var rapor = suspended
+                ? await resourceSuspender.CloseAsync(user.Id, scope.Sites, cancellationToken)
+                : await resourceSuspender.RestoreAsync(user.Id, cancellationToken, scope.Sites);
+            var cumle = suspended
+                ? SiteSuspensionReport.Stopped(scope.Sites.Count, rapor.SitesFailed)
+                : SiteSuspensionReport.Started(rapor.SitesRequested, rapor.SitesFailed);
+            if (rapor.Extras.Length > 0)
+            {
+                cumle += " " + rapor.Extras;
+            }
+
+            await auditService.WriteAsync(
+                suspended ? "users.suspended" : "users.resumed",
+                "users",
+                $"Customer '{user.UserName}' {(suspended ? "suspended" : "resumed")}; {cumle}",
+                actorUserId,
+                ipAddress,
+                cancellationToken);
+            return;
+        }
 
         // YAPILAN sayilir, ISTENEN degil.
         //

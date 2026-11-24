@@ -32,8 +32,15 @@ public sealed class SubscriptionEnforcementService(
     IAuditService auditService,
     AdaPanelDbContext dbContext,
     ILogger<SubscriptionEnforcementService> logger,
-    IHttpContextAccessor? httpContextAccessor = null) : ISubscriptionEnforcementService
+    IHttpContextAccessor? httpContextAccessor = null,
+    SubscriptionResourceSuspender? resourceSuspender = null) : ISubscriptionEnforcementService
 {
+    // Doğrudan kurulan (test) örneklerde de aynı mantık çalışsın: FTP/cron servisi yoksa o türler
+    // "desteklenmiyor" olarak KAYDEDİLİR (sessiz geçilmez).
+    private readonly SubscriptionResourceSuspender suspender = resourceSuspender
+        ?? new SubscriptionResourceSuspender(
+            customerScopes, iisSiteService, Microsoft.Extensions.Logging.Abstractions.NullLogger<SubscriptionResourceSuspender>.Instance);
+
     /// <inheritdoc />
     public async Task<SubscriptionUsageDto> GetUsageAsync(Guid userId, CancellationToken cancellationToken = default)
     {
@@ -124,6 +131,23 @@ public sealed class SubscriptionEnforcementService(
     {
         var degisenler = new List<SubscriptionEnforcementChangeDto>();
 
+        // Disk aşımı bayrağı ZATEN olan abonelikler: her turda aynı JSON'u yeniden yazmamak için.
+        var diskBayrakli = new HashSet<Guid>();
+        try
+        {
+            foreach (var durum in await customerScopes.GetAttentionStatesAsync(cancellationToken))
+            {
+                if (durum.DiskOverage is not null)
+                {
+                    diskBayrakli.Add(durum.UserId);
+                }
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Disk aşımı bayrakları okunamadı.");
+        }
+
         foreach (var userId in await customerScopes.GetSubscriptionUserIdsAsync(cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -134,6 +158,9 @@ public sealed class SubscriptionEnforcementService(
                 {
                     degisenler.Add(degisim);
                 }
+
+                await BekleyenAdimlariYenidenDeneAsync(userId, cancellationToken);
+                await DiskAsimiBayragiAsync(userId, diskBayrakli.Contains(userId), cancellationToken);
             }
             catch (Exception exception)
             {
@@ -143,6 +170,77 @@ public sealed class SubscriptionEnforcementService(
         }
 
         return degisenler;
+    }
+
+    /// <summary>
+    /// M2: kapatılamayan (askıda hâlâ açık) ya da açılamayan (askı kalktı, hâlâ kapalı) kaynakları her
+    /// turda yeniden dener. Eskiden durdurulamayan site bir daha DENENMİYORDU: abonelik "askıda" görünür,
+    /// site yayında kalırdı. Sonuç denetim kaydına yazılır; hâlâ başarısızsa dikkat akışında görünür.
+    /// </summary>
+    private async Task BekleyenAdimlariYenidenDeneAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        var scope = await customerScopes.GetScopeAsync(userId, cancellationToken);
+        var kullanici = await dbContext.Users.AsNoTracking().FirstOrDefaultAsync(item => item.Id == userId, cancellationToken);
+
+        // Yönetici müşteriyi ELLE pasife aldıysa (IsActive=false) kaynaklar kapalı KALMALIDIR.
+        var kapaliOlmali = scope.IsSuspended || kullanici is { IsActive: false };
+        var rapor = await suspender.RetryAsync(userId, kapaliOlmali, scope.Sites, cancellationToken);
+        if (rapor is null)
+        {
+            return;
+        }
+
+        var (aktor, ip, tetikleyici) = Aktor();
+        var cumle = kapaliOlmali
+            ? SiteSuspensionReport.Stopped(rapor.SitesRequested, rapor.SitesFailed)
+            : SiteSuspensionReport.Started(rapor.SitesRequested, rapor.SitesFailed);
+        if (rapor.Extras.Length > 0)
+        {
+            cumle += " " + rapor.Extras;
+        }
+
+        await auditService.WriteForSubscriptionAsync(
+            "subscription.retry",
+            $"subscription:{userId:N}",
+            $"Pending {(kapaliOlmali ? "suspension" : "resume")} steps retried (trigger: {tetikleyici}); {cumle}",
+            aktor,
+            userId,
+            ip,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// M3: plan disk tavanı aşıldıysa BAYRAK konur (dikkat akışı gösterir), altına inince kalkar. Otomatik
+    /// askı YOKTUR: planda böyle bir ayar yok ve yeni bir askı politikası uydurulmadı. Kesilmiş ölçüm bir
+    /// ALT SINIRDIR; alt sınır tavanı aşıyorsa gerçek kullanım da aşar, bu yüzden bayrak güvenle konur.
+    /// </summary>
+    private async Task DiskAsimiBayragiAsync(Guid userId, bool zatenBayrakli, CancellationToken cancellationToken)
+    {
+        var scope = await customerScopes.GetScopeAsync(userId, cancellationToken);
+        if (scope.MaxDiskMb <= 0)
+        {
+            if (zatenBayrakli)
+            {
+                await customerScopes.SetDiskOverageAsync(userId, null, cancellationToken);
+            }
+
+            return;
+        }
+
+        var disk = await customerScopes.GetDiskUsageMbAsync(userId, cancellationToken);
+        var asildi = disk.UsageMb > scope.MaxDiskMb;
+        if (asildi && !zatenBayrakli)
+        {
+            await customerScopes.SetDiskOverageAsync(
+                userId,
+                new DiskOverageState { DetectedAtUtc = DateTime.UtcNow, UsageMb = disk.UsageMb, MaxDiskMb = scope.MaxDiskMb },
+                cancellationToken);
+        }
+        else if (!asildi && zatenBayrakli && disk.Measured)
+        {
+            // Yalnız TAM ölçümle kaldırılır: eksik ölçüm "sığıyor" demek değildir.
+            await customerScopes.SetDiskOverageAsync(userId, null, cancellationToken);
+        }
     }
 
     private async Task<SubscriptionEnforcementChangeDto?> AboneligiDenetleAsync(Guid userId, CancellationToken cancellationToken)
@@ -210,29 +308,12 @@ public sealed class SubscriptionEnforcementService(
 
         var scope = await customerScopes.GetScopeAsync(userId, cancellationToken);
 
-        // DURDURULAN sayilir, ISTENEN degil. Onceki hâl denetim kaydina kosulsuz
-        // `scope.Sites.Count` yaziyordu; asagidaki catch tek tek hatalari yutup devam ettigi icin
-        // bes siteden ucu durdurulamasa bile kayit "5 site(s) stopped" diyordu.
-        //
-        // Bedeli dogrudan: askiya alinmis bir musterinin siteleri YAYINDA kalir, denetim kaydi
-        // aksini soyler, ve yonetici arizayi ancak musteri sikayet edince ogrenir. Bu depoda
-        // tekrar eden sinif -- panel yapamadigi seye "yaptim" der.
-        var durdurulamayan = new List<string>();
-
-        foreach (var site in scope.Sites)
-        {
-            try
-            {
-                await iisSiteService.StopSiteAsync(site, cancellationToken);
-            }
-            catch (Exception exception)
-            {
-                // Bir sitenin durdurulamaması askıyı geri almaz: kayıt zaten askıda ve yönetici
-                // durumu görebilmeli. Sessiz de geçmiyoruz.
-                durdurulamayan.Add(site);
-                logger.LogWarning(exception, "Askıya alma sırasında site durdurulamadı: {Site}", site);
-            }
-        }
+        // DURDURULAN sayilir, ISTENEN degil (bkz. SiteSuspensionReport). Siteler + FTP hesaplari +
+        // zamanlanmis gorevler kapatilir; her kaynagin ONCEKI hali kaydedilir ve acilista yalniz
+        // askidan once acik olanlar geri acilir. Kapatilamayanlar bekleyen adim olarak kalir:
+        // her denetim turunda yeniden denenir ve dikkat akisinda gorunur.
+        var rapor = await suspender.CloseAsync(userId, scope.Sites, cancellationToken);
+        var durdurulamayan = rapor.SitesFailed;
 
         var (aktor, ip, tetikleyici) = Aktor();
 
@@ -243,6 +324,10 @@ public sealed class SubscriptionEnforcementService(
         // askiya aldigi yolda (UserManagementService) da verilir ve orasi kopyalanmadigi icin
         // ISTENEN sayiyi yazmaya devam ediyordu.
         var durum = SiteSuspensionReport.Stopped(scope.Sites.Count, durdurulamayan);
+        if (rapor.Extras.Length > 0)
+        {
+            durum += " " + rapor.Extras;
+        }
 
         await auditService.WriteForSubscriptionAsync(
             "subscription.suspended",
@@ -257,35 +342,22 @@ public sealed class SubscriptionEnforcementService(
     /// <inheritdoc />
     public async Task ResumeAsync(Guid userId, CancellationToken cancellationToken = default)
     {
+        var oncekiKapsam = await customerScopes.GetScopeAsync(userId, cancellationToken);
         await customerScopes.ResumeAsync(userId, cancellationToken);
 
-        var scope = await customerScopes.GetScopeAsync(userId, cancellationToken);
-
-        // KARDES YOL, AYNI HATA. Askiya alma tarafi duzeltilip burasi birakilsaydi, bu depoda
-        // defalarca olculen kalip tekrarlanirdi: koruma bir yola konur, kardesi sessizce eski
-        // hâlde kalir.
-        //
-        // Buradaki bedel TERS ama esit agir: parasini odemis musterinin sitesi KAPALI kalir ve
-        // denetim kaydi acildigini soyler. Musteri "sitem calismiyor" der, yonetici kayda bakar,
-        // kayit "basladi" dedigi icin baska yerde arar.
-        var baslatilamayan = new List<string>();
-
-        foreach (var site in scope.Sites)
-        {
-            try
-            {
-                await iisSiteService.StartSiteAsync(site, cancellationToken);
-            }
-            catch (Exception exception)
-            {
-                baslatilamayan.Add(site);
-                logger.LogWarning(exception, "Askı kaldırılırken site başlatılamadı: {Site}", site);
-            }
-        }
+        // KARDES YOL, AYNI HATA: acilmayan kaynak sessiz kalmaz. Yalniz askidan ONCE acik olanlar acilir
+        // (musterinin elle durdurdugu site/hesap/gorev kapali kalir); acilamayanlar bekleyen adimdir.
+        var rapor = await suspender.RestoreAsync(
+            userId, cancellationToken, oncekiKapsam.IsSuspended ? oncekiKapsam.Sites : null);
+        var baslatilamayan = rapor.SitesFailed;
 
         var (aktor, ip, tetikleyici) = Aktor();
 
-        var durum = SiteSuspensionReport.Started(scope.Sites.Count, baslatilamayan);
+        var durum = SiteSuspensionReport.Started(rapor.SitesRequested, baslatilamayan);
+        if (rapor.Extras.Length > 0)
+        {
+            durum += " " + rapor.Extras;
+        }
 
         await auditService.WriteForSubscriptionAsync(
             "subscription.resumed",
