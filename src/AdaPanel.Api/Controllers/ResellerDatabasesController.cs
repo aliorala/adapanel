@@ -54,6 +54,7 @@ public sealed class ResellerDatabasesController(
         using (await DatabaseLifecycle.EnterSubscriptionAsync(subscriptionId, cancellationToken))
         {
             await authority.RevalidateAsync(dbContext, customerScopes, User, cancellationToken);
+            await LicenseGate.EnsureCanCreateAsync(HttpContext, Core.Dtos.Licensing.LicensedResource.Database, cancellationToken);
             await databaseService.CreateDatabaseAsync(request, async token =>
                 {
                     // A second wait may occur on the database resource lease. Recheck at the

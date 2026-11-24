@@ -185,6 +185,11 @@ public sealed class WordPressController(
             }
         }
 
+        // M3: klon, kaynak sitenin tam bir kopyasını diske yazar; sahibin tavanına sığmıyorsa BAŞLAMAZ.
+        await DiskQuotaGate.EnsureForCopyAsync(HttpContext, siteName, cancellationToken);
+        // M4: klon YENI bir site VE yeni bir veritabani acar; lisans kapisindan gecmeli.
+        await LicenseGate.EnsureCanCreateAsync(HttpContext, Core.Dtos.Licensing.LicensedResource.Site, cancellationToken);
+        await LicenseGate.EnsureCanCreateAsync(HttpContext, Core.Dtos.Licensing.LicensedResource.Database, cancellationToken);
         var result = await wordPressToolkitService.CloneAsync(siteName, request, cancellationToken);
 
         // Klonu kaynağın kapsamına ata → müşteri/bayi yeni siteyi görür.

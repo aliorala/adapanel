@@ -1,4 +1,5 @@
 using AdaPanel.Core.Common;
+using AdaPanel.Core.Dtos.Licensing;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Dtos.Users;
 using AdaPanel.Core.Entities;
@@ -30,8 +31,31 @@ public sealed class UserManagementService(
     ISiteCascadeDeletionService siteCascadeDeletion,
     IApiTokenService apiTokenService,
     IServerOwnerService serverOwnerService,
-    IResellerQuotaService resellerQuotas) : IUserManagementService
+    IResellerQuotaService resellerQuotas,
+    ILicenseService? licenseService = null,
+    SubscriptionResourceSuspender? resourceSuspender = null) : IUserManagementService
 {
+    /// <summary>
+    /// Kullanıcı satırı + denetim kaydı TEK İŞLEMDE (G4 bakiyesi).
+    /// </summary>
+    /// <remarks>
+    /// Önceden kullanıcı satırı hiçbir yerde AÇIKÇA kaydedilmiyordu: denetim yazıcısının
+    /// <c>SaveChanges</c>'i satırı da kalıcı kılıyordu. Yani denetim yazımının sırası/hatası
+    /// kullanıcı değişikliğinin kaderini belirliyordu. Şimdi satır açıkça kaydedilir ve denetim
+    /// başarısız olursa işlem GERİ ALINIR (rol/IsActive/e-posta değişmez, istek hata döner).
+    /// Dışarıda zaten bir işlem varsa (ya da bellek sağlayıcısında) iç içe işlem açılmaz.
+    /// </remarks>
+    private async Task<Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction?> BeginAtomicAsync(CancellationToken cancellationToken)
+    {
+        if (dbContext.Database.CurrentTransaction is not null ||
+            dbContext.Database.ProviderName?.Contains("InMemory", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return null;
+        }
+
+        return await dbContext.Database.BeginTransactionAsync(cancellationToken);
+    }
+
     /// <summary>Müşteri OLMAYAN satırların diski: ÖLÇÜLMÜŞ sıfır.</summary>
     /// <remarks>
     /// "Ölçemedim" ile "ölçülecek bir şey yok" AYNI ŞEY DEĞİL. Yöneticinin/bayinin kendi
@@ -152,6 +176,14 @@ public sealed class UserManagementService(
             await EnsureResellerQuotaAsync(actorIsReseller, role, actorUserId, Guid.Empty, request.MaxSites, request.MaxDiskMb, cancellationToken);
         }
 
+        // M4: YENİ abonelik (müşteri) lisans kapısından geçer. "Kısıtlı" durumda ya da SKU'nun
+        // abonelik sınırı doluysa 402 + license.* anahtarı. Alt-kullanıcı yeni abonelik DEĞİLDİR.
+        if (licenseService is not null && role == UserRole.Customer && parentUserId is null)
+        {
+            var mevcutAbonelik = (await customerScopeService.GetSubscriptionUserIdsAsync(cancellationToken)).Count;
+            await licenseService.EnsureCanCreateAsync(LicensedResource.Subscription, mevcutAbonelik, cancellationToken);
+        }
+
         var user = new PanelUser
         {
             UserName = normalizedUserName,
@@ -166,6 +198,8 @@ public sealed class UserManagementService(
         user.PasswordHash = passwordHasher.HashPassword(user, request.Password);
         dbContext.Users.Add(user);
 
+        await using var atomic = await BeginAtomicAsync(cancellationToken);
+        await dbContext.SaveChangesAsync(cancellationToken);
         await auditService.WriteAsync(
             "users.created",
             "users",
@@ -188,6 +222,11 @@ public sealed class UserManagementService(
             {
                 await customerScopeService.SetOwnerAsync(user.Id, ownerId, cancellationToken);
             }
+        }
+
+        if (atomic is not null)
+        {
+            await atomic.CommitAsync(cancellationToken);
         }
 
         if (request.SendWelcomeEmail)
@@ -293,6 +332,13 @@ public sealed class UserManagementService(
         }
 
         var newRole = actorIsReseller ? UserRole.Customer : Enum.Parse<UserRole>(request.Role, ignoreCase: true);
+
+        // M4: baska bir rolden MUSTERIYE donusmek de YENI abonelik acmaktir (lisans kapisi).
+        if (licenseService is not null && newRole == UserRole.Customer && user.Role != UserRole.Customer)
+        {
+            var mevcutAbonelik = (await customerScopeService.GetSubscriptionUserIdsAsync(cancellationToken)).Count;
+            await licenseService.EnsureCanCreateAsync(LicensedResource.Subscription, mevcutAbonelik, cancellationToken);
+        }
         var ownerId = actorIsReseller ? actorUserId : request.OwnerId;
         var willRemoveActiveAdmin = user.Role == UserRole.Administrator &&
             (newRole != UserRole.Administrator || !request.IsActive);
@@ -363,41 +409,90 @@ public sealed class UserManagementService(
         user.IsActive = request.IsActive;
         user.UpdatedAtUtc = DateTime.UtcNow;
 
-        await auditService.WriteAsync(
-            "users.updated",
-            "users",
-            $"User '{user.UserName}' updated. Role='{user.Role}', Active='{user.IsActive}'.",
-            actorUserId,
-            ipAddress,
-            cancellationToken);
-
+        // G4 BAKİYESİ. Sıra ve atomiklik:
+        //  1) Pasif KAYNAĞI (JSON) kullanıcı satırından ÖNCE yazılır. Eskiden satır önce kalıcı oluyor,
+        //     kayıt sonra yazılıyordu: ikinci adım düşerse müşteri kaynaksız pasif kalıyor ve bayi
+        //     açamıyordu (G22'nin kapattığı sınıf).
+        //  2) Satır AÇIKÇA kaydedilir ve denetim aynı işlemdedir: denetim yazılamazsa işlem geri
+        //     alınır, IsActive/rol/e-posta değişmez ve istek hata döner.
+        //  3) Kapsam (JSON) yazımları işlem içindedir; biri düşerse satır da geri alınır.
+        // Kaynak kaydı sonraki adımlar düşerse önceki değerine DÖNDÜRÜLÜR.
+        var writeInactiveSource = trackSuspensionSource || adminClaimsInactive;
+        string? previousInactiveSource = null;
+        var inactiveSourceWritten = false;
+        await using var atomic = await BeginAtomicAsync(cancellationToken);
         CustomerScope scope;
-        if (existingParent is not null)
+        try
         {
-            scope = await customerScopeService.GetScopeAsync(user.Id, cancellationToken);
-        }
-        else
-        {
-            scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, cancellationToken);
-            if (user.Role == UserRole.Customer)
+            if (writeInactiveSource)
             {
-                await customerScopeService.SetOwnerAsync(user.Id, ownerId, cancellationToken);
+                previousInactiveSource = await customerScopeService.GetInactiveSourceAsync(user.Id, cancellationToken);
+                await customerScopeService.SetInactiveSourceAsync(
+                    user.Id, request.IsActive ? null : (actorIsReseller ? "reseller" : "admin"), cancellationToken);
+                inactiveSourceWritten = true;
             }
+
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await auditService.WriteAsync(
+                "users.updated",
+                "users",
+                $"User '{user.UserName}' updated. Role='{user.Role}', Active='{user.IsActive}'.",
+                actorUserId,
+                ipAddress,
+                cancellationToken);
+
+            if (existingParent is not null)
+            {
+                scope = await customerScopeService.GetScopeAsync(user.Id, cancellationToken);
+            }
+            else
+            {
+                scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, cancellationToken);
+                if (user.Role == UserRole.Customer)
+                {
+                    await customerScopeService.SetOwnerAsync(user.Id, ownerId, cancellationToken);
+                }
+            }
+
+            if (atomic is not null)
+            {
+                await atomic.CommitAsync(cancellationToken);
+            }
+        }
+        catch
+        {
+            if (inactiveSourceWritten)
+            {
+                try
+                {
+                    await customerScopeService.SetInactiveSourceAsync(user.Id, previousInactiveSource, CancellationToken.None);
+                }
+                catch (Exception restoreError)
+                {
+                    logger.LogError(restoreError, "Pasif kaynağı geri alınamadı: {User}", user.UserName);
+                }
+            }
+
+            throw;
         }
 
         // Aktiflik değiştiyse (askıya al / sürdür) müşterinin atanan sitelerini durdur/başlat.
         // ALT-KULLANICI: PAYLAŞILAN siteleri DURDURMA (yalnız o login IsActive=false ile engellenir) → boş kapsam geç.
         var suspensionScope = existingParent is not null ? new CustomerScope([], 0, 0, 0, 0, 0) : scope;
-        await ApplySuspensionStateAsync(user, suspensionScope, wasActive, actorUserId, ipAddress, cancellationToken);
-
-        // Pasifin KAYNAĞI askıdan ayrı alanda tutulur: bayi PUT ile pasife alırsa "reseller", yönetici
-        // alırsa "admin" (varsa bayi kaydını ezer). /subscriptions/suspend bu alanı ASLA yazmaz; bayi
-        // yalnız "reseller" kaydını açabilir. Açılınca kayıt silinir.
-        if (trackSuspensionSource || adminClaimsInactive)
+        try
         {
-            await customerScopeService.SetInactiveSourceAsync(
-                user.Id, request.IsActive ? null : (actorIsReseller ? "reseller" : "admin"), cancellationToken);
+            await ApplySuspensionStateAsync(user, suspensionScope, wasActive, actorUserId, ipAddress, existingParent is not null, cancellationToken);
         }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Satir ZATEN kaydedildi (commit sonrasi): sessiz gecmek, pasif musterinin kaynaklarinin acik
+            // kaldigini gizlerdi. Hata yukari cikar; zorlama turu IsActive=false gorup kapatmayi yeniden dener.
+            logger.LogError(exception, "Aski durumu uygulanamadi (kullanici kaydedildi): {User}", user.UserName);
+            throw new AppException("users.suspension_apply_failed", 500, 500);
+        }
+
+        // Pasifin KAYNAĞI askıdan ayrı alanda tutulur (bkz. yukarıdaki atomik blok): bayi PUT ile pasife
+        // alırsa "reseller", yönetici alırsa "admin". /subscriptions/suspend bu alanı ASLA yazmaz.
 
         var diskKullanimi = user.Role == UserRole.Customer
             ? await customerScopeService.GetDiskUsageMbAsync(user.Id, cancellationToken)
@@ -491,14 +586,57 @@ public sealed class UserManagementService(
         bool wasActive,
         Guid actorUserId,
         string? ipAddress,
+        bool subUser,
         CancellationToken cancellationToken)
     {
-        if (user.Role != UserRole.Customer || wasActive == user.IsActive || scope.Sites.Count == 0)
+        // Alt-kullanıcı paylaşılan kaynakları ETKİLEMEZ. Ortak askı mantığı (M2) varsa site sayısı 0 olsa
+        // da çalışır (FTP/cron/posta durumu da kaydedilir); yoksa eski davranış: sitesiz müşteri atlanır.
+        if (user.Role != UserRole.Customer || wasActive == user.IsActive || subUser ||
+            (resourceSuspender is null && scope.Sites.Count == 0))
         {
             return;
         }
 
         var suspended = !user.IsActive;
+
+        if (resourceSuspender is not null)
+        {
+            // YETKI SIRASI: pasifi kaldirmak kaynagi ACMAZ eger abonelik hala askidaysa (sure/trafik/yonetici
+            // askisi). Kayit korunur; askiyi kaldiran taraf (ResumeAsync) pasif olmadigini gorup acar.
+            if (!suspended && scope.IsSuspended)
+            {
+                await auditService.WriteAsync(
+                    "users.resumed",
+                    "users",
+                    $"Customer '{user.UserName}' reactivated; resources KEPT CLOSED because the subscription is still suspended ({scope.SuspendReason}).",
+                    actorUserId,
+                    ipAddress,
+                    cancellationToken);
+                return;
+            }
+
+            // TEK MANTIK (SubscriptionResourceSuspender): otomatik zorlama ile AYNI karar — önceki hal
+            // kaydedilir, açılışta yalnız askıdan önce açık olanlar açılır, başarısızlar yeniden denenir.
+            var rapor = suspended
+                ? await resourceSuspender.CloseAsync(user.Id, scope.Sites, cancellationToken)
+                : await resourceSuspender.RestoreAsync(user.Id, cancellationToken, scope.Sites);
+            var cumle = suspended
+                ? SiteSuspensionReport.Stopped(scope.Sites.Count, rapor.SitesFailed)
+                : SiteSuspensionReport.Started(rapor.SitesRequested, rapor.SitesFailed);
+            if (rapor.Extras.Length > 0)
+            {
+                cumle += " " + rapor.Extras;
+            }
+
+            await auditService.WriteAsync(
+                suspended ? "users.suspended" : "users.resumed",
+                "users",
+                $"Customer '{user.UserName}' {(suspended ? "suspended" : "resumed")}; {cumle}",
+                actorUserId,
+                ipAddress,
+                cancellationToken);
+            return;
+        }
 
         // YAPILAN sayilir, ISTENEN degil.
         //
@@ -564,15 +702,21 @@ public sealed class UserManagementService(
         user.LockedUntilUtc = null;
         user.FailedLoginCount = 0;
         user.UpdatedAtUtc = DateTime.UtcNow;
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        await auditService.WriteAsync(
-            "users.unlocked",
-            "users",
-            $"Login lock cleared for '{user.UserName}'.",
-            actorUserId,
-            ipAddress,
-            cancellationToken);
+        await using (var atomic = await BeginAtomicAsync(cancellationToken))
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await auditService.WriteAsync(
+                "users.unlocked",
+                "users",
+                $"Login lock cleared for '{user.UserName}'.",
+                actorUserId,
+                ipAddress,
+                cancellationToken);
+            if (atomic is not null)
+            {
+                await atomic.CommitAsync(cancellationToken);
+            }
+        }
 
         var scope = user.Role == UserRole.Customer
             ? await customerScopeService.GetScopeAsync(user.Id, cancellationToken)
@@ -804,19 +948,46 @@ public sealed class UserManagementService(
         // ikinci deneme boş bir kapsam görüp HİÇBİR uyarı üretmeden "başarılı" derdi — yalan
         // aynı yerden geri gelirdi. Ayrıca iptal edilmiş bir müşterinin panel girişi açık kalırdı.
         // Dürüstlük panel kaydında değil YANITTA sağlanıyor: kalıntı varsa uç 2xx dönmez.
-        await customerScopeService.RemoveUserAsync(userId, cancellationToken);
+        //
+        // SIRA (G4 bakiyesi): önce satır silinir+kaydedilir ve denetim yazılır, kapsam kaydı EN SON
+        // kaldırılır; hepsi tek işlemde. Eskiden kapsam JSON'u önce siliniyordu: denetim düşerse satır
+        // kalıyor ama kapsamı (siteleri/limitleri) yok oluyordu.
         dbContext.Users.Remove(user);
+        await using (var atomic = await BeginAtomicAsync(cancellationToken))
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await auditService.WriteAsync(
+                "users.deleted",
+                "users",
+                $"User '{user.UserName}' ({user.Role}) deleted. removeSites={removeSites}; {scope.Sites.Count} site(s) in scope; " +
+                $"{cascadeUyarilari.Count} cascade warning(s); {rapor.Leftovers.Count(kalinti => !kalinti.Deliberate)} unresolved leftover(s).",
+                actorUserId,
+                ipAddress,
+                cancellationToken);
+            if (atomic is not null)
+            {
+                await atomic.CommitAsync(cancellationToken);
+            }
+        }
+
+        // Kapsam kaydi COMMIT'ten SONRA kaldirilir: commit dusseydi satir kalir ve kapsami da kalirdi.
+        // Bu adim dusse bile kullanici silindi; yetim kapsam kaydi zararsizdir ve rapora yazilir.
+        try
+        {
+            await customerScopeService.RemoveUserAsync(userId, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogError(exception, "Kullanici silindi ama kapsam kaydi kaldirilamadi: {UserId}", userId);
+            rapor.Leftovers.Add(new UserDeletionLeftoverDto
+            {
+                Kind = SiteLeftoverKinds.ScopeRecord,
+                Name = user.UserName,
+                Reason = $"kullanici silindi ama kapsam kaydi kaldirilamadi (yetim kayit) - {exception.Message}"
+            });
+        }
+
         rapor.UserDeleted = true;
-
-        await auditService.WriteAsync(
-            "users.deleted",
-            "users",
-            $"User '{user.UserName}' ({user.Role}) deleted. removeSites={removeSites}; {scope.Sites.Count} site(s) in scope; " +
-            $"{cascadeUyarilari.Count} cascade warning(s); {rapor.Leftovers.Count(kalinti => !kalinti.Deliberate)} unresolved leftover(s).",
-            actorUserId,
-            ipAddress,
-            cancellationToken);
-
         return rapor;
     }
 
@@ -1023,16 +1194,24 @@ public sealed class UserManagementService(
         user.PasswordHash = passwordHasher.HashPassword(user, request.Password);
         dbContext.Users.Add(user);
 
-        await auditService.WriteAsync(
-            "users.sub_created",
-            "users",
-            $"Additional user '{user.UserName}' created under subscription '{parent.UserName}'.",
-            parentUserId,
-            ipAddress,
-            cancellationToken);
+        await using (var atomic = await BeginAtomicAsync(cancellationToken))
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await auditService.WriteAsync(
+                "users.sub_created",
+                "users",
+                $"Additional user '{user.UserName}' created under subscription '{parent.UserName}'.",
+                parentUserId,
+                ipAddress,
+                cancellationToken);
 
-        await customerScopeService.SetParentSubscriptionAsync(user.Id, parentUserId, cancellationToken);
-        await customerScopeService.SetSubUserSectionsAsync(user.Id, request.AllowedSections, cancellationToken);
+            await customerScopeService.SetParentSubscriptionAsync(user.Id, parentUserId, cancellationToken);
+            await customerScopeService.SetSubUserSectionsAsync(user.Id, request.AllowedSections, cancellationToken);
+            if (atomic is not null)
+            {
+                await atomic.CommitAsync(cancellationToken);
+            }
+        }
 
         return await MapSubUserAsync(user, cancellationToken);
     }
@@ -1070,15 +1249,23 @@ public sealed class UserManagementService(
         user.IsActive = request.IsActive;
         user.UpdatedAtUtc = DateTime.UtcNow;
 
-        await auditService.WriteAsync(
-            "users.sub_updated",
-            "users",
-            $"Additional user '{user.UserName}' updated under subscription '{parent.UserName}'. Active='{user.IsActive}'.",
-            parentUserId,
-            ipAddress,
-            cancellationToken);
+        await using (var atomic = await BeginAtomicAsync(cancellationToken))
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await auditService.WriteAsync(
+                "users.sub_updated",
+                "users",
+                $"Additional user '{user.UserName}' updated under subscription '{parent.UserName}'. Active='{user.IsActive}'.",
+                parentUserId,
+                ipAddress,
+                cancellationToken);
 
-        await customerScopeService.SetSubUserSectionsAsync(user.Id, request.AllowedSections, cancellationToken);
+            await customerScopeService.SetSubUserSectionsAsync(user.Id, request.AllowedSections, cancellationToken);
+            if (atomic is not null)
+            {
+                await atomic.CommitAsync(cancellationToken);
+            }
+        }
 
         return await MapSubUserAsync(user, cancellationToken);
     }
@@ -1093,15 +1280,22 @@ public sealed class UserManagementService(
 
         // Alt-kullanıcının kendi kaynağı yoktur (cron/DB abonelik kimliğine yazılır) → silmek güvenlidir.
         dbContext.Users.Remove(user);
-        await customerScopeService.RemoveUserAsync(subUserId, cancellationToken);
-
-        await auditService.WriteAsync(
-            "users.sub_deleted",
-            "users",
-            $"Additional user '{user.UserName}' deleted from subscription '{parent.UserName}'.",
-            parentUserId,
-            ipAddress,
-            cancellationToken);
+        await using (var atomic = await BeginAtomicAsync(cancellationToken))
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await auditService.WriteAsync(
+                "users.sub_deleted",
+                "users",
+                $"Additional user '{user.UserName}' deleted from subscription '{parent.UserName}'.",
+                parentUserId,
+                ipAddress,
+                cancellationToken);
+            await customerScopeService.RemoveUserAsync(subUserId, cancellationToken);
+            if (atomic is not null)
+            {
+                await atomic.CommitAsync(cancellationToken);
+            }
+        }
     }
 
     /// <summary>Hedefin GERÇEKTEN aktörün alt-kullanıcısı olduğunu doğrular (başka aboneliğinkine dokunulamaz).</summary>

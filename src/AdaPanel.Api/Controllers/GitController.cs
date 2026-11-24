@@ -65,6 +65,8 @@ public sealed class GitController(
     [HttpPost("{siteName}/deploy")]
     public async Task<ActionResult<ApiResponse<GitDeployResultDto>>> DeployAsync(string siteName, CancellationToken cancellationToken)
     {
+        // M3: dağıtım depoyu siteye yazar; sahibi aboneliğin disk tavanı doluysa BAŞLAMADAN reddedilir.
+        await DiskQuotaGate.EnsureForSiteAsync(HttpContext, siteName, 0, cancellationToken);
         var result = await gitDeploymentService.DeployAsync(siteName, cancellationToken);
 
         await auditService.AuditAsync(
@@ -113,6 +115,9 @@ public sealed class GitController(
             Request.Headers[GitWebhookToken.HeaderName].ToString(),
             token);
 
+        // M3: anonim tetikleyici de sitenin sahibi aboneliğin kotasına tabidir (yönetici muafiyeti yok:
+        // kimlik yok). Jeton doğrulaması servistedir; kota yalnız disk dolu mu diye bakar.
+        await DiskQuotaGate.EnsureForSiteAsync(HttpContext, siteName, 0, cancellationToken);
         var result = await gitDeploymentService.DeployViaWebhookAsync(siteName, jeton, cancellationToken);
 
         // Anonim uç: kimlik yok, geriye yalnız İP kalıyor (HttpAuditExtensions onu her kayda yazar).

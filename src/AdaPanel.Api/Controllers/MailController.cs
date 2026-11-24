@@ -157,6 +157,7 @@ public sealed class MailController(
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, request.DomainName, cancellationToken);
+        await LicenseGate.EnsureCanCreateAsync(HttpContext, Core.Dtos.Licensing.LicensedResource.Mailbox, cancellationToken);
         var workspace = await mailService.CreateDomainAsync(request, cancellationToken);
 
         // profesyonel paneller gibi: domain panelde site olarak yönetiliyorsa MX/SPF/DKIM/DMARC kayıtları
@@ -303,6 +304,7 @@ public sealed class MailController(
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, request.Domain, cancellationToken);
         await EnsureAddressDomainAsync(request.Address, request.Domain, cancellationToken);
+        await LicenseGate.EnsureCanCreateAsync(HttpContext, Core.Dtos.Licensing.LicensedResource.Mailbox, cancellationToken);
         await EnsureMailboxQuotaAsync(cancellationToken);
         var workspace = await mailService.CreateAccountAsync(request, cancellationToken);
 

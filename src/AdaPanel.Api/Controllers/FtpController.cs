@@ -203,6 +203,8 @@ public sealed class FtpController(
             target.ValidateSnapshot(current);
             await ValidateActorAsync(actor, token);
             await CustomerAccess.EnsureSiteAsync(customerScopes, actor.Principal, request.SiteName, token);
+            // M3: plan MaxFtpUsers kotası. Abonelik kilidi (actorLease) altında, hesap açılmadan hemen önce.
+            await EnsureFtpQuotaAsync(actor.Principal, request.SiteName, token);
             if (!actor.Principal.IsInRole("Administrator") && !string.IsNullOrWhiteSpace(request.HomePath))
             {
                 var root = string.IsNullOrWhiteSpace(current.ApplicationRootPath) ? current.PhysicalPath : current.ApplicationRootPath;
@@ -272,6 +274,10 @@ public sealed class FtpController(
 
         return Ok(ApiResponse<FtpUserDto>.Ok(user, mesaj));
     }
+
+    /// <summary>M3 (plan MaxFtpUsers): ortak kural <see cref="FtpQuota"/>'da; bkz. orası.</summary>
+    internal Task EnsureFtpQuotaAsync(System.Security.Claims.ClaimsPrincipal principal, string siteName, CancellationToken cancellationToken)
+        => FtpQuota.EnsureAsync(customerScopes, ftpService, principal, siteName, cancellationToken);
 
     [HttpPost("users/password")]
     public async Task<ActionResult<ApiResponse<object>>> SetPasswordAsync([FromBody] SetFtpPasswordRequest request, CancellationToken cancellationToken)

@@ -26,19 +26,89 @@ public sealed class LicenseService(
 
     private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
 
-    public Task<LicenseStatusDto> GetStatusAsync(CancellationToken cancellationToken = default) =>
-        store.RunExclusiveAsync(() => GetStatusCoreAsync(cancellationToken), cancellationToken);
-
-    private async Task<LicenseStatusDto> GetStatusCoreAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Durum okuması. AĞ ÇAĞRISI KİLİT DIŞINDA (M4): eskiden doğrulama sunucusuna giden istek
+    /// <c>RunExclusiveAsync</c> içindeydi; yavaş/ulaşılamayan bir lisans sunucusu, her
+    /// <c>EnsureCanCreateAsync</c> çağrısını (ve etkinleştirme/devre dışı bırakmayı) zaman aşımı
+    /// boyunca tıkıyordu. Şimdi kilit yalnız kısa disk adımlarını korur:
+    /// (1) "deneme" damgası atılır (aynı anda gelen diğer istekler ağa gitmez),
+    /// (2) ağ çağrısı kilitsiz yapılır,
+    /// (3) karar kilit altında yazılır — ama anahtar bu arada DEĞİŞTİYSE (etkinleştirme/devre dışı)
+    /// geç gelen karar atılır; eski anahtarın hükmü yeni anahtarın üstüne yazılmaz.
+    /// </summary>
+    public async Task<LicenseStatusDto> GetStatusAsync(CancellationToken cancellationToken = default)
     {
-        var record = await LoadAsync(cancellationToken);
-
-        if (ShouldAttemptVerification(record, Now))
+        var (record, claimedKey, attemptedAt) = await store.RunExclusiveAsync(async () =>
         {
-            record = (await VerifyAsync(record, licenseKeyOverride: null, cancellationToken)).Record;
+            var current = await LoadAsync(cancellationToken);
+            if (!ShouldAttemptVerification(current, Now))
+            {
+                return (current, (string?)null, default(DateTime));
+            }
+
+            var now = Now;
+            var stamped = await store.UpdateAsync(existing =>
+            {
+                existing.LastAttemptAtUtc = now;
+                return existing;
+            }, cancellationToken);
+            stamped.IsConfigured = IsConfigured;
+            return (stamped, current.ProtectedKey, now);
+        }, cancellationToken);
+
+        if (claimedKey is null)
+        {
+            return BuildStatus(record);
         }
 
+        var key = store.UnprotectKey(claimedKey);
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            return BuildStatus(record);
+        }
+
+        // KİLİT DIŞI: ağ.
+        var outcome = await verificationClient.VerifyAsync(NewRequest(key), cancellationToken);
+
+        record = await store.RunExclusiveAsync(async () =>
+        {
+            var updated = await store.UpdateAsync(existing =>
+                string.Equals(existing.ProtectedKey, claimedKey, StringComparison.Ordinal) &&
+                existing.LastAttemptAtUtc == attemptedAt
+                    ? ApplyOutcome(existing, outcome, attemptedAt)
+                    : existing, // anahtar değişti: bu karar ESKİ anahtarındı, uygulanmaz
+                cancellationToken);
+            updated.IsConfigured = IsConfigured;
+            return updated;
+        }, cancellationToken);
+
         return BuildStatus(record);
+    }
+
+    private LicenseVerificationRequest NewRequest(string key) => new()
+    {
+        Product = options.Value.ProductCode,
+        LicenseKey = key,
+        Fingerprint = fingerprintProvider.Get(),
+        PanelVersion = PanelVersion
+    };
+
+    private static LicenseRecord ApplyOutcome(LicenseRecord existing, LicenseVerificationOutcome outcome, DateTime attemptedAt)
+    {
+        if (outcome.Response is null)
+        {
+            // ULAŞILAMADI: önceki karar OLDUĞU GİBİ korunur. Ağ hatası bir karar değildir.
+            existing.LastError = outcome.Error;
+            return existing;
+        }
+
+        existing.LastVerdict = outcome.Response.Status.Trim().ToLowerInvariant();
+        existing.LastVerifiedAtUtc = attemptedAt;
+        existing.Sku = outcome.Response.Sku ?? string.Empty;
+        existing.MaxSubscriptions = Math.Max(0, outcome.Response.MaxSubscriptions);
+        existing.ExpiresAtUtc = outcome.Response.ExpiresAtUtc;
+        existing.LastError = outcome.Response.Message ?? string.Empty;
+        return existing;
     }
 
     public Task<LicenseStatusDto> ActivateAsync(string licenseKey, CancellationToken cancellationToken = default) =>

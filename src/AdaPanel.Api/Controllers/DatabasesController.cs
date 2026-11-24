@@ -204,6 +204,7 @@ public sealed class DatabasesController(
         using (await DatabaseLifecycle.EnterSubscriptionAsync(authority.SubscriptionId, cancellationToken))
         {
             await authority.RevalidateAsync(dbContext, customerScopes, User, cancellationToken);
+            await LicenseGate.EnsureCanCreateAsync(HttpContext, Core.Dtos.Licensing.LicensedResource.Database, cancellationToken);
             workspace = await databaseService.CreateDatabaseAsync(request,
                 token => authority.RevalidateAsync(dbContext, customerScopes, User, token),
                 _ => Task.CompletedTask, cancellationToken);

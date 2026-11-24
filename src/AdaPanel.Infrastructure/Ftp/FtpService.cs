@@ -1071,6 +1071,52 @@ public sealed partial class FtpService(
             Approve, cancellationToken);
     }
 
+    public async Task SetFtpUserEnabledAsync(string userName, bool enabled, CancellationToken cancellationToken = default)
+    {
+        var normalized = NormalizeUserName(userName);
+
+        // YALNIZ PANELİN KENDİ AÇTIĞI hesap (parola değiştirmeyle aynı kapı): Administrator da bir
+        // yerel hesaptır ve burası ad doğrulamasından başka bir şey sormaz.
+        var kayit = await ReadAccountAsync(normalized, cancellationToken);
+        if (kayit is null)
+        {
+            throw new AppException("ftp.user_not_found", 404, 404);
+        }
+
+        var ad = EscapePowerShellLiteral(normalized);
+        var verb = enabled ? "Enable-LocalUser" : "Disable-LocalUser";
+        // GERİ OKUMA ŞART: cmdlet hatasız dönüp bayrak değişmemiş olabilir.
+        var script = $@"$ErrorActionPreference = 'Stop'
+{verb} -Name '{ad}'
+$hesap = Get-LocalUser -Name '{ad}'
+[Console]::Out.WriteLine('ADAPANEL-ENABLED=' + $hesap.Enabled)";
+        var sonuc = await RunStrictScriptAsync(script, cancellationToken);
+        var cikti = sonuc.StandardOutput ?? string.Empty;
+        var beklenen = enabled ? "ADAPANEL-ENABLED=True" : "ADAPANEL-ENABLED=False";
+        if (!sonuc.Success || !cikti.Contains(beklenen, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new AppException("ftp.enable_state_unverified", 500, 500,
+                SecretRedactor.SanitizeDetails(BuildCommandDetails(sonuc)));
+        }
+
+        await fileStore.UpdateAsync(
+            StatePath,
+            Array.Empty<FtpUserState>(),
+            mevcut =>
+            {
+                foreach (var item in mevcut)
+                {
+                    if (string.Equals(item.UserName.Trim(), normalized, StringComparison.OrdinalIgnoreCase))
+                    {
+                        item.IsEnabled = enabled;
+                    }
+                }
+
+                return mevcut;
+            },
+            cancellationToken);
+    }
+
     private async Task<FtpUserState?> ReadAccountAsync(string name, CancellationToken token) =>
         (await fileStore.ReadAsync(StatePath, Array.Empty<FtpUserState>(), token))
             .SingleOrDefault(item => string.Equals(item.UserName.Trim(), name, StringComparison.OrdinalIgnoreCase));

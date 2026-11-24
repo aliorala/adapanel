@@ -1,3 +1,4 @@
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Store;
 using AdaPanel.Core.Interfaces;
@@ -32,6 +33,8 @@ public sealed class StoreController(
     [HttpPost("install")]
     public async Task<ActionResult<ApiResponse<AppInstallResultDto>>> InstallAsync([FromBody] InstallAppTemplateRequest request, CancellationToken cancellationToken)
     {
+        // M3: kurulum diske yazar; sahibi aboneliğin disk tavanı doluysa BAŞLAMADAN reddedilir.
+        await DiskQuotaGate.EnsureForSiteAsync(HttpContext, request.SiteName, 0, cancellationToken);
         var result = await appStoreService.InstallAsync(request, cancellationToken);
 
         Guid? siteSahibi = null;

@@ -24,7 +24,8 @@ public sealed class AttentionService(
     IDomainRefreshService domainRefreshService,
     IHealthService healthService,
     ILogger<AttentionService>? logger = null,
-    Automation.IAlertDeliveryFailureStore? alertFailures = null) : IAttentionService
+    Automation.IAlertDeliveryFailureStore? alertFailures = null,
+    ICustomerScopeService? customerScopes = null) : IAttentionService
 {
     public async Task<AttentionSummaryDto> GetSummaryAsync(CancellationToken cancellationToken = default)
     {
@@ -215,6 +216,70 @@ public sealed class AttentionService(
             }
             catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("alertDelivery"); }
             RecordDuration("alertDelivery");
+        }
+
+        // 4d) ABONELİK askısı/kotası (M2/M3): askıda kapatılamayan ya da açılamayan kaynaklar, panelin
+        // kapatamadığı kaynak türleri ve disk tavanını aşan abonelikler. Bunlar zorlama turunda tespit
+        // edilip kaydedilir; burada yalnız OKUNUR (ağır ölçüm yapılmaz). Sessiz başarı yok: askı
+        // "uygulandı" görünür ama FTP/site açık kalıyorsa yöneticinin görebileceği tek yer burasıdır.
+        if (customerScopes is not null)
+        {
+            try
+            {
+                var states = await customerScopes.GetAttentionStatesAsync(cancellationToken);
+                var pending = states.Where(item => item.PendingClose.Count + item.PendingRestore.Count > 0).ToArray();
+                if (pending.Length > 0)
+                {
+                    var names = pending
+                        .SelectMany(item => item.PendingClose.Concat(item.PendingRestore))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Take(8)
+                        .ToArray();
+                    items.Add(new AttentionItemDto
+                    {
+                        Id = "subscription-suspension-pending",
+                        Severity = "critical",
+                        TitleKey = "attention.subscription.suspensionPending",
+                        DescriptionKey = "attention.subscription.suspensionPending.desc",
+                        Detail = string.Join(", ", names),
+                        AffectedCount = pending.Length,
+                        Section = "accounts"
+                    });
+                }
+
+                var unsupported = states.Where(item => item.Unsupported.Count > 0).ToArray();
+                if (unsupported.Length > 0)
+                {
+                    items.Add(new AttentionItemDto
+                    {
+                        Id = "subscription-suspension-unsupported",
+                        Severity = "warning",
+                        TitleKey = "attention.subscription.suspensionUnsupported",
+                        DescriptionKey = "attention.subscription.suspensionUnsupported.desc",
+                        Detail = string.Join(", ", unsupported.SelectMany(item => item.Unsupported).Distinct(StringComparer.OrdinalIgnoreCase)),
+                        AffectedCount = unsupported.Length,
+                        Section = "accounts"
+                    });
+                }
+
+                var overage = states.Where(item => item.DiskOverage is not null).ToArray();
+                if (overage.Length > 0)
+                {
+                    var worst = overage.OrderByDescending(item => item.DiskOverage!.UsageMb - item.DiskOverage.MaxDiskMb).First().DiskOverage!;
+                    items.Add(new AttentionItemDto
+                    {
+                        Id = "subscription-disk-over-quota",
+                        Severity = "warning",
+                        TitleKey = "attention.subscription.diskOverQuota",
+                        DescriptionKey = "attention.subscription.diskOverQuota.desc",
+                        Detail = $"{worst.UsageMb}/{worst.MaxDiskMb} MB",
+                        AffectedCount = overage.Length,
+                        Section = "accounts"
+                    });
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("subscriptions"); }
+            RecordDuration("subscriptions");
         }
 
         // 5) Durmuş Windows servisleri → tek-tık yeniden başlat.
