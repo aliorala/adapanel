@@ -77,11 +77,11 @@ public sealed class SelfUpdateDownloadCoordinatorTests : IDisposable
         var first = await coordinator.StartDownloadAsync(new ApplyUpdateRequest(), CancellationToken.None);
         await fake.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var second = await coordinator.StartDownloadAsync(new ApplyUpdateRequest(), CancellationToken.None);
+        fake.Release.TrySetResult();
 
         Assert.True(first.Started);
         Assert.False(second.Started);
         Assert.Equal(UpdateDownloadDto.Downloading, second.Download.State);
-        fake.Release.SetResult();
         await WaitForAsync(async () => (await coordinator.GetAsync(CancellationToken.None)).State == UpdateDownloadDto.Ready);
         Assert.Equal(1, fake.Calls);
     }
