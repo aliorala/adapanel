@@ -330,7 +330,7 @@
       :domain="mailDomainFromSearch" />
 
     <MonitoringView
-      v-else-if="activeSection === 'monitor' && isAdmin"
+      v-else-if="activeSection === 'monitor'"
       :overview="systemStore.overview"
       :overview-confirmed="systemStore.overviewConfirmed"
       :overview-error="systemStore.overviewError"
@@ -816,7 +816,14 @@ function restorePanelLocation() {
   const query = router.currentRoute.value.query;
   const section = typeof query.section === "string" ? query.section : activeSection.value;
   const allowed = dashboardSections.value.some((item) => item.id === section);
-  deniedSection.value = !allowed && section !== "home" && KNOWN_SECTION_IDS.has(section) ? section : "";
+  if (!allowed && section !== "home" && KNOWN_SECTION_IDS.has(section)) {
+    deniedSection.value = section;
+  } else if (section !== "home") {
+    // Gerçekten başka (yetkili) bir bölüme gidildi. "home" burada KASITLI olarak ayrı: yetkisiz bölümden
+    // adresi Ana Sayfa'ya çevirmemiz (aşağıdaki replace) kendi yankısı olarak tekrar buraya düşer ve
+    // açıklama ekranını daha çizilmeden silerdi.
+    deniedSection.value = "";
+  }
   activeSection.value = allowed ? section : "home";
   if (activeSection.value === "settings") {
     const tabs = isAdmin.value ? ["general", "branding", "security", "errorReports", "notifications", "updates", "license"] : ["branding"];
@@ -824,8 +831,7 @@ function restorePanelLocation() {
     if (settingsTab.value === "branding" && !brandingLoaded.value) void loadBrandingSettings();
   }
   navigationReady = true;
-  // Yetkisiz bölümde adres OLDUĞU GİBİ kalır: yenileyince aynı açıklama görünür, sessizce başka yere atılmaz.
-  if (!deniedSection.value && query.section !== activeSection.value) void router.replace({ query: { section: activeSection.value } });
+  if (query.section !== activeSection.value) void router.replace({ query: { section: activeSection.value } });
 }
 watch(() => router.currentRoute.value, () => {
   if (navigationReady && mode.value === "dashboard") restorePanelLocation();
@@ -1761,12 +1767,8 @@ async function openMailDomainFromSearch(domain: string) {
 
 async function handleNavigation(sectionId: string) {
   if (sectionId !== "attention" && !await allowNavigation()) return;
-  if (sectionId !== "attention" && deniedSection.value) {
-    // Yetkisiz ekrandayken menüden başka bir yere geçilirse adres de güncellenir (activeSection
-    // değişmiyorsa — ör. Ana Sayfa — izleyici tetiklenmez ve adres eski bölümde kalırdı).
-    deniedSection.value = "";
-    if (sectionId !== "exit") void router.replace({ query: { section: sectionId } });
-  }
+  // Menüden bilinçli bir seçim: "yetkisiz" açıklaması kapanır.
+  if (sectionId !== "attention") deniedSection.value = "";
   if (sectionId === "exit") {
     void logout();
     return;
