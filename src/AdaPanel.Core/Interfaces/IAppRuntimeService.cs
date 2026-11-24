@@ -41,5 +41,8 @@ public interface IAppRuntimeService
     Task<AppRuntimeRemovalResultDto> RemoveAppAsync(string siteName, bool deleteLogs,
         Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default);
 
+    /// <summary>Site silme akışı için kaldırma: çağıran silme işaretini tutar, barındırma yoksa no-op.</summary>
+    Task<AppRuntimeRemovalResultDto> RemoveAppForSiteDeletionAsync(SiteDto site, bool deleteLogs, CancellationToken cancellationToken = default);
+
     Task<AppRuntimeLogsDto> GetLogsAsync(string siteName, int tail, CancellationToken cancellationToken = default);
 }

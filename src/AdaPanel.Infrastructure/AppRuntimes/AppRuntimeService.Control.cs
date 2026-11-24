@@ -115,55 +115,72 @@ public sealed partial class AppRuntimeService
         Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default)
     {
         using var target = await SiteMutationGuard.CaptureAsync(iisSiteService, concurrencyLock, siteName, cancellationToken);
-        var removed = new List<string>();
-        var leftovers = new List<string>();
-        AppRuntimeSiteConfigurationDto? after = null;
+        AppRuntimeRemovalResultDto? outcome = null;
         await target.RunAsync(async current =>
         {
             await beforeMutation(current, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            var siteRoot = ResolveSiteRoot(current.PhysicalPath);
-            var webConfigPath = ResolveSiteManagedPath(siteRoot, "web.config", allowCurrentDirectory: false);
-            var before = ReadConfiguration(current);
-            if (before.RuntimeType == "none" && !before.HasHttpPlatformHandler)
-                throw new AppException("appruntime.not_hosted", 409, 409);
-
-            // 1) Önce yapılandırmayı kaldır: havuz durdurulsa bile handler kalırsa site kırık kalır.
-            try
-            {
-                if (RemovePanelEntries(webConfigPath, cancellationToken)) removed.Add("web.config");
-            }
-            catch (Exception exception) when (exception is not (OperationCanceledException or AppException))
-            {
-                logger.LogError(exception, "Unable to remove application runtime configuration for site {SiteName}.", current.Name);
-                throw MapAppRuntimeException(exception, "appruntime.configuration_failed");
-            }
-
-            // 2) Süreç: havuzu geri dönüştür (web.config değişikliği çocuk süreci zaten düşürür; bu, ölçülür kılar).
-            try
-            {
-                ControlPool(current.ApplicationPoolName, "restart");
-                removed.Add("process");
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                logger.LogWarning(exception, "Application pool recycle after runtime removal failed for site {SiteName}.", current.Name);
-                leftovers.Add("process: the hosted process may still be running until the application pool is recycled");
-            }
-
-            // 3) Panelin günlük klasörü — yalnız panelin yazdığı stdout dosyaları; özyineleme YOK.
-            if (deleteLogs) DeletePanelLogs(siteRoot, removed, leftovers);
-
-            after = ReadConfiguration(current);
-            if (after.IsEnabled || after.HasHttpPlatformHandler)
-                leftovers.Add("web.config: the hosting configuration is still present");
+            outcome = RemoveCore(current, deleteLogs, requireHosted: true, cancellationToken);
         }, cancellationToken);
+        return outcome!;
+    }
+
+    /// <summary>
+    /// Site silme akışı için: çağıran silme işaretini ZATEN tutar (<c>SiteMutationGuard.BeginDeletionAsync</c>), bu yüzden
+    /// yakalama (Capture) yapılmaz — yapılsaydı "site siliniyor" diye reddederdi. Barındırma yoksa no-op.
+    /// </summary>
+    public Task<AppRuntimeRemovalResultDto> RemoveAppForSiteDeletionAsync(SiteDto site, bool deleteLogs, CancellationToken cancellationToken = default) =>
+        Task.FromResult(RemoveCore(site, deleteLogs, requireHosted: false, cancellationToken));
+
+    private AppRuntimeRemovalResultDto RemoveCore(SiteDto current, bool deleteLogs, bool requireHosted, CancellationToken cancellationToken)
+    {
+        var removed = new List<string>();
+        var leftovers = new List<string>();
+        var siteRoot = ResolveSiteRoot(current.PhysicalPath);
+        var webConfigPath = ResolveSiteManagedPath(siteRoot, "web.config", allowCurrentDirectory: false);
+        var before = ReadConfiguration(current);
+        var hosted = before.RuntimeType != "none" || before.HasHttpPlatformHandler;
+        if (!hosted)
+        {
+            if (requireHosted) throw new AppException("appruntime.not_hosted", 409, 409);
+            return new AppRuntimeRemovalResultDto { SiteName = current.Name, Configuration = before };
+        }
+
+        // 1) Önce yapılandırmayı kaldır: havuz durdurulsa bile handler kalırsa site kırık kalır.
+        try
+        {
+            if (RemovePanelEntries(webConfigPath, cancellationToken)) removed.Add("web.config");
+        }
+        catch (Exception exception) when (exception is not (OperationCanceledException or AppException))
+        {
+            logger.LogError(exception, "Unable to remove application runtime configuration for site {SiteName}.", current.Name);
+            throw MapAppRuntimeException(exception, "appruntime.configuration_failed");
+        }
+
+        // 2) Süreç: havuzu geri dönüştür (web.config değişikliği çocuk süreci zaten düşürür; bu, ölçülür kılar).
+        try
+        {
+            ControlPool(current.ApplicationPoolName, "restart");
+            removed.Add("process");
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Application pool recycle after runtime removal failed for site {SiteName}.", current.Name);
+            leftovers.Add("process: the hosted process may still be running until the application pool is recycled");
+        }
+
+        // 3) Panelin günlük klasörü — yalnız panelin yazdığı stdout dosyaları; özyineleme YOK.
+        if (deleteLogs) DeletePanelLogs(siteRoot, removed, leftovers);
+
+        var after = ReadConfiguration(current);
+        if (after.IsEnabled || after.HasHttpPlatformHandler)
+            leftovers.Add("web.config: the hosting configuration is still present");
         return new AppRuntimeRemovalResultDto
         {
-            SiteName = siteName,
+            SiteName = current.Name,
             Removed = removed.ToArray(),
             Leftovers = leftovers.ToArray(),
-            Configuration = after ?? new AppRuntimeSiteConfigurationDto { SiteName = siteName }
+            Configuration = after
         };
     }
 

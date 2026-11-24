@@ -30,6 +30,9 @@ public interface IDockerService
 
     Task<DockerContainerLimitsDto> GetContainerLimitsAsync(string id, CancellationToken cancellationToken = default);
 
+    /// <summary>Siteyle ilişkili konteyner adları (silme önizlemesi için); motor yoksa boş.</summary>
+    Task<IReadOnlyCollection<string>> ListSiteContainersAsync(string siteName, CancellationToken cancellationToken = default);
+
     /// <summary>Siteyle ilişkili (etiketli) bütün konteynerleri durdurup kaldırır; ölçülmüş sonucu döner.</summary>
     Task<DockerSiteCleanupResult> RemoveSiteContainersAsync(string siteName, CancellationToken cancellationToken = default);
 }

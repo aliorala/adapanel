@@ -135,11 +135,19 @@ public sealed class SoftwareController(
     [HttpDelete("{componentId}")]
     public async Task<ActionResult<ApiResponse<object>>> RemoveAsync(string componentId)
     {
-        var temizlenemeyenler = await componentBootstrapper.RemoveAsync(
-            componentId,
-            User.GetRequiredUserId(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(),
-            CancellationToken.None);
+        // PHP sürümleri kullanan siteleri korumalı yoldan kaldırılır (PhpController ile aynı kural):
+        // bu genel uç, "sürüm kullanımdaysa reddet" denetimini atlamasın.
+        var temizlenemeyenler = componentId.StartsWith("php-", StringComparison.OrdinalIgnoreCase)
+            ? await phpService.RemoveVersionAsync(
+                componentId,
+                User.GetRequiredUserId(),
+                HttpContext.Connection.RemoteIpAddress?.ToString(),
+                CancellationToken.None)
+            : await componentBootstrapper.RemoveAsync(
+                componentId,
+                User.GetRequiredUserId(),
+                HttpContext.Connection.RemoteIpAddress?.ToString(),
+                CancellationToken.None);
 
         // KISMİ TEMİZLİK "tamamlandı" DEĞİLDİR. Servis durdurulamadıysa ya da dosyalar kilitliyse
         // kullanıcı bunu bilmeli: sunucuda kalan artığı ancak o temizleyebilir.

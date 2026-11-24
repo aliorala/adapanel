@@ -179,18 +179,32 @@ public sealed partial class DockerService(ILogger<DockerService> logger) : IDock
         return new DockerContainerLimitsDto { ContainerId = id, Cpus = nano / 1_000_000_000d, MemoryBytes = memory };
     }
 
-    public async Task<DockerSiteCleanupResult> RemoveSiteContainersAsync(string siteName, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyCollection<string>> ListSiteContainersAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        var (state, containers) = await ReadSiteContainersAsync(siteName, cancellationToken);
+        return state.DaemonRunning ? containers.Select(container => container.Name).ToArray() : [];
+    }
+
+    private async Task<(DockerSiteCleanupResult State, List<(string Id, string Name)> Containers)> ReadSiteContainersAsync(string siteName, CancellationToken cancellationToken)
     {
         var label = SiteLabel(siteName);
         var outcome = new DockerSiteCleanupResult();
+        var containers = new List<(string Id, string Name)>();
         var version = await TryRunAsync("version --format \"{{.Server.Version}}\"", cancellationToken);
-        if (version is null) return outcome;
+        if (version is null) return (outcome, containers);
         outcome.Installed = true;
-        if (!version.Success || string.IsNullOrWhiteSpace(version.StandardOutput)) return outcome;
+        if (!version.Success || string.IsNullOrWhiteSpace(version.StandardOutput)) return (outcome, containers);
         outcome.DaemonRunning = true;
 
         var listed = await RunRequiredAsync("ps -a --filter label=" + label + " --format \"{{json .}}\"", cancellationToken);
-        foreach (var container in ParseLines(listed.StandardOutput, element => (Id: GetString(element, "ID"), Name: GetString(element, "Names"))))
+        containers.AddRange(ParseLines(listed.StandardOutput, element => (Id: GetString(element, "ID"), Name: GetString(element, "Names"))));
+        return (outcome, containers);
+    }
+
+    public async Task<DockerSiteCleanupResult> RemoveSiteContainersAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        var (outcome, containers) = await ReadSiteContainersAsync(siteName, cancellationToken);
+        foreach (var container in containers)
         {
             var removal = await TryRunAsync("rm -f " + RequireIdentifier(container.Id), cancellationToken);
             if (removal is { Success: true }) outcome.Removed.Add(container.Name);
