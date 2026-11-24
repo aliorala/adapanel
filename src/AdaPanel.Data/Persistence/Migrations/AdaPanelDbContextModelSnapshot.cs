@@ -207,6 +207,10 @@ namespace AdaPanel.Data.Persistence.Migrations
                     b.Property<bool>("AllowTerminal")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("AllowedIps")
+                        .HasMaxLength(1024)
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("TEXT");
 
@@ -220,6 +224,9 @@ namespace AdaPanel.Data.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
+
+                    b.Property<bool>("ReadOnly")
+                        .HasColumnType("INTEGER");
 
                     b.Property<DateTime?>("RevokedAtUtc")
                         .HasColumnType("TEXT");

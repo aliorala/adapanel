@@ -29,7 +29,8 @@ public sealed class BruteForceProtectionService(
     public async Task<bool> IsBannedAsync(string? ipAddress, CancellationToken cancellationToken = default)
     {
         var ip = Normalize(ipAddress);
-        if (ip is null)
+        var exact = NormalizeExact(ipAddress);
+        if (ip is null || exact is null)
         {
             return false;
         }
@@ -38,7 +39,7 @@ public sealed class BruteForceProtectionService(
         // tamamıyla paylaşılıyor. Salt okuma için kilit almak, uzun süren bir iş (yedek yüklemesi
         // gibi) kilidi tuttuğunda giriş ekranını da kilitlerdi.
         var state = await LoadAsync(cancellationToken);
-        if (!state.Enabled || IsWhitelisted(state, ip))
+        if (!state.Enabled || IsWhitelisted(state, exact))
         {
             return false;
         }
@@ -67,7 +68,8 @@ public sealed class BruteForceProtectionService(
     public async Task RegisterFailedAttemptAsync(string? ipAddress, CancellationToken cancellationToken = default)
     {
         var ip = Normalize(ipAddress);
-        if (ip is null)
+        var exact = NormalizeExact(ipAddress);
+        if (ip is null || exact is null)
         {
             return;
         }
@@ -80,7 +82,7 @@ public sealed class BruteForceProtectionService(
             await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Auth, async () =>
             {
                 var state = await LoadAsync(cancellationToken);
-                if (!state.Enabled || IsWhitelisted(state, ip) || state.Bans.Any(ban => ban.IpAddress == ip))
+                if (!state.Enabled || IsWhitelisted(state, exact) || state.Bans.Any(ban => ban.IpAddress == ip))
                 {
                     return;
                 }
@@ -104,7 +106,7 @@ public sealed class BruteForceProtectionService(
                     {
                         IpAddress = ip,
                         BannedAtUtc = now,
-                        ExpiresAtUtc = state.BanMinutes <= 0 ? null : now.AddMinutes(state.BanMinutes),
+                        ExpiresAtUtc = BanExpiry(ip, state.BanMinutes, now),
                         FailedAttempts = attempt.Count,
                         FirewallRuleName = RulePrefix + ip
                     };
@@ -120,7 +122,9 @@ public sealed class BruteForceProtectionService(
 
             if (ipToBan is not null && banRecord is not null)
             {
-                var blocked = await ApplyFirewallBlockAsync(banRecord, cancellationToken);
+                // Loopback yalnız UYGULAMA katmanında engellenir (bkz. Normalize): güvenlik duvarına
+                // 127.0.0.1/::1 için kural yazmak panelin kendi iç bağlantılarını riske atar.
+                var blocked = IsLoopbackKey(ipToBan) || await ApplyFirewallBlockAsync(banRecord, cancellationToken);
                 if (blocked)
                 {
                     logger.LogWarning("Brute-force eşiği aşıldı, IP engellendi: {IpAddress}", ipToBan);
@@ -289,14 +293,31 @@ public sealed class BruteForceProtectionService(
     private static IReadOnlyCollection<string> NormalizeWhitelist(IReadOnlyCollection<string> entries)
     {
         return entries
-            .Select(Normalize)
+            .Select(NormalizeExact)
             .Where(entry => entry is not null)
             .Select(entry => entry!)
             .Distinct()
             .ToArray();
     }
 
-    private static string? Normalize(string? ipAddress)
+    /// <summary>Loopback kaynaklı yasağın en uzun süresi (dk): yerel yönetimi uzun süre kilitlememek için.</summary>
+    internal const int LoopbackMaxBanMinutes = 5;
+
+    /// <summary>
+    /// Deneme/yasak ANAHTARI. IPv4 olduğu gibi; IPv6 ise /64 ÖNEKİ ("2001:db8:1:2::/64") — bir
+    /// aboneye verilen /64'te 2^64 adres vardır, adres başına yasak saldırganı hiç durdurmaz.
+    /// IPv4-eşlemeli IPv6 IPv4'e indirilir. "/64" ekli girdi (yasak listesinden Unban) kabul edilir.
+    /// <para>
+    /// LOOPBACK ARTIK MUAF DEĞİL: eskiden null dönüp hiç izlenmiyordu, yani yerelden (ya da
+    /// ARR/ters vekil arkasından, tüm istemciler 127.0.0.1 görünürken) sınırsız parola denenebiliyordu.
+    /// Şimdi izlenir, ama (a) güvenlik duvarına kural YAZILMAZ, yalnız uygulama katmanı reddeder,
+    /// (b) yasak en çok <see cref="LoopbackMaxBanMinutes"/> dk sürer. Panelin kendi iç çağrıları
+    /// (autodiscover vekili, webmail SSO, DbTools, sağlık) bu yoldan geçmez: sayaç yalnız
+    /// <c>AuthService.LoginAsync</c>'teki BAŞARISIZ giriş denemesinde artar ve yasağı yalnız giriş
+    /// sorar; iç çağrılar oturum açmaz, dolayısıyla bu kapıya hiç uğramaz.
+    /// </para>
+    /// </summary>
+    internal static string? Normalize(string? ipAddress)
     {
         if (string.IsNullOrWhiteSpace(ipAddress))
         {
@@ -304,13 +325,53 @@ public sealed class BruteForceProtectionService(
         }
 
         var trimmed = ipAddress.Trim();
-        // Loopback adreslerini engelleme — yerel yönetimi kilitleme riski.
-        if (!IPAddress.TryParse(trimmed, out var parsed) || IPAddress.IsLoopback(parsed))
+        if (trimmed.EndsWith("/64", StringComparison.Ordinal))
+        {
+            trimmed = trimmed[..^3];
+        }
+
+        if (!IPAddress.TryParse(trimmed, out var parsed))
         {
             return null;
         }
 
-        return parsed.ToString();
+        if (parsed.IsIPv4MappedToIPv6)
+        {
+            parsed = parsed.MapToIPv4();
+        }
+
+        if (parsed.AddressFamily != System.Net.Sockets.AddressFamily.InterNetworkV6 || IPAddress.IsLoopback(parsed))
+        {
+            return parsed.ToString();
+        }
+
+        var bytes = parsed.GetAddressBytes();
+        Array.Clear(bytes, 8, 8);
+        return new IPAddress(bytes) + "/64";
+    }
+
+    /// <summary>Tam adres (muaf listesi için): önek DARALTILMAZ, yalnız ayrıştırılır.</summary>
+    private static string? NormalizeExact(string? ipAddress)
+    {
+        if (string.IsNullOrWhiteSpace(ipAddress) || !IPAddress.TryParse(ipAddress.Trim(), out var parsed))
+        {
+            return null;
+        }
+
+        return (parsed.IsIPv4MappedToIPv6 ? parsed.MapToIPv4() : parsed).ToString();
+    }
+
+    private static bool IsLoopbackKey(string key) =>
+        IPAddress.TryParse(key, out var parsed) && IPAddress.IsLoopback(parsed);
+
+    internal static DateTime? BanExpiry(string key, int banMinutes, DateTime now)
+    {
+        if (IsLoopbackKey(key))
+        {
+            return now.AddMinutes(banMinutes <= 0 ? LoopbackMaxBanMinutes : Math.Min(banMinutes, LoopbackMaxBanMinutes));
+        }
+
+        return banMinutes <= 0 ? null : now.AddMinutes(banMinutes);
     }
 
     private static BruteForceStatusDto ToStatus(BruteForceState state)

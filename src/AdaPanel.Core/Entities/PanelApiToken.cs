@@ -41,6 +41,18 @@ public sealed class PanelApiToken
     /// </summary>
     public bool AllowTerminal { get; set; }
 
+    /// <summary>
+    /// SALT OKUNUR kapsam: true ise anahtar GET/HEAD dışında hiçbir istek yapamaz (403) ve MCP'de
+    /// yıkıcı/terminal yetkisi kapalıdır. Varsayılan false: mevcut anahtarlar değişmeden kalır.
+    /// </summary>
+    public bool ReadOnly { get; set; }
+
+    /// <summary>
+    /// İsteğe bağlı IP/CIDR izin listesi (virgülle ayrılmış, normalleştirilmiş). Boş/null = kısıt yok.
+    /// Doluysa yalnız bu adreslerden gelen istekler kabul edilir.
+    /// </summary>
+    public string? AllowedIps { get; set; }
+
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
     /// <summary>Boşsa süresiz. Dolduğunda anahtar reddedilir.</summary>

@@ -239,13 +239,54 @@ public static class PanelRateLimits
     /// </remarks>
     public static string SessionPartitionKey(HttpContext context, string authCookieName)
     {
-        var cookie = context.Request.Cookies[authCookieName];
-        if (!string.IsNullOrEmpty(cookie))
+        // çerezin VARLIĞI bölüm anahtarı olamaz. Rastgele çerez üretip her istekte
+        // yeni bir "oturum" bölümü açmak, sınırı sonsuz kovaya çeviriyordu. Çerez ancak panelin
+        // kendi veri koruma anahtarıyla ÇÖZÜLEBİLİYORSA (geçerli bir bilet) oturum sayılır; aksi
+        // hâlde kimliği doğrulanmamış istek IP (IPv6'da /64) bölümüne düşer. Çözme DB'ye gitmez.
+        var cookie = ReadValidSessionCookie(context);
+        if (cookie is not null)
         {
             return "session:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(cookie)))[..16];
         }
 
         return "ip:" + SourceKey(context.Connection.RemoteIpAddress);
+    }
+
+    /// <summary>
+    /// Çerez panelin çerez şemasıyla çözülebiliyorsa ham değeri, değilse (yok, bozuk, başka
+    /// anahtarla üretilmiş, süresi dolmuş) null döner. Hizmetler yoksa (test) null: güvenli taraf.
+    /// </summary>
+    private static string? ReadValidSessionCookie(HttpContext context)
+    {
+        var monitor = context.RequestServices?.GetService(
+            typeof(Microsoft.Extensions.Options.IOptionsMonitor<Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationOptions>))
+            as Microsoft.Extensions.Options.IOptionsMonitor<Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationOptions>;
+        if (monitor is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var options = monitor.Get(Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme);
+            var raw = options.CookieManager.GetRequestCookie(context, options.Cookie.Name ?? string.Empty);
+            if (string.IsNullOrEmpty(raw))
+            {
+                return null;
+            }
+
+            var ticket = options.TicketDataFormat.Unprotect(raw);
+            if (ticket is null || ticket.Properties.ExpiresUtc is { } expires && expires <= DateTimeOffset.UtcNow)
+            {
+                return null;
+            }
+
+            return raw;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>IP tabanlı politikaların ortak bölümleme anahtarı.</summary>
