@@ -1201,13 +1201,16 @@ function showNotice(message: string, isError: boolean) {
 .import-issues { margin: var(--sp-6) 0 0; padding-inline-start: var(--sp-20); overflow-wrap: anywhere; }
 .import-table { max-height: 320px; overflow: auto; }
 .import-row { grid-template-columns: minmax(70px, 0.6fr) minmax(48px, 0.4fr) minmax(90px, 1fr) minmax(140px, 2.4fr); }
+.import-row .cell-main { min-width: 0; }
+.import-row small { white-space: normal; overflow-wrap: anywhere; }
 .import-conflict { color: var(--warn-1); font-weight: 600; }
 .import-confirm { display: flex; align-items: flex-start; gap: var(--sp-8); }
 .file-pick { cursor: pointer; display: inline-flex; align-items: center; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @media (max-width: 640px) {
-  .import-row { grid-template-columns: minmax(56px, 0.7fr) minmax(40px, 0.4fr) minmax(70px, 1fr); }
-  .import-row > :nth-child(4) { grid-column: 1 / -1; }
+  .import-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-6) var(--sp-12); }
+  .import-row.table-head { display: none; }
+  .import-row > :nth-child(4) { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
 }
 
 .dnssec-ds {
