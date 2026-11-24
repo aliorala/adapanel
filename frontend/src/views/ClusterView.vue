@@ -673,7 +673,7 @@ function showNotice(message: string, isError: boolean) {
 <style scoped>
 .cert-approval { display: grid; gap: 8px; }
 .cert-details { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
-.cert-details dt { color: var(--muted, #6b7280); }
+.cert-details dt { color: var(--text-muted, #6b7280); }
 .cert-details dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .cert-details { grid-template-columns: 1fr; } }
 .cluster-workspace {

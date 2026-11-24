@@ -1,5 +1,5 @@
 <template>
-  <section class="panel module-shell htaccess-module" data-testid="htaccess-module-card">
+  <section class="panel module-shell" data-testid="htaccess-module-card">
     <div class="section-head">
       <div>
         <h3>{{ t("panel.htaccessModule.title") }}</h3>

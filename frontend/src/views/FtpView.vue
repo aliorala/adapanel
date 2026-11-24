@@ -178,7 +178,7 @@
     </section>
 
     <!-- Hesap düzenleme: ev dizini (site kökü içinde) + salt-okunur. Kota YOK: desteklenmiyor, dürüstçe yazılır. -->
-    <section v-if="editing" class="form-surface ftp-edit" aria-labelledby="ftp-edit-heading">
+    <section v-if="editing" class="form-surface" aria-labelledby="ftp-edit-heading">
       <div class="section-head compact-head">
         <div>
           <h3 id="ftp-edit-heading">{{ t("panel.ftp.editTitle", { user: editing.userName }) }}</h3>

@@ -39,11 +39,19 @@ internal static class AdminLockStore
     public static async Task EnsureCanEnableAsync(JsonFileStore store, ClaimsPrincipal user, string kind, string name, CancellationToken token)
     {
         if (!await IsLockedAsync(store, kind, name, token)) return;
-        if (!user.IsInRole("Administrator")) throw new AppException(kind + ".locked_by_admin", 403, 403);
+        if (!user.IsInRole("Administrator")) throw new AppException(LockedMessageKey(kind), 403, 403);
         await ClearAsync(store, kind, name, token);
     }
 
     /// <summary>Kapatma isteğinde: yönetici kapatıyorsa kilit yazılır.</summary>
     public static Task RecordDisableAsync(JsonFileStore store, ClaimsPrincipal user, string kind, string name, CancellationToken token) =>
         user.IsInRole("Administrator") ? MarkAsync(store, kind, name, token) : Task.CompletedTask;
+
+    /// <summary>Sabit anahtarlar (dinamik birleştirme yok): çeviri kapsama testi ve arama bunları görebilsin.</summary>
+    private static string LockedMessageKey(string kind) => kind switch
+    {
+        "ftp" => "ftp.locked_by_admin",
+        "mail" => "mail.locked_by_admin",
+        _ => kind + ".locked_by_admin"
+    };
 }

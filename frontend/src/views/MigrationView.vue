@@ -10,7 +10,7 @@
       </div>
     </header>
 
-    <div class="full-migration-switch">
+    <div>
       <button type="button" class="secondary" :aria-expanded="fullMigrationOpen" @click="fullMigrationOpen = !fullMigrationOpen">{{ t(fullMigrationOpen ? 'panel.fullMigration.close' : 'panel.fullMigration.open') }}</button>
     </div>
     <FullMigrationPanel v-if="fullMigrationOpen" />
