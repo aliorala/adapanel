@@ -151,13 +151,29 @@ public sealed class McpToolGuardTests : IDisposable
     }
 
     [Fact]
-    public void DNS_araclari_MUSTERIYE_kapali()
+    public void DNS_araclari_rol_kapisi_REST_ikiziyle_AYNI()
     {
-        // REST ikizi DnsController [Authorize(Roles = "Administrator,Reseller")] tasiyor; ayni
-        // yetenegin iki kapisi ayni kilidi tasimali.
-        Assert.Throws<McpProtocolException>(() => McpCapability.RequireDnsRole(Kullanici(Musteri, "Customer")));
+        // REST ikizi DnsController [Authorize(Roles = "Administrator,Reseller,Customer")] tasiyor (A6:
+        // musteri kendi sitesinin DNS'ini yonetir); ayni yetenegin iki kapisi ayni kilidi tasimali.
+        McpCapability.RequireDnsRole(Kullanici(Musteri, "Customer"));
         McpCapability.RequireDnsRole(Kullanici(Guid.NewGuid(), "Reseller"));
         McpCapability.RequireDnsRole(Kullanici(Guid.NewGuid(), "Administrator"));
+        Assert.Throws<McpProtocolException>(() => McpCapability.RequireDnsRole(Kullanici(Guid.NewGuid(), "Operator")));
+    }
+
+    [Fact]
+    public void DNS_araclari_musteriye_acik_ama_SAHIPLIK_BOLUM_ASKI_ve_PAYLASIM_kapilarini_tasir()
+    {
+        // Rol kapisi tek basina yetmez: musteri anahtari BASKASININ bolgesine dokunamamali.
+        var okuma = KaynakOku("src", "AdaPanel.Api", "Mcp", "AdaPanelReadTools.cs").Split("[McpServerTool").First(p => p.Contains("Name = \"dns_zone\"", StringComparison.Ordinal));
+        Assert.Contains("CustomerAccess.EnsureSiteAsync", okuma, StringComparison.Ordinal);
+        Assert.Contains("McpCapability.EnsureReadAllowedAsync(customerScopes, user, \"sites\"", okuma, StringComparison.Ordinal);
+
+        var yazma = KaynakOku("src", "AdaPanel.Api", "Mcp", "AdaPanelWriteTools.cs").Split("[McpServerTool").First(p => p.Contains("Name = \"dns_upsert_record\"", StringComparison.Ordinal));
+        Assert.Contains("CustomerAccess.EnsureSiteAsync", yazma, StringComparison.Ordinal);
+        Assert.Contains("McpCapability.EnsureWriteAllowedAsync(customerScopes, user, \"sites\"", yazma, StringComparison.Ordinal);
+        // Paylasimli bolge: onay geri cagrisi olmadan yazma, kapsam disi esin kaydina dokunurdu.
+        Assert.Contains("DnsRecordApproval.Create", yazma, StringComparison.Ordinal);
     }
 
     // --- 4) Kablolama: HER araca kapi konmus mu ---

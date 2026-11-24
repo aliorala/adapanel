@@ -69,22 +69,21 @@ internal static class McpCapability
     }
 
     /// <summary>
-    /// DNS araçlarının kapısı: yönetici ya da bayi.
+    /// DNS araçlarının kapısı: yönetici, bayi ya da müşteri (kapsamlı roller kendi sitelerinde).
     /// <para>
-    /// Neden: aynı yeteneğin REST kapısı olan <c>DnsController</c>
-    /// <c>[Authorize(Roles = "Administrator,Reseller")]</c> ile korunuyor — DNS bölgesi bir sunucu
-    /// yeteneğidir ve müşteriye açılmamış. MCP tarafında bu denetim yoktu: bir MÜŞTERİ anahtarı,
-    /// panelin REST üzerinden hiç vermediği bölge okuma/yazma yeteneğine erişebiliyordu (MX'i
-    /// değiştirmek postayı kesmek, A'yı değiştirmek trafiği kaçırmak demektir). Aynı yeteneğin iki
-    /// kapısı varsa ikisi de aynı kilidi taşımalı.
+    /// REST ikizi <c>DnsController</c> <c>[Authorize(Roles = "Administrator,Reseller,Customer")]</c> ile
+    /// korunuyor (müşteri kendi sitesinin DNS'ini yönetir — Plesk gibi). İki kapı AYNI kilidi taşır:
+    /// rol burada, SAHİPLİK (<c>EnsureSiteAsync</c>), alt-kullanıcı bölüm izni, abonelik askısı ve
+    /// paylaşımlı-bölge kapsam onayı (<c>DnsRecordApproval</c>) araç gövdesinde. MX'i değiştirmek
+    /// postayı kesmek, A'yı değiştirmek trafiği kaçırmak demektir; rol tek başına yetmez.
     /// </para>
     /// </summary>
     public static void RequireDnsRole(ClaimsPrincipal user)
     {
-        if (!user.IsInRole("Administrator") && !user.IsInRole("Reseller"))
+        if (!user.IsInRole("Administrator") && !user.IsInRole("Reseller") && !user.IsInRole("Customer"))
         {
             throw new McpProtocolException(
-                "DNS bölgesi yönetimi yalnızca yönetici ve bayi hesaplarına açıktır; panelin REST " +
+                "DNS bölgesi yönetimi yalnızca yönetici, bayi ve müşteri hesaplarına açıktır; panelin REST " +
                 "arayüzünde de aynı kısıt geçerli.",
                 McpErrorCode.InvalidRequest);
         }
