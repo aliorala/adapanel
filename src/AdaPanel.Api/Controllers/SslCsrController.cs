@@ -14,7 +14,7 @@ namespace AdaPanel.Api.Controllers;
 [ApiController]
 [Authorize(Roles = "Administrator")]
 [Route("api/v1/ssl-csr")]
-public sealed class SslCsrController(ISslCsrService csrService, IAuditService auditService) : ControllerBase
+public sealed class SslCsrController(ISslCsrService csrService, IAuditService auditService, ICustomerScopeService customerScopes) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<SslCsrDto>>>> ListAsync(CancellationToken cancellationToken) =>
@@ -45,7 +45,9 @@ public sealed class SslCsrController(ISslCsrService csrService, IAuditService au
         var certificate = await csrService.ImportSignedAsync(id, request, cancellationToken);
         await auditService.AuditAsync(HttpContext, "ssl.csr.imported", $"ssl:{certificate.SiteName}",
             $"csr={id}; host={certificate.HostName}:{certificate.Port}; thumbprint={certificate.Thumbprint}; " +
-            $"notAfter={certificate.NotAfterUtc:yyyy-MM-dd}");
+            $"notAfter={certificate.NotAfterUtc:yyyy-MM-dd}",
+            // Sertifika bir SİTEYE bağlanır: konu sitenin sahibi (yöneticinin kendi sitesinde boş).
+            await AuditSubject.SiteOwnerAsync(customerScopes, certificate.SiteName, cancellationToken));
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.csr_imported"));
     }
 

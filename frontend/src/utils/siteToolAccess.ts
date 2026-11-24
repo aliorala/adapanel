@@ -14,7 +14,8 @@
  *   backup   → BackupController, protected → SitesController (korumalı dizinler), mail → MailController,
  *   logs     → LogsController GET site/{ad} (müşteri dahil; döndürme bayi+yönetici)
  *   toolkit  → SiteHostingSettingsController komut uçları (bayi+yönetici)
- *   asp/dns/proxy/ftp/apps → AspController / DnsController / ProxyController / FtpController /
+ *   dns/ftp  → DnsController / FtpController (müşteri dahil; sahiplik denetimli, sunucu uçları yalnız yönetici)
+ *   asp/proxy/apps → AspController / ProxyController /
  *                             AppRuntimeController (bayi+yönetici)
  *   webdb/cron/cache/migrate/store → sunucu düzeyi, yalnız yönetici
  */
@@ -37,9 +38,9 @@ export const SITE_TOOL_ROLES: Readonly<Record<string, readonly string[]>> = {
   logs: EVERYONE,
   toolkit: STAFF,
   asp: STAFF,
-  dns: STAFF,
+  dns: EVERYONE,
   proxy: STAFF,
-  ftp: STAFF,
+  ftp: EVERYONE,
   apps: STAFF,
   webdb: ADMIN,
   domaindb: ADMIN,

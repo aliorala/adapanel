@@ -668,14 +668,16 @@ public sealed class BackupController(
     {
         var result = await backupService.TestRestoreAsync(backupId, request?.EncryptionPassword, cancellationToken);
 
-        await auditService.WriteAsync(
+        // Konu: yedeğin KALICI sahibi (arşiv kaydındaki abonelik). Sunucu yedeği/panel yedeği ise boş kalır.
+        var kayit = (await backupService.GetBackupsAsync(cancellationToken))
+            .FirstOrDefault(item => string.Equals(item.Id, backupId, StringComparison.OrdinalIgnoreCase));
+        await WriteBackupAuditAsync(
             "backup.test_restore",
             $"backup:{backupId}",
             $"outcome={result.Outcome}; entries={result.EntryCount}; fileFailures={result.FileFailures}; " +
             $"dumps={result.DatabaseDumpsChecked}; dumpFailures={result.DatabaseDumpFailures}; " +
             $"dumpsUnchecked={result.DatabaseDumpsUnchecked}; cleanedUp={result.CleanedUp}",
-            User.GetRequiredUserId(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            await ResolveRecordSubjectAsync(kayit, cancellationToken),
             cancellationToken);
 
         return Ok(ApiResponse<BackupTestRestoreResultDto>.Ok(result, "backup.test_restore_" + result.Outcome));

@@ -7,8 +7,8 @@ import { canUseSiteTool, SITE_TOOL_ROLES } from "./siteToolAccess";
  *  - eksik gösterirsek backend'in izin verdiği özellik müşteriden saklanır (A1).
  */
 describe("site tool access map", () => {
-  const customerSees = ["hosting", "php", "ssl", "files", "protected", "stats", "backup", "mail", "wp", "logs"];
-  const staffOnly = ["toolkit", "asp", "dns", "proxy", "ftp", "apps"];
+  const customerSees = ["hosting", "php", "ssl", "files", "protected", "stats", "backup", "mail", "wp", "logs", "dns", "ftp"];
+  const staffOnly = ["toolkit", "asp", "proxy", "apps"];
   const adminOnly = ["webdb", "domaindb", "cron", "cache", "migrate", "store"];
 
   it("shows the customer exactly the tools the backend allows (SSL, statistics and WordPress included)", () => {
