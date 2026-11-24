@@ -270,11 +270,16 @@
 
       <!-- Durum gelmeden "kurulu değil" + kurulum butonu gösteriliyordu; kurulu ClamAV
            yeniden kurulmaya çalışılabiliyordu. -->
-      <p v-if="!avStatus" class="empty-state" role="status" aria-live="polite">
+      <div v-if="!avStatus && avLoadError" class="notice error" role="alert">
+        <p>{{ t("panel.antivirus.statusLoadFailed") }}</p>
+        <button class="secondary compact" @click="refreshAvStatus">{{ t("panel.common.retry") }}</button>
+      </div>
+      <p v-else-if="!avStatus" class="empty-state" role="status" aria-live="polite">
         {{ t("panel.common.loading") }}
       </p>
 
       <div v-else-if="!avStatus.isInstalled" class="form-surface">
+        <AntivirusStatusNotice :installed="avStatus.isInstalled" />
         <p class="meta">{{ t("panel.antivirus.installHint") }}</p>
         <div class="row-actions">
           <button class="compact" :disabled="globalLoading || !!busyAction" @click="installAv">
@@ -442,6 +447,7 @@
 </template>
 
 <script setup lang="ts">
+import AntivirusStatusNotice from "../components/AntivirusStatusNotice.vue";
 import { getFormattingLocale } from '../utils/locale';
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -496,6 +502,7 @@ const loading = computed(() => siteLoading.value || globalLoading.value);
 const activeSection = ref<"site" | "firewall" | "bruteforce" | "antivirus">("site");
 // ClamAV antivirüs (Güvenlik > Antivirüs). Durum sekme ilk açıldığında yüklenir.
 const avStatus = ref<AntivirusStatus | null>(null);
+const avLoadError = ref(false);
 // Kurulum / tanım güncelleme / tarama DAKİKALAR–SAATLER sürer; hepsi aynı şeridi kullanır
 // (aynı anda yalnız biri çalışabilir: üçü de `busyAction === "av"` ile kilitli).
 const avTask = useRunningTask();
@@ -618,10 +625,14 @@ async function refreshAvStatus(): Promise<AntivirusStatus | null> {
       const status = await getAntivirusStatus();
       if (!isActive() || generation !== avGeneration) return null;
       avStatus.value = status;
+      avLoadError.value = false;
       avClockMs.value = Date.now();
       return status;
     } catch (error) {
-      if (isActive() && generation === avGeneration) showNotice(resolveApiMessage(error), true);
+      if (isActive() && generation === avGeneration) {
+        avLoadError.value = true;
+        showNotice(resolveApiMessage(error), true);
+      }
       return null;
     } finally {
       if (generation === avGeneration) avPending = undefined;

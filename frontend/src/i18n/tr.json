@@ -2241,6 +2241,7 @@
   "panel.antivirus.title": "Antivirüs",
   "panel.antivirus.subtitle": "ClamAV ile site dosyalarını kötü amaçlı yazılımlara karşı tarayın (Cisco Talos imzaları). Daemon çalışmaz; taramalar isteğe bağlıdır, sunucuya kalıcı yük binmez.",
   "panel.antivirus.noProtection": "Antivirüs kurulu değil, koruma yok. Site dosyaları taranmıyor; ClamAV kurulup virüs tanımları indirilene kadar sunucu kötü amaçlı yazılıma karşı korunmuyor.",
+  "panel.antivirus.statusLoadFailed": "Antivirüs durumu okunamadı; koruma durumu bilinmiyor.",
   "panel.antivirus.notInstalled": "Kurulu değil",
   "panel.antivirus.installedVersion": "ClamAV {version}",
   "panel.antivirus.installHint": "ClamAV motoru henüz kurulu değil. Kurulum ~220 MB indirir; ardından virüs tanımlarını güncellemeniz gerekir (~250 MB, tek seferlik — sonrası artımlı ve hızlıdır).",

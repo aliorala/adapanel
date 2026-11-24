@@ -151,7 +151,7 @@
             <span class="meta">{{ boyutMetni(archiveOperation.output.size) }}</span>
           </div>
           <p v-else class="meta">{{ t('panel.files.archiveOutputUnavailable') }}</p>
-          <a v-if="archiveDownloadUrl" class="secondary compact action-link" :href="archiveDownloadUrl">
+          <a v-if="archiveDownloadUrl" class="secondary compact action-link" :href="safeHref(archiveDownloadUrl)">
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4" /></svg>
             {{ t('panel.files.archiveDownload') }}
           </a>
@@ -460,7 +460,7 @@
                    Şimdi görünür kalan tek eylem, dosya yöneticisinde en sık kullanılan "İndir";
                    gerisi tek bir açma düğmesinin ardında ve KONUMU SABİT. -->
               <div class="entry-actions" role="cell">
-                <a v-if="!entry.isDirectory" class="secondary compact action-link" :href="getDownloadUrl(entry.path)">
+                <a v-if="!entry.isDirectory" class="secondary compact action-link" :href="safeHref(getDownloadUrl(entry.path))">
                   {{ t("panel.files.download") }}
                 </a>
                 <button
@@ -534,7 +534,7 @@
           {{ saving ? t("panel.confirm.working") : t("panel.files.save") }}
         </button>
         <span v-if="isDirty" class="status-pill" role="status">{{ t("panel.files.unsaved") }}</span>
-        <a class="secondary compact action-link" :href="getDownloadUrl(workspace.path)">
+        <a class="secondary compact action-link" :href="safeHref(getDownloadUrl(workspace.path))">
           {{ t("panel.files.download") }}
         </a>
       </div>
@@ -720,6 +720,7 @@ import { useBulkAction, useBulkSelection } from "../composables/useBulkSelection
 import { usePagination } from "../composables/usePagination";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 import { formatBytes } from "../utils/bytes";
+import { safeHref } from "../utils/url";
 import { formatDateTime } from "../utils/datetime";
 
 const props = defineProps<{ embedded?: boolean }>();

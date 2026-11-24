@@ -88,19 +88,37 @@ export function openReachable(raw: string): void {
 const HREF_SEMALARI = new Set(["http:", "https:", "mailto:"]);
 
 /**
+ * Göreli yol kuralı (tek yerde): tek "/" ile başlar; "//", ters bölü, kontrol karakteri ve
+ * kodlanmış %5C / %2F içermez. Tarayıcı "/\evil" ve "/	/evil" değerlerini "//evil" gibi
+ * ağ-yolu olarak açar; kodlanmış hâller de sunucu/aracı katmanlarda çözülebilir.
+ */
+function isSafeRelativePath(value: string): boolean {
+  if (!value.startsWith("/") || value.startsWith("//")) {
+    return false;
+  }
+  if (value.includes("\\") || /[\u0000-\u001f\u007f]/.test(value)) {
+    return false;
+  }
+  return !/%(5c|2f)/i.test(value);
+}
+
+/**
  * Sunucudan gelen bir adresi `:href`e basmadan önce süzer: yalnız http, https ve mailto
  * geçer; `javascript:`, `data:`, `vbscript:` ve ayrıştırılamayan her şey "#" olur.
- * Göreli yollar ("/x", "x/y") geçer; "//evil" ağ-yolu referansı geçmez.
+ * Göreli yollar isSafeRelativePath kuralından geçmelidir.
  */
 export function safeHref(raw: string | null | undefined): string {
   const value = (raw ?? "").trim();
   if (!value) {
     return "#";
   }
-  if (value.startsWith("//") || value.startsWith("\\")) {
+  if (value.startsWith("/")) {
+    return isSafeRelativePath(value) ? value : "#";
+  }
+  if (value.startsWith("\\") || /[\u0000-\u001f\u007f]/.test(value)) {
     return "#";
   }
-  if (value.startsWith("/") || value.startsWith("#") || value.startsWith("?")) {
+  if (value.startsWith("#") || value.startsWith("?")) {
     return value;
   }
   try {
@@ -113,16 +131,10 @@ export function safeHref(raw: string | null | undefined): string {
 }
 
 /**
- * Giriş sonrası yönlendirme hedefi: yalnız TEK "/" ile başlayan göreli yol kabul edilir.
- * "//evil", "/\evil", "\evil" ve mutlak adresler boş dize döner (çağıran yönlendirmez).
+ * Giriş sonrası yönlendirme hedefi: yalnız isSafeRelativePath kuralından geçen yol kabul
+ * edilir; aksi hâlde boş dize döner (çağıran yönlendirmez).
  */
 export function safeRelativePath(raw: string | null | undefined): string {
   const value = (raw ?? "").trim();
-  if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
-    return "";
-  }
-  if (/[\u0000-\u001f]/.test(value)) {
-    return "";
-  }
-  return value;
+  return isSafeRelativePath(value) ? value : "";
 }
