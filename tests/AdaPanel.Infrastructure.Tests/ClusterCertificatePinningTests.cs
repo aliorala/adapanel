@@ -177,6 +177,20 @@ public sealed class ClusterCertificatePinningTests : IDisposable
         Assert.Equal(0, prober.Calls);
     }
 
+    [Fact]
+    public async Task Rebinding_ic_istisnada_bile_403_doner()
+    {
+        var (servis, _, prober) = Duzenek();
+        var ic = new HttpRequestException(ClusterMessages.AddressForbidden);
+        foreach (var hata in new Exception[] { new HttpRequestException("sarmalayici", ic), new OutboundBlockedException("dugum.ornek.test", "10.0.0.5") })
+        {
+            prober.Failure = hata;
+            var sonuc = await Assert.ThrowsAsync<AppException>(() => servis.ProbeCertificateAsync("https://dugum.ornek.test"));
+            Assert.Equal(ClusterMessages.AddressForbidden, sonuc.MessageKey);
+            Assert.Equal(403, sonuc.HttpStatusCode);
+        }
+    }
+
     // ------------------------------------------------------------------ yardımcılar
 
     private (ClusterService Servis, ClusterNodeStore Depo, FakeCertificateProber Prober) Duzenek()

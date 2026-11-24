@@ -97,10 +97,27 @@ public static class CertificateHostMatcher
         return false;
     }
 
+    private static string ToAscii(string name)
+    {
+        var wildcard = name.StartsWith("*.", StringComparison.Ordinal);
+        var body = wildcard ? name[2..] : name;
+        try
+        {
+            body = new System.Globalization.IdnMapping { AllowUnassigned = true }.GetAscii(body);
+        }
+        catch (ArgumentException)
+        {
+            // Çevrilemeyen ad olduğu gibi (küçük harf) karşılaştırılır; eşleşme şansı yok sayılır.
+        }
+
+        return ((wildcard ? "*." : string.Empty) + body).ToLowerInvariant();
+    }
+
     private static bool DnsMatches(string pattern, string host)
     {
-        pattern = pattern.Trim().TrimEnd('.').ToLowerInvariant();
-        host = host.ToLowerInvariant();
+        // Unicode ad ile punycode SAN AYNI addır: iki taraf da ASCII (punycode) biçime çevrilir.
+        pattern = ToAscii(pattern.Trim().TrimEnd('.'));
+        host = ToAscii(host);
         if (pattern.Length == 0)
         {
             return false;

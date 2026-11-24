@@ -482,6 +482,49 @@ public sealed class LicenseEnforcementTests : IDisposable
         Assert.Equal(now, (await store.ReadAsync(default)).KeyStoredAtUtc);
     }
 
+    /// <summary>
+    /// Mühür anahtarı okunamıyorsa (Seal IOException atar) VerifyAsync "istisna atmaz" sözleşmesini
+    /// korur: önceki karar aynen kalır ve uyarı günlüğe yazılır.
+    /// </summary>
+    [Fact]
+    public async Task Muhur_anahtari_okunamazsa_dogrulama_ISTISNA_atmaz_onceki_karar_korunur_uyari_yazilir()
+    {
+        var sunucu = new SahteLisansSunucusu();
+        var gunluk = new ListeGunlugu();
+        var runtime = Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = dataRoot });
+        var servis = new LicenseService(
+            Microsoft.Extensions.Options.Options.Create(new LicenseOptions
+            {
+                VerificationUrl = "https://lisans.ornek.test/verify", ProductCode = "adapanel", OfflineGraceDays = 14, VerifyIntervalHours = 12
+            }),
+            new LicenseStateStore(new JsonFileStore(runtime), new TersinirKoruyucu()),
+            new SabitParmakIzi(), sunucu, new SabitSaat(DateTime.UtcNow), gunluk);
+
+        await servis.ActivateAsync("ADA-TEST-0001");
+        sunucu.Karar = LicenseVerdicts.Invalid;
+
+        LicenseStatusDto durum;
+        using (new FileStream(Path.Combine(dataRoot, "config", "license", "seal.key"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            durum = await servis.RefreshAsync();
+        }
+
+        Assert.Equal(LicenseState.Active, durum.State);
+        Assert.Contains(gunluk.Satirlar, s => s.Contains("önceki karar korunuyor"));
+    }
+
+    private sealed class ListeGunlugu : Microsoft.Extensions.Logging.ILogger<LicenseService>
+    {
+        public List<string> Satirlar { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => Satirlar.Add(logLevel + ": " + formatter(state, exception));
+    }
+
     // --- düzenek ---
 
     private LicenseService Servis(
