@@ -175,9 +175,9 @@ public sealed class DatabaseUpgradeSafetyTests : IDisposable
         services.AddAdaPanelData(config);
         await using var provider = services.BuildServiceProvider();
         await using var scope = provider.CreateAsyncScope();
-        var conn = scope.ServiceProvider.GetRequiredService<AdaPanelDbContext>().Database.GetDbConnection();
-        await conn.OpenAsync();
-        Assert.Equal(expectedMs, await ScalarLongAsync(conn, "PRAGMA busy_timeout;"));
+        var db = scope.ServiceProvider.GetRequiredService<AdaPanelDbContext>();
+        await db.Database.OpenConnectionAsync(); // EF üzerinden açılır → interceptor çalışır
+        Assert.Equal(expectedMs, await ScalarLongAsync(db.Database.GetDbConnection(), "PRAGMA busy_timeout;"));
     }
 
     [Fact]
@@ -240,14 +240,14 @@ public sealed class DatabaseUpgradeSafetyTests : IDisposable
     }
 
     [Fact]
-    public async Task Audit_write_failure_does_not_throw_but_is_counted()
+    public async Task Audit_write_failure_throws_by_default_and_is_counted()
     {
         await using var db = NewContext();
         await DatabaseUpgrader.UpgradeAsync(db, root, NullLogger.Instance);
         await db.Database.ExecuteSqlRawAsync("DROP TABLE audit_logs;");
         AuditFailureMonitor.ResetForTests();
 
-        await NewAuditService(db).WriteAsync("x.y", "res", "details", null, null);
+        await Assert.ThrowsAnyAsync<Exception>(() => NewAuditService(db).WriteAsync("x.y", "res", "details", null, null));
 
         Assert.Equal(1, AuditFailureMonitor.FailureCount);
         Assert.NotNull(AuditFailureMonitor.LastFailureUtc);
@@ -255,21 +255,20 @@ public sealed class DatabaseUpgradeSafetyTests : IDisposable
     }
 
     [Fact]
-    public async Task Audit_write_failure_propagates_when_other_changes_are_pending_or_when_required()
+    public async Task Best_effort_audit_write_swallows_only_when_no_other_changes_are_pending()
     {
         await using var db = NewContext();
         await DatabaseUpgrader.UpgradeAsync(db, root, NullLogger.Instance);
         await db.Database.ExecuteSqlRawAsync("DROP TABLE audit_logs;");
         AuditFailureMonitor.ResetForTests();
 
-        // Aynı SaveChanges başka bekleyen değişikliği de taşır → hata yutulursa kayıp "başarı" görünür.
-        db.Settings.Add(new PanelSetting { Key = "pending", Value = "v" });
-        await Assert.ThrowsAnyAsync<Exception>(() => NewAuditService(db).WriteAsync("x", "r", "d", null, null));
+        await AuditWriter.WriteAsync(db, "x", "r", "d", null, null, null, propagateFailure: false);
+        Assert.Equal(1, AuditFailureMonitor.FailureCount);
 
-        // Güvenliğe kritik yol: her durumda atar.
-        await using var db2 = NewContext();
+        // Aynı SaveChanges başka bekleyen değişikliği de taşır → yutulursa kayıp "başarı" görünür.
+        db.Settings.Add(new PanelSetting { Key = "pending", Value = "v" });
         await Assert.ThrowsAnyAsync<Exception>(() =>
-            AuditWriter.WriteAsync(db2, "x", "r", "d", null, null, null, propagateFailure: true));
-        Assert.Equal(0, AuditFailureMonitor.FailureCount);
+            AuditWriter.WriteAsync(db, "x", "r", "d", null, null, null, propagateFailure: false));
+        Assert.Equal(2, AuditFailureMonitor.FailureCount);
     }
 }

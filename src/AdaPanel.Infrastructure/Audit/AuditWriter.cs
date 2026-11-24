@@ -22,13 +22,15 @@ namespace AdaPanel.Infrastructure.Audit;
 /// duruyor: kopyalansaydı, birinde uygulanıp diğerinde unutulması an meselesiydi.
 /// </para>
 /// <para>
-/// HATA POLİTİKASI: denetim yazımı başarısız olursa, yazım SADECE denetim kaydını bekleyen
-/// değişiklik olarak taşıyorsa hata YUTULUR (günlük + <see cref="AuditFailureMonitor"/> sayacı):
-/// çağıran zaten yaptığı sistem değişikliğini (site, parola, kural...) denetim diski/kilidi yüzünden
-/// "başarısız" saymamalı. Bağlamda başka bekleyen değişiklik varsa hata YUTULMAZ: aynı SaveChanges
-/// onları da taşır, hata onlardan da gelmiş olabilir ve yutmak veri kaybını başarı gibi gösterirdi.
-/// <c>propagateFailure: true</c> (yetkilendirme öncesi/güvenliğe kritik kayıt: sunucu konsolundan
-/// parola kurtarma) her durumda atar: izsiz yüksek etkili müdahale kabul edilmez.
+/// HATA POLİTİKASI (bilinçli karar): VARSAYILAN = hata ATILIR. Mevcut çağıranlar denetim yazımını
+/// işlemin ATOMİK parçası sayar ve buna dayanır (2FA kurtarma kodları, SSL içe aktarma, durum
+/// değiştiren her uç: AuditCoverageTests, AuthTwoFactorLifecycleTests, SslImportLifecycleTests);
+/// varsayılanı yutmaya çevirmek bu sözleşmeyi 40+ çağrı yerinde sessizce bozardı. Her başarısızlık
+/// ayrıca günlüğe yazılır ve <see cref="AuditFailureMonitor"/> sayacını artırır (görünür boşluk).
+/// <c>propagateFailure: false</c> (en-iyi-çaba) yalnız, sistem değişikliği ZATEN yapılmış ve geri
+/// alınamayan çağıranlar için açık bir seçimdir: bekleyen başka değişiklik yoksa hata yutulur (sayaç
+/// artar); başka bekleyen değişiklik varsa yine atılır, çünkü aynı SaveChanges onları da taşır ve
+/// yutmak veri kaybını başarı gibi gösterirdi.
 /// </para>
 /// </remarks>
 internal static class AuditWriter
@@ -42,7 +44,7 @@ internal static class AuditWriter
         Guid? subscriptionUserId,
         string? ipAddress,
         CancellationToken cancellationToken = default,
-        bool propagateFailure = false,
+        bool propagateFailure = true,
         ILogger? logger = null)
     {
         var hadOtherPendingChanges = dbContext.ChangeTracker.HasChanges();
@@ -72,17 +74,20 @@ internal static class AuditWriter
             // yazımının hatası, alakasız bir işlemi de düşürürdü.
             dbContext.Entry(entry).State = EntityState.Detached;
 
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                AuditFailureMonitor.Record();
+                logger?.LogError(
+                    exception,
+                    "Denetim kaydı yazılamadı (eylem {Action}). Toplam başarısız yazım: {Count}.",
+                    entry.Action,
+                    AuditFailureMonitor.FailureCount);
+            }
+
             if (propagateFailure || hadOtherPendingChanges || cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
-
-            AuditFailureMonitor.Record();
-            logger?.LogError(
-                exception,
-                "Denetim kaydı yazılamadı (eylem {Action}); asıl işlem geri alınmadı. Toplam kayıp: {Count}.",
-                entry.Action,
-                AuditFailureMonitor.FailureCount);
         }
     }
 }
