@@ -213,7 +213,7 @@ const sessionEpoch = getSessionEpoch();
 let viewRevision = 0;
 const isAdministrator = computed(() => auth.session?.user?.role === "Administrator");
 const actorCurrent = () => !disposed && sessionEpoch === getSessionEpoch() && auth.session?.isAuthenticated === true &&
-  ["Administrator", "Reseller"].includes(auth.session?.user?.role ?? "");
+  ["Administrator", "Reseller", "Customer"].includes(auth.session?.user?.role ?? "");
 const contextCurrent = (revision: number) => actorCurrent() && revision === viewRevision;
 const versionsMeasured = computed(() => phpStore.loaded && !verificationRequired.value);
 const catalogMeasured = computed(() => softwareStore.loaded && !verificationRequired.value);

@@ -839,6 +839,8 @@ async function startQueue() {
 }
 
 async function stopQueue() {
+  // Kuyruk işçisini durdurmak bekleyen işlerin (e-posta, bildirim) işlenmesini keser: onay iste.
+  if (!await confirm({ title: t("panel.confirm.stopQueueTitle"), message: t("panel.toolkit.confirmStopQueue"), confirmLabel: t("panel.toolkit.queue.stop") })) return;
   queueBusy.value = true;
   queueNotice.value = "";
   try {
@@ -884,6 +886,7 @@ async function startScheduler() {
 }
 
 async function stopScheduler() {
+  if (!await confirm({ title: t("panel.confirm.stopSchedulerTitle"), message: t("panel.toolkit.confirmStopScheduler"), confirmLabel: t("panel.toolkit.queue.stop") })) return;
   schedulerBusy.value = true;
   queueNotice.value = "";
   try {

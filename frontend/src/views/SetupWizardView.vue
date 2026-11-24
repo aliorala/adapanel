@@ -154,7 +154,10 @@
         </label>
         <label>
           <span>{{ t("panel.form.password") }}</span>
-          <PasswordField v-model="loginForm.password" minlength="12" required />
+          <!-- minlength BİLEREK YOK: giriş formu parola KURMAZ, doğrular. 12 karakter kuralı yalnız parola
+               KURULAN yerlerde (kurulum, sıfırlama, değiştirme) geçerli; burada koyunca eski/kısa parolalı
+               kullanıcı tarayıcı doğrulamasına takılıp neden giriş yapamadığını anlamıyordu. -->
+          <PasswordField v-model="loginForm.password" required />
         </label>
         <label v-if="requiresTwoFactor">
           <span>{{ t("panel.auth.twoFactorCode") }}</span>
@@ -278,8 +281,17 @@
       </div>
     </template>
 
+    <!-- Rolün menüsünde olmayan bir bölüme adres çubuğundan (?section=monitor) gelinirse, eskiden sessizce
+         Ana Sayfa'ya atılıyor ya da (menüde olmayan ama şablonda rol denetimi bulunmayan bölümlerde) boş
+         ekran çiziliyordu. Artık sebebi söylenir; kural menüyle AYNI listeden (dashboardSections) gelir. -->
+    <section v-if="deniedSection" class="panel module-shell section-denied" role="alert">
+      <h2>{{ t("panel.auth.sectionDeniedTitle") }}</h2>
+      <p class="meta">{{ t("panel.auth.sectionDeniedBody") }}</p>
+      <button class="secondary compact" @click="leaveDeniedSection">{{ t("panel.navigation.home") }}</button>
+    </section>
+
     <DashboardOverviewView
-      v-if="activeSection === 'home'"
+      v-else-if="activeSection === 'home'"
       :overview="systemStore.overview"
       :overview-confirmed="systemStore.overviewConfirmed"
       :overview-error="systemStore.overviewError"
@@ -318,7 +330,7 @@
       :domain="mailDomainFromSearch" />
 
     <MonitoringView
-      v-else-if="activeSection === 'monitor'"
+      v-else-if="activeSection === 'monitor' && isAdmin"
       :overview="systemStore.overview"
       :overview-confirmed="systemStore.overviewConfirmed"
       :overview-error="systemStore.overviewError"
@@ -786,18 +798,34 @@ const bannerError = ref(false);
 const requiresTwoFactor = ref(false);
 const settingsTab = ref<SettingsTab>("general");
 const activeSection = ref("home");
+// Adresle istenen ama rolün menüsünde OLMAYAN bölüm ("yetkisiz" ekranı bunu gösterir).
+const deniedSection = ref("");
+// Panelin tanıdığı TÜM bölüm kimlikleri: "yetkisiz" ile "hiç böyle bir bölüm yok"u ayırır.
+const KNOWN_SECTION_IDS = new Set([
+  "home", "sites", "accounts", "sitebuilder", "mail", "ftp", "files", "database", "monitor", "seo", "advisor",
+  "software", "tasks", "security", "audit", "billing", "tools", "migration", "cluster", "ai", "account",
+  "settings", "backup", "subusers"
+]);
+function leaveDeniedSection() {
+  deniedSection.value = "";
+  activeSection.value = "home";
+  void router.replace({ query: { section: "home" } });
+}
 let navigationReady = false;
 function restorePanelLocation() {
   const query = router.currentRoute.value.query;
   const section = typeof query.section === "string" ? query.section : activeSection.value;
-  activeSection.value = dashboardSections.value.some((item) => item.id === section) ? section : "home";
+  const allowed = dashboardSections.value.some((item) => item.id === section);
+  deniedSection.value = !allowed && section !== "home" && KNOWN_SECTION_IDS.has(section) ? section : "";
+  activeSection.value = allowed ? section : "home";
   if (activeSection.value === "settings") {
     const tabs = isAdmin.value ? ["general", "branding", "security", "errorReports", "notifications", "updates", "license"] : ["branding"];
     settingsTab.value = (tabs.includes(String(query.tab)) ? query.tab : tabs[0]) as SettingsTab;
     if (settingsTab.value === "branding" && !brandingLoaded.value) void loadBrandingSettings();
   }
   navigationReady = true;
-  if (query.section !== activeSection.value) void router.replace({ query: { section: activeSection.value } });
+  // Yetkisiz bölümde adres OLDUĞU GİBİ kalır: yenileyince aynı açıklama görünür, sessizce başka yere atılmaz.
+  if (!deniedSection.value && query.section !== activeSection.value) void router.replace({ query: { section: activeSection.value } });
 }
 watch(() => router.currentRoute.value, () => {
   if (navigationReady && mode.value === "dashboard") restorePanelLocation();
@@ -1733,6 +1761,12 @@ async function openMailDomainFromSearch(domain: string) {
 
 async function handleNavigation(sectionId: string) {
   if (sectionId !== "attention" && !await allowNavigation()) return;
+  if (sectionId !== "attention" && deniedSection.value) {
+    // Yetkisiz ekrandayken menüden başka bir yere geçilirse adres de güncellenir (activeSection
+    // değişmiyorsa — ör. Ana Sayfa — izleyici tetiklenmez ve adres eski bölümde kalırdı).
+    deniedSection.value = "";
+    if (sectionId !== "exit") void router.replace({ query: { section: sectionId } });
+  }
   if (sectionId === "exit") {
     void logout();
     return;

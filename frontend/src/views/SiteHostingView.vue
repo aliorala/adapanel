@@ -313,7 +313,7 @@
                 <h4>{{ t("panel.hosting.quota") }}</h4>
                 <p class="meta">{{ t("panel.hosting.quotaHint") }}</p>
               </div>
-              <button class="secondary compact" v-bind="writeGate(busy || !quota?.quotaEnabled)" @click="removeSiteQuota">
+              <button v-if="isStaff" class="secondary compact" v-bind="writeGate(busy || !quota?.quotaEnabled)" @click="removeSiteQuota">
                 {{ t("panel.hosting.quotaRemove") }}
               </button>
             </div>
@@ -321,7 +321,7 @@
             <!-- ÇIKMAZ SOKAK DEĞİL: rol eksikse kurma düğmesi de burada. -->
             <div v-if="quota && !quota.fsrmAvailable" class="notice error fsrm-missing" role="alert">
               <span>{{ t("panel.hosting.quotaUnavailable") }}</span>
-              <button class="secondary compact" v-bind="writeGate(busy)" @click="installFsrmRole">
+              <button v-if="isAdmin" class="secondary compact" v-bind="writeGate(busy)" @click="installFsrmRole">
                 {{ installingFsrm ? t("panel.hosting.quotaInstalling") : t("panel.hosting.quotaInstall") }}
               </button>
             </div>
@@ -345,7 +345,7 @@
               </div>
             </div>
 
-            <div class="settings-rows">
+            <div v-if="isStaff" class="settings-rows">
               <label class="setting-row">
                 <span>{{ t("panel.hosting.quotaLimitMb") }}</span>
                 <input v-model.number="quotaForm.limitMegabytes" type="number" min="1" />
@@ -358,7 +358,7 @@
               </label>
             </div>
 
-            <div class="action-row">
+            <div v-if="isStaff" class="action-row">
               <button v-bind="writeGate(busy)" @click="saveSiteQuota">{{ t("panel.hosting.save") }}</button>
             </div>
           </section>
@@ -554,10 +554,11 @@ import {
 import { getQuota, removeQuota, setQuota, type SiteDiskQuota, installFsrm } from "../api/quota";
 import { configureGitDeployment, deployGit, getGitDeployment, type GitDeployment } from "../api/git";
 import { getSiteStatistics, type WebStatistics } from "../api/statistics";
-import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { updateDocumentRoot, enableFrameworkRewrite, repairSitePermissions } from "../api/sites";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { formatBytes as sharedFormatBytes } from "../utils/bytes";
 import { getSessionEpoch } from "../api/client";
 
@@ -565,7 +566,15 @@ const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
 const { writeGate } = useSubscriptionGate();
+const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
+// Rol süzgeci: backend ile AYNI. Hosting ayarlarını müşteri de yönetir (kendi sitesi); yönetici/bayiye
+// özel olanlar (bant/bağlantı sınırı, kota değiştirme, Composer) ve yalnız yöneticiye özel olan
+// Git dağıtımı müşteriye gösterilmez (backend zaten 403 verirdi).
+const authStore = useAuthStore();
+const role = computed(() => authStore.session?.user?.role);
+const isAdmin = computed(() => role.value === "Administrator");
+const isStaff = computed(() => role.value === "Administrator" || role.value === "Reseller");
 const siteName = computed(() => sitesStore.selectedSiteName);
 const selectedSite = computed(() => sitesStore.selectedSite);
 const documentRoot = ref("");
@@ -705,7 +714,10 @@ const sections = computed(() => [
   { id: "quota", label: t("panel.hosting.quota"), hint: t("panel.hosting.quotaHint") },
   { id: "git", label: t("panel.hosting.git"), hint: t("panel.hosting.gitHint") },
   { id: "tools", label: t("panel.hosting.tools"), hint: t("panel.hosting.toolsHintShort") }
-]);
+].filter((section) =>
+  section.id === "git" ? isAdmin.value
+    : section.id === "tools" || section.id === "traffic" || section.id === "htaccess" ? isStaff.value
+      : true));
 
 const primaryBinding = computed(() => {
   const binding = selectedSite.value?.bindings[0];
@@ -768,7 +780,8 @@ async function load(siteChanged = false) {
     protectedExtensions.value = settings.protectedExtensions.join(", ");
     await loadQuota(context);
     if (!context.current()) return;
-    await loadGitFor(context);
+    // Git dağıtımı yalnız yöneticiye açık (GitController): müşteri/bayi için 403 verecek istek atılmaz.
+    if (isAdmin.value) await loadGitFor(context);
     if (!context.current()) return;
     settingsLoaded.value = true;
   } catch (error) {
@@ -911,6 +924,13 @@ async function saveSiteQuota() {
 }
 
 async function removeSiteQuota() {
+  // Kotayı kaldırmak sitenin disk sınırını açar (plan sınırı aşılabilir): onaysız yapılmaz.
+  const approved = await confirm({
+    title: t("panel.confirm.removeQuotaTitle", { name: siteName.value }),
+    message: t("panel.hosting.quotaRemoveConfirm"),
+    confirmLabel: t("panel.hosting.quotaRemove")
+  });
+  if (!approved) return;
   await mutate(context => removeQuota(context.site), result => {
     quota.value = result;
     quotaError.value = "";

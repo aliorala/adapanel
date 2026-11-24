@@ -707,7 +707,6 @@ import {
 } from "../api/files";
 import { useBackupRestore, restoreResult } from "../composables/useBackupRestore";
 import BackupRestoreResult from "../components/BackupRestoreResult.vue";
-import { UserFacingError } from "../utils/apiError";
 import { useNavigationGuard, allowNavigation } from "../composables/navigationGuard";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import router from "../router";
@@ -2101,7 +2100,7 @@ async function restore(record: BackupRecord) {
   await fullRestore.restore(record, (result) => {
     const report = restoreResult(result, t);
     showNotice(t(report.failed ? "panel.backup.restoredWithErrors" : "panel.backup.restored"), report.failed);
-  }, (error) => showNotice(error instanceof Error && !(error instanceof UserFacingError) && !('isAxiosError' in error) ? error.message : resolveApiMessage(error), true), refreshBackups);
+  }, (error) => showNotice(resolveApiMessage(error), true), refreshBackups);
 }
 
 </script>

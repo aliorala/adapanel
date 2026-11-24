@@ -154,6 +154,7 @@ import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { lazyView } from "../utils/lazyView";
 import { siteToolIcon } from "../utils/siteToolIcons";
+import { canUseSiteTool } from "../utils/siteToolAccess";
 import { toReachableUrl } from "../utils/url";
 import SitesView from "./SitesView.vue";
 import SiteDetailView from "./SiteDetailView.vue";
@@ -209,26 +210,12 @@ const { t } = useI18n();
 const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const authStore = useAuthStore();
-const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
-const isReseller = computed(() => authStore.session?.user?.role === "Reseller");
+const role = computed(() => authStore.session?.user?.role);
 
-// GÖRÜNÜRLÜK, BACKEND'İN ROL LİSTESİYLE AYNI OLMALI.
-//
-// Burada yalnız dört araç kısıtlanıyordu; geri kalan her şey müşteriye görünüyordu ama
-// controller'ların çoğu "Administrator,Reseller" istiyor. Sonuç: müşteri PHP, SSL, FTP, DNS,
-// istatistik gibi 13 araca tıklıyor ve her birinde 403 alıyordu — panel ona olmayan bir yetki
-// vaat ediyordu.
-//
-// Server-level araçlar (yazılım mağazası, web DB kurulumu, önbellek, cron) yalnız admin'e açık.
-const adminOnlyTools = new Set(["store", "webdb", "cache", "cron", "logs", "migrate"]);
-
-// Bayi ve admin'e açık, MÜŞTERİYE KAPALI olanlar — karşılıkları:
-//   hosting/toolkit → SiteHostingSettingsController, php → PhpController, asp → AspController,
-//   dns → DnsController, ssl → SslController, proxy → ProxyController, ftp → FtpController,
-//   stats → StatisticsController, wp → WordPressController, apps → AppRuntimeController
-const resellerAndAdminTools = new Set([
-  "hosting", "toolkit", "php", "asp", "dns", "ssl", "proxy", "ftp", "stats", "wp", "apps"
-]);
+// GÖRÜNÜRLÜK, BACKEND'İN ROL LİSTESİYLE AYNI OLMALI → tek kaynak: utils/siteToolAccess.ts.
+// Eskiden burada iki elle yazılmış liste vardı: müşteriye backend'in İZİN VERDİĞİ SSL, İstatistik ve
+// WordPress gizleniyor (A1), site panosundaki kartlar ise ayrı bir listeden geliyor ve yetkisiz
+// kartlar tıklanınca hiçbir şey yapmıyordu (A2). Artık iki ekran da aynı haritayı okur.
 
 const inWorkspace = ref(false);
 const primary = ref<PrimaryTab>("pano");
@@ -293,17 +280,7 @@ const allTools = computed<ToolDef[]>(() => [
   { id: "apps", group: "start", label: t("panel.sites.tools.apps"), description: t("panel.sites.tools.appsHint") }
 ]);
 
-const visibleTools = computed(() =>
-  allTools.value.filter((tool) => {
-    if (isAdmin.value) {
-      return true;
-    }
-    if (adminOnlyTools.has(tool.id)) {
-      return false;
-    }
-    return isReseller.value || !resellerAndAdminTools.has(tool.id);
-  })
-);
+const visibleTools = computed(() => allTools.value.filter((tool) => canUseSiteTool(tool.id, role.value)));
 function toolsFor(group: PrimaryTab): ToolDef[] {
   return visibleTools.value.filter((tool) => tool.group === group);
 }
@@ -338,9 +315,18 @@ function focusTool(tool: string) {
     return;
   }
   const def = visibleTools.value.find((item) => item.id === tool);
-  const group = def?.group ?? "hostingdns";
-  primary.value = group;
-  openToolId.value = group === "mail" || !def ? "" : tool;
+  if (!def) {
+    // Rolün kullanamadığı / bilinmeyen araç: eskiden "Barındırma ve DNS" listesine düşüp hiçbir şey
+    // açmıyordu (tıklanınca "hiçbir şey olmayan kart"). Artık Pano'da kalır ve sebebi söylenir.
+    primary.value = "pano";
+    openToolId.value = "";
+    notice.value = t("panel.sites.toolNotAllowed");
+    noticeError.value = true;
+    return;
+  }
+
+  primary.value = def.group;
+  openToolId.value = def.group === "mail" ? "" : tool;
 }
 
 async function selectPrimary(tab: PrimaryTab) {
@@ -414,6 +400,12 @@ async function handleStart(siteName: string) {
 }
 
 async function handleStop(siteName: string) {
+  const approved = await confirm({
+    title: t("panel.confirm.stopSiteTitle", { name: siteName }),
+    message: t("panel.sites.confirmStop"),
+    confirmLabel: t("panel.sites.stop")
+  });
+  if (!approved) return;
   try {
     await sitesStore.stopSite(siteName);
     showNotice(t("panel.sites.stopped"), false);
