@@ -38,7 +38,7 @@
           <span>{{ t("panel.software.action") }}</span>
         </div>
         <div v-for="c in workspace.containers" :key="c.id" class="data-row docker-row">
-          <div class="cell-main"><strong>{{ c.name }}</strong><small>{{ c.id.slice(0, 12) }}</small></div>
+          <div class="cell-main"><strong>{{ c.name }}</strong><small>{{ c.id.slice(0, 12) }}</small><small v-if="c.site">{{ t("panel.docker.siteOf", { site: c.site }) }}</small></div>
           <span class="cell-muted">{{ c.image }}</span>
           <span :class="['status-pill', c.state === 'running' ? 'ok' : 'warn']">{{ c.status }}</span>
           <span class="cell-muted">{{ c.ports || "—" }}</span>
@@ -47,11 +47,30 @@
             <button v-else class="secondary compact row-button" :disabled="busy" @click="action(c.id, 'stop')">{{ t("panel.docker.stop") }}</button>
             <button class="secondary compact row-button" :disabled="busy" @click="action(c.id, 'restart')">{{ t("panel.docker.restart") }}</button>
             <button class="secondary compact row-button" :disabled="busy" @click="showLogs(c.id)">{{ t("panel.docker.logs") }}</button>
+            <button class="secondary compact row-button" :disabled="busy" @click="openLimits(c)">{{ t("panel.docker.limits") }}</button>
             <button class="secondary compact row-button danger" :disabled="busy" @click="removeContainer(c)">{{ t("panel.docker.remove") }}</button>
           </div>
         </div>
         <p v-if="workspace.containers.length === 0" class="empty-state">{{ t("panel.docker.noContainers") }}</p>
         <pre v-if="logs" class="docker-logs">{{ logs }}</pre>
+        <div v-if="limitsForm.id" class="form-surface">
+          <h4>{{ t("panel.docker.limitsTitle", { name: limitsForm.name }) }}</h4>
+          <p class="field-hint">{{ t("panel.docker.limitsHint") }}</p>
+          <div class="form-grid">
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.docker.cpuLimit") }}</span>
+              <input v-model.trim="limitsForm.cpu" placeholder="0.5" />
+            </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.docker.memoryLimit") }}</span>
+              <input v-model.trim="limitsForm.memory" placeholder="512m" />
+            </label>
+          </div>
+          <div class="row-actions">
+            <button class="compact" :disabled="busy" @click="saveLimits">{{ t("panel.docker.limitsSave") }}</button>
+            <button class="secondary compact" :disabled="busy" @click="limitsForm.id = ''">{{ t("panel.common.cancel") }}</button>
+          </div>
+        </div>
       </div>
 
       <div v-else-if="tab === 'images'" class="data-table">
@@ -108,6 +127,19 @@
             <span class="field-label">{{ t("panel.docker.envLabel") }}</span>
             <textarea v-model="runForm.environment" rows="3" placeholder="KEY=VALUE"></textarea>
           </label>
+          <label class="stacked-field">
+            <span class="field-label">{{ t("panel.docker.siteLabel") }}</span>
+            <input v-model.trim="runForm.siteName" :placeholder="t('panel.docker.sitePlaceholder')" />
+            <small class="field-hint">{{ t("panel.docker.siteHint") }}</small>
+          </label>
+          <label class="stacked-field">
+            <span class="field-label">{{ t("panel.docker.cpuLimit") }}</span>
+            <input v-model.trim="runForm.cpuLimit" placeholder="0.5" />
+          </label>
+          <label class="stacked-field">
+            <span class="field-label">{{ t("panel.docker.memoryLimit") }}</span>
+            <input v-model.trim="runForm.memoryLimit" placeholder="512m" />
+          </label>
           <label class="toggle-field">
             <input v-model="runForm.autoRestart" type="checkbox" />
             <span>{{ t("panel.docker.autoRestart") }}</span>
@@ -128,7 +160,9 @@ import { useI18n } from "vue-i18n";
 import {
   dockerContainerAction,
   getDocker,
+  getDockerContainerLimits,
   getDockerLogs,
+  updateDockerContainerLimits,
   pullDockerImage,
   removeDockerContainer,
   removeDockerImage,
@@ -150,7 +184,8 @@ const notice = ref("");
 const noticeError = ref(false);
 const logs = ref("");
 const pullImage = ref("");
-const runForm = reactive({ image: "", name: "", ports: "", environment: "", autoRestart: true });
+const runForm = reactive({ image: "", name: "", ports: "", environment: "", autoRestart: true, siteName: "", cpuLimit: "", memoryLimit: "" });
+const limitsForm = reactive({ id: "", name: "", cpu: "", memory: "" });
 
 onMounted(refresh);
 
@@ -230,6 +265,25 @@ async function removeImage(image: DockerImage) {
   });
 }
 
+async function openLimits(container: DockerContainer) {
+  await run2(async () => {
+    const current = await getDockerContainerLimits(container.id);
+    limitsForm.id = container.id;
+    limitsForm.name = container.name || container.id.slice(0, 12);
+    // 0 = sınırsız → boş alan. Gösterilen, motorun ÖLÇTÜĞÜ değerdir; tahmin değil.
+    limitsForm.cpu = current.cpus > 0 ? String(current.cpus) : "";
+    limitsForm.memory = current.memoryBytes > 0 ? `${Math.round(current.memoryBytes / 1024 / 1024)}m` : "";
+  });
+}
+
+async function saveLimits() {
+  await run2(async () => {
+    workspace.value = await updateDockerContainerLimits(limitsForm.id, limitsForm.cpu, limitsForm.memory);
+    limitsForm.id = "";
+    showNotice(t("docker.limits_updated"), false);
+  });
+}
+
 async function run() {
   await run2(async () => {
     workspace.value = await runDockerContainer({ ...runForm });
@@ -237,6 +291,9 @@ async function run() {
     runForm.name = "";
     runForm.ports = "";
     runForm.environment = "";
+    runForm.siteName = "";
+    runForm.cpuLimit = "";
+    runForm.memoryLimit = "";
     tab.value = "containers";
     showNotice(t("panel.docker.started"), false);
   });

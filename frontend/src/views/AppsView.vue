@@ -269,6 +269,13 @@
           </dl>
         </details>
       </section>
+
+      <!-- Durdur/başlat/yeniden başlat/günlük/kaldır: havuz durumu SUNUCUDA ölçülür (poolState). -->
+      <AppRuntimeControls
+        v-if="currentConfiguration?.isEnabled"
+        :site-name="selectedSiteName"
+        :pool-state="currentConfiguration.poolState"
+        @changed="refreshConfiguration" />
     </template>
 
     <!-- `v-else` İDİ ve BU YÜZDEN AYNI ANDA İKİ ÇELİŞKİLİ CÜMLE ÇİZİLİYORDU.
@@ -288,6 +295,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { isCancel } from "axios";
 import { useI18n } from "vue-i18n";
+import AppRuntimeControls from "../components/AppRuntimeControls.vue";
 import CodeSample from "../components/CodeSample.vue";
 import FieldHint from "../components/FieldHint.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";

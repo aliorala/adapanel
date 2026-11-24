@@ -464,7 +464,8 @@ public sealed partial class GitDeploymentService
     // ---- Geçmiş ve geri alma ----
 
     private static GitDeployHistoryDto[] ToHistoryDtos(IEnumerable<GitDeployHistoryEntry> history) =>
-        history.OrderByDescending(entry => entry.Utc).Take(15).Select(entry => new GitDeployHistoryDto
+        history.Select((entry, index) => (entry, index)).OrderByDescending(item => item.entry.Utc).ThenByDescending(item => item.index)
+            .Select(item => item.entry).Take(15).Select(entry => new GitDeployHistoryDto
         {
             Id = entry.Id,
             DeployedAtUtc = entry.Utc,

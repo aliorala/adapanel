@@ -32,9 +32,9 @@ public sealed partial class PhpService
             {
                 var handlers = IisAccess.GetHandlersCollection(manager, site.Name);
                 var uses = Enumerate(handlers).Any(item =>
-                    string.Equals(GetAttributeString(item, "name"), handlerName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(IisAccess.TryGetAttributeString(item, "name"), handlerName, StringComparison.OrdinalIgnoreCase) ||
                     (executablePath.Length > 0 &&
-                     string.Equals(GetAttributeString(item, "scriptProcessor"), executablePath, StringComparison.OrdinalIgnoreCase)));
+                     string.Equals(IisAccess.TryGetAttributeString(item, "scriptProcessor"), executablePath, StringComparison.OrdinalIgnoreCase)));
                 if (uses) users.Add(site.Name);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)

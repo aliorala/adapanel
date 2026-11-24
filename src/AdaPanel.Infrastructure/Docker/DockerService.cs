@@ -143,7 +143,7 @@ public sealed partial class DockerService(ILogger<DockerService> logger) : IDock
         var cpu = NormalizeCpuLimit(request.CpuLimit);
         if (cpu.Length > 0) builder.Append(" --cpus ").Append(cpu);
         var memory = NormalizeMemoryLimit(request.MemoryLimit);
-        if (memory.Length > 0) builder.Append(" --memory ").Append(memory).Append(" --memory-swap ").Append(memory);
+        if (memory.Length > 0) builder.Append(" --memory ").Append(memory);
         if (!string.IsNullOrWhiteSpace(request.SiteName))
             builder.Append(" --label ").Append(SiteLabel(request.SiteName));
 
@@ -161,9 +161,8 @@ public sealed partial class DockerService(ILogger<DockerService> logger) : IDock
         // Boş değer = "sınırı kaldır": docker update için 0 sınırsızdır.
         var builder = new StringBuilder("update");
         builder.Append(" --cpus ").Append(cpu.Length == 0 ? "0" : cpu);
-        // memory-swap bellekten küçük olamaz → ikisi eşit (takas kapalı).
-        if (memory.Length == 0) builder.Append(" --memory 0 --memory-swap -1");
-        else builder.Append(" --memory ").Append(memory).Append(" --memory-swap ").Append(memory);
+        // --memory-swap KULLANILMAZ: panelin motoru Windows konteyneri çalıştırır ve Windows motoru MemorySwap'ı reddeder.
+        builder.Append(" --memory ").Append(memory.Length == 0 ? "0" : memory);
         builder.Append(' ').Append(safeId);
         await RunRequiredAsync(builder.ToString(), cancellationToken);
         return await GetWorkspaceAsync(cancellationToken);
