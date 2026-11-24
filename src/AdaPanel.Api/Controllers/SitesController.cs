@@ -810,31 +810,24 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             var domain = string.IsNullOrWhiteSpace(request.HostName) ? site.Name : request.HostName.Trim();
             try
             {
-                await mailService.CreateDomainAsync(
+                var mailWorkspace = await mailService.CreateDomainAsync(
                     new Core.Dtos.Mail.CreateMailDomainRequest { DomainName = domain },
                     cancellationToken);
                 result.Created.Add($"mail: {domain}");
+                if (mailWorkspace.Warnings.Contains(Core.Dtos.Mail.MailDomainWarnings.SenderPolicyNotApplied))
+                {
+                    result.Warnings.Add($"mail ({domain}): sender forgery protection rule could not be applied.");
+                }
 
                 // profesyonel paneller gibi: mail domaini sitenin DNS bölgesine MX/SPF/DKIM/DMARC kayıtlarını
-                // otomatik yazsın (mail ekranındaki davranışla tutarlı). Best-effort.
-                try
+                // otomatik yazsın. Tek toplu yazma + ÖLÇÜLEN hüküm (mail ekranıyla aynı karar); yazılamadıysa
+                // sessiz geçilmez, uyarı olarak yanıta girer.
+                var (dnsPublished, dnsDetail) = await AdaPanel.Infrastructure.Mail.MailDnsPublication.PublishForSiteAsync(
+                    mailService, dnsService, site.Name, domain, cancellationToken);
+
+                if (!dnsPublished)
                 {
-                    var mailDns = await mailService.GetDnsRecordsAsync(domain, cancellationToken);
-                    foreach (var record in mailDns.Records.Where(r => !string.IsNullOrWhiteSpace(r.Value)))
-                    {
-                        await dnsService.UpsertRecordAsync(domain, new Core.Dtos.Sites.UpsertDnsRecordRequest
-                        {
-                            Type = record.Type,
-                            Host = record.Host,
-                            Value = record.Value,
-                            Priority = record.Priority,
-                            Ttl = 3600
-                        }, cancellationToken);
-                    }
-                }
-                catch
-                {
-                    // DNS otomatik uygulanamadıysa kullanıcı mail ekranından uygular.
+                    result.Warnings.Add($"mail ({domain}): DNS records (MX/SPF/DKIM/DMARC) were not published: {dnsDetail}. Add them manually.");
                 }
             }
             catch (Exception exception)

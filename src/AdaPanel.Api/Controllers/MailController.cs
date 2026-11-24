@@ -178,14 +178,22 @@ public sealed class MailController(
                 exception.Message);
         }
 
+        // DNS yazimini asil olcen burasidir (servisteki ilk deneme ile bu ikinci deneme ayni
+        // bolgeyi hedefler): bu yuzden DNS uyarisi ONUN sonucuna gore belirlenir.
+        var warnings = MergeCreateWarnings(workspace.Warnings, dnsApplied);
+
+        workspace.Warnings = warnings;
+
         await auditService.AuditAsync(
             HttpContext,
             "mail.domain.created",
             request.DomainName,
-            $"Mail domain created (DNS records auto-applied: {dnsApplied}).",
+            $"Mail domain created (DNS records auto-applied: {dnsApplied}; warnings: {(warnings.Count == 0 ? "none" : string.Join(",", warnings))}).",
             await AlanAdiSahibiAsync(request.DomainName, cancellationToken));
 
-        return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, dnsApplied ? "mail.domain_created_dns" : "mail.domain_created"));
+        return Ok(ApiResponse<MailWorkspaceDto>.Ok(
+            workspace,
+            warnings.Count > 0 ? "mail.domain.completed_with_warnings" : "mail.domain_created_dns"));
     }
 
     [HttpDelete("domains/{domainName}")]
@@ -200,12 +208,16 @@ public sealed class MailController(
         // Domaine ait DNS kayıtlarını domain silinmeden ÖNCE çöz (silindikten sonra
         // GetDnsRecordsAsync DKIM anahtarını bulamaz). Kaldırma domain silindikten sonra yapılır.
         Core.Dtos.Mail.MailDnsDto? mailDns = null;
+        var leftovers = new List<string>();
         try
         {
             mailDns = await mailService.GetDnsRecordsAsync(domainName, cancellationToken);
         }
         catch (Exception exception)
         {
+            // Hangi kayitlari sileceginiz bilinmiyor: kayitlar KALACAK -> durustce bildir.
+            // Panelin yonettigi bolge yoksa (dis DNS) bizim eklediğimiz kayit da yoktur.
+            if (!IsNoManagedZone(exception)) leftovers.Add("dns_records_unread");
             logger.LogInformation("Mail DNS kayıtları silme öncesi okunamadı ({Domain}): {Reason}", domainName, exception.Message);
         }
 
@@ -223,6 +235,13 @@ public sealed class MailController(
             catch (Exception exception)
             {
                 logger.LogInformation("Mail DNS kayıtları kaldırılamadı ({Domain}): {Reason}", domainName, exception.Message);
+
+                // Panelin yonettigi bir bolge YOKSA (dis DNS) kaldirilacak bizim kaydimiz da yoktur;
+                // diger tum hatalarda kayitlar bolgede KALDI.
+                if (!IsNoManagedZone(exception))
+                {
+                    leftovers.Add("dns_records_not_removed");
+                }
             }
         }
 
@@ -234,11 +253,34 @@ public sealed class MailController(
             HttpContext,
             "mail.domain.deleted",
             domainName,
-            "Mail domain and its mailboxes were deleted.",
+            leftovers.Count == 0
+                ? "Mail domain and its mailboxes were deleted."
+                : $"Mail domain and its mailboxes were deleted; leftovers: {string.Join(",", leftovers)}.",
             await AlanAdiSahibiAsync(domainName, cancellationToken));
 
-        return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.domain_deleted"));
+        leftovers = MergeDeleteLeftovers(workspace.Warnings, leftovers);
+        workspace.Warnings = leftovers;
+        return Ok(ApiResponse<MailWorkspaceDto>.Ok(
+            workspace,
+            leftovers.Count > 0 ? "mail.domain.delete_completed_with_leftovers" : "mail.domain_deleted"));
     }
+
+    /// <summary>Servis uyarilari + controller'in olctugu DNS sonucu (ikinci deneme servisinkini gecersiz kilar).</summary>
+    internal static List<string> MergeCreateWarnings(IEnumerable<string> serviceWarnings, bool dnsApplied)
+    {
+        var warnings = serviceWarnings.Where(w => w != MailDomainWarnings.DnsNotPublished).ToList();
+        if (!dnsApplied) warnings.Insert(0, MailDomainWarnings.DnsNotPublished);
+        return warnings;
+    }
+
+    /// <summary>Servisin temizlik uyarilari + controller'in DNS artiklari, tekrarsiz.</summary>
+    internal static List<string> MergeDeleteLeftovers(IEnumerable<string> serviceWarnings, IEnumerable<string> dnsLeftovers)
+        => dnsLeftovers.Concat(serviceWarnings).Distinct().ToList();
+
+    /// <summary>Alan adinin panelde yonetilen bir DNS bolgesi yok mu (dis DNS): silinecek kayit da yoktur.</summary>
+    internal static bool IsNoManagedZone(Exception exception)
+        => exception is AdaPanel.Core.Common.AppException { MessageKey: "mail.dns_zone_missing" }
+            or AdaPanel.Core.Common.AppException { MessageKey: "mail.invalid_domain", HttpStatusCode: 400 };
 
     private async Task RemoveDnsRecordsAsync(string domain, Core.Dtos.Mail.MailDnsDto mailDns, IDnsService dnsService, CancellationToken cancellationToken)
     {
@@ -286,7 +328,9 @@ public sealed class MailController(
             address,
             "Mailbox and its messages were deleted.",
             await AdresSahibiAsync(address, null, cancellationToken));
-        return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.account_deleted"));
+        return Ok(ApiResponse<MailWorkspaceDto>.Ok(
+            workspace,
+            workspace.Warnings.Count > 0 ? "mail.account.delete_completed_with_leftovers" : "mail.account_deleted"));
     }
 
     [HttpPost("accounts/password")]

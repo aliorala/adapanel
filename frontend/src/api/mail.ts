@@ -63,6 +63,8 @@ export type MailWorkspace = {
   lists: MailList[];
   listsMeasured?: boolean;
   statusMessage?: string;
+  /** Alan adi olusturma/silme sirasinda tamamlanamayan yan adimlarin kodlari (bos = eksiksiz). */
+  warnings?: string[];
 };
 
 export async function getMailWorkspace(domain?: string) {

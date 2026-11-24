@@ -50,13 +50,210 @@ public sealed class MailDomainDnsProvisioningTests
         Assert.Null(f.PublishedSite);
     }
 
+    [Fact]
+    public async Task UnpublishedDnsIsReportedAsWarningNotSilentSuccess()
+    {
+        using var f = new Fixture { Unresolved = true };
+        var workspace = await f.Service.CreateDomainAsync(new() { DomainName = "example.test" });
+        Assert.Contains(MailDomainWarnings.DnsNotPublished, workspace.Warnings);
+    }
+
+    [Fact]
+    public async Task PublishedDnsProducesNoDnsWarning()
+    {
+        using var f = new Fixture();
+        var workspace = await f.Service.CreateDomainAsync(new() { DomainName = "example.test" });
+        Assert.DoesNotContain(MailDomainWarnings.DnsNotPublished, workspace.Warnings);
+    }
+
+    [Fact]
+    public async Task ConcurrentAutoResponderAndListPolicyUpdatesDoNotLoseWrites()
+    {
+        using var f = new Fixture();
+        var tasks = new List<Task>();
+        for (var i = 0; i < 25; i++)
+        {
+            var n = i;
+            tasks.Add(Task.Run(() => f.Service.UpdateAutoRespondersAsync(
+                store => { store[$"u{n}@example.test"] = new MailService.AutoResponderEntry { Enabled = true, Message = "m" }; return true; },
+                CancellationToken.None)));
+            tasks.Add(Task.Run(() => f.Service.UpdateListPoliciesAsync(
+                store => { store[$"l{n}@example.test"] = new MailService.ListPolicyEntry(); return true; },
+                CancellationToken.None)));
+        }
+
+        await Task.WhenAll(tasks);
+        var responders = await f.Store.ReadAsync<Dictionary<string, MailService.AutoResponderEntry>>("config/mail-autoresponders.json", new(), CancellationToken.None);
+        var policies = await f.Store.ReadAsync<Dictionary<string, MailService.ListPolicyEntry>>("config/mail-list-policies.json", new(), CancellationToken.None);
+        Assert.Equal(25, responders!.Count);
+        Assert.Equal(25, policies!.Count);
+    }
+
+    [Fact]
+    public async Task DeletingAnAccountDropsItsAutoResponderSoARecreatedAddressStartsClean()
+    {
+        using var f = new Fixture { DomainCreated = true };
+        await f.Store.WriteAsync("config/mail-autoresponders.json", new Dictionary<string, MailService.AutoResponderEntry>
+        {
+            ["a@example.test"] = new() { Enabled = true, Message = "old" },
+            ["b@example.test"] = new() { Enabled = true, Message = "keep" }
+        });
+        await f.Service.DeleteAccountAsync("a@example.test");
+        var left = await f.Store.ReadAsync<Dictionary<string, MailService.AutoResponderEntry>>("config/mail-autoresponders.json", new(), CancellationToken.None);
+        Assert.DoesNotContain("a@example.test", left!.Keys);
+        Assert.Contains("b@example.test", left.Keys);
+    }
+
+    [Fact]
+    public async Task DeletingADomainDropsItsAutoRespondersAndListPoliciesOnly()
+    {
+        using var f = new Fixture { DomainCreated = true };
+        await f.Store.WriteAsync("config/mail-autoresponders.json", new Dictionary<string, MailService.AutoResponderEntry>
+        {
+            ["a@example.test"] = new() { Enabled = true, Message = "old" },
+            ["b@other.test"] = new() { Enabled = true, Message = "keep" }
+        });
+        await f.Store.WriteAsync("config/mail-list-policies.json", new Dictionary<string, MailService.ListPolicyEntry>
+        {
+            ["l@example.test"] = new(),
+            ["l@other.test"] = new()
+        });
+        await f.Service.DeleteDomainAsync("example.test");
+        var responders = await f.Store.ReadAsync<Dictionary<string, MailService.AutoResponderEntry>>("config/mail-autoresponders.json", new(), CancellationToken.None);
+        var policies = await f.Store.ReadAsync<Dictionary<string, MailService.ListPolicyEntry>>("config/mail-list-policies.json", new(), CancellationToken.None);
+        Assert.Equal(["b@other.test"], responders!.Keys);
+        Assert.Equal(["l@other.test"], policies!.Keys);
+    }
+
+    [Fact]
+    public async Task DomainDeletionFailingMidwayReportsPartialResultWithWhatWasRemoved()
+    {
+        using var f = new Fixture { DomainCreated = true };
+        f.Override = command => command switch
+        {
+            "query account --json" => """[{"id":"acc-1","emailAddress":"a@example.test"}]""",
+            "get account acc-1 --json" => """{"id":"acc-1","domainId":"domain-id","emailAddress":"a@example.test"}""",
+            _ => null
+        };
+        f.FailDomainDelete = true;
+        var error = await Assert.ThrowsAsync<AppException>(() => f.Service.DeleteDomainAsync("example.test"));
+        Assert.Equal("mail.domain_delete_partial", error.MessageKey);
+        Assert.Contains("account:a@example.test", error.Details);
+    }
+
+    [Fact]
+    public async Task SenderPolicyFailureOnDomainCreationIsReportedAsWarning()
+    {
+        using var f = new Fixture { FailSenderPolicy = true };
+        var workspace = await f.Service.CreateDomainAsync(new() { DomainName = "example.test" });
+        Assert.Contains(MailDomainWarnings.SenderPolicyNotApplied, workspace.Warnings);
+    }
+
+    [Fact]
+    public async Task AccountDeleteSucceedsWithLeftoverWarningWhenStoreCleanupFails()
+    {
+        using var f = new Fixture { DomainCreated = true };
+        // Dosya yolunu klasor yaparak depo okumasini/yazmasini bozar.
+        var path = Path.Combine(f.StoreRoot, "config", "mail-autoresponders.json");
+        Directory.CreateDirectory(path);
+        var workspace = await f.Service.DeleteAccountAsync("a@example.test");
+        Assert.Contains(MailDomainWarnings.StateCleanupFailed, workspace.Warnings);
+    }
+
+    [Fact]
+    public async Task DeletingAListMemberDropsItsPolicyEvenIfDomainDeleteFailsMidway()
+    {
+        using var f = new Fixture { DomainCreated = true, FailDomainDelete = true };
+        await f.Store.WriteAsync("config/mail-list-policies.json", new Dictionary<string, MailService.ListPolicyEntry>
+        {
+            ["l@example.test"] = new(),
+            ["l@other.test"] = new()
+        });
+        f.Override = command => command switch
+        {
+            "query MailingList --json" => """[{"id":"list-1","emailAddress":"l@example.test"}]""",
+            "get MailingList list-1 --json" => """{"id":"list-1","domainId":"domain-id","emailAddress":"l@example.test"}""",
+            _ => null
+        };
+        await Assert.ThrowsAsync<AppException>(() => f.Service.DeleteDomainAsync("example.test"));
+        var policies = await f.Store.ReadAsync<Dictionary<string, MailService.ListPolicyEntry>>("config/mail-list-policies.json", new(), CancellationToken.None);
+        Assert.Equal(["l@other.test"], policies!.Keys);
+    }
+
+    [Fact]
+    public void ControllerWarningMergeAndExternalDnsClassification()
+    {
+        // Servis DNS uyarisi verdi ama controller'in ikinci denemesi yazdi -> uyari duser; sender uyarisi korunur.
+        var merged = AdaPanel.Api.Controllers.MailController.MergeCreateWarnings(
+            [MailDomainWarnings.DnsNotPublished, MailDomainWarnings.SenderPolicyNotApplied], dnsApplied: true);
+        Assert.Equal([MailDomainWarnings.SenderPolicyNotApplied], merged);
+        var notApplied = AdaPanel.Api.Controllers.MailController.MergeCreateWarnings([], dnsApplied: false);
+        Assert.Equal([MailDomainWarnings.DnsNotPublished], notApplied);
+
+        var left = AdaPanel.Api.Controllers.MailController.MergeDeleteLeftovers(
+            [MailDomainWarnings.StateCleanupFailed], ["dns_records_not_removed"]);
+        Assert.Equal(["dns_records_not_removed", MailDomainWarnings.StateCleanupFailed], left);
+
+        Assert.True(AdaPanel.Api.Controllers.MailController.IsNoManagedZone(new AppException("mail.dns_zone_missing", 409, 409)));
+        Assert.True(AdaPanel.Api.Controllers.MailController.IsNoManagedZone(new AppException("mail.invalid_domain", 400, 400)));
+        Assert.False(AdaPanel.Api.Controllers.MailController.IsNoManagedZone(new AppException("mail.invalid_domain", 409, 409)));
+        Assert.False(AdaPanel.Api.Controllers.MailController.IsNoManagedZone(new InvalidOperationException("boom")));
+    }
+
+    [Fact]
+    public async Task SiteCreationDnsPublishReportsFailureInsteadOfSwallowingIt()
+    {
+        var mail = MailServerIdentityTests.IdentityProxy.Make<IMailService>((method, _) => method == "GetDnsRecordsAsync"
+            ? Task.FromResult(new MailDnsDto { Domain = "example.test", Records = [new MailDnsRecordDto { Type = "MX", Host = "@", Value = "mail.example.test", Priority = 10 }] })
+            : throw new InvalidOperationException(method));
+        var failing = MailServerIdentityTests.IdentityProxy.Make<IDnsService>((method, _) => throw new AppException("dns.write_failed", 500, 500));
+        var (published, detail) = await MailDnsPublication.PublishForSiteAsync(mail, failing, "web-example.test", "example.test", CancellationToken.None);
+        Assert.False(published);
+        Assert.Equal("dns.write_failed", detail);
+
+        var notWritten = MailServerIdentityTests.IdentityProxy.Make<IDnsService>((method, _) =>
+            Task.FromResult(new SiteDnsZoneDto { SiteName = "web-example.test", IsWindowsDnsAvailable = false }));
+        var second = await MailDnsPublication.PublishForSiteAsync(mail, notWritten, "web-example.test", "example.test", CancellationToken.None);
+        Assert.False(second.Published);
+        Assert.NotEmpty(second.Detail);
+    }
+
+    [Fact]
+    public void ControllersReportHonestOutcomesForMailDomainCreateAndDelete()
+    {
+        var controller = Oku("src", "AdaPanel.Api", "Controllers", "MailController.cs");
+        Assert.Contains("mail.domain.completed_with_warnings", controller, StringComparison.Ordinal);
+        Assert.Contains("mail.domain.delete_completed_with_leftovers", controller, StringComparison.Ordinal);
+        foreach (var lang in new[] { "tr", "en" })
+        {
+            var json = Oku("frontend", "src", "i18n", lang + ".json");
+            foreach (var key in new[] { "mail.domain.completed_with_warnings", "mail.domain.delete_completed_with_leftovers", "mail.domain_delete_partial" })
+                Assert.Contains("\"" + key + "\"", json, StringComparison.Ordinal);
+        }
+    }
+
+    private static string Oku(params string[] parts)
+    {
+        var klasor = AppContext.BaseDirectory;
+        for (var i = 0; i < 10; i++)
+        {
+            var aday = Path.Combine(new[] { klasor }.Concat(parts).ToArray());
+            if (File.Exists(aday)) return File.ReadAllText(aday);
+            klasor = Path.Combine(klasor, "..");
+        }
+        throw new FileNotFoundException(string.Join('/', parts));
+    }
+
     // The CLI, IIS, DNS and preferences all use in-process fakes. No real process,
     // Windows user, service, certificate or DNS provider is touched by these cases.
     private sealed class Fixture : IDisposable
     {
         private readonly BulutAlani area = new();
         private readonly AdaPanelDbContext db = new(new DbContextOptionsBuilder<AdaPanelDbContext>().UseSqlite("Data Source=:memory:").Options);
-        internal bool DomainCreated, Unresolved, Ambiguous;
+        internal bool DomainCreated, Unresolved, Ambiguous, FailDomainDelete, FailSenderPolicy;
+        internal string StoreRoot => area.Kok;
+        internal Func<string, string?>? Override;
+        internal JsonFileStore Store => area.DosyaDeposu;
         internal string? PublishedSite;
         internal string ZoneName = "example.test";
         internal IReadOnlyCollection<UpsertDnsRecordRequest> PublishedRecords = [];
@@ -105,7 +302,11 @@ public sealed class MailDomainDnsProvisioningTests
                 CommandRunner = (_, command, _, _) =>
                 {
                     if (command.StartsWith("create domain ", StringComparison.Ordinal)) DomainCreated = true;
-                    var output = command switch
+                    if (FailSenderPolicy && command.Contains("MtaStageMail", StringComparison.Ordinal))
+                        return Task.FromResult(new CommandResult { ExitCode = 1, StandardError = "boom" });
+                    if (FailDomainDelete && command.StartsWith("delete domain ", StringComparison.Ordinal))
+                        return Task.FromResult(new CommandResult { ExitCode = 1, StandardError = "boom" });
+                    var output = Override?.Invoke(command) ?? command switch
                     {
                         "query domain --json" when DomainCreated => """[{"id":"domain-id","name":"example.test"}]""",
                         "get domain domain-id --json" => """{"id":"domain-id","name":"example.test"}""",
