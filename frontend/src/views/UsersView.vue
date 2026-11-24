@@ -126,10 +126,23 @@
       <!-- Ayni dugme hem "Olustur" hem "Iptal": IPTAL ASLA BIRINCIL DEGILDIR. Form aciklen
            birincil eylem asagidaki gonder dugmesidir; ust dugme o an ikincile duser, boylece
            ekranda her durumda TEK mavi dugme kalir. -->
-      <button :class="['compact', { secondary: showUserCreateForm }]" @click="showUserCreateForm = !showUserCreateForm">
-        {{ showUserCreateForm ? t("panel.common.cancel") : t("panel.users.create") }}
-      </button>
+      <div class="toolbar-group">
+        <!-- Aboneliği şimdi denetle: süre/trafik/disk aşımı olanları arka plan turunu beklemeden askıya alır
+             ya da açar. Toplu etki olduğundan onay ister; yalnız yönetici (uç da yöneticiye kilitli). -->
+        <button v-if="isAdmin" class="secondary compact" :disabled="enforcing" @click="enforceNow">
+          {{ enforcing ? t("panel.users.enforcing") : t("panel.users.enforceNow") }}
+        </button>
+        <button :class="['compact', { secondary: showUserCreateForm }]" @click="showUserCreateForm = !showUserCreateForm">
+          {{ showUserCreateForm ? t("panel.common.cancel") : t("panel.users.create") }}
+        </button>
+      </div>
     </div>
+
+    <!-- Bayinin KENDİ tavanı (salt okunur): bayi müşteri eklemeden önce ne kadar hakkı kaldığını bilmeli.
+         Tavanı değiştirmek yalnız yöneticidedir; metin bunu açıkça söyler. -->
+    <p v-if="isReseller && ownQuota" class="notice" role="status" data-testid="own-quota">
+      {{ t("panel.users.resellerQuotaOwn", quotaParams(ownQuota)) }}
+    </p>
 
     <!-- `user-create-grid` KALDIRILDI: yaptigi tek sey ortak `.form-grid`in zaten verdigi
          3 sutunu tekrar yazmak, sonra da 980px'te DOGRUDAN tek sutuna dusmekti. Ortak merdiven
@@ -337,6 +350,63 @@
       <SubscriptionCard :user-id="selectedUserId" manageable />
     </div>
 
+    <!-- BAYİ TAVANI (yalnız yönetici): bayinin müşterilerine dağıtabileceği toplam site / disk. 0 = sınırsız.
+         Yalnız yönetici değiştirebilir (bayi kendi tavanını yükseltebilseydi tavan anlamsız olurdu). -->
+    <div v-if="isAdmin && selectedUser?.role === 'Reseller'" class="form-surface reseller-quota" data-testid="reseller-quota">
+      <h4>{{ t("panel.users.resellerQuotaTitle") }}</h4>
+      <p class="meta">{{ t("panel.users.resellerQuotaHint") }}</p>
+      <p v-if="quotaError" class="notice error" role="alert">{{ quotaError }}</p>
+      <p v-else-if="!resellerQuota" class="empty-state" role="status">{{ t("panel.common.loading") }}</p>
+      <template v-else>
+        <p class="meta" data-testid="reseller-quota-usage">{{ t("panel.users.resellerQuotaUsage", quotaParams(resellerQuota)) }}</p>
+        <div class="form-grid">
+          <label class="stacked-field">
+            <span class="field-label">{{ t("panel.users.resellerQuotaSites") }}</span>
+            <input v-model.number="quotaForm.maxSites" type="number" min="0" />
+          </label>
+          <label class="stacked-field">
+            <span class="field-label">{{ t("panel.users.resellerQuotaDisk") }}</span>
+            <input v-model.number="quotaForm.maxDiskMb" type="number" min="0" />
+          </label>
+        </div>
+        <div class="row-actions form-actions">
+          <button type="button" class="compact" :disabled="quotaSaving" @click="saveResellerQuota">
+            {{ quotaSaving ? t("panel.common.loading") : t("panel.users.resellerQuotaSave") }}
+          </button>
+        </div>
+      </template>
+    </div>
+
+    <!-- PAROLA BELİRLE (yönetici; bayi yalnız kendi müşterisi için): kullanıcı parolasını unuttuğunda ve
+         e-posta sıfırlaması çalışmadığında. Sunucu 12+ karakteri dayatır, kendi hesabını reddeder, hedefin
+         API anahtarlarını düşürür ve DENETİM KAYDI yazar (parola kayda girmez). -->
+    <form
+      v-if="selectedUser && selectedUser.id !== authStore.session?.user?.id && (isAdmin || isReseller)"
+      class="form-surface set-password"
+      data-testid="set-password"
+      @submit.prevent="submitSetPassword">
+      <h4>{{ t("panel.users.setPasswordTitle") }}</h4>
+      <p class="meta">{{ t("panel.users.setPasswordHint", { name: selectedUser.userName }) }}</p>
+      <div class="form-grid">
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.users.setPasswordNew") }}</span>
+          <PasswordField v-model="setPasswordForm.password" minlength="12" maxlength="128" autocomplete="new-password" required />
+        </label>
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.users.setPasswordConfirm") }}</span>
+          <PasswordField v-model="setPasswordForm.confirm" minlength="12" maxlength="128" autocomplete="new-password" required />
+        </label>
+      </div>
+      <p v-if="setPasswordForm.confirm && setPasswordForm.password !== setPasswordForm.confirm" class="field-hint warn-text" role="alert">
+        {{ t("panel.users.setPasswordMismatch") }}
+      </p>
+      <div class="row-actions form-actions">
+        <button type="submit" class="compact" :disabled="!canSetPassword || settingPassword">
+          {{ settingPassword ? t("panel.common.loading") : t("panel.users.setPasswordSubmit") }}
+        </button>
+      </div>
+    </form>
+
     <!-- `user-edit-grid` KALDIRILDI: `align-items: end` alanlari ALTTAN hizaliyordu, oysa
          formda alti ipuclu alanlar var; alt hizalama o hucrelerin etiketlerini yukari kacirip
          basliklari kademeli gosteriyordu (ayni hata plan formunda da vardi, orada `start` ile
@@ -418,14 +488,15 @@
 // Hesap yönetimi (Plesk "Müşteriler & Bayiler"): kullanıcı listesi, oluşturma/düzenleme/silme,
 // kilit açma, müşteri olarak giriş ve alt-kullanıcı (abonelik altı hesap) bağlama.
 // Daha önce SetupWizardView > Ayarlar > Kullanıcılar sekmesindeydi; davranış birebir korunmuştur.
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { getServicePlans, createServicePlan, updateServicePlan, deleteServicePlan, type ServicePlan } from "../api/servicePlans";
 import { extractApiDetails, extractApiMessage, useAuthStore, type ManagedUser } from "../stores/auth";
-import { extractDeletionLeftovers, type UserDeletionLeftover } from "../api/users";
+import { extractDeletionLeftovers, setUserPassword, type UserDeletionLeftover } from "../api/users";
 import SubscriptionCard from "../components/SubscriptionCard.vue";
+import { enforceSubscriptions, getResellerQuota, setResellerQuota, type ResellerQuotaUsage } from "../api/subscriptions";
 import { useSitesStore } from "../stores/sites";
 import { formatBytes as sharedFormatBytes } from "../utils/bytes";
 
@@ -564,11 +635,18 @@ onMounted(async () => {
   await loadUsers();
 
   if (sitesStore.sites.length === 0) {
-    await sitesStore.fetchSites().catch(() => undefined);
+    // Yutulmaz: liste okunamazsa "atanacak site yok" yazısı yanlış bir olgu bildirirdi.
+    await sitesStore.fetchSites().catch((error) => notify(resolveApiMessage(error), true));
   }
 
   if (isAdmin.value) {
     await loadServicePlans();
+  }
+
+  // Bayi kendi tavanını (salt okunur) görür; okunamazsa satır gösterilmez (yanlış sayı yazılmaz).
+  const ownId = authStore.session?.user?.id;
+  if (isReseller.value && ownId) {
+    ownQuota.value = await getResellerQuota(ownId).catch(() => null);
   }
 });
 
@@ -824,6 +902,129 @@ async function unlockUser(user: ManagedUser) {
     notify(resolveApiMessage(error), true);
   } finally {
     unlockingUserId.value = "";
+  }
+}
+
+// --- Seçili kullanıcıya bağlı yönetim kartları: bayi tavanı (A3), parola belirleme (A4) ---
+
+const selectedUser = computed(() => authStore.users.find((user) => user.id === selectedUserId.value) ?? null);
+
+const resellerQuota = ref<ResellerQuotaUsage | null>(null);
+const ownQuota = ref<ResellerQuotaUsage | null>(null);
+const quotaError = ref("");
+const quotaSaving = ref(false);
+const quotaForm = reactive({ maxSites: 0, maxDiskMb: 0 });
+let quotaRead = 0;
+
+function quotaParams(quota: ResellerQuotaUsage) {
+  const unlimited = t("panel.security.unlimited");
+  return {
+    sites: quota.maxSites > 0 ? String(quota.maxSites) : unlimited,
+    disk: quota.maxDiskMb > 0 ? String(quota.maxDiskMb) : unlimited,
+    allocatedSites: String(quota.allocatedSites),
+    allocatedDisk: String(quota.allocatedDiskMb),
+    customers: String(quota.customerCount)
+  };
+}
+
+async function loadResellerQuota(userId: string) {
+  const read = ++quotaRead;
+  resellerQuota.value = null;
+  quotaError.value = "";
+  try {
+    const quota = await getResellerQuota(userId);
+    if (read !== quotaRead || selectedUserId.value !== userId) return;
+    resellerQuota.value = quota;
+    quotaForm.maxSites = quota.maxSites;
+    quotaForm.maxDiskMb = quota.maxDiskMb;
+  } catch (error) {
+    if (read === quotaRead && selectedUserId.value === userId) quotaError.value = resolveApiMessage(error);
+  }
+}
+
+// Seçim bir bayiye düşünce tavanı ölçerek yükle; başka kullanıcıya geçince eski değer ekranda KALMAZ.
+watch(() => [selectedUserId.value, selectedUser.value?.role] as const, ([id, role]) => {
+  resellerQuota.value = null;
+  quotaError.value = "";
+  setPasswordForm.password = "";
+  setPasswordForm.confirm = "";
+  if (id && role === "Reseller" && isAdmin.value) void loadResellerQuota(id);
+}, { flush: "sync" });
+
+async function saveResellerQuota() {
+  const userId = selectedUserId.value;
+  if (!userId || quotaSaving.value) return;
+  const maxSites = Math.trunc(Number(quotaForm.maxSites)), maxDiskMb = Math.trunc(Number(quotaForm.maxDiskMb));
+  if (!Number.isSafeInteger(maxSites) || !Number.isSafeInteger(maxDiskMb) || maxSites < 0 || maxDiskMb < 0) {
+    notify(t("panel.users.resellerQuotaInvalid"), true);
+    return;
+  }
+  quotaSaving.value = true;
+  try {
+    const saved = await setResellerQuota(userId, { maxSites, maxDiskMb });
+    // Yanıt ÖLÇÜLMEDEN "kaydedildi" denmez: sunucunun döndürdüğü değer gönderilenle aynı olmalı.
+    if (saved?.maxSites !== maxSites || saved?.maxDiskMb !== maxDiskMb) {
+      notify(t("panel.users.resellerQuotaUnconfirmed"), true);
+      return;
+    }
+    if (selectedUserId.value === userId) resellerQuota.value = saved;
+    notify(t("panel.users.resellerQuotaSaved"), false);
+  } catch (error) {
+    notify(resolveApiMessage(error), true);
+  } finally {
+    quotaSaving.value = false;
+  }
+}
+
+const setPasswordForm = reactive({ password: "", confirm: "" });
+const settingPassword = ref(false);
+const canSetPassword = computed(() =>
+  setPasswordForm.password.length >= 12 && setPasswordForm.password.length <= 128 &&
+  setPasswordForm.password === setPasswordForm.confirm);
+
+async function submitSetPassword() {
+  const target = selectedUser.value;
+  if (!target || !canSetPassword.value || settingPassword.value) return;
+  const approved = await confirm({
+    title: t("panel.confirm.setPasswordTitle", { name: target.userName }),
+    message: t("panel.users.setPasswordConfirmMessage"),
+    confirmLabel: t("panel.users.setPasswordSubmit")
+  });
+  if (!approved || selectedUserId.value !== target.id) return;
+  settingPassword.value = true;
+  const submitted = setPasswordForm.password;
+  try {
+    const revoked = await setUserPassword(target.id, submitted);
+    notify(t("panel.users.setPasswordDone", { name: target.userName, count: revoked }), false);
+    setPasswordForm.password = "";
+    setPasswordForm.confirm = "";
+  } catch (error) {
+    notify(resolveApiMessage(error), true);
+  } finally {
+    settingPassword.value = false;
+  }
+}
+
+const enforcing = ref(false);
+async function enforceNow() {
+  if (enforcing.value) return;
+  const approved = await confirm({
+    title: t("panel.confirm.enforceSubscriptionsTitle"),
+    message: t("panel.users.enforceConfirm"),
+    confirmLabel: t("panel.users.enforceNow")
+  });
+  if (!approved) return;
+  enforcing.value = true;
+  try {
+    const changes = await enforceSubscriptions();
+    const list = Array.isArray(changes) ? changes : [];
+    notify(list.length === 0
+      ? t("panel.users.enforceNoChange")
+      : t("panel.users.enforceDone", { count: list.length, names: list.map((item) => `${item.userName} (${item.action})`).join(", ") }), false);
+  } catch (error) {
+    notify(resolveApiMessage(error), true);
+  } finally {
+    enforcing.value = false;
   }
 }
 

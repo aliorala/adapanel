@@ -29,3 +29,11 @@ public sealed class NotificationSettingsDto
     /// </summary>
     public string WebhookSecret { get; set; } = string.Empty;
 }
+
+/// <summary>Webhook anahtarı döndürme sonucu: tam değer YALNIZ bu yanıtta bulunur.</summary>
+public sealed class WebhookSecretRotationDto
+{
+    public string WebhookSecret { get; init; } = string.Empty;
+
+    public string Masked { get; init; } = string.Empty;
+}

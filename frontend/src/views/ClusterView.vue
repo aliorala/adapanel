@@ -248,6 +248,14 @@
         </label>
       </div>
 
+      <!-- Otomatik seçimin SONUCU önceden gösterilir: "Otomatik" bırakan yönetici sitenin nereye gideceğini
+           oluşturmadan önce bilir (ölçülmüş değer; okunamazsa sebebi söylenir, tahmin yazılmaz). -->
+      <p v-if="placementError" class="notice error" role="alert">{{ placementError }}</p>
+      <p v-else-if="placement" class="meta placement-preview" data-testid="cluster-placement">
+        <template v-if="placement.nodeId">{{ t("panel.cluster.placementPreview", { node: placement.nodeLabel, reason: t(placement.reasonKey) }) }}</template>
+        <template v-else>{{ t(placement.reasonKey) }}</template>
+      </p>
+
       <div class="row-actions">
         <button class="compact" :disabled="operationBusy" @click="createSite">
           {{ creatingSite ? t("panel.cluster.siteCreating") : t("panel.cluster.siteCreate") }}
@@ -275,13 +283,15 @@ import { useConfirm } from "../components/ConfirmDialog.vue";
 import {
   createClusterSite,
   getClusterNodeLink,
+  getClusterPlacement,
   getClusterOverview,
   probeClusterNode,
   registerClusterNode,
   removeClusterNode,
   updateClusterNode,
   type ClusterNodeStatus,
-  type ClusterOverview
+  type ClusterOverview,
+  type ClusterPlacement
 } from "../api/cluster";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { getSessionEpoch } from "../api/client";
@@ -313,6 +323,8 @@ const form = reactive({
 });
 
 const siteForm = reactive({ name: "", nodeId: "" });
+const placement = ref<ClusterPlacement | null>(null);
+const placementError = ref("");
 
 const ulasilabilirler = computed(() => (overview.value?.nodes ?? []).filter((row) => row.reachable));
 
@@ -340,6 +352,14 @@ async function refresh(): Promise<"loaded" | "failed" | "stale"> {
     if (!target.current() || id !== request) return "stale";
     overview.value = result;
     loaded.value = true;
+    // Yerleşim önizlemesi ayrı okunur: hata düğüm listesini gizlemez, ama sessizce de yutulmaz.
+    try {
+      const preview = await getClusterPlacement();
+      if (target.current() && id === request) { placement.value = preview; placementError.value = ""; }
+    } catch (error) {
+      if (target.current() && id === request) { placement.value = null; placementError.value = resolveApiMessage(error); }
+    }
+    if (!target.current() || id !== request) return "stale";
     return "loaded";
   } catch (error) {
     if (!target.current() || id !== request) return "stale";

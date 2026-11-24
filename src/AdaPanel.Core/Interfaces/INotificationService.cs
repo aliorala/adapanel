@@ -19,4 +19,12 @@ public interface INotificationService
     Task SendWebhookAsync(string eventName, string body, CancellationToken cancellationToken = default);
 
     Task TestAsync(TestNotificationRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Webhook imza anahtarını (X-AdaPanel-Signature HMAC sırrı) YENİDEN ÜRETİR ve yeni değeri
+    /// döndürür. Eski anahtar hemen geçersiz olur: alıcı tarafın da güncellenmesi gerekir.
+    /// Varsayılan gövde (uygulamayan test sahteleri için) açıkça desteklenmez der.
+    /// </summary>
+    Task<string> RotateWebhookSecretAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
 }

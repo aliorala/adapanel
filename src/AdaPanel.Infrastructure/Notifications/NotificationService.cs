@@ -195,6 +195,19 @@ public sealed class NotificationService(
         await SendWebhookAsync(settings, eventName, body, cancellationToken);
     }
 
+    public async Task<string> RotateWebhookSecretAsync(CancellationToken cancellationToken = default)
+    {
+        var fresh = NewWebhookSecret();
+        var protectedSecret = secretProtector.Protect(fresh);
+        // Yalnız anahtar değişir; revizyon ve diğer alanlar (SMTP, adres) aynen kalır.
+        await fileStore.UpdateAsync(SettingsPath, new NotificationSettingsDto(), current =>
+        {
+            current.WebhookSecret = protectedSecret;
+            return current;
+        }, cancellationToken);
+        return fresh;
+    }
+
     internal static string NewWebhookSecret() =>
         Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
 

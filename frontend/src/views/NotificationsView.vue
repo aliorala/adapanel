@@ -105,6 +105,28 @@
         <input v-model.trim="form.webhookUrl" type="url" placeholder="https://example.com/hooks/panel" />
         <small class="field-hint">{{ t("panel.notifications.webhookHint") }}</small>
       </label>
+
+      <!-- İmza anahtarı: alıcı, X-AdaPanel-Signature başlığını bununla doğrular. Okumada MASKELİ; tam değer
+           yalnız döndürme anında bir kez görünür (kapatılınca bir daha gösterilemez). -->
+      <div class="stacked-field webhook-secret">
+        <span class="field-label">{{ t("panel.notifications.webhookSecret") }}</span>
+        <code class="secret-mask" data-testid="webhook-secret-mask">{{ savedSettings?.webhookSecret || t("panel.notifications.webhookSecretNone") }}</code>
+        <small class="field-hint">{{ t("panel.notifications.webhookSecretHint") }}</small>
+        <div v-if="revealedSecret" class="notice warn-banner" role="status">
+          <strong>{{ t("panel.notifications.webhookSecretNew") }}</strong>
+          <code class="secret-once" data-testid="webhook-secret-once">{{ revealedSecret }}</code>
+          <small>{{ t("panel.notifications.webhookSecretOnce") }}</small>
+          <div class="toolbar-group">
+            <button type="button" class="secondary compact" @click="copySecret">{{ t("panel.notifications.webhookSecretCopy") }}</button>
+            <button type="button" class="secondary compact" @click="revealedSecret = ''">{{ t("panel.notifications.webhookSecretHide") }}</button>
+          </div>
+        </div>
+        <div class="toolbar-group">
+          <button type="button" class="secondary compact" v-bind="writeGate(!settingsConfirmed || !!busy || locked)" @click="rotateSecret">
+            {{ busy === "rotate" ? t("panel.notifications.saving") : t("panel.notifications.webhookSecretRotate") }}
+          </button>
+        </div>
+      </div>
     </section>
 
     <div class="module-toolbar">
@@ -137,7 +159,8 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
-import { getNotificationSettings, saveNotificationSettings, sendNotificationTest, type NotificationSettings } from "../api/notifications";
+import { getNotificationSettings, rotateWebhookSecret, saveNotificationSettings, sendNotificationTest, type NotificationSettings } from "../api/notifications";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { getSessionEpoch } from "../api/client";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
@@ -160,6 +183,9 @@ let disposed = false, draftRevision = 0;
 const current = () => !disposed && getSessionEpoch() === mountedEpoch && auth.session?.user?.id === actor && auth.session?.user?.role === role;
 const notice = ref("");
 const noticeError = ref(false);
+const { confirm } = useConfirm();
+// Döndürmeden gelen TAM anahtar: yalnız bellekte, ekranda bir kez; sayfadan çıkınca/kapatınca silinir.
+const revealedSecret = ref("");
 
 const form = reactive({
   smtpHost: "",
@@ -193,7 +219,7 @@ function publishSettings(value: NotificationSettings, revision: number, preserve
 }
 
 onMounted(loadSettings);
-onBeforeUnmount(() => { disposed = true; form.smtpPassword = ""; });
+onBeforeUnmount(() => { disposed = true; form.smtpPassword = ""; revealedSecret.value = ""; });
 
 async function loadSettings() {
   if (!current() || busy.value) return;
@@ -208,6 +234,38 @@ async function loadSettings() {
     if (current()) { settingsConfirmed.value = false; loadError.value = resolveApiMessage(error); notice.value = ""; }
   } finally {
     if (current()) busy.value = "";
+  }
+}
+
+async function rotateSecret() {
+  if (!current() || !settingsConfirmed.value || busy.value) return;
+  // Eski anahtar ANINDA geçersiz olur: alıcı güncellenene kadar imza doğrulaması düşer.
+  const approved = await confirm({
+    title: t("panel.confirm.rotateWebhookSecretTitle"),
+    message: t("panel.notifications.webhookSecretRotateConfirm"),
+    confirmLabel: t("panel.notifications.webhookSecretRotate")
+  });
+  if (!approved || !current()) return;
+  busy.value = "rotate";
+  try {
+    const result = await rotateWebhookSecret();
+    if (!current()) return;
+    revealedSecret.value = result.webhookSecret;
+    if (savedSettings.value) savedSettings.value = { ...savedSettings.value, webhookSecret: result.masked };
+    showNotice(t("panel.notifications.webhookSecretRotated"), false);
+  } catch (error) {
+    if (current()) showNotice(resolveApiMessage(error), true);
+  } finally {
+    if (current()) busy.value = "";
+  }
+}
+
+async function copySecret() {
+  try {
+    await navigator.clipboard.writeText(revealedSecret.value);
+    showNotice(t("panel.notifications.webhookSecretCopied"), false);
+  } catch {
+    showNotice(t("panel.notifications.webhookSecretCopyFailed"), true);
   }
 }
 

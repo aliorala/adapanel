@@ -366,6 +366,79 @@ public sealed class CustomerSelfServiceAuthorizationTests
         Assert.Empty(kayit.Cagrilar);
     }
 
+    // ---------- askı: müşteriye açılan yazma uçları askıdayken KAPALI ----------
+
+    [Theory]
+    [InlineData("POST", "/api/v1/sites/benim.test/php")]
+    [InlineData("POST", "/api/v1/sites/benim.test/php/settings")]
+    [InlineData("PUT", "/api/v1/sites/benim.test/hosting-settings")]
+    public async Task Askidaki_musteri_PHP_ve_hosting_ayarini_DEGISTIREMEZ(string yontem, string yol)
+    {
+        var kapsam = Yap<ICustomerScopeService>((ad, _) =>
+            ad == "GetScopeAsync" ? new CustomerScope(["benim.test"], 0, 0, 0, 0, 0, SuspendedAtUtc: DateTime.UtcNow, SuspendReason: "manual") : null).Arayuz;
+        var kullanici = Baglam("Customer").HttpContext.User;
+
+        var hata = await Assert.ThrowsAsync<AppException>(() =>
+            SubscriptionSuspension.EnsureAllowedAsync(kapsam, kullanici, yontem, yol, CancellationToken.None));
+
+        Assert.Equal("subscription.suspended_readonly", hata.MessageKey);
+    }
+
+    [Fact]
+    public async Task Askidaki_musteri_gunlugunu_OKUYABILIR()
+    {
+        var kapsam = Yap<ICustomerScopeService>((ad, _) =>
+            ad == "GetScopeAsync" ? new CustomerScope(["benim.test"], 0, 0, 0, 0, 0, SuspendedAtUtc: DateTime.UtcNow) : null).Arayuz;
+
+        await SubscriptionSuspension.EnsureAllowedAsync(
+            kapsam, Baglam("Customer").HttpContext.User, "GET", "/api/v1/logs/site/benim.test", CancellationToken.None);
+    }
+
+    // ---------- webhook imza anahtarı: okumada maskeli, tam değer yalnız döndürmede ----------
+
+    private static NotificationsController Bildirim(string depolanan = "0123456789abcdef0123456789abcdef")
+    {
+        var (servis, _) = Yap<INotificationService>((ad, _) => ad switch
+        {
+            "GetSettingsAsync" => new AdaPanel.Core.Dtos.Notifications.NotificationSettingsDto { WebhookSecret = depolanan },
+            "RotateWebhookSecretAsync" => "fresh-secret-value-9999",
+            _ => null
+        });
+        return new NotificationsController(servis, Yap<IAuditService>().Arayuz) { ControllerContext = Baglam("Administrator") };
+    }
+
+    [Fact]
+    public async Task Webhook_anahtari_okumada_MASKELI_doner_tam_deger_sizmaz()
+    {
+        var denetleyici = Bildirim();
+
+        var yanit = await denetleyici.GetSettingsAsync(CancellationToken.None);
+
+        var ayar = ((AdaPanel.Core.Dtos.Common.ApiResponse<AdaPanel.Core.Dtos.Notifications.NotificationSettingsDto>)((OkObjectResult)yanit.Result!).Value!).Data!;
+        Assert.DoesNotContain("0123456789abcdef0123456789abcdef", ayar.WebhookSecret, StringComparison.Ordinal);
+        Assert.EndsWith("cdef", ayar.WebhookSecret, StringComparison.Ordinal);
+        Assert.StartsWith("•", ayar.WebhookSecret, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Webhook_anahtarini_yenileme_YENI_degeri_bir_kez_doner_ve_yalniz_yonetici()
+    {
+        var denetleyici = Bildirim();
+
+        var yanit = await denetleyici.RotateWebhookSecretAsync(CancellationToken.None);
+
+        var sonuc = ((AdaPanel.Core.Dtos.Common.ApiResponse<AdaPanel.Core.Dtos.Notifications.WebhookSecretRotationDto>)((OkObjectResult)yanit.Result!).Value!).Data!;
+        Assert.Equal("fresh-secret-value-9999", sonuc.WebhookSecret);
+        Assert.DoesNotContain("fresh-secret", sonuc.Masked, StringComparison.Ordinal);
+        Assert.Equal("Administrator", typeof(NotificationsController).GetCustomAttribute<AuthorizeAttribute>()?.Roles);
+    }
+
+    [Theory]
+    [InlineData("", "")]
+    [InlineData("abcd", "••••")]
+    public void Maske_kisa_ve_bos_degeri_aynen_gizler(string girdi, string beklenen) =>
+        Assert.Equal(beklenen, NotificationsController.MaskSecret(girdi));
+
     // ---------- düzenek ----------
 
     private static string Roller(Type tip, string metot)
