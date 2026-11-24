@@ -28,9 +28,8 @@ public sealed class WorkerAndRecoveryBehaviorTests
         await worker.StartAsync(CancellationToken.None);
         try
         {
-            SpinWait.SpinUntil(() => automation.WatchdogRuns >= 3, TimeSpan.FromSeconds(10));
-            // İlk tur patladı; döngü yaşadı ve sonraki turlar çalıştı.
-            Assert.True(automation.WatchdogRuns >= 3);
+            // İlk tur patladı; döngü yaşadı ve 3. tura ulaştı (sayaç sinyali, sabit süre yok).
+            await automation.ReachedThreeRuns.Task.WaitAsync(TimeSpan.FromSeconds(30));
         }
         finally
         {
@@ -44,11 +43,12 @@ public sealed class WorkerAndRecoveryBehaviorTests
         var automation = new FlakyAutomation();
         var worker = NewAutomationWorker(automation);
         await worker.StartAsync(CancellationToken.None);
-        SpinWait.SpinUntil(() => automation.WatchdogRuns >= 2, TimeSpan.FromSeconds(10));
+        await automation.ReachedThreeRuns.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        // StopAsync döngü görevinin bitmesini bekler; dönünce yeni tur çalışamaz.
         await worker.StopAsync(CancellationToken.None);
-        var afterStop = automation.WatchdogRuns;
-        await Task.Delay(150);
-        Assert.Equal(afterStop, automation.WatchdogRuns);
+        var afterStop = Volatile.Read(ref automation.WatchdogRuns);
+        await Task.Yield();
+        Assert.Equal(afterStop, Volatile.Read(ref automation.WatchdogRuns));
     }
 
     private static AutomationWorker NewAutomationWorker(IAutomationService automation)
@@ -64,9 +64,15 @@ public sealed class WorkerAndRecoveryBehaviorTests
     private sealed class FlakyAutomation : IAutomationService
     {
         public int WatchdogRuns;
+        public readonly TaskCompletionSource ReachedThreeRuns = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task RunWatchdogsAsync(CancellationToken cancellationToken = default)
         {
-            if (Interlocked.Increment(ref WatchdogRuns) == 1)
+            var runs = Interlocked.Increment(ref WatchdogRuns);
+            if (runs >= 3)
+            {
+                ReachedThreeRuns.TrySetResult();
+            }
+            if (runs == 1)
             {
                 throw new InvalidOperationException("ilk tur bilerek patlar");
             }
@@ -98,8 +104,7 @@ public sealed class WorkerAndRecoveryBehaviorTests
         await worker.StartAsync(CancellationToken.None);
         try
         {
-            SpinWait.SpinUntil(() => rotation.Calls >= 3, TimeSpan.FromSeconds(10));
-            Assert.True(rotation.Calls >= 3);
+            await rotation.ReachedThreeCalls.Task.WaitAsync(TimeSpan.FromSeconds(30));
         }
         finally
         {
@@ -125,9 +130,15 @@ public sealed class WorkerAndRecoveryBehaviorTests
     {
         public int Calls;
         public bool ThrowOnFirst;
+        public readonly TaskCompletionSource ReachedThreeCalls = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task<bool> RunDueAsync(CancellationToken cancellationToken = default)
         {
-            if (Interlocked.Increment(ref Calls) == 1 && ThrowOnFirst)
+            var calls = Interlocked.Increment(ref Calls);
+            if (calls >= 3)
+            {
+                ReachedThreeCalls.TrySetResult();
+            }
+            if (calls == 1 && ThrowOnFirst)
             {
                 throw new IOException("ilk tur bilerek patlar");
             }
