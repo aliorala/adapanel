@@ -97,15 +97,35 @@
         </label>
         <p class="field-hint">{{ t("panel.cluster.fieldEnabledHint") }}</p>
 
-        <!-- TLS doğrulaması VARSAYILAN AÇIK. Kapatmak, merkezin yönetici belirtecini araya
-             girene teslim etmeyi göze almaktır; bu yüzden kutu İŞARETLİ başlar ve işaret
-             kaldırılınca kırmızı uyarı çıkar. -->
-        <label class="check-field">
-          <input v-model="form.verifyTlsCertificate" type="checkbox" />
-          <span>{{ t("panel.cluster.fieldTls") }}</span>
-        </label>
-        <p v-if="form.verifyTlsCertificate" class="field-hint">{{ t("panel.cluster.fieldTlsHint") }}</p>
-        <p v-else class="notice error">{{ t("panel.cluster.fieldTlsWarning") }}</p>
+        <!-- G18: "TLS doğrulamasını kapat" KALDIRILDI. https düğümde yönetici sertifikanın parmak
+             izini görür, başka bir kanaldan teyit eder ve ONAYLAR; bağlantılar o parmak izine
+             sabitlenir. Onay olmadan https düğüme bağlanılmaz. -->
+        <div v-if="isHttpsAddress" class="cert-approval">
+          <div class="row-actions">
+            <button class="secondary compact" :disabled="operationBusy || probingCert" @click="readCertificate">
+              {{ probingCert ? t("panel.cluster.certReading") : t("panel.cluster.certRead") }}
+            </button>
+            <span v-if="form.certificateFingerprint" class="status-pill ok">{{ t("panel.cluster.certApprovedPill") }}</span>
+            <span v-else-if="editingId && !addressChanged" class="field-hint">{{ t("panel.cluster.certKeepHint") }}</span>
+          </div>
+          <dl v-if="certProbe && certProbe.https" class="cert-details">
+            <dt>{{ t("panel.cluster.certFingerprint") }}</dt>
+            <dd><code>{{ certProbe.fingerprint }}</code></dd>
+            <dt>{{ t("panel.cluster.certSubject") }}</dt>
+            <dd>{{ certProbe.subject }}</dd>
+            <dt>{{ t("panel.cluster.certIssuer") }}</dt>
+            <dd>{{ certProbe.issuer }}</dd>
+            <dt>{{ t("panel.cluster.certValidity") }}</dt>
+            <dd>{{ certProbe.notBeforeUtc ? formatDateTime(certProbe.notBeforeUtc) : "-" }} – {{ certProbe.notAfterUtc ? formatDateTime(certProbe.notAfterUtc) : "-" }}</dd>
+          </dl>
+          <p v-if="certProbe && certProbe.https" class="field-hint">{{ certProbe.chainTrusted ? t("panel.cluster.certChainTrusted") : t("panel.cluster.certChainUntrusted") }}</p>
+          <div v-if="certProbe && certProbe.https" class="row-actions">
+            <button class="compact" :disabled="operationBusy || form.certificateFingerprint === certProbe.fingerprint" @click="approveProbed">
+              {{ t("panel.cluster.certApprove") }}
+            </button>
+          </div>
+          <p class="field-hint">{{ t("panel.cluster.certHint") }}</p>
+        </div>
 
         <div class="row-actions">
           <button class="compact" :disabled="operationBusy" @click="save">
@@ -193,8 +213,11 @@
                hizada -- refleksle yanlisina basilacak dizilim. Uc guvenli eylem kendi obeginde
                kaldi, silme obekten kopartildi ve HER ZAMAN satirin sonunda duruyor. -->
           <footer class="node-actions">
-            <span v-if="!row.node.verifyTlsCertificate" class="status-pill danger">
-              {{ t("panel.cluster.tlsOff") }}
+            <span v-if="row.node.certificateState === 'reapproval_required'" class="status-pill danger">
+              {{ t("panel.cluster.certReapproval") }}
+            </span>
+            <span v-else-if="row.node.certificateState === 'pinned'" class="status-pill ok" :title="row.node.certificateFingerprint">
+              {{ t("panel.cluster.certPinned") }}
             </span>
             <span v-if="!row.node.hasToken" class="status-pill warn">{{ t("panel.cluster.noToken") }}</span>
             <span class="cell-muted">{{ sonGorulme(row) }}</span>
@@ -208,6 +231,13 @@
                 :title="row.reachable ? t('panel.cluster.openHint') : t('panel.cluster.openDisabled')"
                 @click="open(row)">
                 {{ t("panel.cluster.open") }}
+              </button>
+              <button
+                v-if="row.node.certificateState !== 'not_applicable'"
+                class="secondary compact row-button"
+                :disabled="operationBusy"
+                @click="reapprove(row)">
+                {{ row.node.certificateState === "pinned" ? t("panel.cluster.certReapprove") : t("panel.cluster.certApproveNow") }}
               </button>
               <button class="secondary compact row-button" @click="edit(row)">{{ t("panel.common.edit") }}</button>
             </div>
@@ -285,10 +315,13 @@ import {
   getClusterNodeLink,
   getClusterPlacement,
   getClusterOverview,
+  approveClusterCertificate,
+  probeClusterCertificate,
   probeClusterNode,
   registerClusterNode,
   removeClusterNode,
   updateClusterNode,
+  type ClusterCertificateProbe,
   type ClusterNodeStatus,
   type ClusterOverview,
   type ClusterPlacement
@@ -318,9 +351,20 @@ const form = reactive({
   address: "",
   apiToken: "",
   enabled: true,
-  // VARSAYILAN AÇIK — sunucu tarafındaki varsayılanla aynı.
-  verifyTlsCertificate: true
+  // Yöneticinin ONAYLADIĞI parmak izi. Yalnız `approveProbed` doldurur.
+  certificateFingerprint: ""
 });
+
+const certProbe = ref<ClusterCertificateProbe | null>(null);
+const probingCert = ref(false);
+const editingAddress = ref("");
+// Şema yazılmadıysa sunucu https varsayar (ClusterAddressGuard.TryNormalize).
+const isHttpsAddress = computed(() => {
+  const value = form.address.trim();
+  return value.length > 0 && (/^https:\/\//i.test(value) || !/^[a-z]+:\/\//i.test(value));
+});
+const addressChanged = computed(() => editingId.value.length > 0
+  && form.address.trim().toLowerCase().replace(/\/+$/, "") !== editingAddress.value.toLowerCase().replace(/\/+$/, ""));
 
 const siteForm = reactive({ name: "", nodeId: "" });
 const placement = ref<ClusterPlacement | null>(null);
@@ -380,12 +424,58 @@ async function showMutationResult(target: ReturnType<typeof context>, message: s
 function toggleForm() { showForm.value = !showForm.value; if (!showForm.value) resetForm(); }
 function resetForm() {
   editingId.value = "";
-  Object.assign(form, { label: "", address: "", apiToken: "", enabled: true, verifyTlsCertificate: true });
+  Object.assign(form, { label: "", address: "", apiToken: "", enabled: true, certificateFingerprint: "" });
+  certProbe.value = null; editingAddress.value = "";
 }
 function edit(row: ClusterNodeStatus) {
   editingId.value = row.node.id;
-  Object.assign(form, { label: row.node.label, address: row.node.address, apiToken: "", enabled: row.node.enabled, verifyTlsCertificate: row.node.verifyTlsCertificate });
+  Object.assign(form, { label: row.node.label, address: row.node.address, apiToken: "", enabled: row.node.enabled, certificateFingerprint: "" });
+  certProbe.value = null; editingAddress.value = row.node.address;
   showForm.value = true;
+}
+
+// Adres değişince okunmuş sertifika ve verilmiş onay GEÇERSİZDİR (başka sunucunun parmak izi).
+watch(() => form.address, () => { certProbe.value = null; form.certificateFingerprint = ""; });
+
+async function readCertificate() {
+  if (!canMutate() || probingCert.value) return;
+  const target = context(), address = form.address.trim();
+  probingCert.value = true;
+  try {
+    const result = await probeClusterCertificate(address);
+    if (!target.current() || form.address.trim() !== address) return;
+    certProbe.value = result;
+  } catch (error) { if (target.current()) showNotice(resolveApiMessage(error), true); }
+  finally { if (target.current()) probingCert.value = false; }
+}
+
+function approveProbed() {
+  if (certProbe.value?.https) form.certificateFingerprint = certProbe.value.fingerprint;
+}
+
+// Onay yok / sertifika yenilendi: yönetici parmak izini görür, onaylarsa sabitlenir.
+async function reapprove(row: ClusterNodeStatus) {
+  if (!canMutate()) return;
+  const target = context(), nodeId = row.node.id;
+  let probeResult: ClusterCertificateProbe;
+  busyId.value = nodeId;
+  try { probeResult = await probeClusterCertificate(row.node.address); }
+  catch (error) { if (target.current()) { showNotice(resolveApiMessage(error), true); busyId.value = ""; } return; }
+  if (!target.current()) return;
+  busyId.value = "";
+  const confirmed = await confirm({
+    title: t("panel.cluster.certReapproveTitle"),
+    message: t("panel.cluster.certReapproveMessage", { label: row.node.label, fingerprint: probeResult.fingerprint }),
+    impact: [row.node.certificateFingerprint ? t("panel.cluster.certOldFingerprint", { fingerprint: row.node.certificateFingerprint }) : t("panel.cluster.certNoOldFingerprint"), t("panel.cluster.certVerifyElsewhere")],
+    confirmLabel: t("panel.cluster.certApprove"), busyLabel: t("panel.cluster.certApproving")
+  });
+  if (!confirmed || !target.current() || !canMutate()) return;
+  invalidateRead(); busyId.value = nodeId;
+  try {
+    await approveClusterCertificate(nodeId, probeResult.fingerprint);
+    await showMutationResult(target, t("cluster.certificate_approved"));
+  } catch (error) { if (target.current()) showNotice(resolveApiMessage(error), true); }
+  finally { if (target.current()) busyId.value = ""; }
 }
 
 async function save() {
@@ -396,8 +486,12 @@ async function save() {
   if (!editingId.value && form.apiToken.trim().length === 0) {
     showNotice(t("cluster.token_required"), true); return;
   }
+  // https düğüm yeni kayıtta ya da adres değişince ONAYSIZ kaydedilemez (sunucu da reddeder).
+  if (isHttpsAddress.value && !form.certificateFingerprint && (!editingId.value || addressChanged.value)) {
+    showNotice(t("cluster.certificate_approval_required"), true); return;
+  }
   const target = context(), nodeId = editingId.value, snapshot = JSON.stringify(form);
-  const payload = { label: form.label.trim(), address: form.address.trim(), apiToken: form.apiToken.trim(), enabled: form.enabled, verifyTlsCertificate: form.verifyTlsCertificate };
+  const payload = { label: form.label.trim(), address: form.address.trim(), apiToken: form.apiToken.trim(), enabled: form.enabled, certificateFingerprint: form.certificateFingerprint };
   invalidateRead();
   saving.value = true;
   try {
@@ -577,6 +671,11 @@ function showNotice(message: string, isError: boolean) {
 </script>
 
 <style scoped>
+.cert-approval { display: grid; gap: 8px; }
+.cert-details { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+.cert-details dt { color: var(--muted, #6b7280); }
+.cert-details dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .cert-details { grid-template-columns: 1fr; } }
 .cluster-workspace {
   align-content: start;
 }
