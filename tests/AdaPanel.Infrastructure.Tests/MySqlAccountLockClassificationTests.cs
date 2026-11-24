@@ -9,6 +9,8 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </summary>
 public sealed class MySqlAccountLockClassificationTests
 {
+    // SHOW GRANTS, veritabani adindaki alt cizgiyi ters bolu ile kacirilmis gosterir (panel GRANT'te boyle yazar).
+    private static readonly string Db = "`uye" + (char)92 + "_db`";
     private static readonly HashSet<string> Owned = new(["uye_db"], StringComparer.OrdinalIgnoreCase);
 
     private static (bool Touches, bool Exclusive) Classify(params string[] lines) => MySqlDatabaseProvider.ClassifyGrants(lines, Owned);
@@ -18,7 +20,7 @@ public sealed class MySqlAccountLockClassificationTests
     {
         var verdict = Classify(
             "GRANT USAGE ON *.* TO `u`@`localhost` IDENTIFIED BY PASSWORD '*X'",
-            "GRANT ALL PRIVILEGES ON `uye_db`.* TO `u`@`localhost`");
+            $"GRANT ALL PRIVILEGES ON {Db}.* TO `u`@`localhost`");
         Assert.Equal((true, true), verdict);
     }
 
@@ -27,7 +29,7 @@ public sealed class MySqlAccountLockClassificationTests
     {
         var verdict = Classify(
             "GRANT USAGE ON *.* TO `u`@`localhost`",
-            "GRANT ALL PRIVILEGES ON `uye_db`.* TO `u`@`localhost`",
+            $"GRANT ALL PRIVILEGES ON {Db}.* TO `u`@`localhost`",
             "GRANT SELECT ON `baska_db`.`tablo` TO `u`@`localhost`");
         Assert.Equal((true, false), verdict);
     }
@@ -35,14 +37,14 @@ public sealed class MySqlAccountLockClassificationTests
     [Fact]
     public void SUTUN_ve_YORDAM_yetkisi_baska_veritabaninda_munhasirligi_bozar()
     {
-        Assert.Equal((true, false), Classify("GRANT ALL ON `uye_db`.* TO `u`@`h`", "GRANT SELECT (`kolon`) ON `baska`.`t` TO `u`@`h`"));
-        Assert.Equal((true, false), Classify("GRANT ALL ON `uye_db`.* TO `u`@`h`", "GRANT EXECUTE ON PROCEDURE `baska`.`p` TO `u`@`h`"));
+        Assert.Equal((true, false), Classify($"GRANT ALL ON {Db}.* TO `u`@`h`", $"GRANT SELECT (`kolon`) ON `baska`.`t` TO `u`@`h`"));
+        Assert.Equal((true, false), Classify($"GRANT ALL ON {Db}.* TO `u`@`h`", $"GRANT EXECUTE ON PROCEDURE `baska`.`p` TO `u`@`h`"));
     }
 
     [Fact]
     public void Abonelik_veritabanindaki_tablo_yetkisi_munhasirligi_bozmaz()
     {
-        Assert.Equal((true, true), Classify("GRANT USAGE ON *.* TO `u`@`h`", "GRANT SELECT ON `uye_db`.`t` TO `u`@`h`"));
+        Assert.Equal((true, true), Classify($"GRANT USAGE ON *.* TO `u`@`h`", $"GRANT SELECT ON {Db}.`t` TO `u`@`h`"));
     }
 
     [Theory]
@@ -51,20 +53,20 @@ public sealed class MySqlAccountLockClassificationTests
     [InlineData("GRANT ALL PRIVILEGES ON *.* TO `u`@`h` WITH GRANT OPTION")]
     public void GLOBAL_yetki_USAGE_disindaysa_munhasir_degildir(string global)
     {
-        Assert.Equal((true, false), Classify(global, "GRANT ALL ON `uye_db`.* TO `u`@`h`"));
+        Assert.Equal((true, false), Classify(global, $"GRANT ALL ON {Db}.* TO `u`@`h`"));
     }
 
     [Fact]
     public void Rol_atamasi_munhasirligi_bozar()
     {
-        Assert.Equal((true, false), Classify("GRANT `rol` TO `u`@`h`", "GRANT ALL ON `uye_db`.* TO `u`@`h`"));
+        Assert.Equal((true, false), Classify($"GRANT `rol` TO `u`@`h`", $"GRANT ALL ON {Db}.* TO `u`@`h`"));
     }
 
     [Fact]
     public void Joker_desen_TAM_AD_sayilmaz_ve_munhasir_degildir()
     {
-        // `uye_db` icindeki kacissiz _ joker: uyeXdb gibi baska veritabanlarini da kapsar.
-        Assert.Equal((true, false), Classify("GRANT ALL ON `uye_db`.* TO `u`@`h`".Replace("`uye_db`", "`uye%`")));
+        // {Db} icindeki kacissiz _ joker: uyeXdb gibi baska veritabanlarini da kapsar.
+        Assert.Equal((true, false), Classify("GRANT ALL ON `uye%`.* TO `u`@`h`"));
         Assert.Equal((false, false), Classify("GRANT ALL ON `baska%`.* TO `u`@`h`"));
     }
 
@@ -72,7 +74,13 @@ public sealed class MySqlAccountLockClassificationTests
     public void Kacisli_alt_cizgi_tam_ad_sayilir()
     {
         var owned = new HashSet<string>(["uye_db"], StringComparer.OrdinalIgnoreCase);
-        Assert.Equal((true, true), MySqlDatabaseProvider.ClassifyGrants(["GRANT ALL ON `uye\_db`.* TO `u`@`h`"], owned));
+        Assert.Equal((true, true), MySqlDatabaseProvider.ClassifyGrants([$"GRANT ALL ON {Db}.* TO `u`@`h`"], owned));
+    }
+
+    [Fact]
+    public void Kacissiz_alt_cizgi_JOKER_sayilir_kapali_guvenli()
+    {
+        Assert.Equal((true, false), Classify("GRANT ALL ON `uye_db`.* TO `u`@`h`"));
     }
 
     [Fact]
@@ -96,7 +104,7 @@ public sealed class MySqlAccountLockClassificationTests
     [Fact]
     public void Escape_ters_bolu_ve_tirnagi_kacirir()
     {
-        Assert.Equal("a\\b''c", MySqlDatabaseProvider.Escape("a\b'c"));
+        Assert.Equal("a" + (char)92 + (char)92 + "b''c", MySqlDatabaseProvider.Escape("a" + (char)92 + "b'c"));
         Assert.Equal("plain", MySqlDatabaseProvider.Escape("plain"));
     }
 }
