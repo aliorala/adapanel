@@ -165,7 +165,7 @@ public sealed partial class MailService : IMigrationMailProvisioner
         // Never propagate CLI output: a rejected credential payload may be echoed by a tool.
         if (!result.Success) throw MigrationMailError("provisioning_failed");
     }
-    private static bool? MigrationAccountActive(JsonElement account)
+    internal static bool? MigrationAccountActive(JsonElement account)
     {
         if (!account.TryGetProperty("permissions", out var permissions)) return null;
         var kind = GetField(permissions, "@type");

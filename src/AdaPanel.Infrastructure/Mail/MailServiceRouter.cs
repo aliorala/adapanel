@@ -143,4 +143,22 @@ public sealed class MailServiceRouter(
 
     public Task<MailClientSettingsDto?> GetClientSettingsAsync(string domain, CancellationToken cancellationToken = default)
         => Active.GetClientSettingsAsync(domain, cancellationToken);
+
+    public Task<MailWorkspaceDto> SetAccountActiveAsync(SetMailAccountActiveRequest request, CancellationToken cancellationToken = default)
+        => Active.SetAccountActiveAsync(request, cancellationToken);
+
+    public Task<MailWorkspaceDto> UpdateAliasAsync(UpdateMailAliasRequest request, CancellationToken cancellationToken = default)
+        => Active.UpdateAliasAsync(request, cancellationToken);
+
+    public Task<MailForwardDto> GetForwardAsync(string address, CancellationToken cancellationToken = default)
+        => Active.GetForwardAsync(address, cancellationToken);
+
+    public Task<MailForwardDto> SetForwardAsync(SetMailForwardRequest request, CancellationToken cancellationToken = default)
+        => Active.SetForwardAsync(request, cancellationToken);
+
+    public Task<MailDkimRotationDto> RotateDkimAsync(RotateMailDkimRequest request, CancellationToken cancellationToken = default)
+        => Active.RotateDkimAsync(request, cancellationToken);
+
+    public Task<int> FinalizeDkimRotationsAsync(CancellationToken cancellationToken = default)
+        => Active.FinalizeDkimRotationsAsync(cancellationToken);
 }

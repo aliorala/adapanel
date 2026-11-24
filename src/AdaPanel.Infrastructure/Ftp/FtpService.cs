@@ -506,6 +506,7 @@ public sealed partial class FtpService(
                 SiteName = record.SiteName,
                 CreatedAtUtc = record.CreatedAtUtc,
                 IsEnabled = record.IsEnabled,
+                ReadOnly = record.ReadOnly,
                 ExistsOnSystem = exists,
                 HomeLinkPath = ev.LinkPath,
                 HomeLinkExists = ev.LinkExists,
@@ -837,7 +838,8 @@ public sealed partial class FtpService(
 
     private async Task ChangeHomePermissionsAsync(string userName, string homePath, bool grant,
         Func<CancellationToken, Task>? beforeMutation, Action<string, FtpPermissionChange?>? nativeStarting, CancellationToken cancellationToken,
-        IReadOnlyCollection<string>? permissionPaths = null)
+        IReadOnlyCollection<string>? permissionPaths = null, bool readOnly = false, bool replace = false,
+        Func<string, bool>? skipPath = null)
     {
         // /T traverses junction descendants even with /L on supported Windows builds.
         // Plan ordinary entries ourselves, then issue only nonrecursive native operations.
@@ -866,6 +868,8 @@ public sealed partial class FtpService(
             }
             if (paths.Any(path => !PathContainment.IsRootOrInside(homePath, path)))
                 throw new AppException("ftp.home_outside_site", 403, 403);
+            // Güncellemede eski ağaçtan hak kaldırılırken yeni ev dizininin içine düşen yollar korunur.
+            if (skipPath is not null) paths = paths.Where(path => !skipPath(path)).ToList();
 
             // A fake command transport does not imply permission to query live SAM.
             // Native ACL fixtures opt in with their current-process SID; production
@@ -891,13 +895,14 @@ public sealed partial class FtpService(
                         ? new DirectoryInfo(path).GetAccessControl(AccessControlSections.Access)
                         : new FileInfo(path).GetAccessControl(AccessControlSections.Access);
                     token.ThrowIfCancellationRequested();
-                    if (!HomePermissionChangeNeeded(security, identity, isDirectory, grant)) continue;
+                    if (!HomePermissionChangeNeeded(security, identity, isDirectory, grant, readOnly)) continue;
                     // Reading a descriptor is not permission to follow a replacement.
                     EnsureHomePathBoundary(path);
                 }
-                var rights = isDirectory ? "(OI)(CI)M" : "M";
-                var operation = grant ? $"/grant \"{userName}:{rights}\"" : $"/remove:g \"{userName}\"";
-                FtpPermissionChange? change = grant && identity is not null
+                var rights = readOnly ? (isDirectory ? "(OI)(CI)RX" : "RX") : (isDirectory ? "(OI)(CI)M" : "M");
+                // /grant:r = açık (explicit) hakları DEĞİŞTİRİR; Modify <-> salt-okunur geçişinde eski hak kalmasın.
+                var operation = grant ? $"/grant{(replace ? ":r" : "")} \"{userName}:{rights}\"" : $"/remove:g \"{userName}\"";
+                FtpPermissionChange? change = grant && identity is not null && !readOnly && !replace
                     ? FtpPermissionChange.Capture(path, identity, isDirectory) : null;
                 var retained = false;
                 try
@@ -921,9 +926,39 @@ public sealed partial class FtpService(
         }
     }
 
-    internal static bool HomePermissionChangeNeeded(FileSystemSecurity security, SecurityIdentifier identity,
-        bool isDirectory, bool grant)
+    private const FileSystemRights WriteBits = FileSystemRights.WriteData | FileSystemRights.AppendData
+        | FileSystemRights.Delete | FileSystemRights.DeleteSubdirectoriesAndFiles | FileSystemRights.WriteAttributes
+        | FileSystemRights.WriteExtendedAttributes | FileSystemRights.ChangePermissions | FileSystemRights.TakeOwnership;
+
+    /// <summary>
+    /// Hesabın bu nesnedeki KENDİ izin girdilerinden ölçüm: <c>true</c> yalnız okuma/çalıştırma,
+    /// <c>false</c> yazma hakkı var, <c>null</c> hiç izin girdisi yok.
+    /// </summary>
+    internal static bool? MeasureReadOnly(FileSystemSecurity security, SecurityIdentifier identity)
     {
+        var rules = security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+            .Cast<FileSystemAccessRule>().Where(rule => rule.IdentityReference.Equals(identity)
+                && rule.AccessControlType == AccessControlType.Allow).ToList();
+        if (rules.Count == 0) return null;
+        return !rules.Any(rule => (rule.FileSystemRights & WriteBits) != 0);
+    }
+
+    internal static bool HomePermissionChangeNeeded(FileSystemSecurity security, SecurityIdentifier identity,
+        bool isDirectory, bool grant, bool readOnly = false)
+    {
+        if (grant && readOnly)
+        {
+            // Salt-okunur hedef: yazma biti kalmamalı VE okuma/çalıştırma (uygun kalıtımla) verilmiş olmalı.
+            var own = security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+                .Cast<FileSystemAccessRule>().Where(rule => rule.IdentityReference.Equals(identity)
+                    && rule.AccessControlType == AccessControlType.Allow).ToList();
+            if (own.Any(rule => (rule.FileSystemRights & WriteBits) != 0)) return true;
+            return !own.Any(rule => (rule.FileSystemRights & FileSystemRights.ReadAndExecute) == FileSystemRights.ReadAndExecute
+                && (rule.PropagationFlags & PropagationFlags.InheritOnly) == 0
+                && (!isDirectory || (rule.InheritanceFlags == (InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit)
+                    && rule.PropagationFlags == PropagationFlags.None)));
+        }
+
         var rules = security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
             .Cast<FileSystemAccessRule>().Where(rule => rule.IdentityReference.Equals(identity)
                 && rule.AccessControlType == AccessControlType.Allow);
@@ -1071,13 +1106,30 @@ public sealed partial class FtpService(
             Approve, cancellationToken);
     }
 
-    public async Task SetFtpUserEnabledAsync(string userName, bool enabled, CancellationToken cancellationToken = default)
+    public Task SetFtpUserEnabledAsync(string userName, bool enabled, CancellationToken cancellationToken = default) =>
+        SetFtpUserEnabledCoreAsync(userName, enabled, null, cancellationToken);
+
+    public Task SetFtpUserEnabledAsync(string userName, bool enabled,
+        Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        SetFtpUserEnabledCoreAsync(userName, enabled, beforeMutation, cancellationToken);
+
+    private async Task SetFtpUserEnabledCoreAsync(string userName, bool enabled,
+        Func<FtpUserDto?, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
         var normalized = NormalizeUserName(userName);
 
         // YALNIZ PANELİN KENDİ AÇTIĞI hesap (parola değiştirmeyle aynı kapı): Administrator da bir
         // yerel hesaptır ve burası ad doğrulamasından başka bir şey sormaz.
         var kayit = await ReadAccountAsync(normalized, cancellationToken);
+        using var accountLease = await FtpAccountLifecycle.EnterAsync(normalized, cancellationToken);
+        async Task Approve(CancellationToken token)
+        {
+            await EnsureAccountUnchangedAsync(normalized, kayit, token);
+            if (beforeMutation is not null) await beforeMutation(ToAccountDto(kayit), token);
+            token.ThrowIfCancellationRequested();
+        }
+        // Arayanın yetkisi kayıt YOKKEN de önce sorulur: yanıt farkı hesap numaralandırmaya yol açmasın.
+        await Approve(cancellationToken);
         if (kayit is null)
         {
             throw new AppException("ftp.user_not_found", 404, 404);
@@ -1090,6 +1142,7 @@ public sealed partial class FtpService(
 {verb} -Name '{ad}'
 $hesap = Get-LocalUser -Name '{ad}'
 [Console]::Out.WriteLine('ADAPANEL-ENABLED=' + $hesap.Enabled)";
+        await Approve(cancellationToken);
         var sonuc = await RunStrictScriptAsync(script, cancellationToken);
         var cikti = sonuc.StandardOutput ?? string.Empty;
         var beklenen = enabled ? "ADAPANEL-ENABLED=True" : "ADAPANEL-ENABLED=False";
@@ -1117,6 +1170,164 @@ $hesap = Get-LocalUser -Name '{ad}'
             cancellationToken);
     }
 
+    public Task<FtpUserDto> UpdateFtpUserAsync(string userName, UpdateFtpUserRequest request,
+        Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) =>
+        UpdateFtpUserCoreAsync(userName, request, beforeMutation, cancellationToken);
+
+    /// <summary>
+    /// Ev dizinini ve/veya salt-okunur bayrağını değiştirir. Sıra: yeni dizine hak ver -> IIS kuralı +
+    /// junction -> İKİ yerden ölçüm (IIS izni, NTFS) -> eski dizinden hak kaldır -> kaydı yaz.
+    /// Herhangi bir adım patlarsa yapılanlar geri alınır (eski dizin/mod yeniden uygulanır).
+    /// </summary>
+    private async Task<FtpUserDto> UpdateFtpUserCoreAsync(string userName, UpdateFtpUserRequest request,
+        Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken)
+    {
+        var name = NormalizeUserName(userName);
+        var expected = await ReadAccountAsync(name, cancellationToken);
+        using var accountLease = await FtpAccountLifecycle.EnterAsync(name, cancellationToken);
+        async Task Approve(CancellationToken token)
+        {
+            await EnsureAccountUnchangedAsync(name, expected, token);
+            await beforeMutation(ToAccountDto(expected), token);
+            token.ThrowIfCancellationRequested();
+        }
+        await Approve(cancellationToken);
+        if (expected is null || !await UserExistsAsync(name, cancellationToken))
+            throw new AppException("ftp.user_not_found", 404, 404);
+
+        var oldHome = Path.GetFullPath(expected.HomePath);
+        var oldReadOnly = expected.ReadOnly;
+        var newHome = string.IsNullOrWhiteSpace(request.HomePath) ? oldHome
+            : Path.GetFullPath(Environment.ExpandEnvironmentVariables(request.HomePath.Trim()));
+        var newReadOnly = request.ReadOnly ?? oldReadOnly;
+        var homeChanged = !string.Equals(Path.TrimEndingDirectorySeparator(newHome),
+            Path.TrimEndingDirectorySeparator(oldHome), StringComparison.OrdinalIgnoreCase);
+        var modeChanged = newReadOnly != oldReadOnly;
+        if (!homeChanged && !modeChanged) return ToUpdatedDto(expected, newHome, newReadOnly);
+
+        if (homeChanged)
+        {
+            // Reparse (junction) zinciri ve varlık: yeni dizin yan etkiden ÖNCE doğrulanır; dizin burada oluşturulmaz.
+            EnsureHomePathBoundary(newHome);
+            if (!Directory.Exists(newHome)) throw new AppException("ftp.home_not_found", 404, 404);
+        }
+
+        var identity = ResolveHomeIdentity(name);
+        var newAclTouched = false;
+        var junctionChanged = false;
+        var oldAclRemoved = false;
+        try
+        {
+            await Approve(cancellationToken);
+            newAclTouched = true;
+            await ChangeHomePermissionsAsync(name, newHome, grant: true, Approve, null, cancellationToken,
+                null, readOnly: newReadOnly, replace: true);
+
+            await Approve(cancellationToken);
+            junctionChanged = true;
+            await ConfigureUserHomeAsync(name, newHome, cancellationToken, newReadOnly);
+
+            // ÖLÇÜM: "yazdım" başarı değildir. IIS kuralındaki izin ve NTFS hakkı geri okunur.
+            await Approve(cancellationToken);
+            var measuredIis = await MeasureAuthorizationPermissionsAsync(name, cancellationToken);
+            var wantedIis = newReadOnly ? 1 : 3;
+            if (measuredIis != wantedIis)
+                throw new AppException("ftp.permission_unverified", 500, 500,
+                    $"IIS FTP authorization permissions measured {(measuredIis?.ToString() ?? "unreadable")}, expected {wantedIis}.");
+            if (identity is not null)
+            {
+                var security = new DirectoryInfo(newHome).GetAccessControl(AccessControlSections.Access);
+                var measuredNtfs = MeasureReadOnly(security, identity);
+                if (measuredNtfs != newReadOnly)
+                    throw new AppException("ftp.permission_unverified", 500, 500,
+                        $"NTFS access measured {(measuredNtfs is null ? "none" : measuredNtfs.Value ? "read-only" : "writable")}, expected {(newReadOnly ? "read-only" : "writable")}.");
+            }
+
+            if (homeChanged && Directory.Exists(oldHome))
+            {
+                await Approve(cancellationToken);
+                oldAclRemoved = true;
+                await ChangeHomePermissionsAsync(name, oldHome, grant: false, Approve, null, cancellationToken,
+                    skipPath: path => PathContainment.IsRootOrInside(newHome, path));
+            }
+
+            await fileStore.UpdateAsync(
+                StatePath,
+                Array.Empty<FtpUserState>(),
+                mevcut =>
+                {
+                    foreach (var item in mevcut)
+                    {
+                        if (string.Equals(item.UserName.Trim(), name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            item.HomePath = newHome;
+                            item.ReadOnly = newReadOnly;
+                        }
+                    }
+                    return mevcut;
+                },
+                Approve, cancellationToken);
+        }
+        catch (Exception error)
+        {
+            var notes = new List<string>();
+            async Task Try(string label, Func<Task> work)
+            {
+                try { await work(); } catch (Exception inner) { notes.Add($"{label}: {inner.Message}"); }
+            }
+            if (junctionChanged)
+                await Try("yetki-junction-geri-alma", () => ConfigureUserHomeAsync(name, oldHome, CancellationToken.None, oldReadOnly));
+            if (newAclTouched && homeChanged)
+                await Try("yeni-dizin-acl-geri-alma", () => ChangeHomePermissionsAsync(name, newHome, grant: false, null, null,
+                    CancellationToken.None, skipPath: path => PathContainment.IsRootOrInside(oldHome, path)));
+            if ((newAclTouched || oldAclRemoved) && Directory.Exists(oldHome))
+                await Try("eski-dizin-acl-geri-alma", () => ChangeHomePermissionsAsync(name, oldHome, grant: true, null, null,
+                    CancellationToken.None, null, readOnly: oldReadOnly, replace: true));
+            var suffix = notes.Count == 0 ? string.Empty
+                : $"{Environment.NewLine}GeriAlmaUyarilari:{Environment.NewLine}{string.Join(Environment.NewLine, notes)}";
+            if (error is AppException app)
+                throw new AppException(app.MessageKey, app.Code, app.HttpStatusCode, app.Details + suffix);
+            if (notes.Count == 0) throw;
+            throw new AppException("ftp.update_failed", 500, 500, error.Message + suffix);
+        }
+
+        return ToUpdatedDto(expected, newHome, newReadOnly);
+    }
+
+    private FtpUserDto ToUpdatedDto(FtpUserState record, string homePath, bool readOnly) => new()
+    {
+        UserName = record.UserName, SiteName = record.SiteName, HomePath = homePath, ReadOnly = readOnly,
+        IsEnabled = record.IsEnabled, CreatedAtUtc = record.CreatedAtUtc, ExistsOnSystem = true, Port = FtpPort
+    };
+
+    private SecurityIdentifier? ResolveHomeIdentity(string userName) =>
+        HomePermissionIdentity is { } resolve ? resolve(userName)
+        : NativeCommand is null
+            ? (SecurityIdentifier)new NTAccount(Environment.MachineName, userName).Translate(typeof(SecurityIdentifier))
+            : null;
+
+    /// <summary>IIS FTP yetkilendirme kuralındaki izin bitleri (Read=1, Write=2); okunamazsa null.</summary>
+    private async Task<int?> MeasureAuthorizationPermissionsAsync(string userName, CancellationToken cancellationToken)
+    {
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            Import-Module WebAdministration -ErrorAction Stop
+            $siteName = '{{EscapePowerShellLiteral(FtpSiteName)}}'
+            $userName = '{{EscapePowerShellLiteral(userName)}}'
+            $rules = @(Get-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization/add' | Where-Object { [string]$_.users -eq $userName })
+            if ($rules.Count -ne 1) { [Console]::Out.WriteLine('ADAPANEL-PERMS=rules:' + $rules.Count); return }
+            $n = 0
+            foreach ($p in ([string]$rules[0].permissions -split '[,\s]+')) {
+              if ($p -eq 'Read') { $n += 1 } elseif ($p -eq 'Write') { $n += 2 } elseif ($p -match '^\d+$') { $n += [int]$p }
+            }
+            [Console]::Out.WriteLine('ADAPANEL-PERMS=' + $n)
+            """;
+        var result = await RunStrictScriptAsync(script, cancellationToken);
+        if (!result.Success) return null;
+        var match = Regex.Match(result.StandardOutput ?? string.Empty, @"ADAPANEL-PERMS=(\d+)\s*$", RegexOptions.Multiline);
+        return match.Success && int.TryParse(match.Groups[1].Value, out var value) ? value : null;
+    }
+
     private async Task<FtpUserState?> ReadAccountAsync(string name, CancellationToken token) =>
         (await fileStore.ReadAsync(StatePath, Array.Empty<FtpUserState>(), token))
             .SingleOrDefault(item => string.Equals(item.UserName.Trim(), name, StringComparison.OrdinalIgnoreCase));
@@ -1130,7 +1341,7 @@ $hesap = Get-LocalUser -Name '{ad}'
     }
 
     private static FtpUserDto? ToAccountDto(FtpUserState? value) => value is null ? null : new FtpUserDto
-    { UserName = value.UserName, SiteName = value.SiteName, HomePath = value.HomePath, CreatedAtUtc = value.CreatedAtUtc, IsEnabled = value.IsEnabled };
+    { UserName = value.UserName, SiteName = value.SiteName, HomePath = value.HomePath, CreatedAtUtc = value.CreatedAtUtc, IsEnabled = value.IsEnabled, ReadOnly = value.ReadOnly };
 
     /// <summary>
     /// Kayıtlı FTP kullanıcılarının EKSİK ev bağlantısını tamamlar. Kaç tanesinin onarıldığını döner.
@@ -1608,10 +1819,12 @@ $hesap = Get-LocalUser -Name '{ad}'
         };
     }
 
-    private async Task ConfigureUserHomeAsync(string userName, string homePath, CancellationToken cancellationToken)
+    private async Task ConfigureUserHomeAsync(string userName, string homePath, CancellationToken cancellationToken, bool readOnly = false)
     {
         var userRoots = HomeLinkPaths(userName);
         var rootLiterals = string.Join(",", userRoots.Select(yol => $"'{EscapePowerShellLiteral(yol)}'"));
+        // IIS FTP yetkilendirme izni: 1 = Read, 3 = Read+Write (salt-okunur hesapta yazma izni VERİLMEZ).
+        var permissionValue = readOnly ? 1 : 3;
 
         // KATI çalıştırma (RunPowerShellStrictAsync): bu betiğin ortasında patlayan bir ifade
         // eskiden çıkış koduna yansımıyordu — PowerShell'in çıkış kodu SON ifadenin sonucudur.
@@ -1628,7 +1841,7 @@ $hesap = Get-LocalUser -Name '{ad}'
               New-Item -ItemType Junction -Path $userRoot -Target $homePath | Out-Null
             }
             {{RemoveUserAuthorizationSnippet}}
-            Add-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization' -Value @{accessType='Allow';users=$userName;permissions=3}
+            Add-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization' -Value @{accessType='Allow';users=$userName;permissions={{permissionValue}} }
             """;
 
         var result = await RunStrictScriptAsync(script, cancellationToken);
@@ -2041,6 +2254,9 @@ else {{ [Console]::Out.WriteLine('ADAPANEL-SON=' + $hesap.PasswordExpires.ToStri
         public string HomePath { get; set; } = string.Empty;
 
         public bool IsEnabled { get; set; }
+
+        /// <summary>Salt-okunur hesap (NTFS ReadAndExecute + IIS FTP izni Read). Eski kayıtlarda yok = false.</summary>
+        public bool ReadOnly { get; set; }
 
         public DateTime CreatedAtUtc { get; set; }
     }

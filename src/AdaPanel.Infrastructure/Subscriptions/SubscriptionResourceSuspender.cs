@@ -39,11 +39,18 @@ public sealed class SubscriptionResourceSuspender(
     IIisSiteService iisSiteService,
     ILogger<SubscriptionResourceSuspender> logger,
     IFtpService? ftpService = null,
-    ISchedulerService? schedulerService = null)
+    ISchedulerService? schedulerService = null,
+    IMailService? mailService = null,
+    IDatabaseService? databaseService = null,
+    IDatabaseOwnershipService? databaseOwnership = null)
 {
     internal const string SitePrefix = "site:";
     internal const string FtpPrefix = "ftp:";
     internal const string CronPrefix = "cron:";
+    internal const string MailPrefix = "mail:";
+    internal const string DbUserPrefix = "dbuser:";
+    private const string MailListKey = "mail:*";
+    private const string DbListKey = "dbuser:*";
     private const string FtpListKey = "ftp:*";
 
     /// <summary>Abonelik kimliğine bağlı cron görevi öneki (CronController.GetOwnerPrefixAsync ile AYNI biçim).</summary>
@@ -63,6 +70,8 @@ public sealed class SubscriptionResourceSuspender(
         var failedSites = new List<string>();
         var ftpClosed = 0;
         var cronClosed = 0;
+        var mailClosed = 0;
+        var dbClosed = 0;
 
         // 1) Siteler.
         foreach (var site in sites)
@@ -196,10 +205,27 @@ public sealed class SubscriptionResourceSuspender(
             }
         }
 
-        // 4) Posta ve veritabanı kullanıcıları: panelde GÜVENLE kapatan bir yol YOK. Bunu başarı gibi
-        //    göstermek yerine açıkça kaydederiz (dikkat öğesi + denetim cümlesi).
-        AddOnce(state.Unsupported, "mail");
-        AddOnce(state.Unsupported, "database");
+        // 4) Posta kutuları: Stalwart'ta hesap izinleri kapatılır (posta SİLİNMEZ, geri okunur). MailEnable için
+        //    kanıtlanmış yöntem yok → "desteklenmiyor" olarak KAYDEDİLİR (kapattım denmez).
+        if (mailService is null)
+        {
+            AddOnce(state.Unsupported, "mail");
+        }
+        else
+        {
+            mailClosed = await CloseMailAsync(userId, state, cancellationToken);
+        }
+
+        // 5) Veritabanı kullanıcıları: MariaDB/MySQL ACCOUNT LOCK. Yalnız TÜM yetkisi bu aboneliğin
+        //    veritabanlarında olan hesaplar kilitlenir; başka kiracıyla paylaşılan hesap kilitlenmez (raporlanır).
+        if (databaseService is null || databaseOwnership is null)
+        {
+            AddOnce(state.Unsupported, "database");
+        }
+        else
+        {
+            dbClosed = await CloseDatabaseUsersAsync(userId, state, cancellationToken);
+        }
 
         await customerScopes.SetSuspensionStateAsync(userId, state, cancellationToken);
 
@@ -207,6 +233,11 @@ public sealed class SubscriptionResourceSuspender(
         if (ftpClosed + cronClosed > 0)
         {
             extras.Add($"{ftpClosed} FTP account(s) and {cronClosed} scheduled task(s) disabled.");
+        }
+
+        if (mailClosed + dbClosed > 0)
+        {
+            extras.Add($"{mailClosed} mailbox(es) and {dbClosed} database account(s) suspended.");
         }
 
         var pendingNonSite = state.PendingClose.Where(item => !item.StartsWith(SitePrefix, StringComparison.Ordinal)).ToArray();
@@ -302,6 +333,19 @@ public sealed class SubscriptionResourceSuspender(
                     await schedulerService.SetTaskEnabledAsync(key[CronPrefix.Length..], true, cancellationToken);
                     otherRestored++;
                 }
+                else if (key.StartsWith(MailPrefix, StringComparison.Ordinal) && mailService is not null)
+                {
+                    await mailService.SetAccountActiveAsync(
+                        new AdaPanel.Core.Dtos.Mail.SetMailAccountActiveRequest { Address = key[MailPrefix.Length..], Active = true }, cancellationToken);
+                    otherRestored++;
+                }
+                else if (key.StartsWith(DbUserPrefix, StringComparison.Ordinal) && databaseService is not null)
+                {
+                    var parts = key[DbUserPrefix.Length..].Split('|', 3);
+                    if (parts.Length != 3) throw new NotSupportedException($"Malformed database account key '{key}'.");
+                    await databaseService.SetUserLockedAsync(parts[0], parts[1], parts[2], false, cancellationToken);
+                    otherRestored++;
+                }
                 else
                 {
                     throw new NotSupportedException($"No handler to restore '{key}'.");
@@ -336,7 +380,7 @@ public sealed class SubscriptionResourceSuspender(
         var extras = new List<string>();
         if (otherRestored > 0)
         {
-            extras.Add($"{otherRestored} FTP account(s)/scheduled task(s) re-enabled (only those open before suspension).");
+            extras.Add($"{otherRestored} FTP account(s)/scheduled task(s)/mailbox(es)/database account(s) re-enabled (only those open before suspension: FTP, tasks, mailboxes, database accounts).");
         }
 
         var pendingNonSite = state.PendingRestore.Where(item => !item.StartsWith(SitePrefix, StringComparison.Ordinal)).ToArray();
@@ -365,6 +409,142 @@ public sealed class SubscriptionResourceSuspender(
         }
 
         return state is null ? null : await RestoreAsync(userId, cancellationToken);
+    }
+
+    /// <summary>Posta kutularını kapatır; kapatılan sayıyı döner. Sessiz başarı yok: hata PendingClose'a yazılır.</summary>
+    private async Task<int> CloseMailAsync(Guid userId, SubscriptionSuspensionState state, CancellationToken cancellationToken)
+    {
+        var closed = 0;
+        var unmeasured = false;
+        try
+        {
+            var domains = await customerScopes.GetAllowedMailDomainsAsync(userId, cancellationToken);
+            foreach (var domain in domains)
+            {
+                var workspace = await mailService!.GetWorkspaceAsync(domain, cancellationToken);
+                if (!workspace.Installed || !workspace.Configured)
+                {
+                    continue; // posta sunucusu yok/yapılandırılmamış: kapatılacak kutu yok
+                }
+
+                if (!workspace.AccountsMeasured)
+                {
+                    AddOnce(state.PendingClose, MailListKey); // kutular ölçülemedi: kapatıldı DENMEZ, yeniden denenir
+                    unmeasured = true;
+                    continue;
+                }
+
+                foreach (var account in workspace.Accounts)
+                {
+                    var key = MailPrefix + account.Address;
+                    if (account.Active == false)
+                    {
+                        state.PendingClose.Remove(key); // zaten kapalı (elle ya da önceki turda)
+                        continue;
+                    }
+
+                    AddOnce(state.OpenBefore, key);
+                    try
+                    {
+                        await mailService.SetAccountActiveAsync(
+                            new AdaPanel.Core.Dtos.Mail.SetMailAccountActiveRequest { Address = account.Address, Active = false }, cancellationToken);
+                        state.PendingClose.Remove(key);
+                        closed++;
+                    }
+                    catch (NotSupportedException)
+                    {
+                        state.OpenBefore.Remove(key);
+                        AddOnce(state.Unsupported, "mail");
+                        return closed; // bu posta sunucusu hiçbir kutuyu kapatamaz: tek tek denemenin anlamı yok
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        AddOnce(state.PendingClose, key);
+                        logger.LogWarning(exception, "Askı: posta kutusu kapatılamadı: {Account}", account.Address);
+                    }
+                }
+            }
+
+            if (!unmeasured) state.PendingClose.Remove(MailListKey);
+        }
+        catch (NotSupportedException)
+        {
+            AddOnce(state.Unsupported, "mail");
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            AddOnce(state.PendingClose, MailListKey);
+            logger.LogWarning(exception, "Askı: posta kutuları listelenemedi.");
+        }
+
+        return closed;
+    }
+
+    /// <summary>Aboneliğin veritabanı hesaplarını kilitler (yalnız münhasır hesaplar); kilitlenen sayıyı döner.</summary>
+    private async Task<int> CloseDatabaseUsersAsync(Guid userId, SubscriptionSuspensionState state, CancellationToken cancellationToken)
+    {
+        var closed = 0;
+        try
+        {
+            var owned = await databaseOwnership!.GetOwnedAsync(userId, cancellationToken);
+            foreach (var group in owned.GroupBy(item => item.Engine, StringComparer.OrdinalIgnoreCase))
+            {
+                IReadOnlyCollection<AdaPanel.Core.Dtos.Databases.DatabaseUserLockDto> locks;
+                try
+                {
+                    locks = await databaseService!.GetUserLocksAsync(group.Key, group.Select(item => item.DatabaseName).ToArray(), cancellationToken);
+                }
+                catch (NotSupportedException)
+                {
+                    AddOnce(state.Unsupported, "database"); // PostgreSQL/MSSQL: kilit yöntemi yok
+                    continue;
+                }
+
+                foreach (var account in locks)
+                {
+                    var key = $"{DbUserPrefix}{account.Engine}|{account.UserName}|{account.Host}";
+                    if (!account.Exclusive)
+                    {
+                        // Başka kiracının veritabanına da yetkili: kilitlemek onu da keser → dokunulmaz, açıkça söylenir.
+                        AddOnce(state.Unsupported, $"database:{account.UserName}@{account.Host} (shared with another subscription)");
+                        continue;
+                    }
+
+                    if (account.Locked == true)
+                    {
+                        state.PendingClose.Remove(key); // zaten kilitli
+                        continue;
+                    }
+
+                    AddOnce(state.OpenBefore, key);
+                    try
+                    {
+                        await databaseService!.SetUserLockedAsync(account.Engine, account.UserName, account.Host, true, cancellationToken);
+                        state.PendingClose.Remove(key);
+                        closed++;
+                    }
+                    catch (NotSupportedException)
+                    {
+                        state.OpenBefore.Remove(key);
+                        AddOnce(state.Unsupported, "database");
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        AddOnce(state.PendingClose, key);
+                        logger.LogWarning(exception, "Askı: veritabanı hesabı kilitlenemedi: {Account}", account.UserName);
+                    }
+                }
+            }
+
+            state.PendingClose.Remove(DbListKey);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            AddOnce(state.PendingClose, DbListKey);
+            logger.LogWarning(exception, "Askı: veritabanı hesapları okunamadı.");
+        }
+
+        return closed;
     }
 
     private static void AddOnce(List<string> list, string item)

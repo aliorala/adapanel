@@ -342,6 +342,7 @@ public static class ServiceCollectionExtensions
         // makineler korunurdu, açığı taşıyan MEVCUT kurulumlar hiç kapanmazdı (gerekçe:
         // MailSenderPolicyWorker).
         services.AddHostedService<Mail.MailSenderPolicyWorker>();
+        services.AddHostedService<Mail.MailDkimRetireWorker>();
 
         // Arka plan iş kuyruğunun TÜKETİCİSİ. Kayıt yapılmazsa kuyruk dolar ve kuyruğa alınan hiçbir
         // iş çalışmaz — yani parola sıfırlama postası hiç gitmez. Bu yüzden kayıt burada, diğer

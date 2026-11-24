@@ -53,6 +53,14 @@ public interface IFtpService
     Task SetFtpUserEnabledAsync(string userName, bool enabled, CancellationToken cancellationToken = default)
         => throw new NotSupportedException("FTP account enable/disable is not supported by this implementation.");
 
+    /// <summary>Açma/kapatma; <paramref name="beforeMutation"/> hesap kilidi altında yetki/sahiplik onayı verir.</summary>
+    Task SetFtpUserEnabledAsync(string userName, bool enabled,
+        Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    /// <summary>Ev dizini / salt-okunur güncelleme; yazılan değerler IIS ve NTFS'ten geri okunarak doğrulanır.</summary>
+    Task<FtpUserDto> UpdateFtpUserAsync(string userName, UpdateFtpUserRequest request,
+        Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) => throw new NotSupportedException();
+
     Task DeleteFtpUserAsync(string userName,
         Func<FtpUserDto?, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken) => throw new NotSupportedException();
 

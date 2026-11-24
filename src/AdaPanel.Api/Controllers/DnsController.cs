@@ -1,24 +1,28 @@
-﻿using AdaPanel.Api.Security;
+using AdaPanel.Api.Security;
 using System.Security.Claims;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
+using AdaPanel.Infrastructure.Dns;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace AdaPanel.Api.Controllers;
 
-// Reseller (Bayi) yalnız kendi müşterilerinin sitelerinin DNS bölgesini yönetebilir
-// (EnsureSiteAsync). Windows DNS özelliği KURULUMU server-level → admin-only.
+// KAPSAMLI roller (Reseller, Customer) yalnız kapsamındaki sitelerin DNS bölgesini yönetebilir
+// (EnsureSiteAsync; Plesk gibi müşteri kendi sitesinin DNS'ini yönetir — ürün kararı A6). Sunucu
+// düzeyi uçlar (kip, transfer, DNSSEC, Windows DNS kurulumu, varsayılanlar) ADMIN-ONLY kalır.
+// Paylaşımlı bölgede kapsam dışı bir site etkileniyorsa yazma 403 (DnsRecordApproval).
 //
 // DENETİM KAYDI: durum değiştiren her uç iz bırakır. Bu denetleyicide hiç yoktu; DNS ise
 // panelin en yıkıcı yüzeylerinden biridir — tek bir A ya da MX değişikliği alan adının
 // trafiğini veya postasını başka bir sunucuya taşır. "Kim, ne zaman, neyi değiştirdi"
 // sorusunun cevapsız kalması, bir olaydan sonra elde hiçbir şey bırakmaz.
 [ApiController]
-[Authorize(Roles = "Administrator,Reseller")]
+[Authorize(Roles = "Administrator,Reseller,Customer")]
+[RequireSubUserSection("sites")]
 [Route("api/v1/sites/{siteName}/dns")]
 public sealed class DnsController(
     IDnsService dnsService,
@@ -50,6 +54,18 @@ public sealed class DnsController(
         };
         await CustomerAccess.EnsureSiteAsync(customerScopes, principal, siteName, cancellationToken);
 
+        // ÜRÜN KARARI: ad sunucuları ve bölge aktarım IP'leri yalnız Admin/Reseller değiştirir. Müşterinin
+        // gönderdiği bu alanlar YOK SAYILIR (mevcut değerler korunur) ve yanıtta uyarı mesajı döner.
+        var restrictedIgnored = false;
+        if (principal.IsInRole("Customer"))
+        {
+            var current = await dnsService.GetZoneAsync(siteName, cancellationToken);
+            restrictedIgnored = !SameSet(request.NameServers, current.NameServers)
+                || !SameSet(request.ZoneTransferIps, current.ZoneTransferIps);
+            request.NameServers = [.. current.NameServers];
+            request.ZoneTransferIps = [.. current.ZoneTransferIps];
+        }
+
         // GÜVENLİK (çapraz-kiracı): site kapsamı doğrulanıyordu ama BÖLGE ADI serbestti
         // (DnsService: state.ZoneName = request.ZoneName). Kendi sitesinin bölge adını
         // "kurban.com" yapan bir kiracı, kurbanın alan adının DNS kayıtlarını yönetir hâle
@@ -57,24 +73,12 @@ public sealed class DnsController(
         await CustomerAccess.EnsureDomainClaimAsync(
             customerScopes, iisSiteService, mailService, principal, request.ZoneName, siteName, logger, cancellationToken);
 
-        async Task ApproveConfigurationAsync(IReadOnlyList<string> affectedSites, CancellationToken token)
-        {
-            token.ThrowIfCancellationRequested();
-            // The IIS/domain preflight cannot discover administrator-assigned shared DNS
-            // membership. The service supplies that current membership while holding its
-            // zone leases; the reseller's scope is read again at each publication boundary.
-            var names = affectedSites.Prepend(siteName).Select(name => name?.Trim() ?? string.Empty)
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            if (principal.IsInRole("Administrator")) return;
-            if (!principal.IsInRole("Reseller")) throw new AppException("auth.site_forbidden", 403, 403);
-            var allowed = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, principal, token);
-            token.ThrowIfCancellationRequested();
-            if (allowed is null || names.Any(name => name.Length == 0 || !allowed.Contains(name, StringComparer.OrdinalIgnoreCase)))
-                // Do not disclose the names or owners of peers outside the caller's scope.
-                throw new AppException("auth.site_forbidden", 403, 403);
-        }
+        // The IIS/domain preflight cannot discover administrator-assigned shared DNS membership. The
+        // service supplies that current membership while holding its zone leases; the caller's scope
+        // is read again at each publication boundary (Reseller VE Customer için aynı kural).
+        var approval = DnsRecordApproval.Create(customerScopes, principal, siteName);
 
-        var zone = await dnsService.UpdateZoneAsync(siteName, request, ApproveConfigurationAsync, cancellationToken);
+        var zone = await dnsService.UpdateZoneAsync(siteName, request, approval, cancellationToken);
 
         await auditService.AuditAsync(
             HttpContext,
@@ -94,7 +98,7 @@ public sealed class DnsController(
             $"transferAllowed={FormatList(zone.ZoneTransferIps)}",
             await SiteSahibiAsync(siteName, cancellationToken));
 
-        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, "dns.zone_saved"));
+        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, restrictedIgnored ? "dns.zone_saved_restricted_ignored" : "dns.zone_saved"));
     }
 
     /// <summary>
@@ -166,6 +170,8 @@ public sealed class DnsController(
         string siteName,
         CancellationToken cancellationToken)
     {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
         var zone = await dnsService.InstallWindowsDnsAsync(siteName, cancellationToken);
 
         await auditService.AuditAsync(
@@ -223,18 +229,7 @@ public sealed class DnsController(
     }
 
     private Func<IReadOnlyList<string>, CancellationToken, Task> RecordApproval(string siteName)
-    {
-        var principal = new ClaimsPrincipal(User.Identities.Select(identity => new ClaimsIdentity(identity)));
-        return async (affectedSites, token) =>
-        {
-            token.ThrowIfCancellationRequested();
-            if (principal.IsInRole("Administrator")) return;
-            var allowed = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, principal, token);
-            if (!principal.IsInRole("Reseller") || allowed is null ||
-                affectedSites.Append(siteName).Any(name => !allowed.Contains(name, StringComparer.OrdinalIgnoreCase)))
-                throw new AppException("auth.site_forbidden", 403, 403);
-        };
-    }
+        => DnsRecordApproval.Create(customerScopes, User, siteName);
 
     [HttpPost("records")]
     public async Task<ActionResult<ApiResponse<SiteDnsZoneDto>>> UpsertRecordAsync(
@@ -284,6 +279,73 @@ public sealed class DnsController(
         return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, "dns.record_deleted"));
     }
 
+    /// <summary>Bölgeyi BIND bölge dosyası metni olarak verir (salt okuma).</summary>
+    [HttpGet("export")]
+    public async Task<ActionResult<ApiResponse<DnsZoneExportDto>>> ExportAsync(string siteName, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        var zone = await dnsService.GetZoneAsync(siteName, cancellationToken);
+        return Ok(ApiResponse<DnsZoneExportDto>.Ok(DnsZoneFile.Export(zone)));
+    }
+
+    /// <summary>
+    /// İçe aktarma 1. aşama: ayrıştırır, doğrular, mevcut bölgeyle farkı ve panel-yönetilen çakışmaları
+    /// döner. HİÇBİR ŞEY YAZMAZ.
+    /// </summary>
+    [HttpPost("import/preview")]
+    [RequestSizeLimit(1_048_576)]
+    public async Task<ActionResult<ApiResponse<DnsZoneImportPreviewDto>>> ImportPreviewAsync(
+        string siteName,
+        [FromBody] DnsZoneImportPreviewRequest request,
+        CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        var zone = await dnsService.GetZoneAsync(siteName, cancellationToken);
+        var preview = DnsZoneImport.Preview(zone, request?.ZoneText);
+
+        // Değer YAZILMAZ (içeriğin kendisi denetim kaydına sızmasın); yalnız sayılar.
+        await auditService.AuditAsync(
+            HttpContext,
+            "dns.import_previewed",
+            $"dns:{siteName}",
+            $"zone={zone.ZoneName}; add={preview.AddCount}; change={preview.ChangeCount}; unchanged={preview.UnchangedCount}; " +
+            $"managedConflicts={preview.ManagedConflictCount}; errors={preview.Errors.Length}",
+            await SiteSahibiAsync(siteName, cancellationToken));
+
+        return Ok(ApiResponse<DnsZoneImportPreviewDto>.Ok(preview));
+    }
+
+    /// <summary>
+    /// İçe aktarma 2. aşama: YALNIZ önizlenen metni (özet eşleşmesiyle) tek-kayıt yazma yolundan uygular.
+    /// Panel-yönetilen çakışmalar <c>confirmOverwriteManaged</c> olmadan atlanır ve raporlanır.
+    /// </summary>
+    [HttpPost("import/apply")]
+    [RequestSizeLimit(1_048_576)]
+    public async Task<ActionResult<ApiResponse<DnsZoneImportResultDto>>> ImportApplyAsync(
+        string siteName,
+        [FromBody] DnsZoneImportApplyRequest request,
+        CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        var result = await DnsZoneImport.ApplyAsync(
+            dnsService, siteName, request, RecordApproval(siteName), cancellationToken);
+
+        var hashShort = (request.PreviewHash ?? string.Empty).Trim().ToLowerInvariant();
+        hashShort = hashShort[..Math.Min(12, hashShort.Length)];
+        await auditService.AuditAsync(
+            HttpContext,
+            "dns.zone_imported",
+            $"dns:{siteName}",
+            $"zone={result.ZoneName}; added={result.Added}; changed={result.Changed}; unchanged={result.Unchanged}; " +
+            $"skippedManaged={result.SkippedManaged.Length}; failed={result.Failed.Length}; notAttempted={result.NotAttempted}; " +
+            $"overwriteManaged={request.ConfirmOverwriteManaged}; hash={hashShort}",
+            await SiteSahibiAsync(siteName, cancellationToken));
+
+        return Ok(ApiResponse<DnsZoneImportResultDto>.Ok(result, result.IsPartial ? "dns.import_partial" : "dns.import_applied"));
+    }
+
     /// <summary>
     /// Bölgenin ait olduğu sitenin ABONELİK SAHİBİ — kaydın kiracıya görünmesini sağlayan alan.
     /// </summary>
@@ -298,6 +360,10 @@ public sealed class DnsController(
         => AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken);
 
     /// <summary>Denetim kaydı için IP/ad listesi; boş liste "yok" olarak yazılır ki satır anlamsız kalmasın.</summary>
+    private static bool SameSet(IEnumerable<string>? left, IEnumerable<string>? right) =>
+        new HashSet<string>((left ?? []).Select(item => item.Trim()), StringComparer.OrdinalIgnoreCase)
+            .SetEquals((right ?? []).Select(item => item.Trim()));
+
     private static string FormatList(string[] values)
         => values.Length == 0 ? "(yok)" : string.Join(", ", values);
 }

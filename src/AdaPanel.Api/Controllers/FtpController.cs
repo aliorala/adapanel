@@ -13,8 +13,9 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace AdaPanel.Api.Controllers;
 
-// Reseller (Bayi) yalnız kendi müşterilerinin sitelerine FTP kullanıcısı yönetebilir. FTP sunucusu
-// KURULUMU (ensure) server-level → admin-only. Liste, etkin sitelere göre filtrelenir; parola/silme
+// Reseller (Bayi) yalnız kendi müşterilerinin, Customer (Müşteri, A6: Plesk gibi) yalnız KENDİ
+// sitelerinin FTP hesaplarını yönetebilir. FTP sunucusu KURULUMU (ensure), durum, TLS ve sertifika
+// server-level → admin-only (uç düzeyinde ayrıca [Authorize(Roles = "Administrator")]). Liste, etkin sitelere göre filtrelenir; parola/silme
 // işleminde kullanıcının ait olduğu site çözülüp kapsam doğrulanır.
 //
 // DENETİM KAYDI: buradaki uçlar GERÇEK BİR WINDOWS YEREL HESABI açar/siler/parolasını değiştirir ve
@@ -22,7 +23,9 @@ namespace AdaPanel.Api.Controllers;
 // sunucuda "bu hesabı kim açtı" sorusunun cevabı Windows tarafında da yoktur. Parola DEĞERİ asla
 // yazılmaz — yalnızca "değiştirildi" olgusu.
 [ApiController]
-[Authorize(Roles = "Administrator,Reseller")]
+[Authorize(Roles = "Administrator,Reseller,Customer")]
+// Alt-kullanıcı: "sites" bölüm izni (RequireSubUserSectionAttribute). Üst müşteri/bayi/yönetici etkilenmez.
+[RequireSubUserSection("sites")]
 [Route("api/v1/ftp")]
 public sealed class FtpController(
     IFtpService ftpService,
@@ -317,13 +320,92 @@ public sealed class FtpController(
         await ftpService.DeleteFtpUserAsync(userName,
             (current, token) => ApproveAccountAsync(actor, expected, current, token), cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
+        await AdminLockStore.ClearAsync(HttpContext.RequestServices.GetRequiredService<AdaPanel.Infrastructure.Support.JsonFileStore>(), "ftp", userName, cancellationToken);
         await auditService.AuditAsync(HttpContext, "ftp.user.deleted", userName, "FTP account was removed.", sahip);
         return Ok(ApiResponse<object>.Ok(new { userName }, "ftp.user_deleted"));
     }
 
+    /// <summary>
+    /// Ev dizini (site kökü içinde) ve/veya salt-okunur bayrağını günceller. Kapsam kuralları
+    /// Create ile AYNIDIR: sahiplik her onayda yeniden sorulur, Admin dışı ev dizini site kökü içinde kalır.
+    /// </summary>
+    [HttpPut("users/{userName}")]
+    public async Task<ActionResult<ApiResponse<FtpUserDto>>> UpdateUserAsync(string userName,
+        [FromBody] UpdateFtpUserRequest request, CancellationToken cancellationToken)
+    {
+        request = new UpdateFtpUserRequest { HomePath = request.HomePath, ReadOnly = request.ReadOnly };
+        var actor = new FtpActorAuthority(User);
+        await ValidateActorAsync(actor, cancellationToken);
+        using var actorLease = await DatabaseLifecycle.EnterSubscriptionAsync(actor.UserId, cancellationToken);
+        var expected = await CaptureAccountAsync(actor, userName, cancellationToken)
+            ?? throw new AppException("ftp.user_not_found", 404, 404);
+        var owner = await SiteSahibiAsync(expected.SiteName, cancellationToken);
+
+        async Task Approve(FtpUserDto? current, CancellationToken token)
+        {
+            await ApproveAccountAsync(actor, expected, current, token);
+            // Çapraz-kiracı: admin dışı roller ev dizinini sitenin kökünün dışına taşıyamaz (Create ile aynı kural).
+            if (!actor.Principal.IsInRole("Administrator") && !string.IsNullOrWhiteSpace(request.HomePath))
+            {
+                var site = await iisSiteService.GetSiteAsync(expected.SiteName, token);
+                var root = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
+                var wanted = Environment.ExpandEnvironmentVariables(request.HomePath.Trim());
+                if (!PathContainment.IsRootOrInside(root, wanted))
+                    throw new AppException("ftp.home_outside_site", 403, 403);
+            }
+        }
+
+        var updated = await ftpService.UpdateFtpUserAsync(userName, request, Approve, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        await auditService.AuditAsync(HttpContext, "ftp.user.updated", updated.UserName,
+            $"FTP account updated: home '{expected.HomePath}' -> '{updated.HomePath}'; readOnly {expected.ReadOnly} -> {updated.ReadOnly} (verified from IIS/NTFS).",
+            owner);
+        return Ok(ApiResponse<FtpUserDto>.Ok(updated, "ftp.user_updated"));
+    }
+
+    /// <summary>
+    /// Hesabı açar/kapatır. Müşteri kendi hesabını kapatabilir; askıdaki aboneliğin yazma istekleri
+    /// <see cref="SubscriptionSuspensionFilter"/> tarafından zaten kesilir (yeniden açma dahil).
+    /// </summary>
+    [HttpPost("users/{userName}/enabled")]
+    public async Task<ActionResult<ApiResponse<object>>> SetEnabledAsync(string userName,
+        [FromBody] SetFtpUserEnabledRequest request, CancellationToken cancellationToken)
+    {
+        var enabled = request.Enabled;
+        var actor = new FtpActorAuthority(User);
+        await ValidateActorAsync(actor, cancellationToken);
+        using var actorLease = await DatabaseLifecycle.EnterSubscriptionAsync(actor.UserId, cancellationToken);
+        var expected = await CaptureAccountAsync(actor, userName, cancellationToken);
+        var owner = await FtpKullanicisininSahibiAsync(userName, cancellationToken);
+        var locks = HttpContext.RequestServices.GetRequiredService<AdaPanel.Infrastructure.Support.JsonFileStore>();
+        // Yöneticinin kapattığı hesabı müşteri/bayi yeniden açamaz.
+        if (enabled) await AdminLockStore.EnsureCanEnableAsync(locks, actor.Principal, "ftp", userName, cancellationToken);
+        await ftpService.SetFtpUserEnabledAsync(userName, enabled,
+            (current, token) => ApproveAccountAsync(actor, expected, current, token), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!enabled) await AdminLockStore.RecordDisableAsync(locks, actor.Principal, "ftp", userName, cancellationToken);
+        await auditService.AuditAsync(HttpContext, enabled ? "ftp.user.enabled" : "ftp.user.disabled", userName,
+            enabled ? "FTP account was enabled (verified from the local account)." : "FTP account was disabled (verified from the local account).", owner);
+        return Ok(ApiResponse<object>.Ok(new { userName, enabled }, enabled ? "ftp.user_enabled" : "ftp.user_disabled"));
+    }
+
+    /// <summary>
+    /// Kullanıcı başı kota DESTEKLENMİYOR: bu depodaki tek gerçek kota mekanizması FSRM site-klasörü
+    /// kotasıdır (DiskQuotaService) ve hesap değil KLASÖR başınadır; birden çok FTP hesabı aynı site
+    /// kökünü paylaşır. Uydurma bir değer yazmak yerine dürüstçe 409 döner.
+    /// </summary>
+    [HttpPut("users/{userName}/quota")]
+    public async Task<ActionResult<ApiResponse<object>>> SetQuotaAsync(string userName, CancellationToken cancellationToken)
+    {
+        var actor = new FtpActorAuthority(User);
+        await ValidateActorAsync(actor, cancellationToken);
+        await EnsureFtpUserScopeAsync(userName, cancellationToken);
+        throw new AppException("ftp.quota_unsupported", 409, 409);
+    }
+
     private Task ValidateActorAsync(FtpActorAuthority actor, CancellationToken token) => actor.ValidateAsync(
         HttpContext.RequestServices.GetRequiredService<AdaPanelDbContext>(),
-        HttpContext.RequestServices.GetRequiredService<SessionRevocationStore>(), token);
+        HttpContext.RequestServices.GetRequiredService<SessionRevocationStore>(), token, customerScopes);
 
     private async Task<FtpUserDto?> CaptureAccountAsync(FtpActorAuthority actor, string userName, CancellationToken token)
     {

@@ -75,7 +75,7 @@ public sealed class AdaPanelWriteTools(
         // Kayıt ÜZERİNE YAZMA ihtimali taşıdığı için yıkıcı sayılıyor: var olan bir MX'i
         // değiştirmek postayı kesebilir.
         McpCapability.RequireDestructive(user);
-        // ROL PARİTESİ: REST ikizi (DnsController) yalnız yönetici ve bayiye açık.
+        // ROL PARİTESİ: REST ikizi (DnsController) yönetici, bayi ve müşteriye açık; sahiplik aşağıda.
         McpCapability.RequireDnsRole(user);
         await McpCapability.EnsureWriteAllowedAsync(customerScopes, user, "sites", cancellationToken);
         // SAHİPLİK: bu denetim olmadan bir müşteri anahtarı BAŞKA bir müşterinin DNS kaydını
@@ -85,6 +85,9 @@ public sealed class AdaPanelWriteTools(
         var zone = await dnsService.UpsertRecordAsync(
             siteName,
             new UpsertDnsRecordRequest { Type = type, Host = host, Value = value, Priority = priority, Ttl = 3600 },
+            // PAYLAŞIMLI BÖLGE: REST ile aynı kapsam onayı. Onaysız çağrı, kapsamlı bir anahtarın kendi
+            // sitesi üzerinden aynı bölgeyi paylaşan BAŞKA bir sitenin kaydına dokunmasına izin verirdi.
+            AdaPanel.Api.Security.DnsRecordApproval.Create(customerScopes, user, siteName),
             cancellationToken);
 
         await WriteAuditAsync(user, "mcp.dns.upsert", $"{siteName}: {type} {host}", cancellationToken);

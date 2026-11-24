@@ -747,7 +747,252 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         return result;
     }
 
-    private static string Escape(string value) => value.Replace("'", "''");
+    // --- Askı: hesap kilidi (ALTER USER ... ACCOUNT LOCK) ---
+
+    public async Task<IReadOnlyCollection<DatabaseUserLockDto>> GetUserLocksAsync(
+        DatabaseConnectionProfile profile, IReadOnlyCollection<string> databaseNames, CancellationToken cancellationToken)
+    {
+        var owned = new HashSet<string>(databaseNames.Select(name => name.Trim()), StringComparer.OrdinalIgnoreCase);
+        await using var connection = await OpenConnectionAsync(profile, cancellationToken);
+
+        // Panelin KENDİ bağlantı kullanıcısı asla kilitlenmez (kilitlenirse panel veritabanına erişimini kaybeder).
+        string panelUser;
+        await using (var current = connection.CreateCommand())
+        {
+            current.CommandText = "SELECT CURRENT_USER()";
+            var text = Convert.ToString(await current.ExecuteScalarAsync(cancellationToken)) ?? string.Empty;
+            panelUser = text.Contains('@') ? text[..text.LastIndexOf('@')] : text;
+        }
+
+        var accounts = new List<(string User, string Host)>();
+        await using (var list = connection.CreateCommand())
+        {
+            list.CommandText = "SELECT User, Host FROM mysql.user WHERE User <> '' AND Host <> ''";
+            await using var reader = await list.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken)) accounts.Add((reader.GetString(0), reader.GetString(1)));
+        }
+
+        var results = new List<DatabaseUserLockDto>();
+        foreach (var (user, host) in accounts)
+        {
+            if (IsProtectedAccount(user) || string.Equals(user, panelUser, StringComparison.OrdinalIgnoreCase)) continue;
+
+            // SHOW GRANTS tek kaynaktır: global, veritabanı, tablo, sütun ve yordam yetkilerinin HEPSİNİ (ve rolleri) gösterir.
+            var lines = new List<string>();
+            try
+            {
+                await using var grants = connection.CreateCommand();
+                grants.CommandText = $"SHOW GRANTS FOR '{Escape(user)}'@'{Escape(host)}'";
+                await using var reader = await grants.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken)) lines.Add(reader.GetString(0));
+            }
+            catch (MySqlException)
+            {
+                continue; // yetkileri okunamayan hesap: kilitlenmez
+            }
+
+            var verdict = ClassifyGrants(lines, owned);
+            if (!verdict.TouchesOwned) continue;
+            results.Add(new DatabaseUserLockDto
+            {
+                Engine = profile.EngineKey,
+                UserName = user,
+                Host = host,
+                Exclusive = verdict.Exclusive,
+                Locked = await ReadLockedAsync(connection, user, host, cancellationToken)
+            });
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// <c>SHOW GRANTS</c> satırlarından: hesap sorulan veritabanlarına dokunuyor mu ve YALNIZ onlara mı (münhasır).
+    /// Kapalı-güvenli: global yetki (USAGE dışı), rol, joker (_ %) desenli veritabanı adı, başka veritabanındaki
+    /// tablo/sütun/yordam yetkisi ya da çözülemeyen her satır münhasırlığı BOZAR.
+    /// </summary>
+    internal static (bool TouchesOwned, bool Exclusive) ClassifyGrants(IEnumerable<string> lines, ISet<string> owned)
+    {
+        var touches = false;
+        var exclusive = true;
+        foreach (var line in lines)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(line,
+                @"^GRANT\s+(?<privs>.+?)\s+ON\s+(?<target>.+?)\s+TO\s",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+            if (!match.Success)
+            {
+                exclusive = false; // rol ataması ya da tanınmayan satır
+                continue;
+            }
+
+            var target = match.Groups["target"].Value.Trim();
+            var privs = match.Groups["privs"].Value.Trim();
+            if (target == "*.*")
+            {
+                if (!string.Equals(privs, "USAGE", StringComparison.OrdinalIgnoreCase)) exclusive = false;
+                continue;
+            }
+
+            target = System.Text.RegularExpressions.Regex.Replace(target, @"^(PROCEDURE|FUNCTION|PACKAGE BODY|PACKAGE)\s+", string.Empty,
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var (name, wildcard) = ParseLeadingIdentifier(target);
+            if (name is null)
+            {
+                exclusive = false;
+                continue;
+            }
+
+            if (wildcard)
+            {
+                // Joker desen aboneliğin dışındaki veritabanlarını da kapsayabilir.
+                exclusive = false;
+                var regex = "^" + System.Text.RegularExpressions.Regex.Escape(name).Replace("_", ".").Replace("%", ".*") + "$";
+                if (owned.Any(item => System.Text.RegularExpressions.Regex.IsMatch(item, regex, System.Text.RegularExpressions.RegexOptions.IgnoreCase))) touches = true;
+                continue;
+            }
+
+            if (owned.Contains(name)) touches = true;
+            else exclusive = false;
+        }
+
+        return (touches, touches && exclusive);
+    }
+
+    /// <summary>Hedefin başındaki `db` tanımlayıcısını çözer; kaçışsız _ ya da % varsa joker sayılır.</summary>
+    private static (string? Name, bool Wildcard) ParseLeadingIdentifier(string target)
+    {
+        if (target.Length == 0 || target[0] != '`') return (null, false);
+        var builder = new System.Text.StringBuilder();
+        var wildcard = false;
+        var i = 1;
+        for (; i < target.Length; i++)
+        {
+            var c = target[i];
+            if (c == '`')
+            {
+                if (i + 1 < target.Length && target[i + 1] == '`') { builder.Append('`'); i++; continue; }
+                break;
+            }
+
+            if (c == '\\' && i + 1 < target.Length && (target[i + 1] is '_' or '%' or '\\'))
+            {
+                builder.Append(target[i + 1]);
+                i++;
+                continue;
+            }
+
+            if (c is '_' or '%') wildcard = true;
+            builder.Append(c);
+        }
+
+        return i >= target.Length ? (null, false) : (builder.ToString(), wildcard);
+    }
+
+    public async Task SetUserLockedAsync(DatabaseConnectionProfile profile, string userName, string host, bool locked, CancellationToken cancellationToken)
+    {
+        if (IsProtectedAccount(userName)) throw new AppException("database.user_protected", 403, 403);
+        await using var connection = await OpenConnectionAsync(profile, cancellationToken);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"ALTER USER '{Escape(userName)}'@'{Escape(host)}' ACCOUNT {(locked ? "LOCK" : "UNLOCK")};";
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (MySqlException exception) when (exception.Number is 1396 or 1133)
+        {
+            throw new AppException("database.user_not_found", 404, 404);
+        }
+        catch (MySqlException exception) when (exception.Number is 1064 or 1235)
+        {
+            // ACCOUNT LOCK sözdizimi yok (MariaDB < 10.4.2, MySQL < 5.7.6): desteklenmiyor, başarı DEĞİL.
+            throw new NotSupportedException("This database server version does not support ACCOUNT LOCK.");
+        }
+
+        if (locked)
+        {
+            // Kilit yalnız YENİ girişleri keser; açık oturumlar sürerdi. Hesabın açık bağlantılarını kapat.
+            await KillSessionsAsync(connection, userName, host, cancellationToken);
+        }
+
+        var measured = await ReadLockedAsync(connection, userName, host, cancellationToken);
+        if (measured != locked)
+        {
+            throw new AppException("database.user_lock_not_applied", 500, 500,
+                $"user={userName}; requested={(locked ? "locked" : "unlocked")}; measured={(measured?.ToString() ?? "unmeasured")}");
+        }
+    }
+
+    private static bool IsProtectedAccount(string user) =>
+        string.IsNullOrWhiteSpace(user)
+        || new[] { "root", "mariadb.sys", "mysql.sys", "mysql.session", "mysql.infoschema", "debian-sys-maint" }
+            .Contains(user, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>SHOW CREATE USER çıktısından kilit durumu: MySQL "ACCOUNT LOCK"/"ACCOUNT UNLOCK", MariaDB yalnız kilitliyken "ACCOUNT LOCK".</summary>
+    internal static bool? ParseLockedFromCreateUser(string? statement)
+    {
+        if (string.IsNullOrWhiteSpace(statement)) return null;
+        if (System.Text.RegularExpressions.Regex.IsMatch(statement, @"ACCOUNT\s+UNLOCK", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return false;
+        return System.Text.RegularExpressions.Regex.IsMatch(statement, @"ACCOUNT\s+LOCK", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
+    private static async Task<bool?> ReadLockedAsync(MySqlConnection connection, string user, string host, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"SHOW CREATE USER '{Escape(user)}'@'{Escape(host)}'";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            return await reader.ReadAsync(cancellationToken) ? ParseLockedFromCreateUser(reader.GetString(0)) : null;
+        }
+        catch (MySqlException)
+        {
+            return null;
+        }
+    }
+
+    private static async Task KillSessionsAsync(MySqlConnection connection, string user, string host, CancellationToken cancellationToken)
+    {
+        var ids = new List<long>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT ID, HOST FROM information_schema.PROCESSLIST WHERE USER = @user";
+            command.Parameters.AddWithValue("@user", user);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (HostMatches(host, reader.GetString(1))) ids.Add(Convert.ToInt64(reader.GetValue(0)));
+            }
+        }
+
+        foreach (var id in ids)
+        {
+            try
+            {
+                await using var kill = connection.CreateCommand();
+                kill.CommandText = $"KILL {id}"; // id sayıdır, enjeksiyon yok
+                await kill.ExecuteNonQueryAsync(cancellationToken);
+            }
+            catch (MySqlException)
+            {
+                // oturum zaten bitmiş olabilir
+            }
+        }
+    }
+
+    /// <summary>Hesabın host kalıbı ("localhost", "10.0.%", "%") oturumun istemci adresiyle ("host:port") eşleşiyor mu.</summary>
+    internal static bool HostMatches(string accountHost, string processHost)
+    {
+        var client = processHost;
+        var colon = client.LastIndexOf(':');
+        if (colon > 0 && client.IndexOf(':') == colon) client = client[..colon]; // ad/IPv4:port
+        if (accountHost == "%") return true;
+        var regex = "^" + System.Text.RegularExpressions.Regex.Escape(accountHost).Replace("%", ".*").Replace("_", ".") + "$";
+        return System.Text.RegularExpressions.Regex.IsMatch(client, regex, System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+            || (accountHost.Equals("localhost", StringComparison.OrdinalIgnoreCase) && (client is "127.0.0.1" or "::1" or ""));
+    }
+
+    internal static string Escape(string value) => value.Replace("\\", "\\\\").Replace("'", "''");
 
     private static async Task<MySqlConnection> OpenConnectionAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
     {
