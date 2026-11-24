@@ -45,12 +45,32 @@ public sealed class LogsController(
         return Ok(ApiResponse<LogTailDto>.Ok(log));
     }
 
+    /// <summary>
+    /// Sitenin SON erişim günlüğü kuyruğu. Müşteri/bayi yalnız KENDİ kapsamındaki siteyi okur.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kapsam denetimi dosya okunmadan ÖNCE yapılır; okunacak klasör istemciden gelen bir yoldan
+    /// değil, IIS'in site KİMLİĞİNDEN türetilir (<c>IisLogPaths.ResolveSiteDirectory(site.Id)</c>) —
+    /// yani site adına <c>..\</c> yazmak başka bir klasöre götürmez, yalnız "site bulunamadı" verir.
+    /// </para>
+    /// <para>
+    /// Sunucu yolu (<c>Path</c>) yönetici dışına verilmez: müşteri için bir işe yaramaz, yalnız
+    /// sunucu düzenini sızdırır.
+    /// </para>
+    /// </remarks>
     [HttpGet("site/{siteName}")]
-    [Authorize(Roles = "Administrator")]
+    [Authorize(Roles = "Administrator,Reseller,Customer")]
+    [RequireSubUserSection("sites")]
     public async Task<ActionResult<ApiResponse<LogTailDto>>> GetSiteLogAsync(string siteName, [FromQuery] int lines = 120, CancellationToken cancellationToken = default)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
-        var log = await logViewerService.TailSiteLogAsync(siteName, lines, cancellationToken);
+        var log = await logViewerService.TailSiteLogAsync(siteName.Trim(), lines, cancellationToken);
+        if (!User.IsInRole("Administrator"))
+        {
+            log.Path = string.Empty;
+        }
+
         return Ok(ApiResponse<LogTailDto>.Ok(log));
     }
 

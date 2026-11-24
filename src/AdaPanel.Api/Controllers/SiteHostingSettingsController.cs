@@ -8,9 +8,14 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace AdaPanel.Api.Controllers;
 
-// Reseller (Bayi) yalnız kendi müşterilerinin sitelerinin hosting ayarlarını yönetebilir.
+// Müşteri KENDİ sitesinin hosting ayarlarını (varsayılan belge, hata sayfası, MIME, HSTS, yönlendirme)
+// görür/değiştirir; bayi kendi müşterilerinin sitelerinde yönetir. Sınıf düzeyi rol listesi müşteriyi
+// de kapsar; DİĞER BÜTÜN uçlar (komut çalıştırma, arşiv/dosya göçü, kuyruk, zamanlayıcı)
+// eylem düzeyinde "Administrator,Reseller" ile kilitli — sınıf ve eylem rolleri VE ile birleştiği
+// için bu uçlar müşteriye AÇILMAZ (keyfi komut ve dış adrese istek = sunucu düzeyi yetki).
 [ApiController]
-[Authorize(Roles = "Administrator,Reseller")]
+[Authorize(Roles = "Administrator,Reseller,Customer")]
+[RequireSubUserSection("sites")]
 [Route("api/v1/sites/{siteName}/hosting-settings")]
 public sealed class SiteHostingSettingsController(
     ISiteHostingSettingsService service,
@@ -32,6 +37,17 @@ public sealed class SiteHostingSettingsController(
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        // Bant genişliği / bağlantı sınırı yöneticinin kiracıya koyduğu KAPASİTE kısıtıdır; müşteri
+        // kendi sınırını kaldırabilseydi plan anlamsızlaşırdı. Müşteri çağrısında bu iki alan istek
+        // gövdesinden DEĞİL mevcut ayardan alınır (gövdedeki değer sessizce yok sayılır).
+        if (User.IsInRole("Customer"))
+        {
+            var mevcut = await service.GetAsync(siteName, cancellationToken);
+            request.MaximumBandwidthBytesPerSecond = mevcut.MaximumBandwidthBytesPerSecond;
+            request.MaximumConnections = mevcut.MaximumConnections;
+        }
+
         var settings = await service.UpdateAsync(siteName, request, cancellationToken);
 
         // Bu uç siteyi düşürebilecek ayarları (özel hata sayfaları, MIME eşlemeleri, HSTS) yazar.
@@ -57,6 +73,7 @@ public sealed class SiteHostingSettingsController(
     }
 
     [HttpPost("composer-install")]
+    [Authorize(Roles = "Administrator,Reseller")]
     public async Task<ActionResult<ApiResponse<ComposerRunResultDto>>> ComposerInstallAsync(string siteName, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
@@ -67,6 +84,7 @@ public sealed class SiteHostingSettingsController(
 
     // profesyonel paneller gibi keyfi Composer komutu (update, require, dump-autoload, vb.).
     [HttpPost("composer-command")]
+    [Authorize(Roles = "Administrator,Reseller")]
     public async Task<ActionResult<ApiResponse<ComposerRunResultDto>>> ComposerCommandAsync(
         string siteName,
         [FromBody] ComposerCommandRequest request,
@@ -82,6 +100,7 @@ public sealed class SiteHostingSettingsController(
 
     // panel Laravel Toolkit gibi: keyfi Artisan komutu (migrate, cache:clear, key:generate, config:cache, vb.).
     [HttpPost("artisan-command")]
+    [Authorize(Roles = "Administrator,Reseller")]
     public async Task<ActionResult<ApiResponse<ComposerRunResultDto>>> ArtisanCommandAsync(
         string siteName,
         [FromBody] ComposerCommandRequest request,
@@ -95,6 +114,7 @@ public sealed class SiteHostingSettingsController(
 
     // panel Node.js sekmesi gibi: npm install / npm run <script> vb.
     [HttpPost("node-command")]
+    [Authorize(Roles = "Administrator,Reseller")]
     public async Task<ActionResult<ApiResponse<ComposerRunResultDto>>> NodeCommandAsync(
         string siteName,
         [FromBody] ComposerCommandRequest request,
@@ -108,6 +128,7 @@ public sealed class SiteHostingSettingsController(
 
     // panel WP Toolkit gibi: WP-CLI komutu (plugin/tema/çekirdek, search-replace, cache flush, user…).
     [HttpPost("wpcli-command")]
+    [Authorize(Roles = "Administrator,Reseller")]
     public async Task<ActionResult<ApiResponse<ComposerRunResultDto>>> WpCliCommandAsync(
         string siteName,
         [FromBody] ComposerCommandRequest request,
@@ -121,6 +142,7 @@ public sealed class SiteHostingSettingsController(
 
     // profesyonel goc araci gibi: kaynak sitenin dosya arşivini (http/https/ftp .zip) indirip hedef siteye açar.
     [HttpPost("import-archive")]
+    [Authorize(Roles = "Administrator,Reseller")]
     public async Task<ActionResult<ApiResponse<SiteImportResultDto>>> ImportArchiveAsync(
         string siteName,
         [FromBody] ImportSiteArchiveRequest request,
@@ -138,6 +160,7 @@ public sealed class SiteHostingSettingsController(
 
     // profesyonel goc araci gibi (dosya tarafı): kaynak sunucudan FTP/FTPS/SFTP ile site dosyalarını hedef sitenin köküne indirir.
     [HttpPost("migrate-files")]
+    [Authorize(Roles = "Administrator,Reseller")]
     public async Task<ActionResult<ApiResponse<RemoteFileMigrationResult>>> MigrateFilesAsync(
         string siteName,
         [FromBody] RemoteFileMigrationRequest request,
@@ -157,6 +180,7 @@ public sealed class SiteHostingSettingsController(
 
     // panel Kuyruk sekmesi gibi: Laravel queue worker durum / başlat / durdur.
     [HttpGet("queue")]
+    [Authorize(Roles = "Administrator,Reseller")]
     public async Task<ActionResult<ApiResponse<QueueWorkerStatusDto>>> GetQueueAsync(string siteName, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
@@ -164,6 +188,7 @@ public sealed class SiteHostingSettingsController(
     }
 
     [HttpPost("queue/start")]
+    [Authorize(Roles = "Administrator,Reseller")]
     public async Task<ActionResult<ApiResponse<QueueWorkerStatusDto>>> StartQueueAsync(string siteName, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
@@ -173,6 +198,7 @@ public sealed class SiteHostingSettingsController(
     }
 
     [HttpPost("queue/stop")]
+    [Authorize(Roles = "Administrator,Reseller")]
     public async Task<ActionResult<ApiResponse<QueueWorkerStatusDto>>> StopQueueAsync(string siteName, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
@@ -183,6 +209,7 @@ public sealed class SiteHostingSettingsController(
 
     // panel Laravel Toolkit "Scheduler": dakikalık `php artisan schedule:run` (Laravel'in tek cron girdisi).
     [HttpGet("scheduler")]
+    [Authorize(Roles = "Administrator,Reseller")]
     public async Task<ActionResult<ApiResponse<QueueWorkerStatusDto>>> GetSchedulerAsync(string siteName, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
@@ -190,6 +217,7 @@ public sealed class SiteHostingSettingsController(
     }
 
     [HttpPost("scheduler/start")]
+    [Authorize(Roles = "Administrator,Reseller")]
     public async Task<ActionResult<ApiResponse<QueueWorkerStatusDto>>> StartSchedulerAsync(string siteName, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
@@ -199,6 +227,7 @@ public sealed class SiteHostingSettingsController(
     }
 
     [HttpPost("scheduler/stop")]
+    [Authorize(Roles = "Administrator,Reseller")]
     public async Task<ActionResult<ApiResponse<QueueWorkerStatusDto>>> StopSchedulerAsync(string siteName, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);

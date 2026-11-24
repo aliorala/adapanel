@@ -6736,5 +6736,6 @@
   "panel.php.loggingVerified": "Log writing verified",
   "panel.php.loggingFailed": "Log writing verification failed",
   "panel.php.loggingPending": "Log writing verification pending",
-  "panel.php.loggingUnverified": "Log writing has not been verified"
+  "panel.php.loggingUnverified": "Log writing has not been verified",
+  "php.limits_staff_only": "Unlimited memory (-1) or unlimited execution time (0) can only be set by an administrator or reseller; please enter a finite value."
 }

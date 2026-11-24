@@ -6736,5 +6736,6 @@
   "panel.php.loggingVerified": "Günlük yazımı doğrulandı",
   "panel.php.loggingFailed": "Günlük yazımı doğrulanamadı",
   "panel.php.loggingPending": "Günlük yazımı doğrulaması bekleniyor",
-  "panel.php.loggingUnverified": "Günlük yazımı doğrulanmadı"
+  "panel.php.loggingUnverified": "Günlük yazımı doğrulanmadı",
+  "php.limits_staff_only": "Sınırsız bellek (-1) veya sınırsız çalışma süresi (0) yalnız yönetici ya da bayi tarafından ayarlanabilir; lütfen sonlu bir değer girin."
 }
